@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: cronuz_b2b_postgres
+    environment:
+      POSTGRES_USER: cronuz_admin
+      POSTGRES_PASSWORD: cronuz_password_123
+      POSTGRES_DB: cronuz_b2b
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+volumes:
+  postgres_data:

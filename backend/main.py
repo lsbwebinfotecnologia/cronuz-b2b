@@ -10,6 +10,7 @@ from app.api import horus
 from app.api import auth
 from app.core import security
 from app.core import dependencies
+from pydantic import BaseModel
 
 # Create tables for both company and user
 company_models.Base.metadata.create_all(bind=engine)
@@ -117,6 +118,9 @@ def read_users(
 class UserPasswordUpdate(BaseModel):
     password: str
 
+class StatusUpdate(BaseModel):
+    active: bool
+
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(
     user_id: int,
@@ -168,11 +172,7 @@ def read_company(
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
     return company
 
-# The payload should match a basic schema, or we can use form data, but let's use a simple Body argument or model.
 # FastAPI can auto-infer simple parameters from query if not specified, but let's use generic Pydantic or Request body.
-from pydantic import BaseModel
-class StatusUpdate(BaseModel):
-    active: bool
 
 @app.patch("/companies/{company_id}/status", response_model=schemas.Company)
 def update_company_status(
