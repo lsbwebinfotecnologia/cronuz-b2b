@@ -5,7 +5,6 @@ from datetime import datetime
 class CompanyBase(BaseModel):
     name: str
     document: str
-    email: Optional[EmailStr] = None
     domain: str
     logo: Optional[str] = None
     active: bool = True
@@ -16,7 +15,6 @@ class CompanyCreate(CompanyBase):
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
     document: Optional[str] = None
-    email: Optional[EmailStr] = None
     domain: Optional[str] = None
     logo: Optional[str] = None
     active: Optional[bool] = None
