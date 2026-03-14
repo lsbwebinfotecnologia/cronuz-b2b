@@ -5,8 +5,10 @@ from app.db.session import engine, get_db, SessionLocal
 from app.models import company as company_models
 from app.models import user as user_models
 from app.models import customer as customer_models
+from app.models import company_settings as settings_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
+from app.schemas import company_settings as settings_schemas
 from app.api import horus
 from app.api import auth
 from app.api import customers
@@ -18,6 +20,7 @@ from pydantic import BaseModel
 company_models.Base.metadata.create_all(bind=engine)
 user_models.Base.metadata.create_all(bind=engine)
 customer_models.Base.metadata.create_all(bind=engine)
+settings_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -201,3 +204,39 @@ def read_company_users(
 ):
     users = db.query(user_models.User).filter(user_models.User.company_id == company_id).all()
     return users
+
+@app.get("/companies/{company_id}/settings", response_model=settings_schemas.CompanySettings)
+def read_company_settings(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.require_master_user)
+):
+    settings = db.query(settings_models.CompanySettings).filter(settings_models.CompanySettings.company_id == company_id).first()
+    if not settings:
+        # Auto-create if not exists
+        settings = settings_models.CompanySettings(company_id=company_id)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
+
+@app.put("/companies/{company_id}/settings", response_model=settings_schemas.CompanySettings)
+def update_company_settings(
+    company_id: int,
+    settings_update: settings_schemas.CompanySettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.require_master_user)
+):
+    settings = db.query(settings_models.CompanySettings).filter(settings_models.CompanySettings.company_id == company_id).first()
+    if not settings:
+         settings = settings_models.CompanySettings(company_id=company_id)
+         db.add(settings)
+    
+    # Update fields
+    update_data = settings_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(settings, key, value)
+        
+    db.commit()
+    db.refresh(settings)
+    return settings
