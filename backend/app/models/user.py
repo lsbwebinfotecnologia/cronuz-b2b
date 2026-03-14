@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, UniqueConstraint, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -23,6 +23,11 @@ class User(Base):
     
     # Nullable because MASTER doesn't have a company
     company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=True)
+    
+    # Security & 2FA
+    failed_login_attempts = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+    is_2fa_enabled = Column(Boolean, default=False, nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
