@@ -9,6 +9,7 @@ class UserBase(BaseModel):
     document: Optional[str] = None
     type: UserRole
     company_id: Optional[int] = None
+    active: bool = True
 
 class UserCreate(UserBase):
     password: str
@@ -20,6 +21,7 @@ class UserUpdate(BaseModel):
     type: Optional[UserRole] = None
     company_id: Optional[int] = None
     password: Optional[str] = None
+    active: Optional[bool] = None
 
 class UserInDBBase(UserBase):
     id: int

@@ -24,6 +24,8 @@ class User(Base):
     # Nullable because MASTER doesn't have a company
     company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=True)
     
+    active = Column(Boolean, default=True, nullable=False)
+    
     # Security & 2FA
     failed_login_attempts = Column(Integer, default=0, nullable=False)
     locked_until = Column(DateTime(timezone=True), nullable=True)

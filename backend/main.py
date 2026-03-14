@@ -113,6 +113,50 @@ def read_users(
     users = db.query(user_models.User).offset(skip).limit(limit).all()
     return users
 
+# User password and status update schemas
+class UserPasswordUpdate(BaseModel):
+    password: str
+
+@app.patch("/users/{user_id}/status", response_model=user_schemas.User)
+def update_user_status(
+    user_id: int,
+    status_update: StatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    user = db.query(user_models.User).filter(user_models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    
+    # Restrict permissions: MASTER can edit anyone. SELLER can edit CUSTOMERS/AGENTS within same company.
+    if current_user.type != user_models.UserRole.MASTER:
+       if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type == user_models.UserRole.MASTER:
+           raise HTTPException(status_code=403, detail="Sem permissão para alterar este usuário")
+
+    user.active = status_update.active
+    db.commit()
+    db.refresh(user)
+    return user
+
+@app.patch("/users/{user_id}/password")
+def update_user_password(
+    user_id: int,
+    password_update: UserPasswordUpdate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    user = db.query(user_models.User).filter(user_models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    if current_user.type != user_models.UserRole.MASTER:
+       if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type == user_models.UserRole.MASTER:
+           raise HTTPException(status_code=403, detail="Sem permissão para alterar este usuário")
+
+    user.password_hash = security.get_password_hash(password_update.password)
+    db.commit()
+    return {"message": "Senha atualizada com sucesso"}
+
 @app.get("/companies/{company_id}", response_model=schemas.Company)
 def read_company(
     company_id: int,
