@@ -43,7 +43,9 @@ class CustomerBase(BaseModel):
     state_registration: Optional[str] = None # IE
     email: Optional[str] = None
     phone: Optional[str] = None
+    customer_type: Optional[str] = "PJ" # PF, PJ
     credit_limit: Optional[float] = 0.0
+    discount: Optional[float] = 0.0
     consignment_status: Optional[str] = "INACTIVE"
     open_debts: Optional[float] = 0.0
 
@@ -58,7 +60,9 @@ class CustomerUpdate(BaseModel):
     state_registration: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    customer_type: Optional[str] = None
     credit_limit: Optional[float] = None
+    discount: Optional[float] = None
     consignment_status: Optional[str] = None
     open_debts: Optional[float] = None
 

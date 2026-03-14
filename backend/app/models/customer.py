@@ -17,9 +17,11 @@ class Customer(Base):
     state_registration = Column(String(50), nullable=True) # IE Inscrição Estadual
     email = Column(String(255), nullable=True)
     phone = Column(String(50), nullable=True)
+    customer_type = Column(String(20), default="PJ", nullable=False) # PF or PJ
     
     # B2B Financial Data
     credit_limit = Column(Float, default=0.0, nullable=False)
+    discount = Column(Float, default=0.0, nullable=False)
     open_debts = Column(Float, default=0.0, nullable=False)
     consignment_status = Column(String(50), default="INACTIVE", nullable=False) # e.g., ACTIVE, BLOCKED, INACTIVE
     
