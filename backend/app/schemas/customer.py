@@ -2,19 +2,62 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
-class CustomerBase(BaseModel):
+class AddressBase(BaseModel):
+    street: str
+    number: str
+    complement: Optional[str] = None
+    neighborhood: str
+    city: str
+    state: str
+    zip_code: str
+    type: Optional[str] = "MAIN"
+
+class AddressCreate(AddressBase):
+    pass
+
+class Address(AddressBase):
+    id: int
+    customer_id: int
+    class Config:
+        from_attributes = True
+
+class ContactBase(BaseModel):
     name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None
+
+class ContactCreate(ContactBase):
+    pass
+
+class Contact(ContactBase):
+    id: int
+    customer_id: int
+    class Config:
+        from_attributes = True
+
+class CustomerBase(BaseModel):
+    name: str # Nome Fantasia
+    corporate_name: Optional[str] = None # Razão Social
     document: str
+    state_registration: Optional[str] = None # IE
+    email: Optional[str] = None
+    phone: Optional[str] = None
     credit_limit: Optional[float] = 0.0
     consignment_status: Optional[str] = "INACTIVE"
     open_debts: Optional[float] = 0.0
 
 class CustomerCreate(CustomerBase):
-    pass
+    addresses: Optional[list[AddressCreate]] = []
+    contacts: Optional[list[ContactCreate]] = []
 
 class CustomerUpdate(BaseModel):
     name: Optional[str] = None
+    corporate_name: Optional[str] = None
     document: Optional[str] = None
+    state_registration: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
     credit_limit: Optional[float] = None
     consignment_status: Optional[str] = None
     open_debts: Optional[float] = None
@@ -29,4 +72,5 @@ class CustomerInDBBase(CustomerBase):
         from_attributes = True
 
 class Customer(CustomerInDBBase):
-    pass
+    addresses: list[Address] = []
+    contacts: list[Contact] = []
