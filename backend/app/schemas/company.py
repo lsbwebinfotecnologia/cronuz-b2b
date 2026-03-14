@@ -3,24 +3,23 @@ from typing import Optional
 from datetime import datetime
 
 class CompanyBase(BaseModel):
-    nome_fantasia: str
-    razao_social: str
-    cnpj: str
-    inscricao_estadual: Optional[str] = None
-    email_contato: Optional[EmailStr] = None
-    telefone: Optional[str] = None
-    ativo: bool = True
+    name: str
+    document: str
+    email: Optional[EmailStr] = None
+    domain: str
+    logo: Optional[str] = None
+    active: bool = True
 
 class CompanyCreate(CompanyBase):
     pass
 
 class CompanyUpdate(BaseModel):
-    nome_fantasia: Optional[str] = None
-    razao_social: Optional[str] = None
-    inscricao_estadual: Optional[str] = None
-    email_contato: Optional[EmailStr] = None
-    telefone: Optional[str] = None
-    ativo: Optional[bool] = None
+    name: Optional[str] = None
+    document: Optional[str] = None
+    email: Optional[EmailStr] = None
+    domain: Optional[str] = None
+    logo: Optional[str] = None
+    active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):
     id: int
