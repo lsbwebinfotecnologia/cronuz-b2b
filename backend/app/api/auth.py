@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from app.db.session import get_db
 from app.models.user import User
+from app.models.company import Company
 from app.core import security
 
 router = APIRouter()
@@ -56,10 +57,17 @@ def login_for_access_token(db: Session = Depends(get_db), form_data: OAuth2Passw
         expires_delta=access_token_expires
     )
     
+    company_name = "Sede Master Cronuz"
+    if user.company_id:
+        company = db.query(Company).filter(Company.id == user.company_id).first()
+        if company:
+            company_name = company.name
+
     return {"access_token": access_token, "token_type": "bearer", "user": {
         "name": user.name,
         "email": user.email,
         "type": user.type,
-        "company_id": user.company_id
+        "company_id": user.company_id,
+        "company_name": company_name
          # Do not return password hash
     }}

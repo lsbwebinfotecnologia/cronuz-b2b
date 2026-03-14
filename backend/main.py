@@ -168,6 +168,58 @@ def update_user_password(
     db.commit()
     return {"message": "Senha atualizada com sucesso"}
 
+@app.patch("/users/{user_id}/email")
+def update_user_email(
+    user_id: int,
+    email_update: user_schemas.UserEmailUpdate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    from sqlalchemy.exc import IntegrityError
+    user = db.query(user_models.User).filter(user_models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    if current_user.type != user_models.UserRole.MASTER:
+       if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type == user_models.UserRole.MASTER:
+           raise HTTPException(status_code=403, detail="Sem permissão para alterar este usuário")
+
+    user.email = email_update.email
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Este e-mail já está em uso por outro usuário deste tipo/empresa.")
+    return {"message": "E-mail atualizado com sucesso"}
+
+@app.delete("/users/{user_id}")
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    from sqlalchemy.exc import IntegrityError
+    user = db.query(user_models.User).filter(user_models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    # Only MASTER or SELLER can delete. SELLER can't delete MASTER or users from another company
+    if current_user.type != user_models.UserRole.MASTER:
+        if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type == user_models.UserRole.MASTER:
+           raise HTTPException(status_code=403, detail="Sem permissão para excluir este usuário")
+
+    # Prevent deleting yourself
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Você não pode excluir a si mesmo.")
+
+    try:
+        db.delete(user)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Não é possível excluir este usuário pois ele possui histórico vinculados (ex: Pedidos, Interações). Desative-o em vez disso.")
+    return {"message": "Usuário excluído com sucesso."}
+
 @app.get("/companies/{company_id}", response_model=schemas.Company)
 def read_company(
     company_id: int,

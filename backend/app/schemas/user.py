@@ -23,6 +23,9 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     active: Optional[bool] = None
 
+class UserEmailUpdate(BaseModel):
+    email: EmailStr
+
 class UserInDBBase(UserBase):
     id: int
     created_at: datetime

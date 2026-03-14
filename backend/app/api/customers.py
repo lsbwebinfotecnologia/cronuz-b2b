@@ -4,13 +4,18 @@ from typing import List, Optional
 from app.db.session import get_db
 from app.models.customer import Customer, Address, Contact, Interaction
 from app.models.user import User, UserRole
-from app.schemas.customer import CustomerCreate, CustomerUpdate, Customer as CustomerSchema
+from app.schemas.customer import CustomerCreate, CustomerUpdate, Customer as CustomerSchema, ContactCreate, Contact as ContactSchema
 from app.core.dependencies import get_current_user
+from app.core.security import get_password_hash
 from pydantic import BaseModel
 
 class InteractionCreate(BaseModel):
     type: str # CALL, EMAIL, MEETING, NOTE
     content: str
+
+class CustomerUserCreate(BaseModel):
+    email: str
+    password: str
 
 router = APIRouter()
 
@@ -162,3 +167,128 @@ def create_interaction(
     db.commit()
     db.refresh(db_interaction)
     return {"message": "Interação registrada com sucesso.", "id": db_interaction.id}
+
+@router.post("/customers/{customer_id}/contacts", response_model=ContactSchema)
+def create_contact(
+    customer_id: int,
+    contact_in: ContactCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Não autorizado a gerenciar contatos.")
+        
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+    
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+
+    db_contact = Contact(**contact_in.model_dump(), customer_id=customer_id)
+    db.add(db_contact)
+    db.commit()
+    db.refresh(db_contact)
+    return db_contact
+
+@router.delete("/customers/{customer_id}/contacts/{contact_id}")
+def delete_contact(
+    customer_id: int,
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Não autorizado a gerenciar contatos.")
+        
+    contact = db.query(Contact).join(Customer).filter(
+        Contact.id == contact_id,
+        Contact.customer_id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+    
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contato não encontrado.")
+        
+    db.delete(contact)
+    db.commit()
+    return {"message": "Contato excluído com sucesso."}
+
+@router.get("/customers/{customer_id}/users")
+def get_customer_user(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Não autorizado.")
+        
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+    
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+
+    user = db.query(User).filter(
+        User.document == customer.document,
+        User.company_id == customer.company_id,
+        User.type == UserRole.CUSTOMER
+    ).first()
+
+    if not user:
+        return None
+        
+    from app.schemas.user import User as UserPydanticSchema
+    return UserPydanticSchema.from_orm(user)
+
+@router.post("/customers/{customer_id}/users")
+def create_customer_user(
+    customer_id: int,
+    user_in: CustomerUserCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from sqlalchemy.exc import IntegrityError
+    from app.schemas.user import User as UserPydanticSchema
+    
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Não autorizado.")
+        
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+    
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+
+    existing_user = db.query(User).filter(
+        User.document == customer.document,
+        User.company_id == customer.company_id,
+        User.type == UserRole.CUSTOMER
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Este cliente já possui credencial de acesso.")
+
+    db_user = User(
+        name=customer.name,
+        email=user_in.email,
+        document=customer.document,
+        password_hash=get_password_hash(user_in.password),
+        type=UserRole.CUSTOMER,
+        company_id=customer.company_id
+    )
+    
+    try:
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        return UserPydanticSchema.from_orm(db_user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="E-mail já cadastrado por outro usuário.")
+
