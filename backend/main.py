@@ -4,10 +4,12 @@ from sqlalchemy.orm import Session
 from app.db.session import engine, get_db, SessionLocal
 from app.models import company as company_models
 from app.models import user as user_models
+from app.models import customer as customer_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.api import horus
 from app.api import auth
+from app.api import customers
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -15,6 +17,7 @@ from pydantic import BaseModel
 # Create tables for both company and user
 company_models.Base.metadata.create_all(bind=engine)
 user_models.Base.metadata.create_all(bind=engine)
+customer_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -29,6 +32,7 @@ app.add_middleware(
 
 app.include_router(auth.router, tags=["authentication"])
 app.include_router(horus.router, tags=["inventory"])
+app.include_router(customers.router, tags=["customers"])
 
 @app.on_event("startup")
 def seed_master_user():
