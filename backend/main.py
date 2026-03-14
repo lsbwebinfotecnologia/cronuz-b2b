@@ -112,3 +112,44 @@ def read_users(
 ):
     users = db.query(user_models.User).offset(skip).limit(limit).all()
     return users
+
+@app.get("/companies/{company_id}", response_model=schemas.Company)
+def read_company(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    company = db.query(company_models.Company).filter(company_models.Company.id == company_id).first()
+    if company is None:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+    return company
+
+# The payload should match a basic schema, or we can use form data, but let's use a simple Body argument or model.
+# FastAPI can auto-infer simple parameters from query if not specified, but let's use generic Pydantic or Request body.
+from pydantic import BaseModel
+class StatusUpdate(BaseModel):
+    active: bool
+
+@app.patch("/companies/{company_id}/status", response_model=schemas.Company)
+def update_company_status(
+    company_id: int,
+    status_update: StatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.require_master_user)
+):
+    company = db.query(company_models.Company).filter(company_models.Company.id == company_id).first()
+    if company is None:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+    company.active = status_update.active
+    db.commit()
+    db.refresh(company)
+    return company
+
+@app.get("/companies/{company_id}/users", response_model=list[user_schemas.User])
+def read_company_users(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    users = db.query(user_models.User).filter(user_models.User.company_id == company_id).all()
+    return users
