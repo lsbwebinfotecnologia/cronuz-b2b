@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cronuz B2B",
+  title: "Cronuz",
   description: "Portal B2B Multi-Empresas Cronuz",
 };
 

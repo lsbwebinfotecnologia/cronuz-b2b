@@ -27,6 +27,20 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exception
     return user
 
+def get_current_user_optional(token: str = Depends(OAuth2PasswordBearer(tokenUrl="token", auto_error=False)), db: Session = Depends(get_db)):
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            return None
+    except JWTError:
+        return None
+        
+    user = db.query(User).filter(User.email == email).first()
+    return user
+
 def require_master_user(current_user: User = Depends(get_current_user)):
     if current_user.type != UserRole.MASTER:
         raise HTTPException(status_code=403, detail="Acesso negado. Apenas usuários MASTER permitidos.")

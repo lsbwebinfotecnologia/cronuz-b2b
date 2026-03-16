@@ -6,7 +6,7 @@ from app.db.session import get_db
 from app.models.product import Product
 from app.models.catalog_support import StockMovement, PriceHistory
 from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_current_user_optional
 from app.models.user import User
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -74,12 +74,13 @@ def list_products(
     limit: int = Query(25, ge=1, le=100),
     search: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Optional[User] = Depends(get_current_user_optional)
 ):
-    if not current_user.company_id:
-        raise HTTPException(status_code=400, detail="Usuário sem empresa vinculada.")
-        
-    query = db.query(Product).filter(Product.company_id == current_user.company_id)
+    # If the user is logged in, restrict to their company.
+    # If not (public storefront), default to Company 1 or main catalog.
+    target_company_id = current_user.company_id if current_user and current_user.company_id else 1
+    
+    query = db.query(Product).filter(Product.company_id == target_company_id)
     
     if search:
         search_filter = f"%{search}%"

@@ -36,7 +36,7 @@ export default function DashboardPage() {
     <div className="space-y-8">
       <div>
         <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white mb-2">Visão Geral</h1>
-        <p className="text-slate-500 dark:text-slate-400">Bem-vindo ao Cronuz B2B. Acompanhe os indicadores da sua multi-empresa.</p>
+        <p className="text-slate-500 dark:text-slate-400">Bem-vindo ao Cronuz. Acompanhe os indicadores da sua multi-empresa.</p>
       </div>
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
