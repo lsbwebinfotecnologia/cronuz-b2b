@@ -4,16 +4,18 @@ import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowUpRight, TrendingUp, Users, Package, ShoppingCart, RefreshCw } from 'lucide-react';
 
-const stats = [
-  { name: 'Faturamento Total', value: 'R$ 124.500,00', change: '+12%', icon: TrendingUp },
-  { name: 'Pedidos Ativos', value: '45', change: '+4%', icon: ShoppingCart },
-  { name: 'Empresas Clientes', value: '12', change: '+2', icon: Users },
-  { name: 'Itens em Estoque (Horus)', value: '8.432', change: '-1%', icon: Package },
+const defaultStats = [
+  { id: 'revenue', name: 'Faturamento Total', value: 'R$ 0,00', change: '+0%', icon: TrendingUp },
+  { id: 'orders', name: 'Pedidos Ativos', value: '0', change: '0', icon: ShoppingCart },
+  { id: 'customers', name: 'Empresas Clientes', value: '0', change: '0', icon: Users },
+  { id: 'products', name: 'Produtos Ativos', value: '0', change: '0', icon: Package },
 ];
 
 export default function DashboardPage() {
   const [horusStatus, setHorusStatus] = useState<any>(null);
+  const [metrics, setMetrics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMetrics, setLoadingMetrics] = useState(true);
 
   const fetchHorusStatus = async () => {
     setLoading(true);
@@ -28,9 +30,38 @@ export default function DashboardPage() {
     }
   };
 
+  const fetchMetrics = async () => {
+    setLoadingMetrics(true);
+    try {
+      const token = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+      const res = await fetch('http://localhost:8000/dashboard/metrics', {
+         headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+         setMetrics(await res.json());
+      }
+    } catch (error) {
+      console.error("Failed to fetch metrics", error);
+    } finally {
+      setLoadingMetrics(false);
+    }
+  };
+
   useEffect(() => {
     fetchHorusStatus();
+    fetchMetrics();
   }, []);
+
+  const displayStats = defaultStats.map(stat => {
+     if (!metrics) return stat;
+     
+     if (stat.id === 'products') return { ...stat, value: metrics.active_products.toString() };
+     if (stat.id === 'customers') return { ...stat, value: metrics.total_customers.toString() };
+     if (stat.id === 'orders') return { ...stat, value: metrics.active_orders.toString() };
+     if (stat.id === 'revenue') return { ...stat, value: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.total_revenue) };
+     
+     return stat;
+  });
 
   return (
     <div className="space-y-8">
@@ -40,9 +71,9 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat, i) => (
+        {displayStats.map((stat, i) => (
           <motion.div
-            key={stat.name}
+            key={stat.id}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1, duration: 0.4 }}
@@ -50,13 +81,17 @@ export default function DashboardPage() {
           >
             <div className="flex items-center justify-between mb-4">
               <stat.icon className="h-5 w-5 text-[var(--color-primary-base)]" />
-              <span className="flex items-center text-xs font-medium text-[var(--color-secondary-base)] bg-[var(--color-secondary-base)]/10 px-2 py-1 rounded-full">
+              <span className="flex items-center text-xs font-medium text-[var(--color-secondary-base)] bg-[var(--color-secondary-base)]/10 px-2 py-1 rounded-full opacity-50">
                 {stat.change}
                 <ArrowUpRight className="ml-1 h-3 w-3" />
               </span>
             </div>
             <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">{stat.name}</h3>
-            <p className="text-2xl font-bold text-slate-900 dark:text-white">{stat.value}</p>
+            {loadingMetrics ? (
+                <div className="h-8 w-24 bg-slate-200 dark:bg-slate-800 rounded animate-pulse mt-1"></div>
+            ) : (
+                <p className="text-2xl font-bold text-slate-900 dark:text-white">{stat.value}</p>
+            )}
             
             <div className="absolute -right-4 -bottom-4 opacity-5 group-hover:opacity-10 transition-opacity">
               <stat.icon className="h-24 w-24 text-[var(--color-primary-base)]" />

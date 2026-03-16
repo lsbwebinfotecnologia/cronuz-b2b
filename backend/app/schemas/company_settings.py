@@ -12,6 +12,7 @@ class CompanySettingsBase(BaseModel):
     horus_branch: Optional[str] = None
     bookinfo_api_key: Optional[str] = None
     metabooks_api_key: Optional[str] = None
+    cover_image_base_url: Optional[str] = None
 
 class CompanySettingsUpdate(CompanySettingsBase):
     pass

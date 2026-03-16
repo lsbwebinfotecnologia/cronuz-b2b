@@ -58,7 +58,8 @@ const sellerNavigation: NavItem[] = [
     href: '/promotions', 
     icon: Megaphone,
     subItems: [
-       { name: 'Promoções', href: '/promotions' }
+       { name: 'Promoções', href: '/promotions' },
+       { name: 'Vitrines da Loja', href: '/marketing/showcases' }
     ]
   },
   { name: 'Configurações', href: '/settings', icon: Settings },
@@ -110,9 +111,6 @@ export function Sidebar() {
               className="object-contain w-full h-full"
             />
           </div>
-          <span className="text-xl font-semibold bg-gradient-to-r from-slate-800 to-slate-500 dark:from-white dark:to-slate-400 bg-clip-text text-transparent">
-            B2B
-          </span>
         </div>
 
         <nav className="space-y-1">

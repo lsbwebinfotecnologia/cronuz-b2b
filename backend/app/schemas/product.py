@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from app.models.product import ProductStatus
+from app.schemas.catalog_support import CategoryResponse, BrandResponse
 
 class ProductBase(BaseModel):
     sku: str
@@ -51,6 +52,8 @@ class ProductResponse(ProductBase):
     company_id: int
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
+    category: Optional[CategoryResponse] = None
+    brand_rel: Optional[BrandResponse] = None
 
     class Config:
         from_attributes = True

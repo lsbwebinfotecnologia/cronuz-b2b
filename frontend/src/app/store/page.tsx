@@ -26,38 +26,49 @@ function ProductGridSkeleton() {
 }
 
 export default function StoreHome() {
-  const [products, setProducts] = useState<any[]>([]);
+  const [showcases, setShowcases] = useState<any[]>([]);
+  const [fallbackProducts, setFallbackProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Carrega os primeiros 25 produtos (limite 25)
-    const fetchProducts = async () => {
+    const fetchHomeContent = async () => {
       try {
-        const res = await fetch('http://localhost:8000/products/?limit=25', {
-          headers: {
-            'Authorization': `Bearer ${getToken()}`
-          }
+        const token = getToken();
+        // First, fetch the custom showcases
+        const res = await fetch('http://localhost:8000/storefront/home', {
+          headers: { 'Authorization': `Bearer ${token}` }
         });
+        
         if (res.ok) {
           const data = await res.json();
-          setProducts(data.items || []);
+          setShowcases(data);
+          
+          // Se não houver vitrines configuradas, busca o catálogo padrão
+          if (data.length === 0) {
+             const fbRes = await fetch('http://localhost:8000/products/?limit=25', {
+               headers: { 'Authorization': `Bearer ${token}` }
+             });
+             if (fbRes.ok) {
+               const fbData = await fbRes.json();
+               setFallbackProducts(fbData.items || []);
+             }
+          }
         }
       } catch (err) {
-        console.error("Failed to load products", err);
+        console.error("Failed to load storefront metrics", err);
       } finally {
         setLoading(false);
       }
     };
-    fetchProducts();
+    fetchHomeContent();
   }, []);
 
   return (
     <div className="flex-1 w-full bg-slate-50 dark:bg-[#0a0f1c]">
       
-      {/* Vitrine / Banners Section */}
+      {/* Vitrine / Banners Section (Hardcoded aesthetic hero for now) */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Main Hero Banner */}
           <div className="md:col-span-2 relative overflow-hidden rounded-3xl bg-gradient-to-br from-[var(--color-primary-base)] to-slate-900 text-white min-h-[250px] sm:min-h-[300px] flex items-center p-8 md:p-12 shadow-lg shadow-[var(--color-primary-base)]/20">
             <div className="relative z-10 max-w-lg">
               <span className="inline-block px-3 py-1 mb-4 text-xs font-bold uppercase tracking-wider bg-white/20 backdrop-blur-md rounded-full">
@@ -73,12 +84,10 @@ export default function StoreHome() {
                 Ver Lançamentos <ChevronRight className="w-5 h-5"/>
               </button>
             </div>
-            {/* Background decoration */}
             <div className="absolute top-0 right-0 -m-20 w-80 h-80 bg-white/10 blur-3xl rounded-full pointer-events-none"></div>
             <div className="absolute bottom-0 right-10 -m-10 w-40 h-40 bg-[var(--color-primary-hover)] blur-2xl rounded-full pointer-events-none opacity-50"></div>
           </div>
           
-          {/* Secondary Banners Stack */}
           <div className="flex flex-col gap-6">
             <div className="flex-1 relative overflow-hidden rounded-3xl bg-emerald-500 text-white p-6 shadow-md flex flex-col justify-end">
                <h3 className="font-bold text-xl mb-1 relative z-10">Queima de Estoque</h3>
@@ -94,34 +103,77 @@ export default function StoreHome() {
         </div>
       </section>
 
-      {/* Main Content Grid Area */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12">
-        <div className="flex items-center justify-between mb-8">
-          <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
-             <span className="w-2 h-8 bg-[var(--color-primary-base)] rounded-full"></span>
-             Destaques do Catálogo
-          </h2>
-        </div>
-
+      {/* Dynamic Showcases Rendering */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12 space-y-16">
         {loading ? (
-          <ProductGridSkeleton />
-        ) : products.length === 0 ? (
-          <div className="py-20 text-center flex flex-col items-center bg-white rounded-3xl border border-slate-200 border-dashed dark:bg-slate-900/50 dark:border-slate-800">
-             <PackageOpen className="w-16 h-16 text-slate-300 dark:text-slate-600 mb-4" />
-             <h3 className="text-lg font-bold text-slate-700 dark:text-slate-300">Nenhum produto disponível</h3>
-             <p className="text-slate-500 dark:text-slate-500 max-w-md mt-2">
-               O catálogo B2B ainda não tem produtos cadastrados ou os filtros atuais não encontraram resultados.
-             </p>
+          <div>
+            <div className="flex items-center justify-between mb-8">
+              <div className="h-8 bg-slate-200 dark:bg-slate-800 rounded w-1/4 animate-pulse"></div>
+            </div>
+            <ProductGridSkeleton />
           </div>
+        ) : showcases.length > 0 ? (
+          showcases.map((showcase, index) => (
+             <div key={showcase.id || index} className="space-y-6">
+               <div className="flex items-center justify-between mb-4">
+                 <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
+                    <span className="w-2 h-8 bg-[var(--color-primary-base)] rounded-full"></span>
+                    {showcase.name}
+                 </h2>
+               </div>
+               
+               {/* Showcase Banner se houver */}
+               {showcase.banner_url && (
+                  <div className="w-full h-48 md:h-64 rounded-3xl overflow-hidden mb-6 relative">
+                     <img src={showcase.banner_url} alt={showcase.name} className="w-full h-full object-cover" />
+                     <div className="absolute inset-0 bg-black/10 pointer-events-none"></div>
+                  </div>
+               )}
+
+               {showcase.products && showcase.products.length > 0 ? (
+                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                   {showcase.products.map((p: any) => (
+                      <ProductCard 
+                        key={p.id} 
+                        product={p} 
+                        onAddToCart={(prod, qty) => console.log('Add to cart:', prod.name, qty)} 
+                      />
+                   ))}
+                 </div>
+               ) : (
+                 <p className="text-slate-500 text-sm">Nenhum produto atende à regra desta vitrine.</p>
+               )}
+             </div>
+          ))
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-            {products.map(p => (
-               <ProductCard 
-                 key={p.id} 
-                 product={p} 
-                 onAddToCart={(prod, qty) => console.log('Add to cart clicked:', prod.name, qty)} 
-               />
-            ))}
+          // Fallback Clássico se não houver NENHUMA vitrine ativa
+          <div className="space-y-6">
+             <div className="flex items-center justify-between mb-4">
+               <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
+                  <span className="w-2 h-8 bg-slate-400 rounded-full"></span>
+                  Catálogo Geral
+               </h2>
+             </div>
+             
+             {fallbackProducts.length === 0 ? (
+                <div className="py-20 text-center flex flex-col items-center bg-white rounded-3xl border border-slate-200 border-dashed dark:bg-slate-900/50 dark:border-slate-800">
+                   <PackageOpen className="w-16 h-16 text-slate-300 dark:text-slate-600 mb-4" />
+                   <h3 className="text-lg font-bold text-slate-700 dark:text-slate-300">Catálogo Vazio</h3>
+                   <p className="text-slate-500 dark:text-slate-500 max-w-md mt-2">
+                     O catálogo B2B ainda não possui produtos.
+                   </p>
+                </div>
+             ) : (
+               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                 {fallbackProducts.map(p => (
+                    <ProductCard 
+                      key={p.id} 
+                      product={p} 
+                      onAddToCart={(prod, qty) => console.log('Add to cart clicked:', prod.name, qty)} 
+                    />
+                 ))}
+               </div>
+             )}
           </div>
         )}
       </section>

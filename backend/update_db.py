@@ -11,6 +11,7 @@ def run_migration():
         "ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS horus_password VARCHAR(255);",
         "ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS horus_company VARCHAR(50);",
         "ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS horus_branch VARCHAR(50);",
+        "ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS cover_image_base_url VARCHAR(500);",
     ]
     with engine.connect() as conn:
         for query in queries:

@@ -20,6 +20,7 @@ class CompanySettings(Base):
     
     bookinfo_api_key = Column(String(255), nullable=True)
     metabooks_api_key = Column(String(255), nullable=True)
+    cover_image_base_url = Column(String(500), nullable=True)
     
     # Audit trail
     created_at = Column(DateTime(timezone=True), server_default=func.now())

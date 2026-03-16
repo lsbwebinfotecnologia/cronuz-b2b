@@ -8,6 +8,7 @@ from app.models import customer as customer_models
 from app.models import company_settings as settings_models
 from app.models import product as product_models
 from app.models import catalog_support as catalog_models
+from app.models import marketing_showcase as marketing_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -17,9 +18,15 @@ from app.api import customers
 from app.api import products
 from app.api import catalog_support
 from app.api import promotions
+from app.api import marketing_showcases
+from app.api import storefront
+from app.api import upload
+from app.api import dashboard
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+import os
 
 # Create tables for both company and user
 company_models.Base.metadata.create_all(bind=engine)
@@ -28,6 +35,7 @@ customer_models.Base.metadata.create_all(bind=engine)
 settings_models.Base.metadata.create_all(bind=engine)
 product_models.Base.metadata.create_all(bind=engine)
 catalog_models.Base.metadata.create_all(bind=engine)
+marketing_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -46,6 +54,14 @@ app.include_router(customers.router, tags=["customers"])
 app.include_router(products.router, tags=["products"])
 app.include_router(catalog_support.router, tags=["catalog-metadata"])
 app.include_router(promotions.router, tags=["promotions"])
+app.include_router(marketing_showcases.router, tags=["marketing"])
+app.include_router(storefront.router, tags=["storefront"])
+app.include_router(upload.router, tags=["upload"])
+app.include_router(dashboard.router, tags=["dashboard"])
+
+# Mount static files directory
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.on_event("startup")
 def seed_master_user():
@@ -271,8 +287,11 @@ def read_company_users(
 def read_company_settings(
     company_id: int,
     db: Session = Depends(get_db),
-    current_user: user_models.User = Depends(dependencies.require_master_user)
+    current_user: user_models.User = Depends(dependencies.get_current_user)
 ):
+    if current_user.type != user_models.UserRole.MASTER and current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Sem permissão para ler as configurações desta empresa")
+        
     settings = db.query(settings_models.CompanySettings).filter(settings_models.CompanySettings.company_id == company_id).first()
     if not settings:
         # Auto-create if not exists

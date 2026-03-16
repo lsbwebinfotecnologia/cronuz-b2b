@@ -47,16 +47,36 @@ export default function NewProductPage() {
     stock_quantity: 0
   });
 
+  const [coverBaseUrl, setCoverBaseUrl] = useState('');
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+
   useEffect(() => {
     const fetchSupport = async () => {
       try {
         const headers = { 'Authorization': `Bearer ${getToken()}` };
-        const [catRes, brandRes] = await Promise.all([
+        const [{ getUser }] = await Promise.all([import('@/lib/auth')]);
+        const user = getUser();
+        
+        const promises = [
           fetch('http://localhost:8000/categories', { headers }),
           fetch('http://localhost:8000/brands', { headers })
-        ]);
+        ];
+
+        if (user?.company_id) {
+          promises.push(fetch(`http://localhost:8000/companies/${user.company_id}/settings`, { headers }));
+        }
+
+        const [catRes, brandRes, settingsRes] = await Promise.all(promises);
+        
         if (catRes.ok) setCategories(await catRes.json());
         if (brandRes.ok) setBrands(await brandRes.json());
+        if (settingsRes?.ok) {
+          const settings = await settingsRes.json();
+          if (settings.cover_image_base_url) {
+            setCoverBaseUrl(settings.cover_image_base_url.replace(/\/$/, ''));
+          }
+        }
       } catch (e) {
         toast.error('Erro ao buscar dados de apoio.');
       }
@@ -380,14 +400,94 @@ export default function NewProductPage() {
                animate={{ opacity: 1, y: 0 }}
                exit={{ opacity: 0, y: -10 }}
                className="space-y-6"
-             >
-                <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 dark:bg-slate-900/50 dark:border-slate-800 text-center py-20">
-                   <ImageIcon className="w-12 h-12 text-slate-300 mx-auto mb-4 dark:text-slate-700" />
-                   <h3 className="text-lg font-medium text-slate-700 mb-2 dark:text-slate-300">Upload de Arquivos Multimídia</h3>
-                   <p className="text-slate-500 text-sm mb-6 max-w-sm mx-auto dark:text-slate-400">Em breve você poderá arrastar imagens diretamente para nossa CDN Cronuz.</p>
-                   <button disabled className="bg-slate-100 text-slate-500 px-6 py-2.5 rounded-xl font-medium cursor-not-allowed dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">Explorar CDN (Integração Futura)</button>
+              >
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 dark:bg-slate-900/50 dark:border-slate-800">
+                  <h3 className="text-lg font-semibold text-slate-900 mb-4 dark:text-white flex items-center gap-2">
+                    <ImageIcon className="w-5 h-5 text-slate-400" /> Capa / Imagem Principal
+                  </h3>
+                  
+                  {!product.ean_gtin ? (
+                    <div className="bg-amber-50 rounded-xl p-5 border border-amber-200 text-amber-800 dark:bg-amber-500/10 dark:border-amber-500/20 dark:text-amber-400 flex items-start gap-3">
+                      <ShieldAlert className="w-5 h-5 mt-0.5" />
+                      <div>
+                        <p className="font-medium text-sm">Código ISBN/EAN Necessário</p>
+                        <p className="text-sm mt-1">Para carregar ou enviar a capa deste produto, preencha o campo <b>Código de Barras (EAN/GTIN)</b> na aba Geral primeiro.</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                       <div className="flex items-center gap-6 bg-slate-50 dark:bg-slate-950 p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+                         {imagePreview ? (
+                           <div className="w-32 h-44 shrink-0 rounded-lg overflow-hidden border border-slate-200 shadow-sm relative group bg-white">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={imagePreview} alt="Capa" className="w-full h-full object-contain" />
+                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <button type="button" onClick={() => setImagePreview(null)} className="bg-white text-rose-600 p-2 rounded-full hover:bg-rose-50"><Trash2 className="w-4 h-4" /></button>
+                              </div>
+                           </div>
+                         ) : (
+                           <div className="w-32 h-44 shrink-0 rounded-lg bg-slate-100 dark:bg-slate-800 border-2 border-dashed border-slate-300 dark:border-slate-700 flex flex-col items-center justify-center text-slate-400">
+                              <ImageIcon className="w-8 h-8 mb-2" />
+                              <span className="text-[10px] uppercase font-bold tracking-wider">Sem Capa</span>
+                           </div>
+                         )}
+
+                         <div className="flex-1">
+                            <h4 className="text-sm font-medium text-slate-900 dark:text-white mb-2">Padrão de Resolução: <span className="font-mono text-indigo-600 dark:text-indigo-400">{product.ean_gtin}.jpg</span></h4>
+                            
+                            {coverBaseUrl ? (
+                               <p className="text-sm text-slate-500 mb-4">
+                                 O sistema tenta carregar a imagem automaticamente baseando-se por prioridade nas configurações gerais.
+                               </p>
+                            ) : (
+                               <p className="text-sm text-slate-500 mb-4">A sua empresa não possui uma URL base configurada nas configurações gerais. Você pode tentar puxar de uma, ou fazer o upload manual abaixo.</p>
+                            )}
+                            
+                            <div className="flex gap-3">
+                              {coverBaseUrl && (
+                                <button type="button" onClick={() => setImagePreview(`${coverBaseUrl}/${product.ean_gtin}.jpg`)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-xl transition-colors dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                                  Tentar Sincronizar
+                                </button>
+                              )}
+                              
+                              <label className={`px-4 py-2 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-medium rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-2 ${uploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
+                                {uploadingImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                                Fazer Upload Manual
+                                <input type="file" className="hidden" accept="image/jpeg, image/png, image/webp" onChange={async (e) => {
+                                  if (!e.target.files?.length) return;
+                                  setUploadingImage(true);
+                                  const formData = new FormData();
+                                  formData.append('file', e.target.files[0]);
+                                  formData.append('isbn', product.ean_gtin);
+                                  
+                                  try {
+                                    const res = await fetch('http://localhost:8000/upload/cover', {
+                                      method: 'POST',
+                                      headers: { 'Authorization': `Bearer ${getToken()}` },
+                                      body: formData
+                                    });
+                                    if(res.ok) {
+                                      const data = await res.json();
+                                      setImagePreview(`http://localhost:8000${data.url}`);
+                                      toast.success("Imagem enviada com sucesso!");
+                                    } else {
+                                      const err = await res.json();
+                                      toast.error(err.detail || "Erro no upload");
+                                    }
+                                  } catch (error) {
+                                    toast.error("Falha no envio da imagem.");
+                                  } finally {
+                                    setUploadingImage(false);
+                                  }
+                                }} />
+                              </label>
+                            </div>
+                         </div>
+                       </div>
+                    </div>
+                  )}
                 </div>
-             </motion.div>
+              </motion.div>
             )}
 
             

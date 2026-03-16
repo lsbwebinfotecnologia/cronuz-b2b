@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState } from 'react';
-import { ShoppingCart, Plus, Minus, Image as ImageIcon } from 'lucide-react';
+import Link from 'next/link';
+import { ShoppingCart, Plus, Minus } from 'lucide-react';
+import { ProductImage } from './ProductImage';
 
 interface ProductProps {
   product: any;
@@ -31,50 +33,56 @@ export function ProductCard({ product, onAddToCart }: ProductProps) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-col h-full group transition-all hover:shadow-md hover:-translate-y-1 dark:bg-slate-900/80 dark:border-slate-800">
       
-      {/* Thumbnail */}
-      <div className="bg-slate-100 dark:bg-slate-800 rounded-xl aspect-[3/4] w-full mb-4 flex items-center justify-center relative overflow-hidden">
-        {/* Placeholder for real images later */}
-        <ImageIcon className="w-10 h-10 text-slate-300 dark:text-slate-600" />
-        
-        {/* Badges */}
-        {product.promotional_price > 0 && !isOutOfStock && (
-           <span className="absolute top-2 left-2 bg-emerald-500 text-white text-[10px] font-bold px-2 py-1 rounded-lg">
-             OFERTA
-           </span>
-        )}
-        {isOutOfStock && (
-           <span className="absolute inset-0 bg-white/60 dark:bg-slate-950/60 backdrop-blur-[2px] flex items-center justify-center font-bold text-slate-700 dark:text-slate-300">
-             ESGOTADO
-           </span>
-        )}
-      </div>
+      <Link href={`/store/product/${product.id}`} className="flex flex-col flex-1">
+        {/* Thumbnail */}
+        <div className="bg-slate-100 dark:bg-slate-800 rounded-xl aspect-[3/4] w-full mb-4 flex items-center justify-center relative overflow-hidden">
+          
+          <ProductImage 
+            eanGtin={product.ean_gtin} 
+            alt={product.name} 
+            className="w-full h-full p-2"
+          />
+          
+          {/* Badges */}
+          {product.promotional_price > 0 && !isOutOfStock && (
+             <span className="absolute top-2 left-2 bg-emerald-500 text-white text-[10px] font-bold px-2 py-1 rounded-lg">
+               OFERTA
+             </span>
+          )}
+          {isOutOfStock && (
+             <span className="absolute inset-0 bg-white/60 dark:bg-slate-950/60 backdrop-blur-[2px] flex items-center justify-center font-bold text-slate-700 dark:text-slate-300">
+               ESGOTADO
+             </span>
+          )}
+        </div>
 
-      {/* Info */}
-      <div className="flex-1 flex flex-col">
-        <h4 className="font-bold text-sm text-slate-900 dark:text-white line-clamp-2 leading-tight group-hover:text-[var(--color-primary-base)] transition-colors">
-          {product.name}
-        </h4>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-1">
-          {product.brand ? product.brand.name : 'Vários Autores'}
-        </p>
-        
-         <div className="mt-4 flex flex-col mb-4">
-            <div className="flex items-end gap-2">
-              <span className={`text-lg font-black ${isOutOfStock ? 'text-slate-400' : 'text-[var(--color-primary-base)] dark:text-indigo-400'}`}>
-                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)}
-              </span>
-              {product.promotional_price > 0 && !isOutOfStock && (
-                <span className="text-xs text-slate-400 line-through mb-1">
-                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(product.base_price)}
+        {/* Info */}
+        <div className="flex-1 flex flex-col">
+          <h4 className="font-bold text-sm text-slate-900 dark:text-white line-clamp-2 leading-tight group-hover:text-[var(--color-primary-base)] transition-colors">
+            {product.name}
+          </h4>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-1">
+            {product.category ? product.category.name : 'Vários Autores'}
+          </p>
+          
+           <div className="mt-4 flex flex-col mb-4">
+              <div className="flex items-end gap-2">
+                <span className={`text-lg font-black ${isOutOfStock ? 'text-slate-400' : 'text-[var(--color-primary-base)] dark:text-indigo-400'}`}>
+                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)}
                 </span>
-              )}
-            </div>
-            
-            <span className={`text-xs font-semibold mt-1 ${isOutOfStock ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
-              {isOutOfStock ? 'Sem estoque' : `Disponível: ${product.stock_quantity} un`}
-            </span>
-         </div>
-      </div>
+                {product.promotional_price > 0 && !isOutOfStock && (
+                  <span className="text-xs text-slate-400 line-through mb-1">
+                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(product.base_price)}
+                  </span>
+                )}
+              </div>
+              
+              <span className={`text-xs font-semibold mt-1 ${isOutOfStock ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                {isOutOfStock ? 'Sem estoque' : `Disponível: ${product.stock_quantity} un`}
+              </span>
+           </div>
+        </div>
+      </Link>
 
       {/* Actions */}
       <div className="mt-auto pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">

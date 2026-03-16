@@ -43,7 +43,8 @@ export default function CompanyDetailsPage() {
     horus_company: '',
     horus_branch: '',
     bookinfo_api_key: '',
-    metabooks_api_key: ''
+    metabooks_api_key: '',
+    cover_image_base_url: ''
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -86,7 +87,8 @@ export default function CompanyDetailsPage() {
           horus_company: data.horus_company || '',
           horus_branch: data.horus_branch || '',
           bookinfo_api_key: data.bookinfo_api_key || '',
-          metabooks_api_key: data.metabooks_api_key || ''
+          metabooks_api_key: data.metabooks_api_key || '',
+          cover_image_base_url: data.cover_image_base_url || ''
         });
       }
     } catch (error) {
@@ -552,30 +554,23 @@ export default function CompanyDetailsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-5 border border-slate-200 rounded-xl bg-slate-50 dark:border-slate-800/60 dark:bg-slate-900/50">
              <div className="md:col-span-2 space-y-2">
               <h3 className="text-sm font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-widest flex items-center gap-2">
-                Bancos de Dados Literários
+                Configurações Gerais
               </h3>
-              <p className="text-xs text-slate-500">Chaves para metadados de catálogo, capas de livros e sinopses.</p>
+              <p className="text-xs text-slate-500">Configurações globais de exibição e integração de catálogo.</p>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">BookInfo API Key</label>
+            <div className="space-y-1.5 md:col-span-2">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Servidor Local de Capas (Base URL)</label>
               <input
-                type="password"
+                type="url"
                 className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600"
-                placeholder="bk_xxxxxxxxxxxxxxxx"
-                value={settings.bookinfo_api_key}
-                onChange={e => setSettings({ ...settings, bookinfo_api_key: e.target.value })}
+                placeholder="https://capas.cronuz.com.br"
+                value={settings.cover_image_base_url}
+                onChange={e => setSettings({ ...settings, cover_image_base_url: e.target.value })}
               />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">MetaBooks API Key</label>
-              <input
-                type="password"
-                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600"
-                placeholder="mtbk_xxxxxxxxxxxxxxxx"
-                value={settings.metabooks_api_key}
-                onChange={e => setSettings({ ...settings, metabooks_api_key: e.target.value })}
-              />
+              <p className="text-xs text-slate-500 mt-1">
+                Deixe em branco para forçar o uso de imagens cadastradas individualmente em cada produto. A imagem procurada será {"<base_url>/<isbn>.jpg"}.
+              </p>
             </div>
           </div>
 

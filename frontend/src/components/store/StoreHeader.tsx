@@ -3,10 +3,10 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Search, ShoppingCart, User, Menu, X, BookOpen, ShoppingBag, Receipt } from 'lucide-react';
+import { Search, ShoppingCart, User, Menu, X, BookOpen, ShoppingBag, Receipt, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { getUser } from '@/lib/auth';
+import { getUser, removeToken } from '@/lib/auth';
 
 export function StoreHeader() {
   const router = useRouter();
@@ -28,6 +28,11 @@ export function StoreHeader() {
       router.push(`/store/search?q=${encodeURIComponent(searchQuery)}`);
       setIsMobileMenuOpen(false);
     }
+  };
+
+  const handleLogout = () => {
+    removeToken();
+    router.push('/login');
   };
 
   return (
@@ -105,6 +110,15 @@ export function StoreHeader() {
                 </span>
               )}
             </Link>
+
+            {/* Logout Button Desktop */}
+            <button 
+              onClick={handleLogout}
+              className="hidden sm:flex items-center gap-2 p-2 hover:bg-rose-50 rounded-xl transition-colors text-slate-700 hover:text-rose-600 dark:text-slate-300 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 group"
+              title="Sair"
+            >
+              <LogOut className="h-5 w-5 group-hover:-translate-x-0.5 transition-transform" />
+            </button>
           </div>
         </div>
       </div>
@@ -158,6 +172,10 @@ export function StoreHeader() {
                   <Link href="/store/account" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 text-slate-700 font-medium dark:text-slate-300 dark:hover:bg-slate-900">
                     <User className="w-5 h-5 text-slate-400" /> Minha Conta
                   </Link>
+
+                  <button onClick={handleLogout} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-rose-50 text-slate-700 hover:text-rose-600 font-medium dark:text-slate-300 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 transition-colors mt-4">
+                    <LogOut className="w-5 h-5" /> Sair
+                  </button>
                 </nav>
               </div>
 

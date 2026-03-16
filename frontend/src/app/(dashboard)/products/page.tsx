@@ -17,6 +17,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
+import { ProductImage } from '@/components/store/ProductImage';
 
 export default function ProductsPage() {
   const router = useRouter();
@@ -24,6 +25,9 @@ export default function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   
+  const [coverBaseUrl, setCoverBaseUrl] = useState<string | null>(null);
+  const [companyId, setCompanyId] = useState<number>(1);
+
   // Pagination
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -58,6 +62,29 @@ export default function ProductsPage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      const token = getToken();
+      if (!token) return;
+      try {
+        const decoded = JSON.parse(atob(token.split('.')[1]));
+        const compId = decoded.company_id || 1;
+        setCompanyId(compId);
+        
+        const res = await fetch(`http://localhost:8000/companies/${compId}/settings`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+           const data = await res.json();
+           setCoverBaseUrl(data.cover_image_base_url || null);
+        }
+      } catch (e) {
+        console.error("Error loading settings", e);
+      }
+    };
+    fetchSettings();
+  }, []);
 
   useEffect(() => {
     fetchProducts();
@@ -182,8 +209,15 @@ export default function ProductsPage() {
                       <input type="checkbox" onClick={(e) => e.stopPropagation()} className="rounded border-slate-300 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)] dark:border-slate-700 dark:bg-slate-950" />
                     </td>
                     <td className="p-4 hidden sm:table-cell">
-                      <div className="w-14 h-14 bg-slate-100 rounded-lg flex items-center justify-center border border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700">
-                        <ImageIcon className="h-6 w-6" />
+                      <div className="w-14 h-14 bg-slate-100 rounded-lg flex items-center justify-center border border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700 relative overflow-hidden">
+                        <ProductImage 
+                          eanGtin={product.ean_gtin} 
+                          alt={product.name}
+                          baseUrl={coverBaseUrl}
+                          companyIdProp={companyId}
+                          className="w-full h-full object-cover p-1"
+                          iconClassName="h-6 w-6 text-slate-400"
+                        />
                       </div>
                     </td>
                     <td className="p-4">
@@ -191,7 +225,7 @@ export default function ProductsPage() {
                         {product.name}
                       </p>
                       <p className="text-xs text-slate-500 mt-1 dark:text-slate-400">
-                        {product.brand || 'Sem marca'}
+                        {product.brand_rel?.name || product.brand || 'Sem marca'}
                       </p>
                     </td>
                     <td className="p-4">
