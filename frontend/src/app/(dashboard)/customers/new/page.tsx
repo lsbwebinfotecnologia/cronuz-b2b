@@ -2,11 +2,12 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Building2, ArrowLeft, Save, MapPin, Users, Building, Plus, X, Loader2 } from 'lucide-react';
+import { Building2, ArrowLeft, Save, MapPin, Users, Building, Plus, X, Loader2, Search } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 const steps = [
   { id: 'fiscal', title: 'Dados Fiscais', icon: Building2, desc: 'Informações principais de cadastro' },
@@ -16,6 +17,7 @@ const steps = [
 
 export default function NewCustomerPage() {
   const router = useRouter();
+  const user = getUser();
   const [currentStep, setCurrentStep] = useState(0);
   const [loading, setLoading] = useState(false);
 
@@ -29,8 +31,14 @@ export default function NewCustomerPage() {
     email: '',
     phone: '',
     credit_limit: 0,
-    discount: 0
+    open_debts: 0,
+    consignment_status: 'INACTIVE',
+    discount: 0,
+    id_guid: '',
+    id_doc: ''
   });
+
+  const [searchingHorus, setSearchingHorus] = useState(false);
 
   // Masking Utilities
   const maskCEP = (val: string) => {
@@ -38,7 +46,7 @@ export default function NewCustomerPage() {
   };
 
   const maskPhone = (val: string) => {
-    let v = val.replace(/\D/g, '');
+    const v = val.replace(/\D/g, '');
     if (v.length <= 10) {
       return v.replace(/(\d{2})(\d{4})(\d{4})/, '($1) $2-$3');
     }
@@ -46,7 +54,7 @@ export default function NewCustomerPage() {
   };
 
   const maskDocument = (val: string, type: string) => {
-    let v = val.replace(/\D/g, '');
+    const v = val.replace(/\D/g, '');
     if (type === 'PF') {
       return v.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4').substring(0, 14);
     } else {
@@ -98,6 +106,52 @@ export default function NewCustomerPage() {
            // silently fail status
          }
        }
+    }
+  };
+
+  const handleHorusSearch = async () => {
+    if (fiscalData.customer_type !== 'PJ') return;
+    const cleanCnpj = fiscalData.document.replace(/\D/g, '');
+    if (cleanCnpj.length !== 14) {
+      toast.error('Preencha o CNPJ completo antes de buscar no Horus');
+      return;
+    }
+
+    setSearchingHorus(true);
+    try {
+      if (!user?.company_id) throw new Error('Não foi possível obter dados da Empresa vinculada ao usuário');
+      
+      const res = await fetch(`http://localhost:8000/companies/${user.company_id}/horus/customers/${cleanCnpj}`, {
+        headers: {
+          'Authorization': `Bearer ${getToken()}`
+        }
+      });
+
+      if (res.ok) {
+        const payload = await res.json();
+        const data = payload.data;
+        
+        setFiscalData(prev => ({
+          ...prev,
+          name: data.NOM_CLI || prev.name,
+          corporate_name: data.NOM_CLI || prev.corporate_name,
+          email: payload.email || prev.email,
+          id_guid: data.ID_GUID || prev.id_guid,
+          id_doc: payload.cnpj_seller || prev.id_doc,
+          credit_limit: payload.financials?.credit_limit || prev.credit_limit,
+          open_debts: payload.financials?.open_debts || prev.open_debts,
+          consignment_status: payload.financials?.consignment_status || prev.consignment_status
+        }));
+        
+        toast.success(payload.msg || 'Cliente localizado no Horus e dados preenchidos!');
+      } else {
+        const err = await res.json();
+        throw new Error(err.detail || 'Cliente não encontrado no Horus ou api inativa.');
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao conectar com a API Horus. Verifique se ela está habilitada nas configurações.');
+    } finally {
+      setSearchingHorus(false);
     }
   };
 
@@ -189,23 +243,23 @@ export default function NewCustomerPage() {
       <div className="flex items-center gap-5">
         <Link 
           href="/customers"
-          className="p-2 bg-slate-800/50 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white"
+          className="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-colors text-slate-500 hover:text-slate-900 dark:bg-slate-800/50 dark:border-transparent dark:hover:bg-slate-800 dark:text-slate-400 dark:hover:text-white"
         >
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
             Adicionar Novo Cliente B2B
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
             Preencha todos os dados fiscais e operacionais do cliente para homologação.
           </p>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden shadow-2xl">
+      <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm dark:border-slate-800 dark:bg-slate-900/40 dark:shadow-2xl transition-colors">
         {/* Wizard Steps */}
-        <div className="flex flex-col sm:flex-row border-b border-slate-800/80 bg-slate-950/50">
+        <div className="flex flex-col sm:flex-row border-b border-slate-200 bg-slate-50 dark:border-slate-800/80 dark:bg-slate-950/50">
           {steps.map((step, index) => {
             const isActive = index === currentStep;
             const isCompleted = index < currentStep;
@@ -214,18 +268,18 @@ export default function NewCustomerPage() {
               <button
                 key={step.id}
                 onClick={() => setCurrentStep(index)}
-                className={`flex-1 flex px-6 py-4 items-center gap-4 transition-colors relative ${isActive ? 'bg-slate-800/30' : 'hover:bg-slate-800/10'}`}
+                className={`flex-1 flex px-6 py-4 items-center gap-4 transition-colors relative ${isActive ? 'bg-white shadow-sm dark:bg-slate-800/30 dark:shadow-none' : 'hover:bg-slate-100 dark:hover:bg-slate-800/10'}`}
               >
                 <div className={`
                   flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all
-                  ${isActive ? 'bg-[var(--color-primary-base)] text-white shadow-[0_0_15px_var(--color-primary-base)] shadow-indigo-500/20' 
-                   : isCompleted ? 'bg-emerald-500/20 text-emerald-400'
-                   : 'bg-slate-800 text-slate-500'}
+                  ${isActive ? 'bg-[var(--color-primary-base)] text-white shadow-[0_0_15px_var(--color-primary-base)] shadow-[var(--color-primary-base)]/20' 
+                   : isCompleted ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400'
+                   : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'}
                 `}>
                   <step.icon className="h-5 w-5" />
                 </div>
                 <div className="text-left hidden sm:block">
-                  <p className={`text-sm font-semibold ${isActive || isCompleted ? 'text-white' : 'text-slate-400'}`}>{step.title}</p>
+                  <p className={`text-sm font-semibold ${isActive || isCompleted ? 'text-slate-900 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>{step.title}</p>
                   <p className="text-xs text-slate-500">{step.desc}</p>
                 </div>
                 {isActive && (
@@ -253,32 +307,32 @@ export default function NewCustomerPage() {
               >
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="md:col-span-2">
-                    <h2 className="text-lg font-semibold text-white">1. Dados do Cliente</h2>
-                    <p className="text-sm text-slate-400">Insira as informações de identificação do seu cliente para início do processo de faturamento e limites.</p>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-white">1. Dados do Cliente</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Insira as informações de identificação do seu cliente para início do processo de faturamento e limites.</p>
                   </div>
 
                   <div className="space-y-1.5 md:col-span-2">
-                     <label className="text-sm font-medium text-slate-300">Tipo de Cliente *</label>
+                     <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Tipo de Cliente *</label>
                      <div className="flex gap-4">
-                       <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                       <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
                          <input 
                            type="radio" 
                            name="customer_type" 
                            value="PJ" 
                            checked={fiscalData.customer_type === 'PJ'} 
                            onChange={e => setFiscalData({ ...fiscalData, customer_type: e.target.value, document: '' })}
-                           className="text-indigo-500 bg-slate-900 border-slate-700" 
+                           className="text-[var(--color-primary-base)] bg-white border-slate-300 dark:bg-slate-900 dark:border-slate-700" 
                          />
                          Pessoa Jurídica (CNPJ)
                        </label>
-                       <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                       <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
                          <input 
                            type="radio" 
                            name="customer_type" 
                            value="PF" 
                            checked={fiscalData.customer_type === 'PF'} 
                            onChange={e => setFiscalData({ ...fiscalData, customer_type: e.target.value, document: '' })}
-                           className="text-indigo-500 bg-slate-900 border-slate-700" 
+                           className="text-[var(--color-primary-base)] bg-white border-slate-300 dark:bg-slate-900 dark:border-slate-700" 
                          />
                          Pessoa Física (CPF)
                        </label>
@@ -286,38 +340,51 @@ export default function NewCustomerPage() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-slate-300">{fiscalData.customer_type === 'PJ' ? 'CNPJ' : 'CPF'} *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder={fiscalData.customer_type === 'PJ' ? '00.000.000/0001-00' : '000.000.000-00'}
-                      value={fiscalData.document}
-                      onChange={e => handleDocumentChange(e.target.value)}
-                      className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all font-mono"
-                    />
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">{fiscalData.customer_type === 'PJ' ? 'CNPJ' : 'CPF'} *</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        placeholder={fiscalData.customer_type === 'PJ' ? '00.000.000/0001-00' : '000.000.000-00'}
+                        value={fiscalData.document}
+                        onChange={e => handleDocumentChange(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all font-mono dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
+                      />
+                      {fiscalData.customer_type === 'PJ' && (
+                        <button
+                          type="button"
+                          onClick={handleHorusSearch}
+                          disabled={searchingHorus}
+                          className="px-4 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-400 dark:hover:bg-indigo-500/20 dark:border-indigo-500/20 rounded-xl transition-colors flex items-center gap-2 font-medium shrink-0 disabled:opacity-50"
+                        >
+                          {searchingHorus ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
+                          <span className="hidden sm:inline">Buscar no Horus</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                   
                   <div className="space-y-1.5 md:col-span-2">
-                    <label className="text-sm font-medium text-slate-300">{fiscalData.customer_type === 'PJ' ? 'Razão Social' : 'Nome Completo'} *</label>
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">{fiscalData.customer_type === 'PJ' ? 'Razão Social' : 'Nome Completo'} *</label>
                     <input
                       type="text"
                       required
                       placeholder={fiscalData.customer_type === 'PJ' ? 'Livraria Cultura S.A.' : 'João da Silva'}
                       value={fiscalData.corporate_name}
                       onChange={e => setFiscalData({ ...fiscalData, corporate_name: e.target.value })}
-                      className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all"
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
                     />
                   </div>
                   
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-slate-300">{fiscalData.customer_type === 'PJ' ? 'Nome Fantasia *' : 'Apelido (Nome Curto) *'}</label>
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">{fiscalData.customer_type === 'PJ' ? 'Nome Fantasia *' : 'Apelido (Nome Curto) *'}</label>
                     <input
                       type="text"
                       required
                       placeholder={fiscalData.customer_type === 'PJ' ? 'Livraria Cultura Iguatemi' : 'João Cliente'}
                       value={fiscalData.name}
                       onChange={e => setFiscalData({ ...fiscalData, name: e.target.value })}
-                      className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all"
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
                     />
                   </div>
 
@@ -325,59 +392,57 @@ export default function NewCustomerPage() {
 
                   {fiscalData.customer_type === 'PJ' && (
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-slate-300">Inscrição Estadual (I.E.)</label>
+                      <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Inscrição Estadual (I.E.)</label>
                       <input
                         type="text"
                         placeholder="Isento"
                         value={fiscalData.state_registration}
                         onChange={e => setFiscalData({ ...fiscalData, state_registration: e.target.value })}
-                        className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all font-mono"
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all font-mono dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
                       />
                     </div>
                   )}
 
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-slate-300">Telefone Principal</label>
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Telefone Principal</label>
                     <input
                       type="text"
                       placeholder="(11) 90000-0000"
                       value={fiscalData.phone}
                       onChange={e => setFiscalData({ ...fiscalData, phone: maskPhone(e.target.value) })}
-                      className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all"
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
                     />
                   </div>
 
                   <div className="space-y-1.5 md:col-span-2">
-                     <hr className="border-slate-800 my-2" />
+                     <hr className="border-slate-200 dark:border-slate-800 my-2" />
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-slate-300">Limite de Crédito Inicial (R$)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="5000.00"
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Limite de Crédito Inicial (R$)</label>
+                    <CurrencyInput
+                      prefixStr="R$ "
+                      placeholder="5000,00"
                       value={fiscalData.credit_limit}
-                      onChange={e => setFiscalData({ ...fiscalData, credit_limit: Number(e.target.value) })}
-                      className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-emerald-400 font-semibold focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all"
+                      onChangeValue={val => setFiscalData({ ...fiscalData, credit_limit: val })}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-emerald-600 dark:text-emerald-400 font-semibold focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800"
                     />
                   </div>
                   
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-slate-300">Desconto Padrão do Cliente (%)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      max="100"
-                      placeholder="0.00"
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Desconto Padrão do Cliente (%)</label>
+                    <CurrencyInput
+                      suffixStr="%"
+                      maxDecimals={2}
+                      placeholder="0,00%"
                       value={fiscalData.discount}
-                      onChange={e => setFiscalData({ ...fiscalData, discount: Number(e.target.value) })}
-                      className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-indigo-400 font-semibold focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all"
+                      onChangeValue={val => setFiscalData({ ...fiscalData, discount: val })}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-[var(--color-primary-base)] font-semibold focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800"
                     />
                   </div>
                 </div>
                 
-                <div className="flex justify-end pt-4 border-t border-slate-800/60">
+                <div className="flex justify-end pt-4 border-t border-slate-200 dark:border-slate-800/60">
                    <button
                     onClick={() => setCurrentStep(1)}
                     className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2.5 px-6 rounded-xl transition-all"
@@ -399,40 +464,40 @@ export default function NewCustomerPage() {
               >
                 <div className="flex justify-between items-end">
                   <div>
-                    <h2 className="text-lg font-semibold text-white">2. Múltiplos Endereços</h2>
-                    <p className="text-sm text-slate-400">Cadastre os endereços de faturamento e entrega deste cliente.</p>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-white">2. Múltiplos Endereços</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Cadastre os endereços de faturamento e entrega deste cliente.</p>
                   </div>
                   <button
                     onClick={addAddress}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 border border-indigo-500/20 rounded-lg transition-colors"
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-400 dark:hover:bg-indigo-500/20 dark:border-indigo-500/20 rounded-lg transition-colors"
                   >
                     <Plus className="h-4 w-4" /> Novo Endereço
                   </button>
                 </div>
 
                 {addresses.length === 0 ? (
-                  <div className="p-8 border-2 border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center text-slate-500">
+                  <div className="p-8 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center text-slate-400 dark:border-slate-800 dark:text-slate-500">
                     <MapPin className="h-8 w-8 mb-3 opacity-50" />
                     <p>Nenhum endereço cadastrado ainda.</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
                     {addresses.map((addr, idx) => (
-                      <div key={idx} className="p-5 border border-slate-700/60 rounded-xl bg-slate-800/20 relative group">
+                      <div key={idx} className="p-5 border border-slate-200 rounded-xl bg-slate-50 relative group dark:border-slate-700/60 dark:bg-slate-800/20">
                         <button 
                           onClick={() => removeAddress(idx)}
-                          className="absolute top-4 right-4 text-slate-500 hover:text-rose-400 transition-colors"
+                          className="absolute top-4 right-4 text-slate-400 hover:text-rose-500 transition-colors dark:text-slate-500 dark:hover:text-rose-400"
                         >
                           <X className="h-5 w-5" />
                         </button>
                         
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                           <div className="space-y-1 md:col-span-3">
-                             <label className="text-xs font-semibold text-slate-400 uppercase">Tipo do Endereço</label>
+                             <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">Tipo do Endereço</label>
                              <select
                                value={addr.type}
                                onChange={(e) => updateAddress(idx, 'type', e.target.value)}
-                               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none"
+                               className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none dark:bg-slate-900 dark:border-slate-700 dark:text-white focus:border-[var(--color-primary-base)] transition-colors shadow-sm"
                              >
                                 <option value="MAIN">Matriz (Principal)</option>
                                 <option value="SHIPPING">Endereço de Entrega</option>
@@ -440,33 +505,33 @@ export default function NewCustomerPage() {
                              </select>
                           </div>
                           <div className="space-y-1">
-                             <label className="text-xs font-semibold text-slate-400 uppercase">CEP</label>
+                             <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">CEP</label>
                              <input 
                                type="text" 
                                value={addr.zip_code} 
                                onChange={e => handleCepChange(idx, e.target.value)} 
-                               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500 transition-colors" 
+                               className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" 
                                placeholder="00000-000"
                                maxLength={9}
                              />
                           </div>
                           <div className="space-y-1 md:col-span-2">
-                             <label className="text-xs font-semibold text-slate-400 uppercase">Rua / Logradouro</label>
-                             <input type="text" value={addr.street} onChange={e => updateAddress(idx, 'street', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none" placeholder="Av Paulista"/>
+                             <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">Rua / Logradouro</label>
+                             <input type="text" value={addr.street} onChange={e => updateAddress(idx, 'street', e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="Av Paulista"/>
                           </div>
                           <div className="space-y-1">
-                             <label className="text-xs font-semibold text-slate-400 uppercase">Número</label>
-                             <input type="text" value={addr.number} onChange={e => updateAddress(idx, 'number', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none" placeholder="1000"/>
+                             <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">Número</label>
+                             <input type="text" value={addr.number} onChange={e => updateAddress(idx, 'number', e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="1000"/>
                           </div>
                           <div className="space-y-1">
-                             <label className="text-xs font-semibold text-slate-400 uppercase">Bairro</label>
-                             <input type="text" value={addr.neighborhood} onChange={e => updateAddress(idx, 'neighborhood', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none" placeholder="Bela Vista"/>
+                             <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">Bairro</label>
+                             <input type="text" value={addr.neighborhood} onChange={e => updateAddress(idx, 'neighborhood', e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="Bela Vista"/>
                           </div>
                            <div className="space-y-1">
-                             <label className="text-xs font-semibold text-slate-400 uppercase">Cidade / UF</label>
+                             <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">Cidade / UF</label>
                              <div className="flex gap-2">
-                               <input type="text" value={addr.city} onChange={e => updateAddress(idx, 'city', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none" placeholder="Sampa"/>
-                               <input type="text" value={addr.state} onChange={e => updateAddress(idx, 'state', e.target.value)} className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none" placeholder="SP" maxLength={2}/>
+                               <input type="text" value={addr.city} onChange={e => updateAddress(idx, 'city', e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="Sampa"/>
+                               <input type="text" value={addr.state} onChange={e => updateAddress(idx, 'state', e.target.value)} className="w-16 bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="SP" maxLength={2}/>
                              </div>
                           </div>
                         </div>
@@ -475,8 +540,8 @@ export default function NewCustomerPage() {
                   </div>
                 )}
                 
-                <div className="flex justify-between pt-4 border-t border-slate-800/60">
-                  <button onClick={() => setCurrentStep(0)} className="text-slate-400 hover:text-white px-4 py-2">Voltar</button>
+                <div className="flex justify-between pt-4 border-t border-slate-200 dark:border-slate-800/60">
+                  <button onClick={() => setCurrentStep(0)} className="text-slate-500 hover:text-slate-900 px-4 py-2 dark:text-slate-400 dark:hover:text-white">Voltar</button>
                   <button
                     onClick={() => setCurrentStep(2)}
                     className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2.5 px-6 rounded-xl transition-all"
@@ -498,48 +563,48 @@ export default function NewCustomerPage() {
               >
                 <div className="flex justify-between items-end">
                   <div>
-                    <h2 className="text-lg font-semibold text-white">3. Contatos Autorizados</h2>
-                    <p className="text-sm text-slate-400">Pessoas que receberão notas ou aprovarão pedidos.</p>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-white">3. Contatos Autorizados</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Pessoas que receberão notas ou aprovarão pedidos.</p>
                   </div>
                   <button
                     onClick={addContact}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 border border-indigo-500/20 rounded-lg transition-colors"
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-400 dark:hover:bg-indigo-500/20 dark:border-indigo-500/20 rounded-lg transition-colors"
                   >
                     <Plus className="h-4 w-4" /> Add Colaborador
                   </button>
                 </div>
 
                 {contacts.length === 0 ? (
-                  <div className="p-8 border-2 border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center text-slate-500">
+                  <div className="p-8 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center text-slate-400 dark:border-slate-800 dark:text-slate-500">
                     <Users className="h-8 w-8 mb-3 opacity-50" />
                     <p>Nenhum contato nomeado.</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
                     {contacts.map((contact, idx) => (
-                      <div key={idx} className="p-5 border border-slate-700/60 rounded-xl bg-slate-800/20 relative group grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div key={idx} className="p-5 border border-slate-200 rounded-xl bg-slate-50 relative group grid grid-cols-1 md:grid-cols-2 gap-4 dark:border-slate-700/60 dark:bg-slate-800/20">
                         <button 
                           onClick={() => removeContact(idx)}
-                          className="absolute top-4 right-4 text-slate-500 hover:text-rose-400 transition-colors z-10"
+                          className="absolute top-4 right-4 text-slate-400 hover:text-rose-500 transition-colors z-10 dark:text-slate-500 dark:hover:text-rose-400"
                         >
                           <X className="h-5 w-5" />
                         </button>
                         
                         <div className="space-y-1">
-                           <label className="text-xs font-semibold text-slate-400 uppercase">Nome Completo</label>
-                           <input type="text" value={contact.name} onChange={e => updateContact(idx, 'name', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none" placeholder="Ex: João Silva"/>
+                           <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">Nome Completo</label>
+                           <input type="text" value={contact.name} onChange={e => updateContact(idx, 'name', e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="Ex: João Silva"/>
                         </div>
                         <div className="space-y-1 pr-8">
-                           <label className="text-xs font-semibold text-slate-400 uppercase">Cargo/Setor</label>
-                           <input type="text" value={contact.role} onChange={e => updateContact(idx, 'role', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none" placeholder="Ex: Compras"/>
+                           <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">Cargo/Setor</label>
+                           <input type="text" value={contact.role} onChange={e => updateContact(idx, 'role', e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="Ex: Compras"/>
                         </div>
                         <div className="space-y-1">
-                           <label className="text-xs font-semibold text-slate-400 uppercase">E-mail</label>
-                           <input type="email" value={contact.email} onChange={e => updateContact(idx, 'email', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none" placeholder="joao@livraria.com"/>
+                           <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">E-mail</label>
+                           <input type="email" value={contact.email} onChange={e => updateContact(idx, 'email', e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="joao@livraria.com"/>
                         </div>
                         <div className="space-y-1">
-                           <label className="text-xs font-semibold text-slate-400 uppercase">Celular/WhatsApp</label>
-                           <input type="text" value={contact.phone} onChange={e => updateContact(idx, 'phone', maskPhone(e.target.value))} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500 transition-colors" placeholder="(11) 90000-0000"/>
+                           <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">Celular/WhatsApp</label>
+                           <input type="text" value={contact.phone} onChange={e => updateContact(idx, 'phone', maskPhone(e.target.value))} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="(11) 90000-0000"/>
                         </div>
                       </div>
                     ))}
@@ -547,8 +612,8 @@ export default function NewCustomerPage() {
                 )}
                 
                 {/* Submit Action */}
-                <div className="flex justify-between items-center pt-8 border-t border-slate-800/60 mt-8">
-                  <button onClick={() => setCurrentStep(1)} className="text-slate-400 hover:text-white px-4 py-2">Voltar</button>
+                <div className="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800/60 mt-8">
+                  <button onClick={() => setCurrentStep(1)} className="text-slate-500 hover:text-slate-900 px-4 py-2 dark:text-slate-400 dark:hover:text-white">Voltar</button>
                   
                   <button
                     onClick={handleSubmit}

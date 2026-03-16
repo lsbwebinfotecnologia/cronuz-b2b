@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -9,9 +9,14 @@ class CompanySettings(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("cmp_company.id"), unique=True, nullable=False)
     
-    # Integration Keys
-    horus_api_key = Column(String(255), nullable=True)
-    horus_endpoint = Column(String(255), nullable=True)
+    # Horus ERP Integration
+    horus_enabled = Column(Boolean, default=False, nullable=False)
+    horus_url = Column(String(255), nullable=True)
+    horus_port = Column(String(50), nullable=True)
+    horus_username = Column(String(255), nullable=True)
+    horus_password = Column(String(255), nullable=True)
+    horus_company = Column(String(50), nullable=True)
+    horus_branch = Column(String(50), nullable=True)
     
     bookinfo_api_key = Column(String(255), nullable=True)
     metabooks_api_key = Column(String(255), nullable=True)

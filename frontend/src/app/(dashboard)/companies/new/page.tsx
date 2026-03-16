@@ -83,16 +83,16 @@ export default function NewCompanyPage() {
       <div className="flex items-center gap-4">
         <Link 
           href="/"
-          className="p-2 bg-slate-800/50 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white"
+          className="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-colors text-slate-500 hover:text-slate-900 dark:bg-slate-800/50 dark:border-transparent dark:hover:bg-slate-800 dark:text-slate-400 dark:hover:text-white"
         >
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
             <Building2 className="h-6 w-6 text-[var(--color-primary-base)]" />
             Nova Empresa B2B
           </h1>
-          <p className="text-slate-400 text-sm mt-1">
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
             Cadastre um novo portal independente na rede Cronuz.
           </p>
         </div>
@@ -101,70 +101,70 @@ export default function NewCompanyPage() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 md:p-8 backdrop-blur-xl"
+        className="rounded-2xl border border-slate-200 bg-white p-6 md:p-8 shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900/40 dark:backdrop-blur-xl"
       >
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-300">Razão Social / Nome</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Razão Social / Nome</label>
               <div className="relative">
-                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500" />
+                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-slate-500" />
                 <input
                   type="text"
                   required
                   value={formData.name}
                   onChange={(e) => setFormData({...formData, name: e.target.value})}
-                  className="w-full rounded-xl border border-slate-800 bg-slate-950/50 py-3 pl-11 pr-4 text-sm text-slate-200 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-medium"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
                   placeholder="Nome da corporação"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-300">CNPJ / Documento</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">CNPJ / Documento</label>
               <div className="relative">
-                <FileText className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500" />
+                <FileText className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-slate-500" />
                 <input
                   type="text"
                   required
                   value={formData.document}
                   onChange={(e) => handleDocumentChange(e.target.value)}
-                  className="w-full rounded-xl border border-slate-800 bg-slate-950/50 py-3 pl-11 pr-4 text-sm text-slate-200 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-medium font-mono"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium font-mono dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
                   placeholder="00.000.000/0001-00"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-300">Domínio (URL Personalizada)</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Domínio (URL Personalizada)</label>
               <div className="relative">
-                <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500" />
+                <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-slate-500" />
                 <input
                   type="text"
                   required
                   value={formData.domain}
                   onChange={(e) => setFormData({...formData, domain: e.target.value})}
-                  className="w-full rounded-xl border border-slate-800 bg-slate-950/50 py-3 pl-11 pr-4 text-sm text-slate-200 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-medium"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
                   placeholder="livraria.cronuz.com.br"
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-300">Logo URL (Opcional)</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Logo URL (Opcional)</label>
               <div className="relative">
-                <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500" />
+                <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-slate-500" />
                 <input
                   type="url"
                   value={formData.logo}
                   onChange={(e) => setFormData({...formData, logo: e.target.value})}
-                  className="w-full rounded-xl border border-slate-800 bg-slate-950/50 py-3 pl-11 pr-4 text-sm text-slate-200 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-medium"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
                   placeholder="https://meusite.com/logo.png"
                 />
               </div>
             </div>
           </div>
 
-          <div className="flex justify-end pt-4 border-t border-slate-800/60">
+          <div className="flex justify-end pt-4 border-t border-slate-200 dark:border-slate-800/60">
             <button
               type="submit"
               disabled={loading}

@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
 @theme {
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
@@ -14,20 +15,31 @@
 
 @layer base {
   :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+  }
+ 
+  .dark {
     --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
     --ring: 224.3 76.3% 48%;
   }
+}
 
+@layer base {
   * {
-    border-color: var(--color-border);
+    @apply border-border;
   }
-  
   body {
-    background-color: var(--color-background);
-    color: var(--color-foreground);
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
     @apply antialiased font-sans selection:bg-[#01A9AF]/30;
   }
 }
+
+@import 'react-quill-new/dist/quill.snow.css';

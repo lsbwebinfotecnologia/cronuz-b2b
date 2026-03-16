@@ -35,8 +35,8 @@ export default function DashboardPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Visão Geral</h1>
-        <p className="text-slate-400">Bem-vindo ao Cronuz B2B. Acompanhe os indicadores da sua multi-empresa.</p>
+        <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white mb-2">Visão Geral</h1>
+        <p className="text-slate-500 dark:text-slate-400">Bem-vindo ao Cronuz B2B. Acompanhe os indicadores da sua multi-empresa.</p>
       </div>
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -46,7 +46,7 @@ export default function DashboardPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1, duration: 0.4 }}
-            className="group relative overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/40 p-6 hover:bg-slate-900/60 transition-colors"
+            className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 hover:bg-slate-50 shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900/40 dark:hover:bg-slate-900/60"
           >
             <div className="flex items-center justify-between mb-4">
               <stat.icon className="h-5 w-5 text-[var(--color-primary-base)]" />
@@ -55,8 +55,8 @@ export default function DashboardPage() {
                 <ArrowUpRight className="ml-1 h-3 w-3" />
               </span>
             </div>
-            <h3 className="text-sm font-medium text-slate-400 mb-1">{stat.name}</h3>
-            <p className="text-2xl font-bold text-white">{stat.value}</p>
+            <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">{stat.name}</h3>
+            <p className="text-2xl font-bold text-slate-900 dark:text-white">{stat.value}</p>
             
             <div className="absolute -right-4 -bottom-4 opacity-5 group-hover:opacity-10 transition-opacity">
               <stat.icon className="h-24 w-24 text-[var(--color-primary-base)]" />
@@ -70,9 +70,9 @@ export default function DashboardPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
-          className="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 min-h-[300px]"
+          className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 min-h-[300px] dark:border-slate-800 dark:bg-slate-900/40"
         >
-          <h3 className="text-lg font-semibold text-white mb-4">Pedidos Recentes</h3>
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Pedidos Recentes</h3>
           <div className="flex h-full items-center justify-center text-slate-500 text-sm">
             Nenhum pedido recente.
           </div>
@@ -82,9 +82,9 @@ export default function DashboardPage() {
            initial={{ opacity: 0, y: 20 }}
            animate={{ opacity: 1, y: 0 }}
            transition={{ delay: 0.5 }}
-          className="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 min-h-[300px]"
+          className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 min-h-[300px] dark:border-slate-800 dark:bg-slate-900/40"
         >
-          <h3 className="text-lg font-semibold text-white mb-4">Integração Horus</h3>
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Integração Horus</h3>
           {loading ? (
             <div className="flex h-full items-center justify-center text-[var(--color-primary-base)]">
               <RefreshCw className="h-6 w-6 animate-spin" />
@@ -93,7 +93,7 @@ export default function DashboardPage() {
             <div className="flex flex-col h-full justify-center space-y-4">
                <div className="flex items-center gap-3">
                   <div className={`h-3 w-3 rounded-full ${horusStatus.status === 'connected' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
-                  <span className="text-slate-300 font-medium">
+                  <span className="font-medium text-slate-700 dark:text-slate-300">
                     {horusStatus.status === 'connected' ? 'Conectado e Operacional' : 'Falha na Conexão'}
                   </span>
                </div>

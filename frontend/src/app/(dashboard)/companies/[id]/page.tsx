@@ -35,8 +35,13 @@ export default function CompanyDetailsPage() {
   const [toggling, setToggling] = useState(false);
   const [activeTab, setActiveTab] = useState<'users' | 'integrations'>('users');
   const [settings, setSettings] = useState<any>({
-    horus_api_key: '',
-    horus_endpoint: '',
+    horus_enabled: false,
+    horus_url: '',
+    horus_port: '',
+    horus_username: '',
+    horus_password: '',
+    horus_company: '',
+    horus_branch: '',
     bookinfo_api_key: '',
     metabooks_api_key: ''
   });
@@ -73,8 +78,13 @@ export default function CompanyDetailsPage() {
       if (settingsRes.ok) {
         const data = await settingsRes.json();
         setSettings({
-          horus_api_key: data.horus_api_key || '',
-          horus_endpoint: data.horus_endpoint || '',
+          horus_enabled: data.horus_enabled || false,
+          horus_url: data.horus_url || '',
+          horus_port: data.horus_port || '',
+          horus_username: data.horus_username || '',
+          horus_password: data.horus_password || '',
+          horus_company: data.horus_company || '',
+          horus_branch: data.horus_branch || '',
           bookinfo_api_key: data.bookinfo_api_key || '',
           metabooks_api_key: data.metabooks_api_key || ''
         });
@@ -258,42 +268,44 @@ export default function CompanyDetailsPage() {
         <div className="flex items-center gap-5">
           <Link 
             href="/companies"
-            className="p-2 bg-slate-800/50 hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-white"
+            className="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-colors text-slate-500 hover:text-slate-900 dark:bg-slate-800/50 dark:border-transparent dark:hover:bg-slate-800 dark:text-slate-400 dark:hover:text-white"
           >
             <ArrowLeft className="h-5 w-5" />
           </Link>
           
           <div className="flex items-center gap-4">
             {company.logo ? (
-              <img src={company.logo} alt={company.name} className="h-16 w-16 rounded-2xl object-contain bg-white/5 p-2 border border-slate-700/50" />
+              <img src={company.logo} alt={company.name} className="h-16 w-16 rounded-2xl object-contain bg-slate-50 p-2 border border-slate-200 dark:bg-white/5 dark:border-slate-700/50" />
             ) : (
-              <div className="h-16 w-16 rounded-2xl bg-slate-800 flex items-center justify-center border border-slate-700/50">
+              <div className="h-16 w-16 rounded-2xl bg-white flex items-center justify-center border border-slate-200 dark:bg-slate-800 dark:border-slate-700/50">
                 <Building2 className="h-8 w-8 text-slate-400" />
               </div>
             )}
             <div>
               <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold tracking-tight text-white">{company.name}</h1>
+                <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{company.name}</h1>
                 {company.active ? (
-                  <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
                     <CheckCircle2 className="h-3.5 w-3.5" /> Ativa
                   </span>
                 ) : (
-                  <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-rose-50 text-rose-600 border border-rose-200 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20">
                     <XCircle className="h-3.5 w-3.5" /> Inativa
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-4 mt-1.5 text-sm text-slate-400">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono">{company.document}</span>
-                </div>
-                <div className="h-1 w-1 rounded-full bg-slate-600" />
-                <div className="flex items-center gap-1.5">
-                  <Globe className="h-4 w-4" />
-                  <a href={`https://${company.domain}`} target="_blank" rel="noreferrer" className="hover:text-[var(--color-primary-base)] transition-colors">
-                    {company.domain}
-                  </a>
+              <div className="flex items-center gap-4 mt-1.5 text-sm text-slate-500 dark:text-slate-400">
+                <div className="flex items-center flex-wrap gap-2 md:gap-4 w-full">
+                  <span className="font-mono bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 dark:bg-slate-900 dark:border-slate-800">
+                    {company.document}
+                  </span>
+                  <div className="hidden md:block h-1 w-1 rounded-full bg-slate-300 dark:bg-slate-600" />
+                  <div className="flex items-center gap-1.5">
+                    <Globe className="h-4 w-4" />
+                    <a href={`https://${company.domain}`} target="_blank" rel="noreferrer" className="hover:text-[var(--color-primary-base)] transition-colors">
+                      {company.domain}
+                    </a>
+                  </div>
                 </div>
               </div>
             </div>
@@ -306,8 +318,8 @@ export default function CompanyDetailsPage() {
             disabled={toggling}
             className={`px-4 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-all ${
               company.active 
-                ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20'
-                : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20'
+                ? 'bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200 dark:bg-rose-500/10 dark:text-rose-400 dark:hover:bg-rose-500/20 dark:border-rose-500/20'
+                : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20 dark:border-emerald-500/20'
             }`}
           >
             {toggling ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
@@ -318,17 +330,17 @@ export default function CompanyDetailsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-4 border-b border-slate-800">
+      <div className="flex gap-4 border-b border-slate-200 dark:border-slate-800">
         <button
           onClick={() => setActiveTab('users')}
-          className={`pb-4 px-2 font-medium transition-colors border-b-2 flex items-center gap-2 ${activeTab === 'users' ? 'border-[var(--color-primary-base)] text-white' : 'border-transparent text-slate-400 hover:text-slate-300'}`}
+          className={`pb-4 px-2 font-medium transition-colors border-b-2 flex items-center gap-2 ${activeTab === 'users' ? 'border-[var(--color-primary-base)] text-[var(--color-primary-base)] dark:text-white' : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-300'}`}
         >
           <Users className="h-4 w-4" />
           Usuários Sellers
         </button>
         <button
           onClick={() => setActiveTab('integrations')}
-          className={`pb-4 px-2 font-medium transition-colors border-b-2 flex items-center gap-2 ${activeTab === 'integrations' ? 'border-[var(--color-primary-base)] text-white' : 'border-transparent text-slate-400 hover:text-slate-300'}`}
+          className={`pb-4 px-2 font-medium transition-colors border-b-2 flex items-center gap-2 ${activeTab === 'integrations' ? 'border-[var(--color-primary-base)] text-[var(--color-primary-base)] dark:text-white' : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-300'}`}
         >
           <Key className="h-4 w-4" />
           Integrações & ERP
@@ -340,21 +352,21 @@ export default function CompanyDetailsPage() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="rounded-2xl border border-slate-800 bg-slate-900/40 backdrop-blur-xl overflow-hidden"
+        className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden dark:border-slate-800 dark:bg-slate-900/40 dark:backdrop-blur-xl"
       >
-        <div className="p-6 border-b border-slate-800/60 flex items-center justify-between">
+        <div className="p-6 border-b border-slate-200 flex items-center justify-between dark:border-slate-800/60">
           <div>
-            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-              <Users className="h-5 w-5 text-indigo-400" />
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+              <Users className="h-5 w-5 text-indigo-500 dark:text-indigo-400" />
               Usuários Administrativos (Sellers)
             </h2>
-            <p className="text-sm text-slate-400 mt-1">
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
               Pessoas conectadas à organização que possuem acesso ao catálogo e vendas.
             </p>
           </div>
           <Link 
             href={`/companies/${companyId}/users/new`}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2 px-4 rounded-xl flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98]"
+            className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2 px-4 rounded-xl flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-sm shadow-[var(--color-primary-base)]/20"
           >
             <ShieldAlert className="h-4 w-4" />
             Adicionar Acesso
@@ -363,7 +375,7 @@ export default function CompanyDetailsPage() {
         
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-slate-950/50 text-slate-400 font-medium">
+            <thead className="bg-slate-50 text-slate-500 font-medium dark:bg-slate-950/50 dark:text-slate-400">
               <tr>
                 <th className="px-6 py-4">Nome</th>
                 <th className="px-6 py-4">E-mail</th>
@@ -371,20 +383,20 @@ export default function CompanyDetailsPage() {
                 <th className="px-6 py-4 text-right">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60">
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60">
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">
                     Nenhum usuário cadastrado nesta empresa ainda.
                   </td>
                 </tr>
               ) : (
                 users.map((user) => (
-                  <tr key={user.id} className="hover:bg-slate-800/20 transition-colors">
-                    <td className="px-6 py-4 font-medium text-slate-200">
+                  <tr key={user.id} className="hover:bg-slate-50 transition-colors dark:hover:bg-slate-800/20">
+                    <td className="px-6 py-4 font-medium text-slate-900 dark:text-slate-200">
                       {user.name}
                     </td>
-                    <td className="px-6 py-4 text-slate-400">{user.email}</td>
+                    <td className="px-6 py-4 text-slate-500 dark:text-slate-400">{user.email}</td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
                         {user.active ? (
@@ -392,7 +404,7 @@ export default function CompanyDetailsPage() {
                         ) : (
                           <span className="h-2 w-2 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]"></span>
                         )}
-                        <span className="px-2.5 py-1 text-xs font-semibold rounded-md bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                        <span className="px-2.5 py-1 text-xs font-semibold rounded-md bg-indigo-50 text-indigo-600 border border-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20">
                           {user.type}
                         </span>
                       </div>
@@ -401,27 +413,27 @@ export default function CompanyDetailsPage() {
                       <div className="flex items-center justify-end gap-3">
                         <button
                           onClick={() => handleToggleUserStatus(user)}
-                          className={`text-xs font-medium hover:underline transition-colors ${user.active ? 'text-rose-400' : 'text-emerald-400'}`}
+                          className={`text-xs font-medium hover:underline transition-colors ${user.active ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}
                         >
                           {user.active ? 'Bloquear' : 'Ativar'}
                         </button>
                         <button
                           onClick={() => handleResetUserPassword(user.id)}
-                          className="text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:underline transition-colors block"
+                          className="text-xs font-medium text-[var(--color-primary-base)] hover:text-[var(--color-primary-hover)] hover:underline transition-colors block dark:text-indigo-400 dark:hover:text-indigo-300"
                         >
                           Senha
                         </button>
-                        <div className="h-3 w-px bg-slate-700"></div>
+                        <div className="h-3 w-px bg-slate-200 dark:bg-slate-700"></div>
                         <button
                           onClick={() => handleChangeUserEmail(user)}
-                          className="text-xs font-medium text-amber-400 hover:text-amber-300 hover:underline transition-colors block"
+                          className="text-xs font-medium text-amber-600 hover:text-amber-700 hover:underline transition-colors block dark:text-amber-400 dark:hover:text-amber-300"
                         >
                           E-mail
                         </button>
-                        <div className="h-3 w-px bg-slate-700"></div>
+                        <div className="h-3 w-px bg-slate-200 dark:bg-slate-700"></div>
                         <button
                           onClick={() => handleDeleteUser(user.id)}
-                          className="text-xs font-medium text-rose-400 hover:text-rose-300 hover:underline transition-colors flex items-center gap-1"
+                          className="text-xs font-medium text-rose-600 hover:text-rose-700 hover:underline transition-colors flex items-center gap-1 dark:text-rose-400 dark:hover:text-rose-300"
                         >
                           Excluir
                         </button>
@@ -435,76 +447,131 @@ export default function CompanyDetailsPage() {
         </div>
       </motion.div>
       ) : (
-      /* Integrations Section */
       <motion.div
         initial={{ opacity: 0, scale: 0.98 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="rounded-2xl border border-slate-800 bg-slate-900/40 backdrop-blur-xl overflow-hidden p-6"
+        className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden p-6 dark:border-slate-800 dark:bg-slate-900/40 dark:backdrop-blur-xl"
       >
         <div className="mb-6">
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-            <Globe className="h-5 w-5 text-indigo-400" />
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+            <Globe className="h-5 w-5 text-indigo-500 dark:text-indigo-400" />
             Configurações de API & Webhooks
           </h2>
-          <p className="text-sm text-slate-400 mt-1">
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
             Preencha as chaves de acesso fornecidas pelos fornecedores de dados e ERPs para iniciar a sincronização para esta organização.
           </p>
         </div>
 
         <form onSubmit={handleSaveSettings} className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-5 border border-slate-800/60 rounded-xl bg-slate-900/50">
-            <div className="md:col-span-2 space-y-2">
-              <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-widest flex items-center gap-2">
-                Integração: Horus ERP
-              </h3>
-              <p className="text-xs text-slate-500">Credenciais para consulta e faturamento de pedidos B2B.</p>
+          <div className="flex flex-col gap-6 p-5 border border-slate-200 rounded-xl bg-slate-50 dark:border-slate-800/60 dark:bg-slate-900/50">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest flex items-center gap-2">
+                  Integração: Horus ERP
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">Habilite para pesquisar produtos e gerar faturamento de pedidos B2B diretamente pelo ERP Horus.</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" className="sr-only peer" checked={settings.horus_enabled} onChange={e => setSettings({ ...settings, horus_enabled: e.target.checked })} />
+                <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-checked:after:bg-white"></div>
+              </label>
             </div>
             
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-300 block">Horus API Key</label>
-              <input
-                type="password"
-                className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-mono text-sm placeholder:text-slate-600"
-                placeholder="sk_horus_xxxxxxxxxxxxxxxx"
-                value={settings.horus_api_key}
-                onChange={e => setSettings({ ...settings, horus_api_key: e.target.value })}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-300 block">Horus Endpoint (URL Base)</label>
-              <input
-                type="url"
-                className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all text-sm placeholder:text-slate-600"
-                placeholder="https://api.empresa.horuserp.com.br"
-                value={settings.horus_endpoint}
-                onChange={e => setSettings({ ...settings, horus_endpoint: e.target.value })}
-              />
-            </div>
+            {settings.horus_enabled && (
+              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">URL API</label>
+                  <input
+                    type="url"
+                    required
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all text-sm placeholder:text-slate-400 focus:border-[var(--color-primary-base)] dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600 dark:focus:border-indigo-500/50"
+                    placeholder="http://189.79.25.41"
+                    value={settings.horus_url}
+                    onChange={e => setSettings({ ...settings, horus_url: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Porta</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 focus:border-[var(--color-primary-base)] dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600 dark:focus:border-indigo-500/50"
+                    placeholder="8065"
+                    value={settings.horus_port}
+                    onChange={e => setSettings({ ...settings, horus_port: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Usuário</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 focus:border-[var(--color-primary-base)] dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600 dark:focus:border-indigo-500/50"
+                    placeholder="mythos"
+                    value={settings.horus_username}
+                    onChange={e => setSettings({ ...settings, horus_username: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Senha</label>
+                  <input
+                    type="password"
+                    required
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 focus:border-[var(--color-primary-base)] dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600 dark:focus:border-indigo-500/50"
+                    placeholder="••••••"
+                    value={settings.horus_password}
+                    onChange={e => setSettings({ ...settings, horus_password: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Empresa</label>
+                  <input
+                    type="number"
+                    required
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 focus:border-[var(--color-primary-base)] dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600 dark:focus:border-indigo-500/50"
+                    placeholder="2"
+                    value={settings.horus_company}
+                    onChange={e => setSettings({ ...settings, horus_company: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Filial</label>
+                  <input
+                    type="number"
+                    required
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 focus:border-[var(--color-primary-base)] dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600 dark:focus:border-indigo-500/50"
+                    placeholder="2"
+                    value={settings.horus_branch}
+                    onChange={e => setSettings({ ...settings, horus_branch: e.target.value })}
+                  />
+                </div>
+              </motion.div>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-5 border border-slate-800/60 rounded-xl bg-slate-900/50">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-5 border border-slate-200 rounded-xl bg-slate-50 dark:border-slate-800/60 dark:bg-slate-900/50">
              <div className="md:col-span-2 space-y-2">
-              <h3 className="text-sm font-semibold text-blue-400 uppercase tracking-widest flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-widest flex items-center gap-2">
                 Bancos de Dados Literários
               </h3>
               <p className="text-xs text-slate-500">Chaves para metadados de catálogo, capas de livros e sinopses.</p>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-300 block">BookInfo API Key</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">BookInfo API Key</label>
               <input
                 type="password"
-                className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-mono text-sm placeholder:text-slate-600"
+                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600"
                 placeholder="bk_xxxxxxxxxxxxxxxx"
                 value={settings.bookinfo_api_key}
                 onChange={e => setSettings({ ...settings, bookinfo_api_key: e.target.value })}
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-300 block">MetaBooks API Key</label>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">MetaBooks API Key</label>
               <input
                 type="password"
-                className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-mono text-sm placeholder:text-slate-600"
+                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-indigo-500/50 dark:placeholder:text-slate-600"
                 placeholder="mtbk_xxxxxxxxxxxxxxxx"
                 value={settings.metabooks_api_key}
                 onChange={e => setSettings({ ...settings, metabooks_api_key: e.target.value })}

@@ -6,12 +6,17 @@ from app.models import company as company_models
 from app.models import user as user_models
 from app.models import customer as customer_models
 from app.models import company_settings as settings_models
+from app.models import product as product_models
+from app.models import catalog_support as catalog_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
 from app.api import horus
 from app.api import auth
 from app.api import customers
+from app.api import products
+from app.api import catalog_support
+from app.api import promotions
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -21,6 +26,8 @@ company_models.Base.metadata.create_all(bind=engine)
 user_models.Base.metadata.create_all(bind=engine)
 customer_models.Base.metadata.create_all(bind=engine)
 settings_models.Base.metadata.create_all(bind=engine)
+product_models.Base.metadata.create_all(bind=engine)
+catalog_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -36,6 +43,9 @@ app.add_middleware(
 app.include_router(auth.router, tags=["authentication"])
 app.include_router(horus.router, tags=["inventory"])
 app.include_router(customers.router, tags=["customers"])
+app.include_router(products.router, tags=["products"])
+app.include_router(catalog_support.router, tags=["catalog-metadata"])
+app.include_router(promotions.router, tags=["promotions"])
 
 @app.on_event("startup")
 def seed_master_user():

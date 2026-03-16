@@ -48,6 +48,8 @@ class CustomerBase(BaseModel):
     discount: Optional[float] = 0.0
     consignment_status: Optional[str] = "INACTIVE"
     open_debts: Optional[float] = 0.0
+    id_guid: Optional[str] = None
+    id_doc: Optional[str] = None
 
 class CustomerCreate(CustomerBase):
     addresses: Optional[list[AddressCreate]] = []
@@ -65,6 +67,8 @@ class CustomerUpdate(BaseModel):
     discount: Optional[float] = None
     consignment_status: Optional[str] = None
     open_debts: Optional[float] = None
+    id_guid: Optional[str] = None
+    id_doc: Optional[str] = None
 
 class CustomerInDBBase(CustomerBase):
     id: int

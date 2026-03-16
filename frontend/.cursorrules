@@ -1,0 +1,28 @@
+# Frontend Guidelines & Rules
+
+## Forms & Monetary Inputs (Float / Currency)
+**CRITICAL RULE**: Whenever dealing with float values, monetary values, prices, discounts, or credit limits in frontend forms, **ALWAYS** use the `<CurrencyInput />` component located at `src/components/CurrencyInput.tsx`.
+
+### Why?
+The `CurrencyInput` component handles input masking, formatting (e.g. `1.000,90`), and locale-specific conversions perfectly, ensuring consistent user experience and avoiding backend parsing errors associated with raw float inputs.
+
+### Usage
+```tsx
+import { CurrencyInput } from '@/components/CurrencyInput';
+
+// Price / Money
+<CurrencyInput 
+  prefixStr="R$ "
+  value={product.price} 
+  onChangeValue={(val) => setProduct({...product, price: val})} 
+/>
+
+// Percentages
+<CurrencyInput 
+  suffixStr="%"
+  value={customer.discount} 
+  onChangeValue={(val) => setCustomer({...customer, discount: val})} 
+/>
+```
+
+Do not use `<input type="number" />` for monetary or percentage values.
