@@ -9,7 +9,8 @@ import {
   LogOut,
   Megaphone,
   ShoppingBag,
-  ChevronDown
+  ChevronDown,
+  Layers
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -72,6 +73,7 @@ export function Sidebar() {
   const [user, setUser] = useState<UserData | null>(null);
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
   const [usesHorus, setUsesHorus] = useState(false);
+  const [moduleSubscriptions, setModuleSubscriptions] = useState(false);
 
   useEffect(() => {
     const currentUser = getUser();
@@ -96,6 +98,7 @@ export function Sidebar() {
            if (res.ok) {
               const data = await res.json();
               setUsesHorus(data.uses_horus || false);
+              setModuleSubscriptions(data.module_subscriptions || false);
            }
          } catch (e) {}
        };
@@ -107,7 +110,14 @@ export function Sidebar() {
     setOpenMenus(prev => ({ ...prev, [name]: !prev[name] }));
   };
 
-  const filteredSellerNavigation = sellerNavigation.filter(nav => !(usesHorus && nav.name === 'Produtos'));
+  const filteredSellerNavigation = [...sellerNavigation.filter(nav => !(usesHorus && nav.name === 'Produtos'))];
+  
+  if (moduleSubscriptions) {
+    // Insert Assinaturas before Configurações
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, { name: 'Assinaturas', href: '/subscriptions', icon: Layers });
+  }
 
   const dynamicNavigation = user?.type === 'MASTER' ? masterNavigation : 
                             (user?.type === 'SELLER' ? filteredSellerNavigation : []);

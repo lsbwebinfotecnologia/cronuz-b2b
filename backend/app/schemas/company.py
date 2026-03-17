@@ -7,6 +7,8 @@ class CompanyBase(BaseModel):
     document: str
     domain: str
     logo: Optional[str] = None
+    module_horus_erp: bool = False
+    module_subscriptions: bool = False
     active: bool = True
 
 class CompanyCreate(CompanyBase):
@@ -17,6 +19,8 @@ class CompanyUpdate(BaseModel):
     document: Optional[str] = None
     domain: Optional[str] = None
     logo: Optional[str] = None
+    module_horus_erp: Optional[bool] = None
+    module_subscriptions: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

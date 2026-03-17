@@ -11,6 +11,7 @@ from app.models import company_settings as settings_models
 from app.models import product as product_models
 from app.models import catalog_support as catalog_models
 from app.models import marketing_showcase as marketing_models
+from app.models import subscription as subscription_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -25,6 +26,7 @@ from app.api import storefront
 from app.api import upload
 from app.api import dashboard
 from app.api import orders
+from app.api import subscriptions
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -39,6 +41,7 @@ settings_models.Base.metadata.create_all(bind=engine)
 product_models.Base.metadata.create_all(bind=engine)
 catalog_models.Base.metadata.create_all(bind=engine)
 marketing_models.Base.metadata.create_all(bind=engine)
+subscription_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -79,6 +82,7 @@ app.include_router(storefront.router, tags=["storefront"])
 app.include_router(upload.router, tags=["upload"])
 app.include_router(dashboard.router, tags=["dashboard"])
 app.include_router(orders.router, tags=["orders"])
+app.include_router(subscriptions.router, tags=["subscriptions"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -174,6 +178,10 @@ class UserPasswordUpdate(BaseModel):
 
 class StatusUpdate(BaseModel):
     active: bool
+
+class ModuleUpdate(BaseModel):
+    module_horus_erp: bool
+    module_subscriptions: bool
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(
@@ -291,6 +299,24 @@ def update_company_status(
     if company is None:
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
     company.active = status_update.active
+    db.commit()
+    db.refresh(company)
+    return company
+
+@app.patch("/companies/{company_id}/modules", response_model=schemas.Company)
+def update_company_modules(
+    company_id: int,
+    module_update: ModuleUpdate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.require_master_user)
+):
+    company = db.query(company_models.Company).filter(company_models.Company.id == company_id).first()
+    if company is None:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+    
+    company.module_horus_erp = module_update.module_horus_erp
+    company.module_subscriptions = module_update.module_subscriptions
+    
     db.commit()
     db.refresh(company)
     return company

@@ -14,6 +14,8 @@ interface Company {
   document: string;
   domain: string;
   logo: string | null;
+  module_horus_erp: boolean;
+  module_subscriptions: boolean;
   active: boolean;
 }
 
@@ -250,6 +252,34 @@ export default function CompanyDetailsPage() {
     }
   }
 
+  async function handleToggleModule(moduleName: 'module_horus_erp' | 'module_subscriptions', currentValue: boolean) {
+    if (!company) return;
+    try {
+      const token = getToken();
+      const payload = {
+          module_horus_erp: moduleName === 'module_horus_erp' ? !currentValue : company.module_horus_erp,
+          module_subscriptions: moduleName === 'module_subscriptions' ? !currentValue : company.module_subscriptions
+      };
+      
+      const res = await fetch(`http://localhost:8000/companies/${companyId}/modules`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) throw new Error('Falha ao atualizar módulos');
+      
+      const updated = await res.json();
+      setCompany(updated);
+      toast.success(`Módulo atualizado com sucesso!`);
+    } catch (error) {
+      toast.error('Erro ao mudar o status do módulo.');
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -470,20 +500,33 @@ export default function CompanyDetailsPage() {
 
         <form onSubmit={handleSaveSettings} className="space-y-6">
           <div className="flex flex-col gap-6 p-5 border border-slate-200 rounded-xl bg-slate-50 dark:border-slate-800/60 dark:bg-slate-900/50">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-slate-200 dark:border-slate-800/60">
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-rose-600 dark:text-rose-400 uppercase tracking-widest flex items-center gap-2">
+                  Módulo: Assinaturas & Recorrência
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">Habilite para permitir a criação de Hotsites dinâmicos e venda de assinaturas com cobrança recorrente via EFI Automática para este Seller.</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input type="checkbox" className="sr-only peer" checked={company?.module_subscriptions || false} onChange={() => handleToggleModule('module_subscriptions', company?.module_subscriptions || false)} />
+                <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500 peer-checked:after:bg-white"></div>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
               <div>
                 <h3 className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest flex items-center gap-2">
-                  Integração: Horus ERP
+                  Módulo: Integração ERP Horus
                 </h3>
-                <p className="text-xs text-slate-500 mt-1">Habilite para pesquisar produtos e gerar faturamento de pedidos B2B diretamente pelo ERP Horus.</p>
+                <p className="text-xs text-slate-500 mt-1">Habilite para pesquisar produtos e gerar faturamento de pedidos B2B diretamente via XML API.</p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" className="sr-only peer" checked={settings.horus_enabled} onChange={e => setSettings({ ...settings, horus_enabled: e.target.checked })} />
+                <input type="checkbox" className="sr-only peer" checked={company?.module_horus_erp || false} onChange={() => handleToggleModule('module_horus_erp', company?.module_horus_erp || false)} />
                 <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-checked:after:bg-white"></div>
               </label>
             </div>
             
-            {settings.horus_enabled && (
+            {company?.module_horus_erp && (
               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-200 dark:border-slate-800">
                 <div className="space-y-1.5 md:col-span-2">
                   <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">URL API</label>

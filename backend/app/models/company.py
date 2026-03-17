@@ -13,6 +13,10 @@ class Company(Base):
     domain = Column(String(255), unique=True, index=True, nullable=False)
     logo = Column(String(500), nullable=True)
     
+    # Module Capabilities (Toggles managed by MASTER)
+    module_horus_erp = Column(Boolean, default=False, nullable=False)
+    module_subscriptions = Column(Boolean, default=False, nullable=False)
+    
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
