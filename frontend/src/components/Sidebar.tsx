@@ -52,6 +52,7 @@ const sellerNavigation: NavItem[] = [
       { name: 'Características', href: '/products/characteristics' }
     ]
   },
+  { name: 'Pedidos', href: '/orders', icon: ShoppingBag },
   { name: 'Clientes', href: '/customers', icon: Users },
   { 
     name: 'Marketing', 
@@ -70,6 +71,7 @@ export function Sidebar() {
   const router = useRouter();
   const [user, setUser] = useState<UserData | null>(null);
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
+  const [usesHorus, setUsesHorus] = useState(false);
 
   useEffect(() => {
     const currentUser = getUser();
@@ -84,6 +86,20 @@ export function Sidebar() {
            }
        });
        setOpenMenus(initialOpen);
+       
+       const fetchSettings = async () => {
+         try {
+           const tokenStr = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+           const res = await fetch('http://localhost:8000/dashboard/metrics', {
+              headers: { 'Authorization': `Bearer ${tokenStr}` }
+           });
+           if (res.ok) {
+              const data = await res.json();
+              setUsesHorus(data.uses_horus || false);
+           }
+         } catch (e) {}
+       };
+       fetchSettings();
     }
   }, [pathname]);
 
@@ -91,8 +107,10 @@ export function Sidebar() {
     setOpenMenus(prev => ({ ...prev, [name]: !prev[name] }));
   };
 
+  const filteredSellerNavigation = sellerNavigation.filter(nav => !(usesHorus && nav.name === 'Produtos'));
+
   const dynamicNavigation = user?.type === 'MASTER' ? masterNavigation : 
-                            (user?.type === 'SELLER' ? sellerNavigation : []);
+                            (user?.type === 'SELLER' ? filteredSellerNavigation : []);
 
   const handleLogout = () => {
     removeToken();

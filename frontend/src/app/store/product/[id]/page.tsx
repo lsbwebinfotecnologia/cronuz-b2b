@@ -16,6 +16,7 @@ import {
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
 import { ProductImage } from '@/components/store/ProductImage';
+import { useCart } from '@/components/store/CartContext';
 
 export default function ProductDetailsPage() {
   const params = useParams();
@@ -26,13 +27,15 @@ export default function ProductDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [quantity, setQuantity] = useState(1);
   const [errorText, setErrorText] = useState('');
+  const [addedTemp, setAddedTemp] = useState(false);
+  const { addToCart } = useCart();
 
   useEffect(() => {
     const fetchProduct = async () => {
       setLoading(true);
       try {
          const token = getToken();
-         const res = await fetch(`http://localhost:8000/products/${id}`, {
+         const res = await fetch(`http://localhost:8000/storefront/product/${id}`, {
             headers: token ? { 'Authorization': `Bearer ${token}` } : {}
          });
          
@@ -92,8 +95,9 @@ export default function ProductDetailsPage() {
   const handleAddToCart = () => {
     if (!isOutOfStock) {
       console.log('Adicionando ao carrinho:', product.name, quantity);
-      // TODO: Connect Context API Cart
-      alert(`${quantity}x ${product.name} adicionado ao carrinho!`);
+      addToCart(product, quantity);
+      setAddedTemp(true);
+      setTimeout(() => setAddedTemp(false), 2000);
     }
   };
 
@@ -231,23 +235,20 @@ export default function ProductDetailsPage() {
                  <button 
                     onClick={handleAddToCart}
                     disabled={isOutOfStock}
-                    className="flex-1 flex items-center justify-center gap-3 bg-[var(--color-primary-base)] text-white hover:bg-[var(--color-primary-hover)] rounded-2xl h-16 font-bold text-lg disabled:opacity-30 disabled:bg-slate-400 transition-all shadow-lg shadow-[var(--color-primary-base)]/20 hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0"
+                    className={`flex-1 flex items-center justify-center gap-3 rounded-2xl h-16 font-bold text-lg disabled:opacity-30 disabled:bg-slate-400 transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 ${
+                      addedTemp 
+                        ? 'bg-emerald-500 text-white shadow-emerald-500/20'
+                        : 'bg-[var(--color-primary-base)] text-white hover:bg-[var(--color-primary-hover)] shadow-[var(--color-primary-base)]/20'
+                    }`}
                  >
                    <ShoppingCart className="w-6 h-6" />
-                   Adicionar ao Carrinho
+                   {addedTemp ? 'Adicionado com sucesso!' : 'Adicionar ao Carrinho'}
                  </button>
                </div>
 
                {/* Descriptions & Specs */}
                <div className="space-y-8">
-                  {product.short_description && (
-                     <div>
-                       <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-3">Sinopse Curta</h3>
-                       <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-                         {product.short_description}
-                       </p>
-                     </div>
-                  )}
+
 
                    {product.long_description && (
                      <div>

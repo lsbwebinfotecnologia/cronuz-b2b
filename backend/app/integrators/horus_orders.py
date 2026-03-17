@@ -1,3 +1,4 @@
+import re
 from typing import Dict, Any, List, Optional, Union
 from app.integrators.horus import HorusClient
 
@@ -9,9 +10,9 @@ class HorusOrders(HorusClient):
         """
         params = {
             "COD_PEDIDO_ORIGEM": cod_pedido_origem,
-            "ID_DOC": id_doc,
+            "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
             "ID_GUID": id_guid,
-            "CNPJ_DESTINO": cnpj_destino,
+            "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
         }
         
         if limit > 0:
@@ -42,20 +43,30 @@ class HorusOrders(HorusClient):
         Translates sendOrder from HsOrders.php (calls InsPedidoVenda)
         """
         params = {
-            "ID_DOC": id_doc,
+            "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
             "ID_GUID": id_guid,
-            "CNPJ_DESTINO": cnpj_destino,
+            "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
             "TIPO_PEDIDO_V_T_D": type_order,
             "COD_PEDIDO_ORIGEM": cod_pedido_origem,
             "OBS_PEDIDO": obs,
         }
         
+        # if self._settings.horus_company:
+        #     params["COD_EMPRESA"] = int(self._settings.horus_company)
+        # if self._settings.horus_branch:
+        #     params["COD_FILIAL"] = int(self._settings.horus_branch)
+        
+        print("\n\n--- DEBUGGING HORUS InsPedidoVenda PAYLOAD ---")
+        print(params)
+        print("----------------------------------------------\n\n")
+
         response = await self.get("InsPedidoVenda", params=params)
         
         if response and isinstance(response, list) and response[0].get("Falha"):
+            debug_str = " | ".join([f"{k}: {v}" for k, v in params.items()])
             return {
                 "error": True,
-                "msg": response[0].get("Mensagem", "erro desconhecido ao enviar pedido"),
+                "msg": f"{response[0].get('Mensagem', 'erro desconhecido ao enviar pedido')} [Enviado: {debug_str}]",
                 "response": response
             }
             
@@ -69,9 +80,9 @@ class HorusOrders(HorusClient):
         Translates InsItensPedidoVenda step of sendOrderItems from HsOrders.php
         """
         params = {
-            "ID_DOC": id_doc,
+            "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
             "ID_GUID": id_guid,
-            "CNPJ_DESTINO": cnpj_destino,
+            "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
             "COD_PEDIDO_ORIGEM": cod_pedido_origem,
             "BARRAS_ISBN": isbn,
             "QTD_PEDIDA": qty,
@@ -85,9 +96,9 @@ class HorusOrders(HorusClient):
         Translates LimpaItensPedidoVenda step of sendOrderItems from HsOrders.php
         """
         params = {
-            "ID_DOC": id_doc,
+            "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
             "ID_GUID": id_guid,
-            "CNPJ_DESTINO": cnpj_destino,
+            "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
             "COD_PED_VENDA": cod_ped_venda,
         }
         return await self.get("LimpaItensPedidoVenda", params=params)

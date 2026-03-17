@@ -52,7 +52,10 @@ export default function DashboardPage() {
     fetchMetrics();
   }, []);
 
-  const displayStats = defaultStats.map(stat => {
+  const displayStats = defaultStats.filter(stat => {
+     if (metrics?.uses_horus && stat.id === 'products') return false;
+     return true;
+  }).map(stat => {
      if (!metrics) return stat;
      
      if (stat.id === 'products') return { ...stat, value: metrics.active_products.toString() };

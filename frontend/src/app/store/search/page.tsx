@@ -77,7 +77,6 @@ function SearchResults() {
               <ProductCard 
                 key={p.id} 
                 product={p} 
-                onAddToCart={(prod, qty) => console.log('Add to cart clicked:', prod.name, qty)} 
               />
             ))}
           </div>

@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from app.db.session import get_db
 from app.models.user import User
 from app.models.company import Company
+from app.models.company_settings import CompanySettings
+from app.models.customer import Customer
 from app.core import security
 
 router = APIRouter()
@@ -44,7 +46,22 @@ def login_for_access_token(db: Session = Depends(get_db), form_data: OAuth2Passw
             detail="Email ou senha incorretos",
             headers={"WWW-Authenticate": "Bearer"},
         )
-        
+    
+    # Check Horus Rules for CUSTOMER accounts
+    if user.type == "CUSTOMER" and user.company_id:
+        settings = db.query(CompanySettings).filter(CompanySettings.company_id == user.company_id).first()
+        if settings and settings.horus_enabled:
+            customer = db.query(Customer).filter(
+                Customer.document == user.document,
+                Customer.company_id == user.company_id
+            ).first()
+            
+            if not customer or not customer.id_guid or not customer.id_doc:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Seu cadastro ainda não foi sincronizado com o ERP Horus. Entre em contato com o administrador da distribuidora."
+                )
+
     # Success, reset attempts
     user.failed_login_attempts = 0
     user.locked_until = None

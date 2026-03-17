@@ -1,0 +1,48 @@
+INFO:     Will watch for changes in these directories: ['/Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [87444] using StatReload
+INFO:     Started server process [87519]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:60616 - "POST /login/access-token HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60904 - "OPTIONS /dashboard/metrics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60905 - "OPTIONS /orders/2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60904 - "GET /dashboard/metrics HTTP/1.1" 200 OK
+DEBUG HORUS SYNC SELLER (order 2): {'COD_EMPRESA': 1, 'COD_FILIAL': 1, 'COD_CLI': 20, 'NOM_CLI': 'LIVRARIA DA VILA LTDA', 'TPO_PESSOA': 'J', 'CPF': '', 'CNPJ': '54430962000967', 'COD_PED_VENDA': 24, 'QTD_ITENS_TOTAL': 7, 'QTD_ITENS_ATENDIDOS': 7, 'VLR_TOTAL_PEDIDO': '263,40', 'VLR_TOTAL_DESCONTO': '92,16', 'VLR_TOTAL_LIQUIDO': '171,24', 'DAT_PEDIDO': '2026-03-16T17:06:27.910Z', 'STATUS_PEDIDO_VENDA': 'LFT', 'DAT_STATUS': '2026-03-16T20:57:01.113Z', 'DAT_ENVIO': '2026-03-16T17:06:27.910Z', 'VENDA_CONSIG': 'N', 'OBS_PEDIDO': 'B2B PEDIDO 2\r\n\r\nForma de Pagamento: BOLETO\r\nQtd. Parcelas: 1\r\n', 'DAT_ULT_ATL': '2026-03-16T20:57:01.113Z', 'NOM_RESP': '', 'PARCELAS': '30', 'COD_FORMA': 1, 'CONDICAO_PAGAMENTO': 'DD', 'COD_CTR': None, 'COD_PARAM_FISCAL': 11, 'COD_LOCAL': None, 'COD_TRANSP': None, 'VLR_FRETE': '0,00', 'COD_METODO': 1, 'COD_PEDIDO_ORIGEM': '2', 'DADOS_ADICIONAIS_NF': '', 'PRESENTE': None, 'DEST_PRESENTE': '', 'MSG_PRESENTE': '', 'NOTA_FISCAL': None}
+INFO:     127.0.0.1:60905 - "GET /orders/2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60905 - "OPTIONS /orders/2/interactions/2/read HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60905 - "PUT /orders/2/interactions/2/read HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60913 - "OPTIONS /orders/2/interactions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60913 - "POST /orders/2/interactions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60919 - "POST /token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60921 - "GET /storefront/config?company_id=4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60919 - "OPTIONS /storefront/home HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60928 - "OPTIONS /storefront/cart HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60929 - "OPTIONS /storefront/home HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60930 - "OPTIONS /storefront/cart HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60928 - "GET /storefront/cart HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60919 - "GET /storefront/home HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60930 - "GET /storefront/cart HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60928 - "GET /storefront/home HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60928 - "OPTIONS /storefront/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60919 - "OPTIONS /storefront/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60919 - "GET /storefront/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60928 - "GET /storefront/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60928 - "OPTIONS /storefront/orders/2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60919 - "OPTIONS /storefront/orders/2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60919 - "GET /storefront/orders/2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60919 - "OPTIONS /storefront/orders/2/interactions/3/read HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60919 - "PUT /storefront/orders/2/interactions/3/read HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60928 - "GET /storefront/orders/2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61570 - "OPTIONS /storefront/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61570 - "OPTIONS /storefront/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61572 - "GET /storefront/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61570 - "GET /storefront/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61580 - "GET /storefront/config?company_id=4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61572 - "OPTIONS /storefront/cart HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61572 - "GET /storefront/cart HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61570 - "GET /storefront/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61592 - "OPTIONS /storefront/orders/1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61593 - "OPTIONS /storefront/orders/1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61593 - "GET /storefront/orders/1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61592 - "GET /storefront/orders/1 HTTP/1.1" 200 OK

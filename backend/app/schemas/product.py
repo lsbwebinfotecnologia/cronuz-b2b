@@ -23,6 +23,8 @@ class ProductBase(BaseModel):
     brand_id: Optional[int] = None
     status: Optional[str] = ProductStatus.ACTIVE.value
     stock_quantity: int = 0
+    allow_purchase: Optional[bool] = None
+    stock_status_label: Optional[str] = None
 
 class ProductCreate(ProductBase):
     pass

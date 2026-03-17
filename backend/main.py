@@ -1,4 +1,6 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from app.db.session import engine, get_db, SessionLocal
@@ -22,6 +24,7 @@ from app.api import marketing_showcases
 from app.api import storefront
 from app.api import upload
 from app.api import dashboard
+from app.api import orders
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -39,10 +42,27 @@ marketing_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    import json
+    body = await request.body()
+    try:
+        body_text = body.decode()
+    except:
+        body_text = str(body)
+    error_msg = f"Validation Error!\nBody: {body_text}\nErrors: {exc.errors()}"
+    print(error_msg, flush=True)
+    with open("/tmp/pydantic_error.log", "w") as f:
+        f.write(error_msg)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": body_text},
+    )
+
 # Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://0.0.0.0:3000", "http://localhost:8000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,6 +78,7 @@ app.include_router(marketing_showcases.router, tags=["marketing"])
 app.include_router(storefront.router, tags=["storefront"])
 app.include_router(upload.router, tags=["upload"])
 app.include_router(dashboard.router, tags=["dashboard"])
+app.include_router(orders.router, tags=["orders"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)

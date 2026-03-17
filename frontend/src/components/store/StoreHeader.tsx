@@ -7,6 +7,7 @@ import { Search, ShoppingCart, User, Menu, X, BookOpen, ShoppingBag, Receipt, Lo
 import { motion, AnimatePresence } from 'framer-motion';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { getUser, removeToken } from '@/lib/auth';
+import { useCart } from '@/components/store/CartContext';
 
 export function StoreHeader() {
   const router = useRouter();
@@ -20,7 +21,9 @@ export function StoreHeader() {
 
   const storeName = user?.company_name || 'Cronuz';
   const isCustomer = user?.type === 'CUSTOMER';
-  const cartItemsCount = 0; // TODO: Connect to Cart Context
+  
+  const { totalItems, openCart } = useCart();
+  const cartItemsCount = totalItems;
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,14 +105,14 @@ export function StoreHeader() {
               </div>
             </Link>
 
-            <Link href="/store/cart" className="relative p-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 transition-colors dark:bg-slate-900 dark:hover:bg-slate-800 dark:text-slate-300 group">
+            <button onClick={openCart} className="relative p-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 transition-colors dark:bg-slate-900 dark:hover:bg-slate-800 dark:text-slate-300 group">
               <ShoppingCart className="h-5 w-5 group-hover:scale-110 transition-transform" />
               {cartItemsCount > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full text-[10px] font-bold shadow-sm shadow-rose-500/30">
                   {cartItemsCount}
                 </span>
               )}
-            </Link>
+            </button>
 
             {/* Logout Button Desktop */}
             <button 

@@ -136,7 +136,6 @@ export default function StoreHome() {
                       <ProductCard 
                         key={p.id} 
                         product={p} 
-                        onAddToCart={(prod, qty) => console.log('Add to cart:', prod.name, qty)} 
                       />
                    ))}
                  </div>
@@ -169,7 +168,6 @@ export default function StoreHome() {
                     <ProductCard 
                       key={p.id} 
                       product={p} 
-                      onAddToCart={(prod, qty) => console.log('Add to cart clicked:', prod.name, qty)} 
                     />
                  ))}
                </div>

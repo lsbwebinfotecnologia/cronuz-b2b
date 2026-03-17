@@ -44,7 +44,9 @@ export default function CompanyDetailsPage() {
     horus_branch: '',
     bookinfo_api_key: '',
     metabooks_api_key: '',
-    cover_image_base_url: ''
+    cover_image_base_url: '',
+    allow_backorder: false,
+    max_backorder_qty: 0
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -88,7 +90,9 @@ export default function CompanyDetailsPage() {
           horus_branch: data.horus_branch || '',
           bookinfo_api_key: data.bookinfo_api_key || '',
           metabooks_api_key: data.metabooks_api_key || '',
-          cover_image_base_url: data.cover_image_base_url || ''
+          cover_image_base_url: data.cover_image_base_url || '',
+          allow_backorder: data.allow_backorder || false,
+          max_backorder_qty: data.max_backorder_qty || 0
         });
       }
     } catch (error) {
@@ -547,6 +551,42 @@ export default function CompanyDetailsPage() {
                     onChange={e => setSettings({ ...settings, horus_branch: e.target.value })}
                   />
                 </div>
+              </motion.div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-5 border border-slate-200 rounded-xl bg-slate-50 dark:border-slate-800/60 dark:bg-slate-900/50">
+             <div className="md:col-span-2 space-y-2">
+              <h3 className="text-sm font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-widest flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2">Configurações de Estoque B2B</span>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <span className="mr-3 text-xs font-medium text-slate-700 dark:text-slate-300 normal-case">Trabalhar com Encomenda</span>
+                  <input type="checkbox" className="sr-only peer" checked={settings.allow_backorder} onChange={e => setSettings({ ...settings, allow_backorder: e.target.checked })} />
+                  <div className="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                </label>
+              </h3>
+              <p className="text-xs text-slate-500 flex flex-col gap-0.5">
+                <span>Regras de negócio para produtos sem saldo disponível no ERP.</span>
+                <span className="text-slate-400 italic">Pré-vendas (IP no Horus) estão sempre habilitadas.</span>
+              </p>
+            </div>
+            {settings.allow_backorder && (
+              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-1.5 md:col-span-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
+                  Qtd. Máxima para Encomendar 
+                  <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded ml-2 dark:bg-slate-800 dark:text-slate-400">Por Item</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all text-sm placeholder:text-slate-400 dark:bg-slate-950/50 dark:border-slate-800 dark:text-white dark:focus:ring-amber-500/50 dark:placeholder:text-slate-600"
+                  placeholder="Ex: 50 ou 0 para ilimitado"
+                  value={settings.max_backorder_qty === 0 ? '' : settings.max_backorder_qty}
+                  onChange={e => setSettings({ ...settings, max_backorder_qty: parseInt(e.target.value) || 0 })}
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  Se configurado como 0, o cliente poderá encomendar quantidades ilimitadas de itens sem estoque (Apenas se Encomenda estiver ativa).
+                </p>
               </motion.div>
             )}
           </div>

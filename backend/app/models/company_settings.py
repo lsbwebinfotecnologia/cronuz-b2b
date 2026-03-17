@@ -22,6 +22,10 @@ class CompanySettings(Base):
     metabooks_api_key = Column(String(255), nullable=True)
     cover_image_base_url = Column(String(500), nullable=True)
     
+    # Advanced Stock Config
+    allow_backorder = Column(Boolean, default=False, nullable=False)
+    max_backorder_qty = Column(Integer, default=0, nullable=False)
+    
     # Audit trail
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

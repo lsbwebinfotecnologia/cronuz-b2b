@@ -18,6 +18,8 @@ export function ProductImage({ eanGtin, alt, className = "", iconClassName = "w-
   
   const coverImageBaseUrl = baseUrl !== undefined ? baseUrl : storeConfig.coverImageBaseUrl;
   const companyId = companyIdProp !== undefined ? companyIdProp : storeConfig.companyId;
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [hasError, setHasError] = useState(false);
   const [fallbackLevel, setFallbackLevel] = useState(0);
@@ -35,18 +37,19 @@ export function ProductImage({ eanGtin, alt, className = "", iconClassName = "w-
     if (coverImageBaseUrl) {
       setImgSrc(`${coverImageBaseUrl.replace(/\/$/, '')}/${eanGtin}.jpg`);
       setFallbackLevel(1);
-    } else {
-      setImgSrc(`http://localhost:8000/static/covers/${companyId}/${eanGtin}.jpg`);
+    } else if (companyId) {
+      setImgSrc(`${apiUrl}/static/covers/${companyId}/${eanGtin}.jpg`);
       setFallbackLevel(2);
+    } else {
+      setHasError(true);
     }
     
-    setHasError(false);
-  }, [eanGtin, coverImageBaseUrl, companyId]);
+  }, [eanGtin, coverImageBaseUrl, companyId, apiUrl]);
 
   const handleError = () => {
-    if (fallbackLevel === 1) {
+    if (fallbackLevel === 1 && companyId) {
       // Fallback from external CDN to local server
-      setImgSrc(`http://localhost:8000/static/covers/${companyId}/${eanGtin}.jpg`);
+      setImgSrc(`${apiUrl}/static/covers/${companyId}/${eanGtin}.jpg`);
       setFallbackLevel(2);
     } else {
       // Both failed
