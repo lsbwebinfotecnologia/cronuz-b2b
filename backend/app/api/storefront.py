@@ -12,6 +12,11 @@ from app.schemas.order import OrderResponse, OrderItemCreate, CheckoutRequest
 from pydantic import BaseModel
 from app.models.company_settings import CompanySettings
 from app.models.order import Order, OrderItem
+from app.core import security
+
+class PasswordUpdate(BaseModel):
+    current_password: str
+    new_password: str
 router = APIRouter(prefix="/storefront", tags=["storefront"])
 
 def calculate_product_availability(stock_qty: int, situacao: str = None, is_pre_sale: bool = False, is_out_of_print: bool = False, allow_backorder: bool = False):
@@ -1091,3 +1096,23 @@ def mark_interaction_read(
     db.refresh(interaction)
     
     return interaction
+
+@router.put("/profile/password")
+def update_customer_password(
+    password_data: PasswordUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != "CUSTOMER":
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+        
+    if not security.verify_password(password_data.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Senha atual incorreta")
+        
+    if len(password_data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Nova senha deve ter pelo menos 6 caracteres")
+        
+    current_user.password_hash = security.get_password_hash(password_data.new_password)
+    db.commit()
+    
+    return {"message": "Senha atualizada com sucesso"}

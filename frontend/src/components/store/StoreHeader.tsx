@@ -90,10 +90,6 @@ export function StoreHeader() {
                   <ShoppingBag className="h-5 w-5" />
                   <span className="text-sm font-bold">Pedidos</span>
                 </Link>
-                <Link href="/store/financials" className="hidden lg:flex items-center gap-2 p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                  <Receipt className="h-5 w-5" />
-                  <span className="text-sm font-bold">Débitos</span>
-                </Link>
               </>
             )}
             
@@ -165,9 +161,6 @@ export function StoreHeader() {
                     <>
                       <Link href="/store/orders" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 text-slate-700 font-medium dark:text-slate-300 dark:hover:bg-slate-900">
                         <ShoppingBag className="w-5 h-5 text-slate-400" /> Pedidos
-                      </Link>
-                      <Link href="/store/financials" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 text-slate-700 font-medium dark:text-slate-300 dark:hover:bg-slate-900">
-                        <Receipt className="w-5 h-5 text-slate-400" /> Débitos
                       </Link>
                     </>
                   )}
