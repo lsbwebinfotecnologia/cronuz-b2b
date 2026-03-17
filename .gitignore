@@ -1,4 +1,41 @@
-venv/
-node_modules/
-.env
+# Next.js
 .next/
+out/
+build/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp.*
+
+# Python / FastAPI
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+.venv
+*.sqlite
+*.sqlite3
+*.db
+*.log
+
+# Mac OS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Sensitive / Secrets
+*.pem
+*.key
+*.cert
+secret*
+credentials*
+*.p12
+
+# Uploads / Dynamic Content
+frontend/public/uploads/
