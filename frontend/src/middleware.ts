@@ -8,8 +8,8 @@ export function middleware(request: NextRequest) {
   let hostname = request.headers.get('host') || '';
   hostname = hostname.split(':')[0]; // Remove port if exists
 
-  const appDomains = ['localhost', '127.0.0.1', '64.23.182.183', 'app.cronuzb2b.com.br', 'www.app.cronuzb2b.com.br'];
-  const marketingDomains = ['cronuzb2b.com.br', 'www.cronuzb2b.com.br'];
+  const appDomains = ['localhost', '127.0.0.1', '64.23.182.183', 'cronuzb2b.com.br', 'www.cronuzb2b.com.br', 'app.cronuzb2b.com.br', 'www.app.cronuzb2b.com.br'];
+  const marketingDomains: string[] = [];
 
   // A. Marketing Site (Public)
   if (marketingDomains.includes(hostname)) {
