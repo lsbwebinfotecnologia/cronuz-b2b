@@ -22,7 +22,7 @@ export default function DashboardPage() {
   const fetchRecentOrders = async () => {
     try {
       const token = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
-      const res = await fetch('http://localhost:8000/orders', {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/orders`, {
          headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -41,7 +41,9 @@ export default function DashboardPage() {
     setLoadingMetrics(true);
     try {
       const token = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
-      const res = await fetch('http://localhost:8000/dashboard/metrics', {
+      if (!token) return; // Prevent fetch if no token
+      
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics`, {
          headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {

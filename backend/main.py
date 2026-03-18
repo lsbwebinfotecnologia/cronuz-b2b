@@ -62,10 +62,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"detail": exc.errors(), "body": body_text},
     )
 
-# Enable CORS for Next.js frontend
+# Enable CORS for Next.js frontend (Allow all origins for Multitenant Custom Domains)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://0.0.0.0:3000", "http://localhost:8000"],
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -182,6 +182,7 @@ class StatusUpdate(BaseModel):
 class ModuleUpdate(BaseModel):
     module_horus_erp: bool
     module_subscriptions: bool
+    module_pdv: bool
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(
@@ -196,7 +197,7 @@ def update_user_status(
     
     # Restrict permissions: MASTER can edit anyone. SELLER can edit CUSTOMERS/AGENTS within same company.
     if current_user.type != user_models.UserRole.MASTER:
-       if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type == user_models.UserRole.MASTER:
+       if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type in [user_models.UserRole.MASTER, user_models.UserRole.SELLER]:
            raise HTTPException(status_code=403, detail="Sem permissão para alterar este usuário")
 
     user.active = status_update.active
@@ -216,7 +217,7 @@ def update_user_password(
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
     if current_user.type != user_models.UserRole.MASTER:
-       if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type == user_models.UserRole.MASTER:
+       if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type in [user_models.UserRole.MASTER, user_models.UserRole.SELLER]:
            raise HTTPException(status_code=403, detail="Sem permissão para alterar este usuário")
 
     user.password_hash = security.get_password_hash(password_update.password)
@@ -236,7 +237,7 @@ def update_user_email(
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
     if current_user.type != user_models.UserRole.MASTER:
-       if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type == user_models.UserRole.MASTER:
+       if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type in [user_models.UserRole.MASTER, user_models.UserRole.SELLER]:
            raise HTTPException(status_code=403, detail="Sem permissão para alterar este usuário")
 
     user.email = email_update.email
@@ -260,7 +261,7 @@ def delete_user(
 
     # Only MASTER or SELLER can delete. SELLER can't delete MASTER or users from another company
     if current_user.type != user_models.UserRole.MASTER:
-        if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type == user_models.UserRole.MASTER:
+        if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER or user.type in [user_models.UserRole.MASTER, user_models.UserRole.SELLER]:
            raise HTTPException(status_code=403, detail="Sem permissão para excluir este usuário")
 
     # Prevent deleting yourself
@@ -316,6 +317,7 @@ def update_company_modules(
     
     company.module_horus_erp = module_update.module_horus_erp
     company.module_subscriptions = module_update.module_subscriptions
+    company.module_pdv = module_update.module_pdv
     
     db.commit()
     db.refresh(company)
@@ -329,6 +331,23 @@ def read_company_users(
 ):
     users = db.query(user_models.User).filter(user_models.User.company_id == company_id).all()
     return users
+
+@app.get("/companies/{company_id}/agents", response_model=list[user_schemas.User])
+def read_company_agents(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    if current_user.type not in [user_models.UserRole.MASTER, user_models.UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito")
+    if current_user.type == user_models.UserRole.SELLER and current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Acesso restrito a esta empresa")
+        
+    agents = db.query(user_models.User).filter(
+        user_models.User.company_id == company_id,
+        user_models.User.type == user_models.UserRole.AGENT
+    ).all()
+    return agents
 
 @app.get("/companies/{company_id}/settings", response_model=settings_schemas.CompanySettings)
 def read_company_settings(
@@ -353,8 +372,11 @@ def update_company_settings(
     company_id: int,
     settings_update: settings_schemas.CompanySettingsUpdate,
     db: Session = Depends(get_db),
-    current_user: user_models.User = Depends(dependencies.require_master_user)
+    current_user: user_models.User = Depends(dependencies.get_current_user)
 ):
+    if current_user.type != user_models.UserRole.MASTER and current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Sem permissão para alterar as configurações desta empresa")
+
     settings = db.query(settings_models.CompanySettings).filter(settings_models.CompanySettings.company_id == company_id).first()
     if not settings:
          settings = settings_models.CompanySettings(company_id=company_id)

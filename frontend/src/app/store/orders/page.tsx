@@ -39,7 +39,7 @@ export default function StoreOrdersPage() {
         const fetchOrders = async () => {
             try {
                 const token = getToken();
-                const response = await fetch("http://localhost:8000/storefront/orders", {
+                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/orders`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 if (response.ok) {

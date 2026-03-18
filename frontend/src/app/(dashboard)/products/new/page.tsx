@@ -59,12 +59,12 @@ export default function NewProductPage() {
         const user = getUser();
         
         const promises = [
-          fetch('http://localhost:8000/categories', { headers }),
-          fetch('http://localhost:8000/brands', { headers })
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories`, { headers }),
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/brands`, { headers })
         ];
 
         if (user?.company_id) {
-          promises.push(fetch(`http://localhost:8000/companies/${user.company_id}/settings`, { headers }));
+          promises.push(fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${user.company_id}/settings`, { headers }));
         }
 
         const [catRes, brandRes, settingsRes] = await Promise.all(promises);
@@ -107,7 +107,7 @@ export default function NewProductPage() {
     
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/products/', {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -461,14 +461,14 @@ export default function NewProductPage() {
                                   formData.append('isbn', product.ean_gtin);
                                   
                                   try {
-                                    const res = await fetch('http://localhost:8000/upload/cover', {
+                                    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/cover`, {
                                       method: 'POST',
                                       headers: { 'Authorization': `Bearer ${getToken()}` },
                                       body: formData
                                     });
                                     if(res.ok) {
                                       const data = await res.json();
-                                      setImagePreview(`http://localhost:8000${data.url}`);
+                                      setImagePreview(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${data.url}`);
                                       toast.success("Imagem enviada com sucesso!");
                                     } else {
                                       const err = await res.json();

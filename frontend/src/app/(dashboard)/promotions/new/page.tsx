@@ -32,9 +32,9 @@ export default function NewPromotionPage() {
       try {
         const headers = { 'Authorization': `Bearer ${getToken()}` };
         const [catRes, brandRes, prodRes] = await Promise.all([
-          fetch('http://localhost:8000/categories', { headers }),
-          fetch('http://localhost:8000/brands', { headers }),
-          fetch('http://localhost:8000/products/?limit=1000', { headers })
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories`, { headers }),
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/brands`, { headers }),
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/?limit=1000`, { headers })
         ]);
         if (catRes.ok) setCategories(await catRes.json());
         if (brandRes.ok) setBrands(await brandRes.json());
@@ -96,7 +96,7 @@ export default function NewPromotionPage() {
           product_id: t.target_type === 'PRODUCT' ? Number(t.target_id) : undefined,
       }));
 
-      const res = await fetch('http://localhost:8000/promotions/', {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/promotions/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

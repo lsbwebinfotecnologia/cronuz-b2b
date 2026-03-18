@@ -8,9 +8,109 @@ from app.db.session import get_db
 from app.models.user import User
 from app.core.dependencies import get_current_user
 from app.models.order import Order
-from app.schemas.order import OrderResponse
+from app.schemas.order import OrderResponse, PDVOrderCreate
 
 router = APIRouter(tags=["orders"])
+
+@router.post("/orders", response_model=dict)
+async def create_pdv_order(
+    payload: PDVOrderCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.company_settings import CompanySettings
+    from app.models.company import Company
+    from app.models.customer import Customer
+    from app.models.product import Product
+    from app.models.order import OrderItem
+    
+    if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    customer = db.query(Customer).filter(Customer.id == payload.customer_id).first()
+    
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+
+    # Local Order Creation
+    order = Order(
+        company_id=current_user.company_id,
+        customer_id=payload.customer_id,
+        agent_id=current_user.id,
+        status="PROCESSING",
+        origin=payload.source,
+        type_order="V",
+        subtotal=sum([i.quantity * i.unit_price for i in payload.items]),
+        discount=payload.discount_amount,
+        total=payload.total_amount
+    )
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+
+    # Add Items
+    for item in payload.items:
+        prod_ref = db.query(Product).filter(Product.id == item.product_id).first()
+        new_item = OrderItem(
+            order_id=order.id,
+            product_id=item.product_id,
+            ean_isbn=prod_ref.ean_gtin if prod_ref else None,
+            sku=prod_ref.sku if prod_ref else None,
+            name=prod_ref.name if prod_ref else f"Produto {item.product_id}",
+            brand=prod_ref.brand if prod_ref else None,
+            quantity=item.quantity,
+            quantity_requested=item.quantity,
+            unit_price=item.unit_price,
+            total_price=item.quantity * item.unit_price
+        )
+        db.add(new_item)
+    db.commit()
+
+    # Horus Integration (B2B Mode)
+    if settings and settings.horus_enabled and getattr(settings, "horus_api_mode", "B2B") == "B2B":
+        if customer.id_guid:
+            from app.integrators.horus_orders import HorusOrders
+            horus_client = HorusOrders(db, current_user.company_id)
+            
+            try:
+                order_res = await horus_client.send_order(
+                    id_doc=customer.document,
+                    id_guid=customer.id_guid,
+                    cnpj_destino=company.document,
+                    cod_pedido_origem=order.id,
+                    type_order=order.type_order,
+                    obs=f"PDV VENDA {order.id}"
+                )
+                
+                if order_res and not order_res.get("error"):
+                    horus_ped_venda = order_res.get("COD_PED_VENDA")
+                    
+                    for item in payload.items:
+                        prod_ref = db.query(Product).filter(Product.id == item.product_id).first()
+                        isbn_or_sku = prod_ref.ean_gtin if prod_ref and prod_ref.ean_gtin else (prod_ref.sku if prod_ref else str(item.product_id))
+                        
+                        await horus_client.send_order_item(
+                            id_doc=customer.document,
+                            id_guid=customer.id_guid,
+                            cnpj_destino=company.document,
+                            cod_pedido_origem=order.id,
+                            isbn=isbn_or_sku,
+                            qty=item.quantity,
+                            price=item.unit_price
+                        )
+                            
+                    order.horus_pedido_venda = str(horus_ped_venda)
+                    order.status = "SENT_TO_HORUS"
+                    db.commit()
+            except Exception as e:
+                print(f"Error syncing PDV order to Horus: {e}")
+            finally:
+                await horus_client.close()
+
+    return {"status": "success", "order_id": order.id, "horus_id": order.horus_pedido_venda}
+
 
 @router.get("/orders", response_model=dict)
 def get_orders(
@@ -20,7 +120,7 @@ def get_orders(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in ["MASTER", "SELLER"]:
+    if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
         raise HTTPException(status_code=403, detail="Acesso não autorizado")
         
     from app.models.customer import Customer
@@ -28,6 +128,8 @@ def get_orders(
     
     if current_user.type == "SELLER":
         query = query.filter(Order.company_id == current_user.company_id)
+    elif current_user.type == "AGENT":
+        query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
         
     query = query.filter(Order.status != "NEW")
     
@@ -72,12 +174,14 @@ async def get_order_detail(
     from app.models.company_settings import CompanySettings
     from app.models.company import Company
     
-    if current_user.type not in ["MASTER", "SELLER"]:
+    if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
         raise HTTPException(status_code=403, detail="Acesso não autorizado")
         
     query = db.query(Order).filter(Order.id == order_id)
     if current_user.type == "SELLER":
         query = query.filter(Order.company_id == current_user.company_id)
+    elif current_user.type == "AGENT":
+        query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
     
     order = query.first()
     
@@ -276,12 +380,14 @@ def add_interaction(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in ["MASTER", "SELLER"]:
+    if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
         raise HTTPException(status_code=403, detail="Acesso não autorizado")
         
     query = db.query(Order).filter(Order.id == order_id)
     if current_user.type == "SELLER":
         query = query.filter(Order.company_id == current_user.company_id)
+    elif current_user.type == "AGENT":
+        query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
     order = query.first()
     
     if not order:
@@ -310,12 +416,14 @@ def mark_interaction_read(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in ["MASTER", "SELLER"]:
+    if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
         raise HTTPException(status_code=403, detail="Acesso não autorizado")
         
     query = db.query(Order).filter(Order.id == order_id)
     if current_user.type == "SELLER":
         query = query.filter(Order.company_id == current_user.company_id)
+    elif current_user.type == "AGENT":
+        query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
     order = query.first()
     
     if not order:

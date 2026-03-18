@@ -62,3 +62,49 @@ class HorusProducts(HorusClient):
         else:
             # Normal search (equivalent to searchProduct uses GET)
             return await self.get("Busca_AcervoB2B", params=params)
+
+    async def busca_acervo_padrao(
+        self, 
+        id_doc: str, 
+        term: Optional[str] = None, 
+        search_option: Optional[str] = None, 
+        offset: int = 0, 
+        limit: int = 25, 
+        isbns: Optional[List[Dict[str, Any]]] = None,
+        **kwargs
+    ) -> Any:
+        """
+        Fetches products from standard Busca_Acervo endpoint (no customer context).
+        """
+        params: Dict[str, Any] = {}
+        
+        # Pagination
+        if limit is not None:
+            params["OFFSET"] = offset
+            params["LIMIT"] = limit
+            
+        # Company / Branch context from settings
+        if self._settings.horus_company:
+            params["SD_COD_EMPRESA"] = self._settings.horus_company
+        if self._settings.horus_branch:
+            params["SD_COD_FILIAL"] = self._settings.horus_branch
+            
+        if term:
+            if search_option:
+                if search_option == "NOM_ITEM":
+                    params["NOME"] = term
+                else:
+                    params[search_option] = term
+            else:
+                if term.isdigit() and len(term) >= 10:
+                    params["BARRAS_ISBN"] = term
+                else:
+                    params["NOME"] = term
+                    
+        # Support for additional kwargs
+        params.update(kwargs)
+
+        if isbns:
+            return await self.post("Busca_Acervo", json_data=isbns, params=params)
+        else:
+            return await self.get("Busca_Acervo", params=params)

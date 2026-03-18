@@ -19,7 +19,7 @@ export default function CategoriesPage() {
   const fetchCategories = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/categories', {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories`, {
         headers: {
           'Authorization': `Bearer ${getToken()}`
         }
@@ -42,7 +42,7 @@ export default function CategoriesPage() {
     if (!newCatName.trim()) return toast.error("O nome é obrigatório.");
     setSaving(true);
     try {
-      const url = editingCategory ? `http://localhost:8000/categories/${editingCategory.id}` : 'http://localhost:8000/categories';
+      const url = editingCategory ? `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories/${editingCategory.id}` : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories`;
       const method = editingCategory ? 'PATCH' : 'POST';
 
       const res = await fetch(url, {

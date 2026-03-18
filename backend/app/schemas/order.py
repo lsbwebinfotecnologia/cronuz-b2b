@@ -60,6 +60,7 @@ class OrderBase(BaseModel):
     subtotal: Optional[float] = 0.0
     discount: Optional[float] = 0.0
     total: Optional[float] = 0.0
+    agent_id: Optional[int] = None
 
 class OrderCreate(OrderBase):
     pass
@@ -79,3 +80,18 @@ class OrderResponse(OrderBase):
 
 class CheckoutRequest(BaseModel):
     type_order: str = "V"
+
+class PDVOrderItem(BaseModel):
+    product_id: int
+    quantity: int
+    unit_price: float
+
+class PDVOrderCreate(BaseModel):
+    customer_id: int
+    items: List[PDVOrderItem]
+    total_amount: float
+    payment_method: str
+    discount_amount: float
+    status: str
+    source: str
+

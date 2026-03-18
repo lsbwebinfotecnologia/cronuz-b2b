@@ -63,7 +63,7 @@ export default function CustomerDetailsPage() {
       const token = getToken();
       if (!token) return;
 
-      const res = await fetch(`http://localhost:8000/customers/${customerId}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
@@ -84,7 +84,7 @@ export default function CustomerDetailsPage() {
         });
 
         try {
-          const ures = await fetch(`http://localhost:8000/customers/${customerId}/users`, {
+          const ures = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/users`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           if (ures.ok) {
@@ -107,7 +107,7 @@ export default function CustomerDetailsPage() {
 
   async function handleUpdateFinance() {
     try {
-      const res = await fetch(`http://localhost:8000/customers/${customerId}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}`, {
         method: 'PATCH',
         headers: { 
           'Authorization': `Bearer ${getToken()}`,
@@ -134,7 +134,7 @@ export default function CustomerDetailsPage() {
     e.preventDefault();
     setSavingEdit(true);
     try {
-      const res = await fetch(`http://localhost:8000/customers/${customerId}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}`, {
         method: 'PATCH',
         headers: { 
           'Authorization': `Bearer ${getToken()}`,
@@ -161,7 +161,7 @@ export default function CustomerDetailsPage() {
     if (!interactionContent.trim()) return;
     setSavingInteraction(true);
     try {
-      const res = await fetch(`http://localhost:8000/customers/${customerId}/interactions`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/interactions`, {
         method: 'POST',
         headers: { 
           'Authorization': `Bearer ${getToken()}`,
@@ -189,7 +189,7 @@ export default function CustomerDetailsPage() {
     e.preventDefault();
     setSavingContact(true);
     try {
-      const res = await fetch(`http://localhost:8000/customers/${customerId}/contacts`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/contacts`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(newContact)
@@ -208,7 +208,7 @@ export default function CustomerDetailsPage() {
   async function handleDeleteContact(contactId: number) {
     if (!confirm("Tem certeza que deseja remover este contato?")) return;
     try {
-      const res = await fetch(`http://localhost:8000/customers/${customerId}/contacts/${contactId}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/contacts/${contactId}`, {
          method: 'DELETE',
          headers: { 'Authorization': `Bearer ${getToken()}` }
       });
@@ -235,7 +235,7 @@ export default function CustomerDetailsPage() {
     setSavingAuth(true);
     try {
       if (authMode === 'create') {
-        const res = await fetch(`http://localhost:8000/customers/${customerId}/users`, {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/users`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(authForm)
@@ -252,7 +252,7 @@ export default function CustomerDetailsPage() {
         // Edit mode
         let hasError = false;
         if (authForm.email !== customerUser.email) {
-           const eRes = await fetch(`http://localhost:8000/users/${customerUser.id}/email`, {
+           const eRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/${customerUser.id}/email`, {
               method: 'PATCH',
               headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ email: authForm.email })
@@ -261,7 +261,7 @@ export default function CustomerDetailsPage() {
            else setCustomerUser({ ...customerUser, email: authForm.email });
         }
         if (authForm.password) {
-           const pRes = await fetch(`http://localhost:8000/users/${customerUser.id}/password`, {
+           const pRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/${customerUser.id}/password`, {
               method: 'PATCH',
               headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ password: authForm.password })
@@ -288,7 +288,7 @@ export default function CustomerDetailsPage() {
     try {
       if (!user?.company_id) throw new Error('Falha na autenticação: Empresa não encontrada.');
       
-      const horusRes = await fetch(`http://localhost:8000/companies/${user.company_id}/horus/customers/${cleanCnpj}`, {
+      const horusRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${user.company_id}/horus/customers/${cleanCnpj}`, {
         headers: { 'Authorization': `Bearer ${getToken()}` }
       });
       
@@ -304,7 +304,7 @@ export default function CustomerDetailsPage() {
          throw new Error('Retorno do Horus sem as chaves de integração.');
       }
       
-      const patchRes = await fetch(`http://localhost:8000/customers/${customerId}`, {
+      const patchRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}`, {
          method: 'PATCH',
          headers: { 
            'Authorization': `Bearer ${getToken()}`,

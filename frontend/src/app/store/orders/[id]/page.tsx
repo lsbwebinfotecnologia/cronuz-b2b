@@ -81,7 +81,7 @@ export default function StoreOrderDetailPage() {
         const fetchOrder = async () => {
             try {
                 const token = getToken();
-                const response = await fetch(`http://localhost:8000/storefront/orders/${params.id}`, {
+                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/orders/${params.id}`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 if (response.ok) {
@@ -147,7 +147,7 @@ export default function StoreOrderDetailPage() {
         setIsSubmitting(true);
         try {
             const token = getToken();
-            const response = await fetch(`http://localhost:8000/storefront/orders/${order.id}/interactions`, {
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/orders/${order.id}/interactions`, {
                 method: 'POST',
                 headers: { 
                     'Authorization': `Bearer ${token}`,

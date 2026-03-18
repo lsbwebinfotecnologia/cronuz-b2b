@@ -80,6 +80,36 @@ def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dic
         "updated_at": None
     }
 
+@router.get("/domain/{domain_name}")
+def get_storefront_domain_info(
+    domain_name: str,
+    db: Session = Depends(get_db)
+):
+    from app.models.company import Company
+    
+    # Check custom_domain first
+    company = db.query(Company).filter(
+        Company.custom_domain == domain_name,
+        Company.active == True
+    ).first()
+    
+    # Fallback to internal app domain
+    if not company:
+        company = db.query(Company).filter(
+            Company.domain == domain_name,
+            Company.active == True
+        ).first()
+        
+    if not company:
+        raise HTTPException(status_code=404, detail="Domínio não encontrado")
+        
+    return {
+        "company_id": company.id,
+        "name": company.name,
+        "domain": company.domain,
+        "custom_domain": company.custom_domain
+    }
+
 @router.get("/config")
 def get_storefront_config(
     company_id: int = Query(1, description="ID da empresa"),

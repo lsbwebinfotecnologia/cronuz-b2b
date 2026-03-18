@@ -43,6 +43,9 @@ def list_subscription_plans(
             "presale_discount_percent": float(p.presale_discount_percent) if p.presale_discount_percent else 0.0,
             "launch_discount_percent": float(p.launch_discount_percent) if p.launch_discount_percent else 0.0,
             "postlaunch_discount_percent": float(p.postlaunch_discount_percent) if p.postlaunch_discount_percent else 0.0,
+            "presale_start_date": p.presale_start_date.isoformat() if p.presale_start_date else None,
+            "launch_date": p.launch_date.isoformat() if p.launch_date else None,
+            "postlaunch_date": p.postlaunch_date.isoformat() if p.postlaunch_date else None,
             "is_active": p.is_active,
             "hotsite_slug": p.hotsite_slug
         } for p in plans
@@ -69,6 +72,9 @@ def create_subscription_plan(
         presale_discount_percent=plan_data.get("presale_discount_percent", 0),
         launch_discount_percent=plan_data.get("launch_discount_percent", 0),
         postlaunch_discount_percent=plan_data.get("postlaunch_discount_percent", 0),
+        presale_start_date=datetime.fromisoformat(plan_data["presale_start_date"].replace('Z', '+00:00')) if plan_data.get("presale_start_date") else None,
+        launch_date=datetime.fromisoformat(plan_data["launch_date"].replace('Z', '+00:00')) if plan_data.get("launch_date") else None,
+        postlaunch_date=datetime.fromisoformat(plan_data["postlaunch_date"].replace('Z', '+00:00')) if plan_data.get("postlaunch_date") else None,
         is_active=plan_data.get("is_active", True),
         hotsite_slug=plan_data.get("hotsite_slug"),
         hotsite_config=plan_data.get("hotsite_config")
@@ -90,6 +96,9 @@ def create_subscription_plan(
         "presale_discount_percent": float(new_plan.presale_discount_percent) if new_plan.presale_discount_percent else 0.0,
         "launch_discount_percent": float(new_plan.launch_discount_percent) if new_plan.launch_discount_percent else 0.0,
         "postlaunch_discount_percent": float(new_plan.postlaunch_discount_percent) if new_plan.postlaunch_discount_percent else 0.0,
+        "presale_start_date": new_plan.presale_start_date.isoformat() if new_plan.presale_start_date else None,
+        "launch_date": new_plan.launch_date.isoformat() if new_plan.launch_date else None,
+        "postlaunch_date": new_plan.postlaunch_date.isoformat() if new_plan.postlaunch_date else None,
         "is_active": new_plan.is_active,
         "hotsite_slug": new_plan.hotsite_slug
     }
@@ -124,6 +133,9 @@ def get_subscription_plan(
         "presale_discount_percent": float(plan.presale_discount_percent) if plan.presale_discount_percent else 0.0,
         "launch_discount_percent": float(plan.launch_discount_percent) if plan.launch_discount_percent else 0.0,
         "postlaunch_discount_percent": float(plan.postlaunch_discount_percent) if plan.postlaunch_discount_percent else 0.0,
+        "presale_start_date": plan.presale_start_date.isoformat() if plan.presale_start_date else None,
+        "launch_date": plan.launch_date.isoformat() if plan.launch_date else None,
+        "postlaunch_date": plan.postlaunch_date.isoformat() if plan.postlaunch_date else None,
         "is_active": plan.is_active,
         "hotsite_slug": plan.hotsite_slug,
         "hotsite_config": plan.hotsite_config or {}
@@ -156,6 +168,9 @@ def update_subscription_plan(
     if "presale_discount_percent" in plan_data: plan.presale_discount_percent = plan_data["presale_discount_percent"]
     if "launch_discount_percent" in plan_data: plan.launch_discount_percent = plan_data["launch_discount_percent"]
     if "postlaunch_discount_percent" in plan_data: plan.postlaunch_discount_percent = plan_data["postlaunch_discount_percent"]
+    if "presale_start_date" in plan_data: plan.presale_start_date = datetime.fromisoformat(plan_data["presale_start_date"].replace('Z', '+00:00')) if plan_data["presale_start_date"] else None
+    if "launch_date" in plan_data: plan.launch_date = datetime.fromisoformat(plan_data["launch_date"].replace('Z', '+00:00')) if plan_data["launch_date"] else None
+    if "postlaunch_date" in plan_data: plan.postlaunch_date = datetime.fromisoformat(plan_data["postlaunch_date"].replace('Z', '+00:00')) if plan_data["postlaunch_date"] else None
     if "is_active" in plan_data: plan.is_active = plan_data["is_active"]
     if "hotsite_slug" in plan_data: plan.hotsite_slug = plan_data["hotsite_slug"]
     if "hotsite_config" in plan_data: plan.hotsite_config = plan_data["hotsite_config"]
@@ -163,7 +178,70 @@ def update_subscription_plan(
     db.commit()
     return {"message": "Plano atualizado com sucesso"}
 
+@router.get("/hotsite/tenant")
+def get_company_custom_domain(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.user import UserRole
+    if current_user.type != UserRole.SELLER:
+         raise HTTPException(status_code=403, detail="Acesso restrito a vendedores")
+         
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not company:
+         raise HTTPException(status_code=404, detail="Empresa não encontrada")
+         
+    return {"custom_domain": company.custom_domain or ""}
+
+@router.put("/hotsite/tenant")
+def update_company_custom_domain(
+    domain_data: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.user import UserRole
+    if current_user.type != UserRole.SELLER:
+         raise HTTPException(status_code=403, detail="Acesso restrito a vendedores")
+         
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not company:
+         raise HTTPException(status_code=404, detail="Empresa não encontrada")
+         
+    custom_domain = domain_data.get("custom_domain")
+    
+    # Simple validation
+    if custom_domain:
+        custom_domain = custom_domain.strip().lower()
+        if custom_domain.startswith("http://") or custom_domain.startswith("https://"):
+            custom_domain = custom_domain.split("//")[1]
+        custom_domain = custom_domain.split("/")[0] # remove paths
+        
+    company.custom_domain = custom_domain or None
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Este domínio já pode estar em uso por outra empresa.")
+        
+    return {"message": "Domínio atualizado com sucesso", "custom_domain": company.custom_domain}
+
 # ----------------- PUBLIC API (HOTSITE) -----------------
+
+@router.get("/hotsite_by_company/{company_id}")
+def get_hotsite_config_by_company(company_id: int, db: Session = Depends(get_db)):
+    """
+    Public Route: Used by Custom Domains to fetch the primary Hotsite for a Company
+    """
+    plan = db.query(SubscriptionPlan).filter(
+        SubscriptionPlan.company_id == company_id,
+        SubscriptionPlan.is_active == True
+    ).first()
+    
+    if not plan:
+         raise HTTPException(status_code=404, detail="Nenhum Hotsite ativo encontrado para esta empresa.")
+         
+    return get_hotsite_config(plan.hotsite_slug, db)
 
 @router.get("/hotsite/{slug}")
 def get_hotsite_config(slug: str, db: Session = Depends(get_db)):

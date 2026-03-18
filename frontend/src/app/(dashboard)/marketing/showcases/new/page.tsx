@@ -27,7 +27,7 @@ export default function NewShowcasePage() {
   const searchProducts = async () => {
     if (!searchQ.trim()) return;
     try {
-      const res = await fetch(`http://localhost:8000/products/?name=${encodeURIComponent(searchQ)}&limit=10`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/?name=${encodeURIComponent(searchQ)}&limit=10`, {
         headers: { 'Authorization': `Bearer ${getToken()}` }
       });
       if (res.ok) {
@@ -81,7 +81,7 @@ export default function NewShowcasePage() {
       }
 
       const token = getToken();
-      const res = await fetch('http://localhost:8000/marketing/showcases/', {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/marketing/showcases/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

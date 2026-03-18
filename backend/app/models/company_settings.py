@@ -17,6 +17,8 @@ class CompanySettings(Base):
     horus_password = Column(String(255), nullable=True)
     horus_company = Column(String(50), nullable=True)
     horus_branch = Column(String(50), nullable=True)
+    horus_default_b2b_guid = Column(String(100), nullable=True) # Fallback GUID for PDV and public searches
+    horus_api_mode = Column(String(20), default='B2B', nullable=False) # 'B2B' or 'STANDARD'
     
     bookinfo_api_key = Column(String(255), nullable=True)
     metabooks_api_key = Column(String(255), nullable=True)
@@ -25,6 +27,10 @@ class CompanySettings(Base):
     # Advanced Stock Config
     allow_backorder = Column(Boolean, default=False, nullable=False)
     max_backorder_qty = Column(Integer, default=0, nullable=False)
+    
+    # Point of Sale (PDV) Config
+    pdv_type = Column(String(50), default='NON_FISCAL', nullable=False) # 'FISCAL' or 'NON_FISCAL'
+    pdv_allow_out_of_stock = Column(Boolean, default=False, nullable=False)
     
     # Audit trail
     created_at = Column(DateTime(timezone=True), server_default=func.now())

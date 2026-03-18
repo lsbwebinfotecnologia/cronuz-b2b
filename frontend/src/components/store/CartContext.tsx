@@ -74,7 +74,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     
     // Then override with DB state if user logged in
     if (token) {
-      fetch('http://localhost:8000/storefront/cart', {
+      fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/cart`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       .then(res => res.json())
@@ -110,7 +110,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       if (!token) return;
       
       try {
-          const response = await fetch('http://localhost:8000/storefront/cart/items', {
+          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/cart/items`, {
               method: 'POST',
               headers: { 
                   'Authorization': `Bearer ${token}`,

@@ -121,7 +121,7 @@ export default function NewCustomerPage() {
     try {
       if (!user?.company_id) throw new Error('Não foi possível obter dados da Empresa vinculada ao usuário');
       
-      const res = await fetch(`http://localhost:8000/companies/${user.company_id}/horus/customers/${cleanCnpj}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${user.company_id}/horus/customers/${cleanCnpj}`, {
         headers: {
           'Authorization': `Bearer ${getToken()}`
         }
@@ -214,7 +214,7 @@ export default function NewCustomerPage() {
         contacts: contacts
       };
 
-      const res = await fetch('http://localhost:8000/customers', {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

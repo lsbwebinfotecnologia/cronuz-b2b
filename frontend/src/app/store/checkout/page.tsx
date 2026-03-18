@@ -25,7 +25,7 @@ export default function CheckoutPage() {
       try {
         const token = getToken();
         if(!token) return;
-        const res = await fetch(`http://localhost:8000/storefront/cart/validate_stock`, {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/cart/validate_stock`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {
@@ -47,7 +47,7 @@ export default function CheckoutPage() {
         const token = getToken();
         if (!token) return;
 
-        const res = await fetch(`http://localhost:8000/storefront/customer/me`, {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/customer/me`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
@@ -73,7 +73,7 @@ export default function CheckoutPage() {
            return;
         }
         
-        const res = await fetch(`http://localhost:8000/storefront/cart/checkout`, {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/cart/checkout`, {
             method: 'POST',
             headers: { 
                 'Authorization': `Bearer ${token}`,

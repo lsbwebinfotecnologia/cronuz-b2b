@@ -10,7 +10,8 @@ import {
   Megaphone,
   ShoppingBag,
   ChevronDown,
-  Layers
+  Layers,
+  MonitorSmartphone
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -64,7 +65,14 @@ const sellerNavigation: NavItem[] = [
        { name: 'Vitrines da Loja', href: '/marketing/showcases' }
     ]
   },
+  { name: 'Vendedores (PDV)', href: '/agents', icon: MonitorSmartphone },
   { name: 'Configurações', href: '/settings', icon: Settings },
+];
+
+const agentNavigation: NavItem[] = [
+  { name: 'Ponto de Venda (PDV)', href: '/pdv', icon: MonitorSmartphone },
+  { name: 'Clientes', href: '/customers', icon: Users },
+  { name: 'Pedidos', href: '/orders', icon: ShoppingBag },
 ];
 
 export function Sidebar() {
@@ -92,7 +100,7 @@ export function Sidebar() {
        const fetchSettings = async () => {
          try {
            const tokenStr = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
-           const res = await fetch('http://localhost:8000/dashboard/metrics', {
+           const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics`, {
               headers: { 'Authorization': `Bearer ${tokenStr}` }
            });
            if (res.ok) {
@@ -120,7 +128,8 @@ export function Sidebar() {
   }
 
   const dynamicNavigation = user?.type === 'MASTER' ? masterNavigation : 
-                            (user?.type === 'SELLER' ? filteredSellerNavigation : []);
+                            (user?.type === 'SELLER' ? filteredSellerNavigation : 
+                             (user?.type === 'AGENT' ? agentNavigation : []));
 
   const handleLogout = () => {
     removeToken();

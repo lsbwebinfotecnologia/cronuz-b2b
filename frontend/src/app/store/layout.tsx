@@ -19,7 +19,7 @@ function decodeJWTPayload(token: string) {
 
 async function getStoreConfig(companyId: number) {
   try {
-    const res = await fetch(`http://localhost:8000/storefront/config?company_id=${companyId}`, { 
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/config?company_id=${companyId}`, { 
       next: { revalidate: 60 } 
     });
     if (res.ok) {

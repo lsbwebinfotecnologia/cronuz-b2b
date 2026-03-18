@@ -37,7 +37,7 @@ export default function ProductsPage() {
     setLoading(true);
     try {
       const skip = (page - 1) * limit;
-      let url = `http://localhost:8000/products/?skip=${skip}&limit=${limit}`;
+      let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/?skip=${skip}&limit=${limit}`;
       if (searchTerm) {
         url += `&search=${encodeURIComponent(searchTerm)}`;
       }
@@ -72,7 +72,7 @@ export default function ProductsPage() {
         const compId = decoded.company_id || 1;
         setCompanyId(compId);
         
-        const res = await fetch(`http://localhost:8000/companies/${compId}/settings`, {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${compId}/settings`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {

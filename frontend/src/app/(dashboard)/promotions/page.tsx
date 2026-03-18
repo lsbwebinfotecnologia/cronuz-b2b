@@ -13,7 +13,7 @@ export default function PromotionsListPage() {
   const fetchPromotions = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/promotions', {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/promotions`, {
         headers: { 'Authorization': `Bearer ${getToken()}` }
       });
       if (res.ok) {
@@ -33,7 +33,7 @@ export default function PromotionsListPage() {
   const handleDelete = async (id: number) => {
     if (!confirm('Deseja realmente remover esta promoção? Isso afetará os preços em tempo real.')) return;
     try {
-      const res = await fetch(`http://localhost:8000/promotions/${id}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/promotions/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${getToken()}` }
       });

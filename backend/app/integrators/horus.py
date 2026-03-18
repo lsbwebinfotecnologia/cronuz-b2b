@@ -74,7 +74,19 @@ class HorusClient:
         try:
             response = await self._client.get(endpoint, params=params)
             response.raise_for_status()
-            return response.json()
+            text = response.text.strip()
+            # Handle BOM and trailing/leading non-json chars cleanly
+            if text.startswith("\ufeff"):
+                text = text[1:]
+            
+            # Simple fallback to trying to parse JSON
+            import json
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                # If Horus returned a pure string instead of JSON, we can return it as an error format
+                return [{"Falha": True, "Mensagem": f"Resposta inválida da API: {text[:100]}"}]
+                
         except httpx.HTTPStatusError as e:
             # Handle API errors gracefully and extract exact Horus message
             err_msg = e.response.text
@@ -92,7 +104,15 @@ class HorusClient:
         try:
             response = await self._client.post(endpoint, json=json_data, params=params)
             response.raise_for_status()
-            return response.json()
+            text = response.text.strip()
+            if text.startswith("\ufeff"):
+                text = text[1:]
+                
+            import json
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return [{"Falha": True, "Mensagem": f"Resposta inválida da API: {text[:100]}"}]
         except httpx.HTTPStatusError as e:
             err_msg = e.response.text
             try:

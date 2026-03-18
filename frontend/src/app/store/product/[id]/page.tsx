@@ -35,7 +35,7 @@ export default function ProductDetailsPage() {
       setLoading(true);
       try {
          const token = getToken();
-         const res = await fetch(`http://localhost:8000/storefront/product/${id}`, {
+         const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/product/${id}`, {
             headers: token ? { 'Authorization': `Bearer ${token}` } : {}
          });
          

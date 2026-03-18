@@ -73,6 +73,8 @@ def list_products(
     skip: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
     search: Optional[str] = None,
+    source: Optional[str] = None,
+    customer_id: Optional[int] = Query(None, description="Obrigatório no modo B2B para tabelas de preço"),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
@@ -80,6 +82,101 @@ def list_products(
     # If not (public storefront), default to Company 1 or main catalog.
     target_company_id = current_user.company_id if current_user and current_user.company_id else 1
     
+    target_company_id = current_user.company_id if current_user and current_user.company_id else 1
+    
+    from app.models.company_settings import CompanySettings
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == target_company_id).first()
+    
+    # 1) If Horus is enabled, fetch EXCLUSIVELY from Horus as the Single Source of Truth
+    if settings and settings.horus_enabled:
+        import asyncio
+        from app.integrators.horus_products import HorusProducts
+        from app.models.company import Company
+        from app.api.storefront import map_horus_product
+
+        try:
+            company = db.query(Company).filter(Company.id == target_company_id).first()
+            if not company:
+                return {"items": [], "total": 0, "page": 1, "pages": 1, "error": "Company not found."}
+                
+            allow_backorder = settings.allow_backorder if settings else False
+
+            horus_client = HorusProducts(db, target_company_id)
+            
+            # Determine search option
+            search_option = None
+            term = search or ""
+            if term:
+                search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
+                
+            # Determine API Mode from company settings
+            api_mode = getattr(settings, "horus_api_mode", "B2B") or "B2B"
+            
+            if api_mode == "STANDARD":
+                # Padrão: Não exige ID_GUID, usa o acervo da filial em vez de tabela do cliente
+                horus_response = asyncio.run(horus_client.busca_acervo_padrao(
+                    id_doc=company.document or "",
+                    term=term,
+                    search_option=search_option,
+                    offset=skip,
+                    limit=limit
+                ))
+            else:
+                # B2B: Exige obrigatoriamente um cliente logado/selecionado com GUID
+                if not customer_id:
+                    return {
+                        "items": [],
+                        "total": 0,
+                        "page": 1,
+                        "pages": 1,
+                        "error": "O modo B2B exige que um cliente seja selecionado antes de pesquisar produtos."
+                    }
+                    
+                from app.models.customer import Customer
+                customer = db.query(Customer).filter(Customer.id == customer_id, Customer.company_id == target_company_id).first()
+                if not customer or not customer.id_guid:
+                    return {
+                        "items": [],
+                        "total": 0,
+                        "page": 1,
+                        "pages": 1,
+                        "error": "O cliente selecionado não possui sincronização com o Horus (ID_GUID ausente)."
+                    }
+                    
+                horus_response = asyncio.run(horus_client.busca_acervo_b2b(
+                    id_doc=company.document or "",
+                    id_guid=customer.id_guid,
+                    term=term,
+                    search_option=search_option,
+                    offset=skip,
+                    limit=limit
+                ))
+            
+            items = []
+            if isinstance(horus_response, list) and len(horus_response) > 0:
+                # FIX: Check if the dictionary has the key 'Falha' instead of hasattr
+                if not ("Falha" in horus_response[0] or "FALHA" in horus_response[0]):
+                    for h_item in horus_response:
+                        mapped = map_horus_product(h_item, target_company_id, allow_backorder)
+                        # PDV expects 'price' and 'stock' fields directly due to legacy mappings
+                        mapped["price"] = mapped.get("promotional_price") if mapped.get("promotional_price") else mapped.get("base_price", 0.0)
+                        mapped["stock"] = mapped.get("stock_quantity", 0)
+                        # make sure ID doesn't collide with local DB integers on frontend iterators
+                        mapped["id"] = f"horus-{mapped.get('id', 'unknown')}"
+                        items.append(mapped)
+                    
+            asyncio.run(horus_client.close())
+            return {
+                "items": items,
+                "total": len(items),
+                "page": 1,
+                "pages": 1
+            }
+        except Exception as e:
+            print(f"Error checking Horus integration: {e}")
+            return {"items": [], "total": 0, "page": 1, "pages": 1, "error": str(e)}
+
+    # 2) Search in local database EXCLUSIVELY
     query = db.query(Product).filter(Product.company_id == target_company_id)
     
     if search:
@@ -89,14 +186,22 @@ def list_products(
             (Product.sku.ilike(search_filter))
         )
         
-    total = query.count()
-    products = query.order_by(Product.name.asc()).offset(skip).limit(limit).all()
+    local_total = query.count()
+    local_products = query.order_by(Product.name.asc()).offset(skip).limit(limit).all()
     
+    # Convert local products to dictionary matching schema
+    items = []
+    for p in local_products:
+        item_dict = ProductResponse.from_orm(p).dict()
+        item_dict["price"] = p.promotional_price if p.promotional_price else p.base_price
+        item_dict["stock"] = p.stock_quantity
+        items.append(item_dict)
+
     return {
-        "items": [ProductResponse.from_orm(p) for p in products],
-        "total": total,
+        "items": items,
+        "total": local_total,
         "page": (skip // limit) + 1,
-        "pages": (total + limit - 1) // limit
+        "pages": max(1, (local_total + limit - 1) // limit)
     }
 
 @router.get("/{product_id}", response_model=ProductResponse)

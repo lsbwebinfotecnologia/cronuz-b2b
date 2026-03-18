@@ -15,6 +15,7 @@ class Order(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=False, index=True)
     customer_id = Column(Integer, ForeignKey("crm_customer.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("usr_user.id"), nullable=True, index=True) # The seller/agent who made the sale
     
     status = Column(String(50), nullable=False, default="NEW") # NEW, PROCESSING, SENT_TO_HORUS, CANCELLED
     type_order = Column(String(50), nullable=False, default="V") # V=Venda, C=Consignado

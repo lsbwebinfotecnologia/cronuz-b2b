@@ -23,7 +23,7 @@ export default function ShowcasesPage() {
         const token = getToken();
         if (!token) return;
 
-        const res = await fetch('http://localhost:8000/marketing/showcases/', {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/marketing/showcases/`, {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -46,7 +46,7 @@ export default function ShowcasesPage() {
   const handleDelete = async (id: number) => {
     if (!confirm('Tem certeza que deseja remover esta vitrine?')) return;
     try {
-      const res = await fetch(`http://localhost:8000/marketing/showcases/${id}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/marketing/showcases/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${getToken()}` }
       });

@@ -24,8 +24,8 @@ export default function CharacteristicsPage() {
     try {
       const authHeader = { 'Authorization': `Bearer ${getToken()}` };
       const [charRes, catRes] = await Promise.all([
-        fetch('http://localhost:8000/characteristics', { headers: authHeader }),
-        fetch('http://localhost:8000/categories', { headers: authHeader })
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/characteristics`, { headers: authHeader }),
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories`, { headers: authHeader })
       ]);
       
       if (charRes.ok) setChars(await charRes.json());
@@ -46,7 +46,7 @@ export default function CharacteristicsPage() {
     if (!newCharName.trim()) return toast.error("O nome é obrigatório.");
     setSaving(true);
     try {
-      const url = editingChar ? `http://localhost:8000/characteristics/${editingChar.id}` : 'http://localhost:8000/characteristics';
+      const url = editingChar ? `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/characteristics/${editingChar.id}` : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/characteristics`;
       const method = editingChar ? 'PATCH' : 'POST';
 
       const res = await fetch(url, {

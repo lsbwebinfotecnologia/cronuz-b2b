@@ -47,7 +47,7 @@ export default function CustomersPage() {
       if (!token) return;
 
       const skip = (currentPage - 1) * limit;
-      let url = `http://localhost:8000/customers?skip=${skip}&limit=${limit}`;
+      let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers?skip=${skip}&limit=${limit}`;
       if (searchTerm) {
         url += `&search=${encodeURIComponent(searchTerm)}`;
       }

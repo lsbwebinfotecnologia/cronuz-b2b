@@ -24,7 +24,8 @@ export default function CompaniesPage() {
       try {
         const token = getToken();
         if(!token) return;
-        const res = await fetch('http://localhost:8000/companies', {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const res = await fetch(`${apiUrl}/companies`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {

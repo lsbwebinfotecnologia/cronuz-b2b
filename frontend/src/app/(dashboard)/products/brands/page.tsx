@@ -18,7 +18,7 @@ export default function BrandsPage() {
   const fetchBrands = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/brands', {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/brands`, {
         headers: {
           'Authorization': `Bearer ${getToken()}`
         }
@@ -41,7 +41,7 @@ export default function BrandsPage() {
     if (!newBrandName.trim()) return toast.error("O nome é obrigatório.");
     setSaving(true);
     try {
-      const url = editingBrand ? `http://localhost:8000/brands/${editingBrand.id}` : 'http://localhost:8000/brands';
+      const url = editingBrand ? `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/brands/${editingBrand.id}` : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/brands`;
       const method = editingBrand ? 'PATCH' : 'POST';
 
       const res = await fetch(url, {

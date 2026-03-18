@@ -16,6 +16,7 @@ interface Company {
   logo: string | null;
   module_horus_erp: boolean;
   module_subscriptions: boolean;
+  module_pdv: boolean;
   active: boolean;
 }
 
@@ -44,6 +45,7 @@ export default function CompanyDetailsPage() {
     horus_password: '',
     horus_company: '',
     horus_branch: '',
+    horus_api_mode: 'B2B',
     bookinfo_api_key: '',
     metabooks_api_key: '',
     cover_image_base_url: '',
@@ -63,13 +65,13 @@ export default function CompanyDetailsPage() {
       if (!token) return;
 
       const [companyRes, usersRes, settingsRes] = await Promise.all([
-        fetch(`http://localhost:8000/companies/${companyId}`, {
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         }),
-        fetch(`http://localhost:8000/companies/${companyId}/users`, {
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/users`, {
           headers: { 'Authorization': `Bearer ${token}` }
         }),
-        fetch(`http://localhost:8000/companies/${companyId}/settings`, {
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, {
           headers: { 'Authorization': `Bearer ${token}` }
         })
       ]);
@@ -90,6 +92,7 @@ export default function CompanyDetailsPage() {
           horus_password: data.horus_password || '',
           horus_company: data.horus_company || '',
           horus_branch: data.horus_branch || '',
+          horus_api_mode: data.horus_api_mode || 'B2B',
           bookinfo_api_key: data.bookinfo_api_key || '',
           metabooks_api_key: data.metabooks_api_key || '',
           cover_image_base_url: data.cover_image_base_url || '',
@@ -107,7 +110,7 @@ export default function CompanyDetailsPage() {
   async function handleToggleUserStatus(user: User) {
     try {
       const token = getToken();
-      const res = await fetch(`http://localhost:8000/users/${user.id}/status`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/${user.id}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -133,7 +136,7 @@ export default function CompanyDetailsPage() {
 
     try {
       const token = getToken();
-      const res = await fetch(`http://localhost:8000/users/${userId}/password`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/${userId}/password`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -155,7 +158,7 @@ export default function CompanyDetailsPage() {
 
     try {
       const token = getToken();
-      const res = await fetch(`http://localhost:8000/users/${userId}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/${userId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -183,7 +186,7 @@ export default function CompanyDetailsPage() {
 
     try {
       const token = getToken();
-      const res = await fetch(`http://localhost:8000/users/${user.id}/email`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/${user.id}/email`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -209,7 +212,7 @@ export default function CompanyDetailsPage() {
     setToggling(true);
     try {
       const token = getToken();
-      const res = await fetch(`http://localhost:8000/companies/${companyId}/status`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -235,7 +238,7 @@ export default function CompanyDetailsPage() {
     setSavingSettings(true);
     try {
       const token = getToken();
-      const res = await fetch(`http://localhost:8000/companies/${companyId}/settings`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -252,16 +255,17 @@ export default function CompanyDetailsPage() {
     }
   }
 
-  async function handleToggleModule(moduleName: 'module_horus_erp' | 'module_subscriptions', currentValue: boolean) {
+  async function handleToggleModule(moduleName: 'module_horus_erp' | 'module_subscriptions' | 'module_pdv', currentValue: boolean) {
     if (!company) return;
     try {
       const token = getToken();
       const payload = {
           module_horus_erp: moduleName === 'module_horus_erp' ? !currentValue : company.module_horus_erp,
-          module_subscriptions: moduleName === 'module_subscriptions' ? !currentValue : company.module_subscriptions
+          module_subscriptions: moduleName === 'module_subscriptions' ? !currentValue : company.module_subscriptions,
+          module_pdv: moduleName === 'module_pdv' ? !currentValue : company.module_pdv,
       };
       
-      const res = await fetch(`http://localhost:8000/companies/${companyId}/modules`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/modules`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -525,9 +529,52 @@ export default function CompanyDetailsPage() {
                 <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-checked:after:bg-white"></div>
               </label>
             </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-200 dark:border-slate-800/60 mt-4">
+              <div>
+                <h3 className="text-sm font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-widest flex items-center gap-2">
+                  Módulo: Ponto de Venda (PDV)
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">Habilite para permitir que o Seller utilize a frente de caixa integrada (Vendedores e PDV).</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" className="sr-only peer" checked={company?.module_pdv || false} onChange={() => handleToggleModule('module_pdv', company?.module_pdv || false)} />
+                <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-300 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500 peer-checked:after:bg-white"></div>
+              </label>
+            </div>
             
             {company?.module_horus_erp && (
               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Modo de Operação (Catálogo e Preços)</label>
+                  <div className="flex flex-col sm:flex-row gap-4 mt-1">
+                     <label className={`relative flex flex-1 cursor-pointer rounded-xl border p-3 transition-all ${settings.horus_api_mode === 'B2B' ? 'border-indigo-500 bg-indigo-500/5 ring-1 ring-indigo-500' : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50'}`}>
+                       <input type="radio" name="horus_api_mode" value="B2B" className="sr-only" checked={settings.horus_api_mode === 'B2B'} onChange={() => setSettings({ ...settings, horus_api_mode: 'B2B' })} />
+                       <div className="flex w-full items-center gap-3">
+                         <div className={`flex h-4 w-4 items-center justify-center rounded-full border shrink-0 ${settings.horus_api_mode === 'B2B' ? 'border-indigo-600 bg-indigo-600' : 'border-slate-300 dark:border-slate-600'}`}>
+                           {settings.horus_api_mode === 'B2B' && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
+                         </div>
+                         <div>
+                           <p className="text-sm font-medium text-slate-900 dark:text-white">Modo B2B Horus</p>
+                           <p className="text-[10px] text-slate-500 mt-0.5">Exige cliente logado e respeita limites.</p>
+                         </div>
+                       </div>
+                     </label>
+                     <label className={`relative flex flex-1 cursor-pointer rounded-xl border p-3 transition-all ${settings.horus_api_mode === 'STANDARD' ? 'border-indigo-500 bg-indigo-500/5 ring-1 ring-indigo-500' : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50'}`}>
+                       <input type="radio" name="horus_api_mode" value="STANDARD" className="sr-only" checked={settings.horus_api_mode === 'STANDARD'} onChange={() => setSettings({ ...settings, horus_api_mode: 'STANDARD' })} />
+                       <div className="flex w-full items-center gap-3">
+                         <div className={`flex h-4 w-4 items-center justify-center rounded-full border shrink-0 ${settings.horus_api_mode === 'STANDARD' ? 'border-indigo-600 bg-indigo-600' : 'border-slate-300 dark:border-slate-600'}`}>
+                           {settings.horus_api_mode === 'STANDARD' && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
+                         </div>
+                         <div>
+                           <p className="text-sm font-medium text-slate-900 dark:text-white">API Padrão (Livros)</p>
+                           <p className="text-[10px] text-slate-500 mt-0.5">Pesquisa catálogo da filial s/ cliente.</p>
+                         </div>
+                       </div>
+                     </label>
+                  </div>
+                </div>
+                
                 <div className="space-y-1.5 md:col-span-2">
                   <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">URL API</label>
                   <input

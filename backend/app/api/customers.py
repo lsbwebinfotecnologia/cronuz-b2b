@@ -25,7 +25,7 @@ def create_customer(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
         raise HTTPException(status_code=403, detail="Não autorizado a cadastrar clientes.")
         
     if current_user.company_id is None:
@@ -119,7 +119,7 @@ def update_customer(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
         raise HTTPException(status_code=403, detail="Não autorizado a alterar clientes.")
         
     customer = db.query(Customer).filter(
@@ -146,7 +146,7 @@ def create_interaction(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
         raise HTTPException(status_code=403, detail="Não autorizado a criar interações.")
         
     customer = db.query(Customer).filter(
@@ -175,7 +175,7 @@ def create_contact(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
         raise HTTPException(status_code=403, detail="Não autorizado a gerenciar contatos.")
         
     customer = db.query(Customer).filter(
@@ -199,7 +199,7 @@ def delete_contact(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
         raise HTTPException(status_code=403, detail="Não autorizado a gerenciar contatos.")
         
     contact = db.query(Contact).join(Customer).filter(
@@ -221,7 +221,7 @@ def get_customer_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
         raise HTTPException(status_code=403, detail="Não autorizado.")
         
     customer = db.query(Customer).filter(
@@ -254,7 +254,7 @@ def create_customer_user(
     from sqlalchemy.exc import IntegrityError
     from app.schemas.user import User as UserPydanticSchema
     
-    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
         raise HTTPException(status_code=403, detail="Não autorizado.")
         
     customer = db.query(Customer).filter(
@@ -291,4 +291,49 @@ def create_customer_user(
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=400, detail="E-mail já cadastrado por outro usuário.")
+
+@router.get("/customers/{customer_id}/financials")
+async def get_customer_financials_api(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
+        raise HTTPException(status_code=403, detail="Não autorizado a consultar dados financeiros.")
+        
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+    
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+        
+    if not customer.id_guid:
+        raise HTTPException(status_code=400, detail="Cliente não sincronizado com o Horus (sem ID_GUID).")
+
+    from app.models.company import Company
+    from app.integrators.horus_clients import HorusClients
+    
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not company or not company.document:
+        raise HTTPException(status_code=400, detail="Documento da empresa não configurado.")
+
+    horus_client = HorusClients(db, current_user.company_id)
+    try:
+        financials = await horus_client.get_customer_financials(
+            cnpj_destino=company.document,
+            cnpj_cliente=customer.document
+        )
+        return financials
+    except Exception as e:
+        print(f"Horus Financial Fetch Error: {e}")
+        return {
+            "credit_limit": 0.0,
+            "debt_balance": 0.0,
+            "available_limit": 0.0,
+            "status": "ERRO"
+        }
+    finally:
+        await horus_client.close()
 

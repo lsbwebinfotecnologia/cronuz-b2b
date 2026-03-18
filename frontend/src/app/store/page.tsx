@@ -35,7 +35,7 @@ export default function StoreHome() {
       try {
         const token = getToken();
         // First, fetch the custom showcases
-        const res = await fetch('http://localhost:8000/storefront/home', {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/home`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         
@@ -45,7 +45,7 @@ export default function StoreHome() {
           
           // Se não houver vitrines configuradas, busca o catálogo padrão
           if (data.length === 0) {
-             const fbRes = await fetch('http://localhost:8000/products/?limit=25', {
+             const fbRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/?limit=25`, {
                headers: { 'Authorization': `Bearer ${token}` }
              });
              if (fbRes.ok) {
