@@ -26,11 +26,17 @@ export default function SettingsPage() {
   }, []);
 
   async function fetchSettings() {
-    if (!companyId) return;
+    const freshUser = getUser();
+    const cid = freshUser?.company_id;
+    if (!cid) {
+      setLoading(false);
+      toast.error('O ID da Empresa não foi encontrado no seu usuário.');
+      return;
+    }
     setLoading(true);
     try {
       const token = getToken();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${cid}/settings`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (!res.ok) throw new Error('Falha ao buscar configurações');
@@ -169,64 +175,7 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            {/* Integração Horus */}
-            <div className="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800/60">
-              <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">
-                <div className="p-2 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-lg">
-                  <Store className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Integração Horus (Catálogo e Preços)</h2>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">Defina qual arquitetura a loja utilizará para buscar os produtos.</p>
-                </div>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                <label className={`relative flex cursor-pointer rounded-xl border p-4 transition-all hover:bg-slate-50 dark:hover:bg-slate-800/50 ${settings.horus_api_mode === 'B2B' ? 'border-indigo-500 bg-indigo-500/5 ring-1 ring-indigo-500' : 'border-slate-200 dark:border-slate-700'}`}>
-                  <input
-                    type="radio"
-                    name="horus_api_mode"
-                    value="B2B"
-                    className="sr-only"
-                    checked={settings.horus_api_mode === 'B2B'}
-                    onChange={() => setSettings({ ...settings, horus_api_mode: 'B2B' })}
-                  />
-                  <div className="flex w-full items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="text-sm">
-                        <p className={`font-medium ${settings.horus_api_mode === 'B2B' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-900 dark:text-white'}`}>Utilizar B2B Horus</p>
-                        <p className="text-slate-500 dark:text-slate-400 mt-0.5 whitespace-normal break-words pr-4">Exige que o Vendedor do PDV identifique o cliente logado e respeita tabelas de preços/descontos configurados no ID_GUID.</p>
-                      </div>
-                    </div>
-                    <div className={`flex h-5 w-5 items-center justify-center rounded-full border shrink-0 ${settings.horus_api_mode === 'B2B' ? 'border-indigo-600 bg-indigo-600' : 'border-slate-300 dark:border-slate-600'}`}>
-                      {settings.horus_api_mode === 'B2B' && <div className="h-2 w-2 rounded-full bg-white" />}
-                    </div>
-                  </div>
-                </label>
-
-                <label className={`relative flex cursor-pointer rounded-xl border p-4 transition-all hover:bg-slate-50 dark:hover:bg-slate-800/50 ${settings.horus_api_mode === 'STANDARD' ? 'border-indigo-500 bg-indigo-500/5 ring-1 ring-indigo-500' : 'border-slate-200 dark:border-slate-700'}`}>
-                  <input
-                    type="radio"
-                    name="horus_api_mode"
-                    value="STANDARD"
-                    className="sr-only"
-                    checked={settings.horus_api_mode === 'STANDARD'}
-                    onChange={() => setSettings({ ...settings, horus_api_mode: 'STANDARD' })}
-                  />
-                  <div className="flex w-full items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="text-sm">
-                        <p className={`font-medium ${settings.horus_api_mode === 'STANDARD' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-900 dark:text-white'}`}>Utilizar API Padrão Horus</p>
-                        <p className="text-slate-500 dark:text-slate-400 mt-0.5 whitespace-normal break-words pr-4">O vendedor pesquisa no acervo da filial sem atrelar limites ou tabelas de desconto exclusivas do B2B.</p>
-                      </div>
-                    </div>
-                    <div className={`flex h-5 w-5 items-center justify-center rounded-full border shrink-0 ${settings.horus_api_mode === 'STANDARD' ? 'border-indigo-600 bg-indigo-600' : 'border-slate-300 dark:border-slate-600'}`}>
-                      {settings.horus_api_mode === 'STANDARD' && <div className="h-2 w-2 rounded-full bg-white" />}
-                    </div>
-                  </div>
-                </label>
-              </div>
-            </div>
             
             {/* Configurações de Estoque B2B */}
             <div className="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800/60">

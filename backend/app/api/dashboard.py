@@ -58,6 +58,7 @@ def get_dashboard_metrics(
         company = db.query(Company).filter(Company.id == company_id).first()
         
     module_subscriptions = company.module_subscriptions if company else False
+    module_pdv = company.module_pdv if company else False
 
     # 4. Total revenue (Mocked for now since payment/invoicing is not fully done)
     total_revenue = 0.0
@@ -68,5 +69,6 @@ def get_dashboard_metrics(
         "active_orders": active_orders,
         "total_revenue": total_revenue,
         "uses_horus": uses_horus,
-        "module_subscriptions": module_subscriptions
+        "module_subscriptions": module_subscriptions,
+        "module_pdv": module_pdv
     }
