@@ -38,8 +38,6 @@ type UserData = {
 
 const masterNavigation: NavItem[] = [
   { name: 'Empresas', href: '/companies', icon: Users },
-  { name: 'Faturamento Global', href: '/billing', icon: FileText },
-  { name: 'Configurações do Sistema', href: '/settings', icon: Settings },
 ];
 
 const sellerNavigation: NavItem[] = [
@@ -82,6 +80,7 @@ export function Sidebar() {
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
   const [usesHorus, setUsesHorus] = useState(false);
   const [moduleSubscriptions, setModuleSubscriptions] = useState(false);
+  const [modulePdv, setModulePdv] = useState(false);
 
   useEffect(() => {
     const currentUser = getUser();
@@ -103,11 +102,12 @@ export function Sidebar() {
            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics`, {
               headers: { 'Authorization': `Bearer ${tokenStr}` }
            });
-           if (res.ok) {
-              const data = await res.json();
-              setUsesHorus(data.uses_horus || false);
-              setModuleSubscriptions(data.module_subscriptions || false);
-           }
+            if (res.ok) {
+               const data = await res.json();
+               setUsesHorus(data.uses_horus || false);
+               setModuleSubscriptions(data.module_subscriptions || false);
+               setModulePdv(data.module_pdv || false);
+            }
          } catch (e) {}
        };
        fetchSettings();
@@ -118,7 +118,11 @@ export function Sidebar() {
     setOpenMenus(prev => ({ ...prev, [name]: !prev[name] }));
   };
 
-  const filteredSellerNavigation = [...sellerNavigation.filter(nav => !(usesHorus && nav.name === 'Produtos'))];
+  const filteredSellerNavigation = [...sellerNavigation.filter(nav => {
+    if (usesHorus && nav.name === 'Produtos') return false;
+    if (!modulePdv && nav.name === 'Vendedores (PDV)') return false;
+    return true;
+  })];
   
   if (moduleSubscriptions) {
     // Insert Assinaturas before Configurações

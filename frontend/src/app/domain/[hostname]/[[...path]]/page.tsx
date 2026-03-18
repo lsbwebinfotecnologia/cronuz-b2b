@@ -168,6 +168,49 @@ export default function DomainLandingPage() {
                 );
             }
                 
+            case 'CAROUSEL':
+                if (!block.images || block.images.length === 0) return null;
+                return (
+                    <div id={block.id} key={block.id} className="py-24 bg-zinc-950 border-y border-white/5 relative overflow-hidden group/carousel" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
+                        <div className="max-w-[1400px] mx-auto px-6 relative z-10">
+                            {/* Arrows */}
+                            {block.images.filter((i: any) => i.url).length > 1 && (
+                                <>
+                                    <button 
+                                        type="button"
+                                        onClick={(e) => {
+                                            const container = e.currentTarget.parentElement?.querySelector('.carousel-container');
+                                            if(container) container.scrollBy({ left: -container.clientWidth * 0.8, behavior: 'smooth' });
+                                        }}
+                                        className="absolute left-8 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/80 text-white p-3 rounded-full opacity-0 group-hover/carousel:opacity-100 transition-opacity backdrop-blur-md border border-white/10 hidden md:block"
+                                    >
+                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M15 19l-7-7 7-7" /></svg>
+                                    </button>
+                                    
+                                    <button 
+                                        type="button"
+                                        onClick={(e) => {
+                                            const container = e.currentTarget.parentElement?.querySelector('.carousel-container');
+                                            if(container) container.scrollBy({ left: container.clientWidth * 0.8, behavior: 'smooth' });
+                                        }}
+                                        className="absolute right-8 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/80 text-white p-3 rounded-full opacity-0 group-hover/carousel:opacity-100 transition-opacity backdrop-blur-md border border-white/10 hidden md:block"
+                                    >
+                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
+                                    </button>
+                                </>
+                            )}
+                            <div className="carousel-container flex overflow-x-auto gap-6 pb-8 snap-x snap-mandatory no-scrollbar relative scroll-smooth">
+                                {block.images.filter((i: any) => i.url).map((img: any, i: number) => (
+                                    <div key={i} className="min-w-[85vw] lg:min-w-[700px] shrink-0 snap-center rounded-3xl overflow-hidden shadow-2xl relative border border-white/10 group aspect-video">
+                                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent z-10 pointer-events-none"></div>
+                                        <img src={img.url} alt={`Banner Carrossel ${i+1}`} className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                );
+                
             case 'BENEFITS':
                 return (
                     <div id={block.id} key={block.id} className="py-24 bg-slate-50 relative overflow-hidden" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
@@ -202,8 +245,15 @@ export default function DomainLandingPage() {
                 
             case 'HTML':
                 return (
-                    <div id={block.id} key={block.id} className="w-full" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
-                        <div dangerouslySetInnerHTML={{ __html: block.content || '' }} />
+                    <div id={block.id} key={block.id} className="py-20 relative" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : { backgroundColor: '#f8fafc' }}>
+                        <div className="max-w-5xl mx-auto px-6 relative z-10">
+                            <div className="bg-white p-8 md:p-14 rounded-3xl shadow-2xl shadow-slate-200/50 border border-slate-100">
+                                <div 
+                                    className="ql-editor prose prose-slate prose-lg max-w-none text-slate-800" 
+                                    dangerouslySetInnerHTML={{ __html: block.content || '' }} 
+                                />
+                            </div>
+                        </div>
                     </div>
                 );
                 

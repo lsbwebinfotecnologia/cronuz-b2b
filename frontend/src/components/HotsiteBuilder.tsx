@@ -23,8 +23,18 @@ function ImageUploadBox({ value, onChange, label, className = '' }: { value: str
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files?.length) return;
         setUploading(true);
+        
+        const file = e.target.files[0];
+        
+        // Check size limit: 1MB (1,048,576 bytes)
+        if (file.size > 1048576) {
+            toast.error("O arquivo excede o limite de 1MB. Por favor, comprima a imagem.");
+            setUploading(false);
+            return;
+        }
+
         const formData = new FormData();
-        formData.append('file', e.target.files[0]);
+        formData.append('file', file);
         
         try {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -57,10 +67,13 @@ function ImageUploadBox({ value, onChange, label, className = '' }: { value: str
             <div className="flex gap-2">
                 <input type="text" value={value || ''} onChange={(e) => onChange(e.target.value)} className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm dark:bg-slate-950 dark:border-slate-800 dark:text-white" placeholder="URL ou Upload..." />
                 
-                <label className={`shrink-0 flex items-center justify-center gap-2 px-3 py-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg cursor-pointer transition-colors dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50 ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
-                    {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-                    <span className="text-sm font-medium hidden sm:block">Fazer Upload</span>
-                    <input type="file" className="hidden" accept="image/jpeg, image/png, image/webp" onChange={handleUpload} />
+                <label className={`shrink-0 flex flex-col items-center justify-center gap-0.5 px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg cursor-pointer transition-colors dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50 ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <div className="flex items-center gap-2">
+                        {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+                        <span className="text-sm font-medium hidden sm:block">Fazer Upload</span>
+                    </div>
+                    <span className="text-[10px] opacity-70">(Máx: 1MB)</span>
+                    <input type="file" className="hidden" accept="image/*" onChange={handleUpload} />
                 </label>
             </div>
             {value && (
@@ -155,6 +168,7 @@ export default function HotsiteBuilder({ value, onChange }: Props) {
             [{ 'header': [1, 2, 3, 4, 5, 6, false] }],
             [{ 'size': ['small', false, 'large', 'huge'] }],
             ['bold', 'italic', 'underline', 'strike', 'blockquote'],
+            [{ 'align': [] }],
             [{'list': 'ordered'}, {'list': 'bullet'}],
             [{'color': []}, {'background': []}],
             ['link', 'image', 'video'],
