@@ -28,7 +28,7 @@ export default function HotsiteCheckoutPage() {
     const [error, setError] = useState<string | null>(null);
     
     // UI states
-    const [paymentMethod, setPaymentMethod] = useState<'PIX' | 'CREDIT_CARD'>('PIX');
+    const [paymentMethod, setPaymentMethod] = useState<'CREDIT_CARD'>('CREDIT_CARD');
     const [successData, setSuccessData] = useState<any>(null);
     
     const [formData, setFormData] = useState({
@@ -83,6 +83,15 @@ export default function HotsiteCheckoutPage() {
         const isSandbox = planData.efi_settings.sandbox;
         const envUrl = isSandbox ? 'https://sandbox.gerencianet.com.br/v1/cdn/' : 'https://api.gerencianet.com.br/v1/cdn/';
         
+        // Define $gn variable as expected by the Gerencianet script BEFORE loading it
+        if (!(window as any).$gn) {
+            (window as any).$gn = {
+                validForm: true,
+                sign: false, // For subscriptions/assinaturas this must be false
+                prefix: ''
+            };
+        }
+
         const scriptId = `efi-${payeeCode}`;
         if (!document.getElementById(scriptId)) {
             const s = document.createElement('script');
@@ -94,18 +103,34 @@ export default function HotsiteCheckoutPage() {
             document.head.appendChild(s);
         }
         
-        // Define $gn variable as expected by the Gerencianet script
-        (window as any).$gn = {
-            validForm: true,
-            sign: true,
-            prefix: ''
-        };
-        
     }, [planData]);
 
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         let { name, value } = e.target;
         
+        // Masks
+        if (name === 'customer_document') {
+            value = value.replace(/\D/g, '');
+            if (value.length <= 11) {
+                value = value.replace(/(\d{3})(\d)/, '$1.$2');
+                value = value.replace(/(\d{3})(\d)/, '$1.$2');
+                value = value.replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+            } else {
+                value = value.substring(0, 14);
+                value = value.replace(/^(\d{2})(\d)/, '$1.$2');
+                value = value.replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3');
+                value = value.replace(/\.(\d{3})(\d)/, '.$1/$2');
+                value = value.replace(/(\d{4})(\d)/, '$1-$2');
+            }
+        }
+        
+        if (name === 'phone') {
+            value = value.replace(/\D/g, '');
+            value = value.substring(0, 11);
+            value = value.replace(/^(\d{2})(\d)/g, '($1) $2');
+            value = value.replace(/(\d)(\d{4})$/, '$1-$2');
+        }
+
         // Auto-fetch CEP
         if (name === 'shipping_zip_code') {
             value = value.replace(/\D/g, '');
@@ -149,60 +174,116 @@ export default function HotsiteCheckoutPage() {
         if (name === 'number') value = value.replace(/\D/g, '').replace(/(\d{4})(?=\d)/g, '$1 ');
         if (name === 'expiry') {
             value = value.replace(/\D/g, '');
-            if (value.length > 2) value = value.replace(/^(\d{2})(\d)/, '$1/$2').substring(0, 7);
+            if (value.length > 2) value = value.replace(/^(\d{2})(\d)/, '$1/$2').substring(0, 5);
         }
         if (name === 'cvv') value = value.replace(/\D/g, '').substring(0, 4);
 
         setCcData(prev => ({ ...prev, [name]: value }));
     };
 
+    const validateCPF = (cpf: string) => {
+        if (cpf.length !== 11 || /^(\d)\1+$/.test(cpf)) return false;
+        let sum = 0, rest;
+        for (let i = 1; i <= 9; i++) sum = sum + parseInt(cpf.substring(i-1, i)) * (11 - i);
+        rest = (sum * 10) % 11;
+        if ((rest === 10) || (rest === 11)) rest = 0;
+        if (rest !== parseInt(cpf.substring(9, 10))) return false;
+        sum = 0;
+        for (let i = 1; i <= 10; i++) sum = sum + parseInt(cpf.substring(i-1, i)) * (12 - i);
+        rest = (sum * 10) % 11;
+        if ((rest === 10) || (rest === 11)) rest = 0;
+        if (rest !== parseInt(cpf.substring(10, 11))) return false;
+        return true;
+    };
+
+    const validateCNPJ = (cnpj: string) => {
+        if (cnpj.length !== 14 || /^(\d)\1+$/.test(cnpj)) return false;
+        let size = cnpj.length - 2
+        let numbers = cnpj.substring(0, size);
+        const digits = cnpj.substring(size);
+        let sum = 0;
+        let pos = size - 7;
+        for (let i = size; i >= 1; i--) {
+            sum += parseInt(numbers.charAt(size - i)) * pos--;
+            if (pos < 2) pos = 9;
+        }
+        let result = sum % 11 < 2 ? 0 : 11 - sum % 11;
+        if (result !== parseInt(digits.charAt(0))) return false;
+        size = size + 1;
+        numbers = cnpj.substring(0, size);
+        sum = 0;
+        pos = size - 7;
+        for (let i = size; i >= 1; i--) {
+            sum += parseInt(numbers.charAt(size - i)) * pos--;
+            if (pos < 2) pos = 9;
+        }
+        result = sum % 11 < 2 ? 0 : 11 - sum % 11;
+        if (result !== parseInt(digits.charAt(1))) return false;
+        return true;
+    };
+
     const handleSubscribe = async (e: React.FormEvent) => {
         e.preventDefault();
         setSubmitting(true);
+        
+        const docRaw = formData.customer_document.replace(/\D/g, '');
+        if (docRaw.length === 11 && !validateCPF(docRaw)) {
+            toast.error("O CPF informado é inválido.");
+            setSubmitting(false);
+            return;
+        }
+        if (docRaw.length === 14 && !validateCNPJ(docRaw)) {
+            toast.error("O CNPJ informado é inválido.");
+            setSubmitting(false);
+            return;
+        }
+        if (docRaw.length !== 11 && docRaw.length !== 14) {
+            toast.error("Documento inválido. Informe CPF ou CNPJ com a quantidade correta de dígitos.");
+            setSubmitting(false);
+            return;
+        }
         
         try {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
             
             // Get Payment Token using Gerencianet JS
             let paymentToken = '';
-            if (paymentMethod === 'CREDIT_CARD') {
-                const [expMonth, expYear] = ccData.expiry.split('/');
-                if (!expMonth || !expYear) throw new Error("Preencha a validade do cartão (MM/AA).");
-                
-                const rawNumber = ccData.number.replace(/\D/g, '');
-                const brand = getCardBrand(rawNumber);
+            const [expMonth, expYear] = ccData.expiry.split('/');
+            if (!expMonth || !expYear) throw new Error("Preencha a validade do cartão (MM/AA).");
+            
+            const rawNumber = ccData.number.replace(/\D/g, '');
+            const brand = getCardBrand(rawNumber);
 
-                const gnParams = {
-                    brand: brand,
-                    number: rawNumber,
-                    cvv: ccData.cvv,
-                    expiration_month: expMonth,
-                    expiration_year: expYear.length === 2 ? `20${expYear}` : expYear
-                };
+            const gnParams = {
+                brand: brand,
+                number: rawNumber,
+                cvv: ccData.cvv,
+                expiration_month: expMonth,
+                expiration_year: expYear.length === 2 ? `20${expYear}` : expYear
+            };
 
-                try {
-                    const tokenData: any = await new Promise((resolve, reject) => {
-                        const gn = (window as any).$gn;
-                        if (!gn || !gn.ready) {
-                            return reject(new Error("Script de pagamento seguro (EFI) ainda não carregado ou não configurado corretamente."));
-                        }
-                        gn.ready((checkout: any) => {
-                            checkout.getPaymentToken(gnParams, (error: any, response: any) => {
-                                if (error) {
-                                    console.error("Erro Efi:", error);
-                                    reject(new Error(error.error_description || "Cartão inválido ou falha na tokenização EFI."));
-                                } else {
-                                    resolve(response);
-                                }
-                            });
+            try {
+                const tokenData: any = await new Promise((resolve, reject) => {
+                    const gn = (window as any).$gn;
+                    if (!gn || !gn.ready) {
+                        return reject(new Error("Script de pagamento seguro (EFI) ainda não carregado ou não configurado corretamente."));
+                    }
+                    gn.ready((checkout: any) => {
+                        checkout.getPaymentToken(gnParams, (error: any, response: any) => {
+                            if (error) {
+                                console.error("Erro Efi:", error);
+                                reject(new Error(error.error_description || "Cartão inválido ou falha na tokenização EFI."));
+                            } else {
+                                resolve(response);
+                            }
                         });
                     });
-                    paymentToken = tokenData.data.payment_token;
-                } catch (efiErr: any) {
-                    toast.error(efiErr.message || "Erro ao processar dados do cartão.");
-                    setSubmitting(false);
-                    return;
-                }
+                });
+                paymentToken = tokenData.data.payment_token;
+            } catch (efiErr: any) {
+                toast.error(efiErr.message || "Erro ao processar dados do cartão.");
+                setSubmitting(false);
+                return;
             }
 
             const payload = { 
@@ -220,11 +301,7 @@ export default function HotsiteCheckoutPage() {
             const data = await response.json();
             
             if (response.ok) {
-                if (paymentMethod === 'PIX') {
-                    toast.success("Reserva realizada! Efetue o pagamento PIX para confirmar.");
-                } else {
-                    toast.success("Assinatura confirmada com sucesso!");
-                }
+                toast.success("Assinatura confirmada com sucesso!");
                 setSuccessData(data.payment);
             } else {
                 toast.error(data.detail || "Erro ao processar a assinatura.");
@@ -335,42 +412,11 @@ export default function HotsiteCheckoutPage() {
                                         <CheckCircle2 className="h-10 w-10 text-emerald-500" />
                                     </div>
                                     <h3 className="text-2xl font-black text-slate-900 mb-2">
-                                        {successData.method === 'PIX' ? 'Reserva Garantida!' : 'Pagamento Aprovado!'}
+                                        Assinatura Aprovada!
                                     </h3>
                                     <p className="text-slate-600 mb-8 max-w-md mx-auto">
-                                        {successData.method === 'PIX' 
-                                            ? `Para finalizar e garantir sua vaga, efetue o pagamento PIX no valor de R$ ${successData.amount.toFixed(2).replace('.', ',')}.`
-                                            : `Sua assinatura foi confirmada com sucesso em seu cartão de crédito. Você receberá um e-mail com os detalhes em breve.`
-                                        }
+                                        Sua assinatura recorrente foi processada com sucesso em seu cartão de crédito. Você receberá um e-mail com os detalhes em breve e já conta a partir de agora com o seu pacote de fascículos!
                                     </p>
-                                    
-                                    {successData.method === 'PIX' && (
-                                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg shadow-slate-200/50 max-w-sm mx-auto">
-                                            {successData.qrcode_image ? (
-                                                 <img src={successData.qrcode_image} alt="PIX QR Code" className="w-56 h-56 mx-auto mb-6" />
-                                            ) : (
-                                                <div className="w-48 h-48 mx-auto bg-slate-100 rounded-xl flex items-center justify-center text-xs text-slate-400 mb-6">Sem Imagem QR</div>
-                                            )}
-                                            
-                                            <div className="text-left space-y-2">
-                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Copia e Cola</label>
-                                                <div className="flex gap-2">
-                                                    <input 
-                                                        type="text" 
-                                                        readOnly 
-                                                        value={successData.qrcode_string || "00020126...MOCK"} 
-                                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl text-xs px-3 py-3 text-slate-700 outline-none" 
-                                                    />
-                                                    <button 
-                                                        onClick={() => copyToClipboard(successData.qrcode_string || "00020126...MOCK")}
-                                                        className="bg-slate-900 text-white rounded-xl px-4 py-3 text-sm font-bold hover:bg-slate-800 transition-colors"
-                                                    >
-                                                        Copiar
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
 
                                     <p className="text-xs text-slate-400 mt-8">Transação: {successData.txid}</p>
                                 </div>
@@ -385,8 +431,8 @@ export default function HotsiteCheckoutPage() {
                                                 <input type="text" name="customer_name" required value={formData.customer_name} onChange={handleFormChange} disabled={isSoldOut || submitting} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="João da Silva" />
                                             </div>
                                             <div className="space-y-1.5">
-                                                <label className="text-sm font-bold text-slate-700">CPF do Titular</label>
-                                                <input type="text" name="customer_document" required value={formData.customer_document} onChange={handleFormChange} disabled={isSoldOut || submitting} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="000.000.000-00" />
+                                                <label className="text-sm font-bold text-slate-700">CPF ou CNPJ</label>
+                                                <input type="text" name="customer_document" required value={formData.customer_document} onChange={handleFormChange} disabled={isSoldOut || submitting} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="000.000.000-00 ou CNPJ" />
                                             </div>
                                             <div className="space-y-1.5">
                                                 <label className="text-sm font-bold text-slate-700">Telefone / WhatsApp</label>
@@ -439,8 +485,7 @@ export default function HotsiteCheckoutPage() {
                                         <div className="flex gap-4 p-1 bg-slate-100 rounded-2xl mb-8">
                                             <button 
                                                 type="button"
-                                                onClick={() => setPaymentMethod('CREDIT_CARD')}
-                                                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all bg-white text-[var(--color-primary-base)] shadow-sm`}
+                                                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all bg-white text-[var(--color-primary-base)] shadow-sm cursor-default`}
                                             >
                                                 <CreditCard className="h-4 w-4" />
                                                 Cartão de Crédito (Recorrente)

@@ -356,7 +356,7 @@ class SubscribeRequest(BaseModel):
     customer_document: str # CNPJ/CPF
     email: str
     phone: str
-    payment_method: str = "PIX"
+    payment_token: str # Required for CREDIT_CARD recurrent
     shipping_zip_code: str
     shipping_street: str
     shipping_number: str
@@ -410,12 +410,11 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
     # 2. Increment Stock/Count Limit
     plan.current_subscribers_count += 1
     
-    # 3. Handle Payment Method
+    # 3. Handle EFI Subscription Flow
     txid = None
-    qr_data = {}
     bill_status = "PENDING"
     
-    # 3.1 Setup dynamic EFI Service for the Company
+    # Setup dynamic EFI Service for the Company
     from app.integrators.efi_pay import EFIPayIntegration
     from app.models.company_settings import CompanySettings
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == plan.company_id).first()
@@ -425,65 +424,74 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
         client_secret=settings.efi_client_secret if settings else None,
         sandbox=settings.efi_sandbox if settings else None,
         certificate_path=settings.efi_certificate_path if settings else None,
-        pix_key=settings.efi_payee_code if settings else None # just re-using for pix key mockup
+        pix_key=settings.efi_payee_code if settings else None
     )
     
-    if payload.payment_method == "CREDIT_CARD":
-        # Request Credit Card Charge from EFI
-        payment_token = getattr(payload, 'payment_token', None)
-        if not payment_token:
-             # Try fallback to dict access if BaseModel allows extra (though Pydantic doesn't by default without Extra.allow)
-             # Update SubscribeRequest to include payment_token first.
-             pass
-             
-        # Call EFI Integrator
+    # 3.1 Create EFI Plan if it doesn't exist
+    if not plan.efi_plan_id:
         try:
-             bill_addr = {
-                'street': payload.shipping_street,
-                'number': payload.shipping_number,
-                'neighborhood': payload.shipping_neighborhood,
-                'zipcode': payload.shipping_zip_code,
-                'city': payload.shipping_city,
-                'state': payload.shipping_state
-             }
-             
-             res = efi_service.create_credit_card_charge(
-                 amount=first_delivery_price,
-                 customer_name=payload.customer_name,
-                 customer_document=payload.customer_document,
-                 customer_email=payload.email,
-                 customer_phone=payload.phone,
-                 payment_token=getattr(payload, 'payment_token', 'mock_token'),
-                 billing_address=bill_addr
-             )
-             
-             if 'data' in res and 'charge_id' in res['data']:
-                 txid = str(res['data']['charge_id'])
-                 status = res['data'].get('status', 'waiting')
-                 if status in ['paid', 'approved', 'authorized']:
-                     bill_status = "PAID"
-                 else:
-                     bill_status = "PENDING"
-             else:
-                 raise HTTPException(status_code=400, detail="Retorno inválido da operadora de cartão.")
-                 
+            efi_plan = efi_service.create_plan(
+                name=f"{plan.name} - Assinatura",
+                amount=first_delivery_price
+            )
+            plan.efi_plan_id = int(efi_plan['data']['plan_id'])
+            db.commit()
         except Exception as e:
-             # In complete flow, we should rollback the subscription creation.
-             db.rollback()
-             raise HTTPException(status_code=400, detail=str(e))
-    else:
-        # Request PIX Charge from EFI
-        pix_charge = efi_service.create_pix_charge(
-            amount=first_delivery_price,
+            db.rollback()
+            raise HTTPException(status_code=400, detail=f"Erro ao criar Plano na EFI: {str(e)}")
+            
+    # 3.2 Create EFI Subscription (Link customer to Plan)
+    try:
+        items = [{
+            "name": "Fascículos mensais",
+            "amount": 1,
+            "value": int(first_delivery_price * 100) # Cents
+        }]
+        efi_sub = efi_service.create_subscription(
+            plan_id=plan.efi_plan_id,
+            items=items,
             customer_name=payload.customer_name,
-            customer_document=payload.customer_document
+            customer_document=payload.customer_document,
+            customer_email=payload.email,
+            customer_phone=payload.phone
         )
+        sub.efi_subscription_id = int(efi_sub['data']['subscription_id'])
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao criar Assinatura na EFI: {str(e)}")
         
-        pix_loc_id = pix_charge.get("loc", {}).get("id")
-        txid = pix_charge.get("txid")
-        
-        # Generate the QR Code payload utilizing the newly created ID
-        qr_data = efi_service.generate_pix_qrcode(loc_id=pix_loc_id)
+    # 3.3 Pay EFI Subscription via Credit Card
+    try:
+         bill_addr = {
+            'street': payload.shipping_street,
+            'number': payload.shipping_number,
+            'neighborhood': payload.shipping_neighborhood,
+            'zipcode': payload.shipping_zip_code,
+            'city': payload.shipping_city,
+            'state': payload.shipping_state
+         }
+         res_pay = efi_service.pay_subscription(
+             subscription_id=sub.efi_subscription_id,
+             payment_token=payload.payment_token,
+             billing_address=bill_addr
+         )
+         
+         if 'data' in res_pay and 'status' in res_pay['data']:
+             status = res_pay['data']['status']
+             if status in ['paid', 'approved', 'authorized', 'active']:
+                 bill_status = "PAID"
+             else:
+                 bill_status = "PENDING"
+                 
+         else:
+             raise HTTPException(status_code=400, detail="Retorno inválido da operadora de cartão.")
+             
+    except Exception as e:
+         # In complete flow, we should rollback the subscription creation, but the customer already exists in EFI.
+         # So we just mark the local bill as FAILED, or raise the error.
+         db.rollback()
+         raise HTTPException(status_code=400, detail=str(e))
         
     # 4. Create the Subscription Billing history
     bill = SubscriptionBilling(
@@ -500,12 +508,8 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
     payment_response = {
          "txid": txid,
          "amount": first_delivery_price,
-         "method": payload.payment_method
+         "method": "CREDIT_CARD"
     }
-    
-    if payload.payment_method == "PIX":
-        payment_response["qrcode_image"] = qr_data.get("imagemQrcode")
-        payment_response["qrcode_string"] = qr_data.get("qrcode")
         
     return {
         "message": "Assinatura gerada com sucesso",

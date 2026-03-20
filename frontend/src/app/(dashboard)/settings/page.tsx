@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingCert, setUploadingCert] = useState(false);
   const currentUser = getUser();
   const companyId = currentUser?.company_id;
 
@@ -88,6 +89,41 @@ export default function SettingsPage() {
       toast.error('Erro ao salvar configurações.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleCertificateUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !companyId) return;
+    
+    setUploadingCert(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('company_id', companyId.toString());
+      
+      const token = getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/certificate`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+      
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Falha ao enviar certificado.');
+      }
+      
+      const data = await res.json();
+      setSettings(prev => ({ ...prev, efi_certificate_path: data.path }));
+      toast.success('Certificado enviado e salvo com sucesso!');
+    } catch (error: any) {
+      toast.error(error.message);
+    } finally {
+      setUploadingCert(false);
+      if (e.target) e.target.value = '';
     }
   }
 
@@ -300,14 +336,24 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Caminho do Certificado (.p12 / .pem)</label>
-                  <input
-                    type="text"
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-emerald-500/50"
-                    placeholder="Opcional p/ assinatura (Ex: /cert/homologacao.p12)"
-                    value={settings.efi_certificate_path}
-                    onChange={e => setSettings({ ...settings, efi_certificate_path: e.target.value })}
-                  />
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                    <span>Certificado (.p12 / .pem)</span>
+                    {uploadingCert && <Loader2 className="h-3 w-3 animate-spin text-emerald-500" />}
+                  </label>
+                  <div className="flex flex-col gap-2">
+                    <input
+                      type="file"
+                      accept=".p12,.pem"
+                      onChange={handleCertificateUpload}
+                      disabled={uploadingCert}
+                      className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 dark:file:bg-emerald-900/30 dark:file:text-emerald-400 dark:hover:file:bg-emerald-900/50 disabled:opacity-50"
+                    />
+                    {settings.efi_certificate_path && (
+                      <p className="text-xs text-slate-500 font-mono truncate" title={settings.efi_certificate_path}>
+                        Salvo em: {settings.efi_certificate_path}
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

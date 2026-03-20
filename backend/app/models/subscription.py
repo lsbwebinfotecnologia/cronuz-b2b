@@ -54,6 +54,7 @@ class SubscriptionPlan(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     hotsite_slug = Column(String(255), unique=True, index=True, nullable=False)
     hotsite_config = Column(JSON, nullable=True)
+    efi_plan_id = Column(Integer, nullable=True) # Origin EFI Plan ID
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

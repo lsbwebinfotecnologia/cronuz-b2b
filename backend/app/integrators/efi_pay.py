@@ -46,7 +46,7 @@ class EFIPayIntegration:
              return {
                  "data": {
                      "status": "paid",
-                     "charge_id": f"CC-MOCK-{uuid.uuid4().hex[:8]}"
+                     "charge_id": f"CC-MOCK-{str(uuid.uuid4())[:8]}"
                  }
              }
         
@@ -65,6 +65,20 @@ class EFIPayIntegration:
         cpf = ''.join(filter(str.isdigit, customer_document))
         phone = ''.join(filter(str.isdigit, customer_phone))
         
+        customer_data = {
+            'name': customer_name,
+            'email': customer_email,
+            'phone_number': phone
+        }
+        if len(cpf) <= 11:
+            customer_data['cpf'] = cpf
+        else:
+            customer_data['cnpj'] = cpf
+            customer_data['juridical_person'] = {
+                'corporate_name': customer_name,
+                'cnpj': cpf
+            }
+        
         payment_body = {
             'payment': {
                 'credit_card': {
@@ -78,24 +92,11 @@ class EFIPayIntegration:
                         'city': billing_address.get('city', 'São Paulo'),
                         'state': billing_address.get('state', 'SP')
                     },
-                    'customer': {
-                        'name': customer_name,
-                        'email': customer_email,
-                        'cpf': cpf if len(cpf) <= 11 else "", # Efi requires strictly cpf or cnpj object
-                        'phone_number': phone
-                    }
+                    'customer': customer_data
                 }
             }
         }
         
-        if len(cpf) > 11:
-             del payment_body['payment']['credit_card']['customer']['cpf']
-             payment_body['payment']['credit_card']['customer']['cnpj'] = cpf
-             payment_body['payment']['credit_card']['customer']['juridical_person'] = {
-                 'corporate_name': customer_name,
-                 'cnpj': cpf
-             }
-             
         res_pay = gn.pay_charge(params={'id': charge_id}, body=payment_body)
         return res_pay
 
@@ -159,5 +160,96 @@ class EFIPayIntegration:
             return response
         except Exception as e:
             raise Exception(f"Erro na Geração de QRCode EFI: {str(e)}")
+
+    def create_plan(self, name: str, amount: float):
+        """
+        Creates a monthly Subscription Plan in EFI.
+        amount: Final value to be charged per cycle
+        """
+        gn = self._get_charges_client()
+        
+        # MOCK for tests
+        if self.client_id == "dummy_client_id":
+             import uuid
+             return {"data": {"plan_id": f"PLAN-MOCK-{str(uuid.uuid4())[:8]}"}}
+             
+        body = {
+            'name': name,
+            'repeats': 0, # 0 = indefinite
+            'interval': 1 # 1 month
+        }
+        
+        res = gn.create_plan(body=body)
+        return res
+        
+    def create_subscription(self, plan_id: int, items: list, customer_name: str, customer_document: str,
+                            customer_email: str, customer_phone: str):
+        """
+        Creates a Subscription linked to a Plan in EFI.
+        """
+        gn = self._get_charges_client()
+        
+        # MOCK for tests
+        if self.client_id == "dummy_client_id":
+             import uuid
+             return {"data": {"subscription_id": f"SUB-MOCK-{str(uuid.uuid4())[:8]}"}}
+             
+        params = {'id': plan_id}
+        
+        cpf = ''.join(filter(str.isdigit, customer_document))
+        phone = ''.join(filter(str.isdigit, customer_phone))
+        
+        customer_data = {
+            'name': customer_name,
+            'email': customer_email,
+            'phone_number': phone
+        }
+        if len(cpf) <= 11:
+            customer_data['cpf'] = cpf
+        else:
+            customer_data['cnpj'] = cpf
+            customer_data['juridical_person'] = {
+                'corporate_name': customer_name,
+                'cnpj': cpf
+            }
+            
+        body = {
+            'items': items,
+            'customer': customer_data
+        }
+        
+        res = gn.create_subscription(params=params, body=body)
+        return res
+        
+    def pay_subscription(self, subscription_id: int, payment_token: str, billing_address: dict):
+        """
+        Pays a Subscription using a Credit Card Token in EFI.
+        """
+        gn = self._get_charges_client()
+        
+        # MOCK for tests
+        if self.client_id == "dummy_client_id":
+             return {"data": {"status": "paid"}}
+             
+        params = {'id': subscription_id}
+        
+        body = {
+            'payment': {
+                'credit_card': {
+                    'payment_token': payment_token,
+                    'billing_address': { 
+                        'street': billing_address.get('street', 'Rua Padrão'),
+                        'number': billing_address.get('number', 'S/N'),
+                        'neighborhood': billing_address.get('neighborhood', 'Bairro'),
+                        'zipcode': billing_address.get('zipcode', '01001000'),
+                        'city': billing_address.get('city', 'São Paulo'),
+                        'state': billing_address.get('state', 'SP')
+                    }
+                }
+            }
+        }
+        
+        res = gn.pay_subscription(params=params, body=body)
+        return res
 
 efi_service = EFIPayIntegration()
