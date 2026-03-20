@@ -21,10 +21,11 @@ export default function CompaniesPage() {
 
   useEffect(() => {
     async function fetchCompanies() {
+      let apiUrl = '';
       try {
         const token = getToken();
         if(!token) return;
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
         const res = await fetch(`${apiUrl}/companies`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
@@ -32,8 +33,9 @@ export default function CompaniesPage() {
           const data = await res.json();
           setCompanies(data);
         }
-      } catch (error) {
-        console.error("Erro ao buscar empresas", error);
+      } catch (error: any) {
+        console.error("Erro ao buscar empresas", error, "URL:", `${apiUrl}/companies`);
+        alert(`Erro ao acessar: ${apiUrl}/companies. O backend pode estar offline ou bloqueado.`);
       } finally {
         setLoading(false);
       }

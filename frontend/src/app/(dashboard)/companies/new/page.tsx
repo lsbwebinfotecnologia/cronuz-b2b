@@ -1,20 +1,32 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Suspense, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Building2, Save, ArrowLeft, Loader2, Globe, Mail, FileText, Image as ImageIcon } from 'lucide-react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 
 export default function NewCompanyPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-[var(--color-primary-base)]" /></div>}>
+      <NewCompanyForm />
+    </Suspense>
+  );
+}
+
+function NewCompanyForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialName = searchParams.get('name') || '';
+  const initialDocument = searchParams.get('document') || '';
+  const initialLeadId = searchParams.get('lead_id') || '';
   const [loading, setLoading] = useState(false);
   
   const [formData, setFormData] = useState({
-    name: '',
-    document: '',
+    name: initialName,
+    document: initialDocument,
     domain: '',
     logo: ''
   });
@@ -45,6 +57,12 @@ export default function NewCompanyPage() {
     }
   };
 
+  useEffect(() => {
+    if (initialDocument) {
+      handleDocumentChange(initialDocument);
+    }
+  }, [initialDocument]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -59,7 +77,8 @@ export default function NewCompanyPage() {
         },
         body: JSON.stringify({
           ...formData,
-          active: true
+          active: true,
+          lead_id: initialLeadId || null
         })
       });
 

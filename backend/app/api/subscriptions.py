@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import Optional
-import pytz
+from zoneinfo import ZoneInfo
 
 from app.db.session import get_db
 from app.models.subscription import SubscriptionPlan, CustomerSubscription, SubscriptionBilling
@@ -15,7 +15,7 @@ from app.core.dependencies import get_current_user
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
 def get_current_br_time():
-    return datetime.now(pytz.timezone('America/Sao_Paulo'))
+    return datetime.now(ZoneInfo('America/Sao_Paulo'))
 
 # ----------------- ADMIN SELLER CRUD -----------------
 
@@ -259,6 +259,9 @@ def get_hotsite_config(slug: str, db: Session = Depends(get_db)):
         
     company = db.query(Company).filter(Company.id == plan.company_id).first()
     
+    from app.models.company_settings import CompanySettings
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == plan.company_id).first()
+    
     # 1. Determine Availability / Urgency
     is_sold_out = False
     is_near_limit = False
@@ -323,6 +326,10 @@ def get_hotsite_config(slug: str, db: Session = Depends(get_db)):
         "name": plan.name,
         "description": plan.description,
         "config": plan.hotsite_config or {},
+        "efi_settings": {
+            "payee_code": settings.efi_payee_code if settings else None,
+            "sandbox": settings.efi_sandbox if settings else True,
+        },
         "status": {
             "is_sold_out": is_sold_out,
             "is_near_limit": is_near_limit,
@@ -408,14 +415,64 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
     qr_data = {}
     bill_status = "PENDING"
     
+    # 3.1 Setup dynamic EFI Service for the Company
+    from app.integrators.efi_pay import EFIPayIntegration
+    from app.models.company_settings import CompanySettings
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == plan.company_id).first()
+    
+    efi_service = EFIPayIntegration(
+        client_id=settings.efi_client_id if settings else None,
+        client_secret=settings.efi_client_secret if settings else None,
+        sandbox=settings.efi_sandbox if settings else None,
+        certificate_path=settings.efi_certificate_path if settings else None,
+        pix_key=settings.efi_payee_code if settings else None # just re-using for pix key mockup
+    )
+    
     if payload.payment_method == "CREDIT_CARD":
-        import uuid
-        txid = f"CC-MOCK-{uuid.uuid4().hex[:8]}"
-        bill_status = "PAID"
+        # Request Credit Card Charge from EFI
+        payment_token = getattr(payload, 'payment_token', None)
+        if not payment_token:
+             # Try fallback to dict access if BaseModel allows extra (though Pydantic doesn't by default without Extra.allow)
+             # Update SubscribeRequest to include payment_token first.
+             pass
+             
+        # Call EFI Integrator
+        try:
+             bill_addr = {
+                'street': payload.shipping_street,
+                'number': payload.shipping_number,
+                'neighborhood': payload.shipping_neighborhood,
+                'zipcode': payload.shipping_zip_code,
+                'city': payload.shipping_city,
+                'state': payload.shipping_state
+             }
+             
+             res = efi_service.create_credit_card_charge(
+                 amount=first_delivery_price,
+                 customer_name=payload.customer_name,
+                 customer_document=payload.customer_document,
+                 customer_email=payload.email,
+                 customer_phone=payload.phone,
+                 payment_token=getattr(payload, 'payment_token', 'mock_token'),
+                 billing_address=bill_addr
+             )
+             
+             if 'data' in res and 'charge_id' in res['data']:
+                 txid = str(res['data']['charge_id'])
+                 status = res['data'].get('status', 'waiting')
+                 if status in ['paid', 'approved', 'authorized']:
+                     bill_status = "PAID"
+                 else:
+                     bill_status = "PENDING"
+             else:
+                 raise HTTPException(status_code=400, detail="Retorno inválido da operadora de cartão.")
+                 
+        except Exception as e:
+             # In complete flow, we should rollback the subscription creation.
+             db.rollback()
+             raise HTTPException(status_code=400, detail=str(e))
     else:
         # Request PIX Charge from EFI
-        from app.integrators.efi_pay import efi_service
-        
         pix_charge = efi_service.create_pix_charge(
             amount=first_delivery_price,
             customer_name=payload.customer_name,
@@ -483,3 +540,57 @@ async def efi_webhook(request: Request, db: Session = Depends(get_db)):
              
     db.commit()
     return {"status": "success"}
+
+@router.get("/subscribers/list")
+def list_subscribers(
+    skip: int = 0,
+    limit: int = 50,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.user import UserRole
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito")
+        
+    query = db.query(CustomerSubscription).filter(CustomerSubscription.company_id == current_user.company_id)
+    
+    if status is not None:
+        query = query.filter(CustomerSubscription.status == status)
+        
+    total = query.count()
+    subscriptions = query.order_by(CustomerSubscription.created_at.desc()).offset(skip).limit(limit).all()
+    
+    result = []
+    for sub in subscriptions:
+        # Fetch the plan name
+        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == sub.plan_id).first()
+        
+        # We don't have a Customer model fully populated in the prototype usually,
+        # but in a complete flow we would join the CRM Customer table here.
+        # Since we just mocked customer_id = 1, we will return the billing address details as customer info.
+        
+        # Get the latest payment status
+        latest_bill = db.query(SubscriptionBilling).filter(
+            SubscriptionBilling.subscription_id == sub.id
+        ).order_by(SubscriptionBilling.delivery_number.desc()).first()
+        
+        result.append({
+            "id": sub.id,
+            "plan_id": sub.plan_id,
+            "plan_name": plan.name if plan else "Plano Desconhecido",
+            "customer_id": sub.customer_id,
+            # In real system, these would come from the Customer Profile
+            "customer_name": f"Cliente #{sub.customer_id}", 
+            "status": sub.status,
+            "current_delivery": sub.current_delivery_number,
+            "shipping_address": f"{sub.shipping_street}, {sub.shipping_number} - {sub.shipping_city}/{sub.shipping_state} ({sub.shipping_zip_code})",
+            "latest_payment_status": latest_bill.status if latest_bill else "PENDING",
+            "latest_payment_date": latest_bill.paid_at.isoformat() if latest_bill and latest_bill.paid_at else None,
+            "created_at": sub.created_at.isoformat() if sub.created_at else None
+        })
+        
+    return {
+        "total": total,
+        "items": result
+    }

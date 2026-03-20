@@ -56,7 +56,7 @@ export default function NewSellerPage() {
   };
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto">
+    <div className="space-y-8 max-w-4xl mx-auto p-6 md:p-8">
       <div className="flex items-center gap-4">
         <Link 
           href="/companies"

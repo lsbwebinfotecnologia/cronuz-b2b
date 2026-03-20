@@ -72,6 +72,8 @@ class CustomerSubscription(Base):
     
     current_delivery_number = Column(Integer, default=1, nullable=False)
     status = Column(Enum(SubscriptionStatus), default=SubscriptionStatus.ACTIVE, nullable=False)
+    efi_subscription_id = Column(Integer, nullable=True) # Origin EFI Subscription ID
+    
     
     shipping_zip_code = Column(String(20), nullable=True)
     shipping_street = Column(String(255), nullable=True)

@@ -6,6 +6,18 @@ import { Loader2, CheckCircle2, AlertCircle, ShoppingBag, CreditCard, QrCode } f
 import { toast } from 'sonner';
 import Link from 'next/link';
 
+const getCardBrand = (number: string) => {
+    if (/^4/.test(number)) return 'visa';
+    if (/^5[1-5]/.test(number)) return 'mastercard';
+    if (/^3[47]/.test(number)) return 'amex';
+    if (/^6(?:011|5)/.test(number)) return 'discover';
+    if (/^3[68]/.test(number)) return 'diners';
+    if (/^35/.test(number)) return 'jcb';
+    if (/^(606282|384100|384140|384160)/.test(number)) return 'hipercard';
+    if (/^(5067|5090|4576|4011|4389|4514|5041|5094|6362|6363|6277|6500|6504|6505|6507|6509|6516|6550|6582|6583|6584|6585|6586|6587|6588|6589|6590|6591|6592|6593|6594|6595|6596|6597|6598|6599|6592|6593|6594|6595|6596|6597|6598|6599)/.test(number)) return 'elo';
+    return 'visa'; // Fallback
+};
+
 export default function HotsiteCheckoutPage() {
     const params = useParams();
     const slug = params.slug as string;
@@ -63,6 +75,34 @@ export default function HotsiteCheckoutPage() {
         fetchPlan();
     }, [slug]);
 
+    // EFI Tokenization Script Injection
+    useEffect(() => {
+        if (!planData || !planData.efi_settings?.payee_code) return;
+        
+        const payeeCode = planData.efi_settings.payee_code;
+        const isSandbox = planData.efi_settings.sandbox;
+        const envUrl = isSandbox ? 'https://sandbox.gerencianet.com.br/v1/cdn/' : 'https://api.gerencianet.com.br/v1/cdn/';
+        
+        const scriptId = `efi-${payeeCode}`;
+        if (!document.getElementById(scriptId)) {
+            const s = document.createElement('script');
+            s.type = 'text/javascript';
+            const v = parseInt((Math.random() * 1000000).toString());
+            s.src = `${envUrl}${payeeCode}/${v}`;
+            s.async = false;
+            s.id = scriptId;
+            document.head.appendChild(s);
+        }
+        
+        // Define $gn variable as expected by the Gerencianet script
+        (window as any).$gn = {
+            validForm: true,
+            sign: true,
+            prefix: ''
+        };
+        
+    }, [planData]);
+
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         let { name, value } = e.target;
         
@@ -104,7 +144,15 @@ export default function HotsiteCheckoutPage() {
     };
 
     const handleCcChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const { name, value } = e.target;
+        let { name, value } = e.target;
+        
+        if (name === 'number') value = value.replace(/\D/g, '').replace(/(\d{4})(?=\d)/g, '$1 ');
+        if (name === 'expiry') {
+            value = value.replace(/\D/g, '');
+            if (value.length > 2) value = value.replace(/^(\d{2})(\d)/, '$1/$2').substring(0, 7);
+        }
+        if (name === 'cvv') value = value.replace(/\D/g, '').substring(0, 4);
+
         setCcData(prev => ({ ...prev, [name]: value }));
     };
 
@@ -114,7 +162,54 @@ export default function HotsiteCheckoutPage() {
         
         try {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-            const payload = { ...formData, payment_method: paymentMethod };
+            
+            // Get Payment Token using Gerencianet JS
+            let paymentToken = '';
+            if (paymentMethod === 'CREDIT_CARD') {
+                const [expMonth, expYear] = ccData.expiry.split('/');
+                if (!expMonth || !expYear) throw new Error("Preencha a validade do cartão (MM/AA).");
+                
+                const rawNumber = ccData.number.replace(/\D/g, '');
+                const brand = getCardBrand(rawNumber);
+
+                const gnParams = {
+                    brand: brand,
+                    number: rawNumber,
+                    cvv: ccData.cvv,
+                    expiration_month: expMonth,
+                    expiration_year: expYear.length === 2 ? `20${expYear}` : expYear
+                };
+
+                try {
+                    const tokenData: any = await new Promise((resolve, reject) => {
+                        const gn = (window as any).$gn;
+                        if (!gn || !gn.ready) {
+                            return reject(new Error("Script de pagamento seguro (EFI) ainda não carregado ou não configurado corretamente."));
+                        }
+                        gn.ready((checkout: any) => {
+                            checkout.getPaymentToken(gnParams, (error: any, response: any) => {
+                                if (error) {
+                                    console.error("Erro Efi:", error);
+                                    reject(new Error(error.error_description || "Cartão inválido ou falha na tokenização EFI."));
+                                } else {
+                                    resolve(response);
+                                }
+                            });
+                        });
+                    });
+                    paymentToken = tokenData.data.payment_token;
+                } catch (efiErr: any) {
+                    toast.error(efiErr.message || "Erro ao processar dados do cartão.");
+                    setSubmitting(false);
+                    return;
+                }
+            }
+
+            const payload = { 
+                ...formData, 
+                payment_method: paymentMethod,
+                payment_token: paymentToken // Added token
+            };
 
             const response = await fetch(`${apiUrl}/subscriptions/hotsite/${slug}/subscribe`, {
                 method: 'POST',
@@ -344,50 +439,34 @@ export default function HotsiteCheckoutPage() {
                                         <div className="flex gap-4 p-1 bg-slate-100 rounded-2xl mb-8">
                                             <button 
                                                 type="button"
-                                                onClick={() => setPaymentMethod('PIX')}
-                                                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${paymentMethod === 'PIX' ? 'bg-white text-[var(--color-primary-base)] shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}
-                                            >
-                                                <QrCode className="h-4 w-4" />
-                                                PIX
-                                            </button>
-                                            <button 
-                                                type="button"
                                                 onClick={() => setPaymentMethod('CREDIT_CARD')}
-                                                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${paymentMethod === 'CREDIT_CARD' ? 'bg-white text-[var(--color-primary-base)] shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}
+                                                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all bg-white text-[var(--color-primary-base)] shadow-sm`}
                                             >
                                                 <CreditCard className="h-4 w-4" />
-                                                Cartão de Crédito
+                                                Cartão de Crédito (Recorrente)
                                             </button>
                                         </div>
 
-                                        {paymentMethod === 'PIX' ? (
-                                            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-center">
-                                                <QrCode className="h-10 w-10 text-emerald-600 mx-auto mb-3 opacity-80" />
-                                                <p className="text-emerald-800 font-medium mb-1">Aprovação Imediata Secura</p>
-                                                <p className="text-sm text-emerald-600/80">O código PIX será gerado na próxima tela após você clicar em Finalizar.</p>
-                                            </div>
-                                        ) : (
-                                            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 animate-in fade-in duration-300">
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div className="space-y-1.5 col-span-2">
-                                                        <label className="text-sm font-bold text-slate-700">Número do Cartão</label>
-                                                        <input type="text" name="number" required value={ccData.number} onChange={handleCcChange} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="0000 0000 0000 0000" />
-                                                    </div>
-                                                    <div className="space-y-1.5 col-span-2">
-                                                        <label className="text-sm font-bold text-slate-700">Nome no Cartão</label>
-                                                        <input type="text" name="name" required value={ccData.name} onChange={handleCcChange} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="Como impresso no cartão" />
-                                                    </div>
-                                                    <div className="space-y-1.5">
-                                                        <label className="text-sm font-bold text-slate-700">Validade</label>
-                                                        <input type="text" name="expiry" required value={ccData.expiry} onChange={handleCcChange} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="MM/AA" />
-                                                    </div>
-                                                    <div className="space-y-1.5">
-                                                        <label className="text-sm font-bold text-slate-700">CVV</label>
-                                                        <input type="text" name="cvv" required value={ccData.cvv} onChange={handleCcChange} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="123" />
-                                                    </div>
+                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 animate-in fade-in duration-300">
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="space-y-1.5 col-span-2">
+                                                    <label className="text-sm font-bold text-slate-700">Número do Cartão</label>
+                                                    <input type="text" name="number" required value={ccData.number} onChange={handleCcChange} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="0000 0000 0000 0000" />
+                                                </div>
+                                                <div className="space-y-1.5 col-span-2">
+                                                    <label className="text-sm font-bold text-slate-700">Nome no Cartão</label>
+                                                    <input type="text" name="name" required value={ccData.name} onChange={handleCcChange} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="Como impresso no cartão" />
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <label className="text-sm font-bold text-slate-700">Validade</label>
+                                                    <input type="text" name="expiry" required value={ccData.expiry} onChange={handleCcChange} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="MM/AA" />
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <label className="text-sm font-bold text-slate-700">CVV</label>
+                                                    <input type="text" name="cvv" required value={ccData.cvv} onChange={handleCcChange} className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="123" />
                                                 </div>
                                             </div>
-                                        )}
+                                        </div>
                                     </div>
                                     
                                     <div className="pt-4 border-t border-slate-100">

@@ -32,6 +32,13 @@ class CompanySettings(Base):
     pdv_type = Column(String(50), default='NON_FISCAL', nullable=False) # 'FISCAL' or 'NON_FISCAL'
     pdv_allow_out_of_stock = Column(Boolean, default=False, nullable=False)
     
+    # Efí (Gerencianet) Pagamentos & Assinaturas
+    efi_sandbox = Column(Boolean, default=True, nullable=False)
+    efi_client_id = Column(String(255), nullable=True)
+    efi_client_secret = Column(String(255), nullable=True)
+    efi_payee_code = Column(String(255), nullable=True) 
+    efi_certificate_path = Column(String(500), nullable=True)
+
     # Audit trail
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

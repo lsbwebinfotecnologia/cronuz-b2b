@@ -40,7 +40,7 @@ type UserData = {
 
 const masterNavigation: NavItem[] = [
   { name: 'Empresas', href: '/companies', icon: Users },
-  { name: 'Leads Capturados', href: '/leads', icon: Inbox },
+  { name: 'Leads', href: '/leads', icon: Inbox },
 ];
 
 const sellerNavigation: NavItem[] = [
@@ -148,7 +148,15 @@ export function Sidebar() {
     // Insert Assinaturas before Configurações
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
-    filteredSellerNavigation.splice(targetIndex, 0, { name: 'Assinaturas', href: '/subscriptions', icon: Layers });
+    filteredSellerNavigation.splice(targetIndex, 0, { 
+       name: 'Assinaturas', 
+       href: '/subscriptions', 
+       icon: Layers,
+       subItems: [
+         { name: 'Planos e Landpages', href: '/subscriptions' },
+         { name: 'Gestão de Assinaturas', href: '/subscribers' }
+       ]
+    });
   }
 
   const dynamicMasterNavigation = masterNavigation.map(item => {

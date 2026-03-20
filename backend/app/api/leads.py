@@ -36,7 +36,7 @@ def leads_summary(db: Session = Depends(get_db)):
         "total": total
     }
 
-from app.schemas.lead import LeadStatusUpdate
+from app.schemas.lead import LeadStatusUpdate, LeadCompanyUpdate
 
 @router.patch("/{lead_id}/status", response_model=Lead)
 def update_lead_status(lead_id: str, payload: LeadStatusUpdate, db: Session = Depends(get_db)):
@@ -44,6 +44,17 @@ def update_lead_status(lead_id: str, payload: LeadStatusUpdate, db: Session = De
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     lead.status = payload.status
+    db.commit()
+    db.refresh(lead)
+    return lead
+
+@router.patch("/{lead_id}/company", response_model=Lead)
+def update_lead_company(lead_id: str, payload: LeadCompanyUpdate, db: Session = Depends(get_db)):
+    lead = db.query(LeadModel).filter(LeadModel.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    lead.company_id = payload.company_id
+    lead.status = "contacted"
     db.commit()
     db.refresh(lead)
     return lead

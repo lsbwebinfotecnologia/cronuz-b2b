@@ -1,11 +1,22 @@
+import sys
+import traceback
 from app.db.session import SessionLocal
-from sqlalchemy import text
+from app.models.company import Company
+from app.schemas.company import Company as CompanySchema
 
-db = SessionLocal()
-print("Users:")
-for row in db.execute(text("SELECT id, email, type, company_id FROM usr_user")):
-    print(dict(row._mapping))
+def test():
+    try:
+        db = SessionLocal()
+        companies = db.query(Company).all()
+        print("DB QUERY SUCCESS, count:", len(companies))
+        for c in companies:
+            print(c.id, c.name, getattr(c, 'zip_code', 'NO_ZIP'))
+            # Test schema validation
+            mapped = CompanySchema.model_validate(c)
+            print("SCHEMA MAPPING SUCCESS:", mapped.id)
+    except Exception as e:
+        print("EXCEPTION OCCURRED:", e)
+        traceback.print_exc()
 
-print("\nOrders:")
-for row in db.execute(text("SELECT id, status, company_id, customer_id FROM ord_order")):
-    print(dict(row._mapping))
+if __name__ == "__main__":
+    test()

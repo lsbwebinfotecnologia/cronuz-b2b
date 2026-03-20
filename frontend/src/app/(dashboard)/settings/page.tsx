@@ -19,6 +19,11 @@ export default function SettingsPage() {
     max_backorder_qty: 0,
     pdv_allow_out_of_stock: false,
     cover_image_base_url: '',
+    efi_sandbox: true,
+    efi_client_id: '',
+    efi_client_secret: '',
+    efi_payee_code: '',
+    efi_certificate_path: '',
   });
 
   useEffect(() => {
@@ -49,6 +54,11 @@ export default function SettingsPage() {
         max_backorder_qty: data.max_backorder_qty || 0,
         pdv_allow_out_of_stock: data.pdv_allow_out_of_stock || false,
         cover_image_base_url: data.cover_image_base_url || '',
+        efi_sandbox: data.efi_sandbox ?? true,
+        efi_client_id: data.efi_client_id || '',
+        efi_client_secret: data.efi_client_secret || '',
+        efi_payee_code: data.efi_payee_code || '',
+        efi_certificate_path: data.efi_certificate_path || '',
       }));
     } catch (error) {
       toast.error('Erro ao carregar as configurações.');
@@ -232,6 +242,73 @@ export default function SettingsPage() {
                     <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500 dark:bg-slate-700 dark:border-slate-600"></div>
                   </div>
                 </label>
+              </div>
+            </div>
+
+            {/* Configurações de Pagamento (Efí) */}
+            <div className="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800/60">
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/60 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-lg">
+                    <Receipt className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Pagamentos & Assinaturas (Efí)</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Credenciais para tokenização e cobrança recorrente.</p>
+                  </div>
+                </div>
+                <label className="relative flex items-center cursor-pointer shrink-0">
+                  <span className="mr-3 text-sm font-bold text-emerald-600 dark:text-emerald-400 uppercase">Modo Sandbox</span>
+                  <div className="relative">
+                    <input type="checkbox" className="sr-only peer" checked={settings.efi_sandbox} onChange={e => setSettings({ ...settings, efi_sandbox: e.target.checked })} />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                  </div>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Client ID</label>
+                  <input
+                    type="text"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-emerald-500/50"
+                    placeholder="Client_Id_..."
+                    value={settings.efi_client_id}
+                    onChange={e => setSettings({ ...settings, efi_client_id: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Client Secret</label>
+                  <input
+                    type="password"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-emerald-500/50"
+                    placeholder="Client_Secret_..."
+                    value={settings.efi_client_secret}
+                    onChange={e => setSettings({ ...settings, efi_client_secret: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
+                    Identificador de Conta (Payee Code)
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-emerald-500/50"
+                    placeholder="Ex: 57C2... (Utilizado no Javascript)"
+                    value={settings.efi_payee_code}
+                    onChange={e => setSettings({ ...settings, efi_payee_code: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Caminho do Certificado (.p12 / .pem)</label>
+                  <input
+                    type="text"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-emerald-500/50"
+                    placeholder="Opcional p/ assinatura (Ex: /cert/homologacao.p12)"
+                    value={settings.efi_certificate_path}
+                    onChange={e => setSettings({ ...settings, efi_certificate_path: e.target.value })}
+                  />
+                </div>
               </div>
             </div>
 

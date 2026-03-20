@@ -14,6 +14,15 @@ class Company(Base):
     custom_domain = Column(String(255), unique=True, index=True, nullable=True)
     logo = Column(String(500), nullable=True)
     
+    # Address
+    zip_code = Column(String(20), nullable=True)
+    street = Column(String(255), nullable=True)
+    number = Column(String(50), nullable=True)
+    complement = Column(String(255), nullable=True)
+    neighborhood = Column(String(255), nullable=True)
+    city = Column(String(255), nullable=True)
+    state = Column(String(50), nullable=True)
+    
     # Module Capabilities (Toggles managed by MASTER)
     module_horus_erp = Column(Boolean, default=False, nullable=False)
     module_subscriptions = Column(Boolean, default=False, nullable=False)

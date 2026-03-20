@@ -29,6 +29,8 @@ from app.api import dashboard
 from app.api import orders
 from app.api import subscriptions
 from app.api import leads
+from app.api import company_notes
+from app.api import integrators
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -87,6 +89,8 @@ app.include_router(dashboard.router, tags=["dashboard"])
 app.include_router(orders.router, tags=["orders"])
 app.include_router(subscriptions.router, tags=["subscriptions"])
 app.include_router(leads.router, tags=["leads"])
+app.include_router(company_notes.router, prefix="/company-notes", tags=["company-notes"])
+app.include_router(integrators.router, prefix="/integrators", tags=["integrators"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -122,10 +126,20 @@ def create_company(
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.require_master_user)
 ):
-    db_company = company_models.Company(**company.model_dump())
+    company_data = company.model_dump()
+    lead_id = company_data.pop("lead_id", None)
+    db_company = company_models.Company(**company_data)
     db.add(db_company)
     db.commit()
     db.refresh(db_company)
+    
+    if lead_id:
+        from app.models.lead import Lead
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if lead:
+            lead.company_id = db_company.id
+            db.commit()
+            
     return db_company
 
 @app.get("/companies", response_model=list[schemas.Company])
@@ -289,6 +303,28 @@ def read_company(
     company = db.query(company_models.Company).filter(company_models.Company.id == company_id).first()
     if company is None:
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
+    return company
+
+@app.put("/companies/{company_id}", response_model=schemas.Company)
+def update_company(
+    company_id: int,
+    company_update: schemas.CompanyUpdate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    company = db.query(company_models.Company).filter(company_models.Company.id == company_id).first()
+    if company is None:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+        
+    if current_user.type != user_models.UserRole.MASTER and current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Não autorizado")
+        
+    update_data = company_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(company, key, value)
+        
+    db.commit()
+    db.refresh(company)
     return company
 
 # FastAPI can auto-infer simple parameters from query if not specified, but let's use generic Pydantic or Request body.

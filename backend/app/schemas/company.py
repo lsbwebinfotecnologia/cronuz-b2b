@@ -8,13 +8,22 @@ class CompanyBase(BaseModel):
     domain: str
     custom_domain: Optional[str] = None
     logo: Optional[str] = None
+    
+    zip_code: Optional[str] = None
+    street: Optional[str] = None
+    number: Optional[str] = None
+    complement: Optional[str] = None
+    neighborhood: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+
     module_horus_erp: bool = False
     module_subscriptions: bool = False
     module_pdv: bool = False
     active: bool = True
 
 class CompanyCreate(CompanyBase):
-    pass
+    lead_id: Optional[str] = None
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
@@ -23,6 +32,14 @@ class CompanyUpdate(BaseModel):
     horus_default_b2b_guid: Optional[str] = None
     horus_api_mode: Optional[str] = "B2B"
     bookinfo_api_key: Optional[str] = None
+    
+    zip_code: Optional[str] = None
+    street: Optional[str] = None
+    number: Optional[str] = None
+    complement: Optional[str] = None
+    neighborhood: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
     module_horus_erp: Optional[bool] = None
     module_subscriptions: Optional[bool] = None
     module_pdv: Optional[bool] = None

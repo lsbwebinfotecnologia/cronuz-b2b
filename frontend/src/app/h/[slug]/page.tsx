@@ -358,7 +358,7 @@ export default function HotsiteLandingPage() {
                                     href={`/h/${slug}/checkout`}
                                     className={`w-full flex items-center justify-center p-5 rounded-xl font-black uppercase tracking-widest text-lg text-white transition-all shadow-xl ${isSoldOut ? 'bg-slate-300 shadow-none cursor-not-allowed' : 'bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] hover:shadow-[var(--color-primary-base)]/40 active:scale-95'}`}
                                 >
-                                    {isSoldOut ? 'Esgotado' : 'Configurar Pagamento'}
+                                    {isSoldOut ? 'Esgotado' : 'Assinar'}
                                 </Link>
                                 {!isSoldOut && planData.status.is_near_limit && (
                                     <p className="text-center mt-4 text-rose-600 font-bold text-sm animate-pulse">
