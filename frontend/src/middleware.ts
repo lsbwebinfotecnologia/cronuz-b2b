@@ -59,11 +59,13 @@ export function middleware(request: NextRequest) {
         const isCustomer = user.type === 'CUSTOMER';
         
         if (isLoginPage) {
-          return NextResponse.redirect(new URL(isCustomer ? '/store' : '/', request.url));
+          const targetHost = marketingDomains.includes(hostname) ? 'https://app.cronuzb2b.com.br' : request.url;
+          return NextResponse.redirect(new URL(isCustomer ? '/store' : '/', targetHost));
         }
         
         if (isCustomer && !url.pathname.startsWith('/store') && !url.pathname.startsWith('/login')) {
-          return NextResponse.redirect(new URL('/store', request.url));
+          const targetHost = marketingDomains.includes(hostname) ? 'https://app.cronuzb2b.com.br' : request.url;
+          return NextResponse.redirect(new URL('/store', targetHost));
         }
 
         if (url.pathname.startsWith('/companies/new') && user.type !== 'MASTER') {

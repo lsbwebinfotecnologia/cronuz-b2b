@@ -81,9 +81,9 @@ export default function MarketingPage() {
                         </a>
                         <div className="hidden lg:flex items-center justify-center border-l h-6 border-slate-300 mx-1"></div>
                         <div className="flex items-center gap-4">
-                            <a href="/login" className="hidden md:flex text-sm font-bold text-slate-500 hover:text-[#01A9AF] items-center gap-2 transition-colors">
-                                Já sou Cliente
-                            </a>
+                        <a href="https://app.cronuzb2b.com.br/login" className="hidden md:flex text-sm font-bold text-slate-500 hover:text-[#01A9AF] items-center gap-2 transition-colors">
+                            Já sou Cliente
+                        </a>
                             <a href="#contato" className="px-5 py-2.5 bg-slate-900 text-white text-sm font-bold rounded-xl hover:bg-slate-800 transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5 flex items-center gap-2">
                                 Contato Ágil
                             </a>
