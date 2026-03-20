@@ -66,7 +66,7 @@ const sellerNavigation: NavItem[] = [
        { name: 'Vitrines da Loja', href: '/marketing/showcases' }
     ]
   },
-  { name: 'Vendedores (PDV)', href: '/agents', icon: MonitorSmartphone },
+  { name: 'Vendedores/Rep', href: '/agents', icon: MonitorSmartphone },
   { name: 'Configurações', href: '/settings', icon: Settings },
 ];
 
@@ -82,8 +82,12 @@ export function Sidebar() {
   const [user, setUser] = useState<UserData | null>(null);
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
   const [usesHorus, setUsesHorus] = useState(false);
+  const [moduleProducts, setModuleProducts] = useState(true);
+  const [moduleCustomers, setModuleCustomers] = useState(true);
+  const [moduleMarketing, setModuleMarketing] = useState(false);
   const [moduleSubscriptions, setModuleSubscriptions] = useState(false);
   const [modulePdv, setModulePdv] = useState(false);
+  const [moduleAgents, setModuleAgents] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
@@ -109,8 +113,12 @@ export function Sidebar() {
             if (res.ok) {
                const data = await res.json();
                setUsesHorus(data.uses_horus || false);
+               setModuleProducts(data.module_products ?? true);
+               setModuleCustomers(data.module_customers ?? true);
+               setModuleMarketing(data.module_marketing || false);
                setModuleSubscriptions(data.module_subscriptions || false);
                setModulePdv(data.module_pdv || false);
+               setModuleAgents(data.module_agents || false);
             }
          } catch (e) {}
        };
@@ -139,8 +147,10 @@ export function Sidebar() {
   };
 
   const filteredSellerNavigation = [...sellerNavigation.filter(nav => {
-    if (usesHorus && nav.name === 'Produtos') return false;
-    if (!modulePdv && nav.name === 'Vendedores (PDV)') return false;
+    if (!moduleProducts && nav.name === 'Produtos') return false;
+    if (!moduleCustomers && nav.name === 'Clientes') return false;
+    if (!moduleMarketing && nav.name === 'Marketing') return false;
+    if (!moduleAgents && nav.href === '/agents') return false;
     return true;
   })];
   

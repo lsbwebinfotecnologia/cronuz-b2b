@@ -24,9 +24,14 @@ class Company(Base):
     state = Column(String(50), nullable=True)
     
     # Module Capabilities (Toggles managed by MASTER)
+    module_b2b_native = Column(Boolean, default=True, nullable=False)
     module_horus_erp = Column(Boolean, default=False, nullable=False)
+    module_products = Column(Boolean, default=True, nullable=False)
+    module_customers = Column(Boolean, default=True, nullable=False)
+    module_marketing = Column(Boolean, default=False, nullable=False)
     module_subscriptions = Column(Boolean, default=False, nullable=False)
     module_pdv = Column(Boolean, default=False, nullable=False)
+    module_agents = Column(Boolean, default=False, nullable=False)
     
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

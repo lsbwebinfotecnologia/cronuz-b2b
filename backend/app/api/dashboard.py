@@ -57,8 +57,17 @@ def get_dashboard_metrics(
     if company_id:
         company = db.query(Company).filter(Company.id == company_id).first()
         
+    module_b2b_native = company.module_b2b_native if company else False
+    module_horus_erp = company.module_horus_erp if company else False
+    module_products = company.module_products if company else False
+    module_customers = company.module_customers if company else False
+    module_marketing = company.module_marketing if company else False
     module_subscriptions = company.module_subscriptions if company else False
     module_pdv = company.module_pdv if company else False
+    module_agents = company.module_agents if company else False
+
+    # Uses horus is now strongly derived from the company flag
+    uses_horus = module_horus_erp
 
     # 4. Total revenue (Mocked for now since payment/invoicing is not fully done)
     total_revenue = 0.0
@@ -69,6 +78,12 @@ def get_dashboard_metrics(
         "active_orders": active_orders,
         "total_revenue": total_revenue,
         "uses_horus": uses_horus,
+        "module_b2b_native": module_b2b_native,
+        "module_horus_erp": module_horus_erp,
+        "module_products": module_products,
+        "module_customers": module_customers,
+        "module_marketing": module_marketing,
         "module_subscriptions": module_subscriptions,
-        "module_pdv": module_pdv
+        "module_pdv": module_pdv,
+        "module_agents": module_agents
     }

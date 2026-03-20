@@ -19,9 +19,14 @@ interface Company {
   neighborhood?: string | null;
   city?: string | null;
   state?: string | null;
+  module_b2b_native: boolean;
   module_horus_erp: boolean;
+  module_products: boolean;
+  module_customers: boolean;
+  module_marketing: boolean;
   module_subscriptions: boolean;
   module_pdv: boolean;
+  module_agents: boolean;
   active: boolean;
 }
 

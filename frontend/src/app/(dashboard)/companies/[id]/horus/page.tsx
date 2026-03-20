@@ -75,18 +75,32 @@ export default function CompanyHorusPage() {
     if (!company) return;
     setTogglingModule(true);
     
-    const payload = {
-      module_horus_erp: !company.module_horus_erp,
+    const currentValue = company.module_horus_erp;
+    const updates: Record<string, boolean> = {
+      module_b2b_native: company.module_b2b_native,
+      module_horus_erp: !currentValue,
+      module_products: company.module_products,
+      module_customers: company.module_customers,
+      module_marketing: company.module_marketing,
       module_subscriptions: company.module_subscriptions,
-      module_pdv: company.module_pdv
+      module_pdv: company.module_pdv,
+      module_agents: company.module_agents
     };
+
+    if (!currentValue === true) {
+       updates.module_b2b_native = false;
+       updates.module_products = false;
+    } else {
+       updates.module_b2b_native = true;
+       updates.module_products = true;
+    }
 
     try {
       const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${company.id}/modules`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(updates)
       });
       if (!res.ok) throw new Error('Falha ao atualizar módulo');
       toast.success('Módulo atualizado com sucesso!');

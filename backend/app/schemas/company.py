@@ -17,9 +17,14 @@ class CompanyBase(BaseModel):
     city: Optional[str] = None
     state: Optional[str] = None
 
+    module_b2b_native: bool = True
     module_horus_erp: bool = False
+    module_products: bool = True
+    module_customers: bool = True
+    module_marketing: bool = False
     module_subscriptions: bool = False
     module_pdv: bool = False
+    module_agents: bool = False
     active: bool = True
 
 class CompanyCreate(CompanyBase):
@@ -40,9 +45,14 @@ class CompanyUpdate(BaseModel):
     neighborhood: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    module_b2b_native: Optional[bool] = None
     module_horus_erp: Optional[bool] = None
+    module_products: Optional[bool] = None
+    module_customers: Optional[bool] = None
+    module_marketing: Optional[bool] = None
     module_subscriptions: Optional[bool] = None
     module_pdv: Optional[bool] = None
+    module_agents: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):
