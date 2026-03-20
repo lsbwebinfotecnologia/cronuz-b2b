@@ -11,7 +11,8 @@ import {
   ShoppingBag,
   ChevronDown,
   Layers,
-  MonitorSmartphone
+  MonitorSmartphone,
+  Inbox
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -25,6 +26,7 @@ type NavItem = {
   href: string;
   icon: React.ElementType;
   subItems?: { name: string; href: string }[];
+  badge?: number;
 };
 
 type UserData = {
@@ -38,6 +40,7 @@ type UserData = {
 
 const masterNavigation: NavItem[] = [
   { name: 'Empresas', href: '/companies', icon: Users },
+  { name: 'Leads Capturados', href: '/leads', icon: Inbox },
 ];
 
 const sellerNavigation: NavItem[] = [
@@ -81,6 +84,7 @@ export function Sidebar() {
   const [usesHorus, setUsesHorus] = useState(false);
   const [moduleSubscriptions, setModuleSubscriptions] = useState(false);
   const [modulePdv, setModulePdv] = useState(false);
+  const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
     const currentUser = getUser();
@@ -111,6 +115,22 @@ export function Sidebar() {
          } catch (e) {}
        };
        fetchSettings();
+    } else if (currentUser?.type === 'MASTER') {
+       const fetchLeadsSummary = async () => {
+         try {
+           const tokenStr = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+           const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/leads/summary`, {
+              headers: { 'Authorization': `Bearer ${tokenStr}` }
+           });
+           if (res.ok) {
+              const data = await res.json();
+              setUnreadLeads(data.new || 0);
+           }
+         } catch(e) {}
+       };
+       fetchLeadsSummary();
+       window.addEventListener('lead_status_updated', fetchLeadsSummary);
+       return () => window.removeEventListener('lead_status_updated', fetchLeadsSummary);
     }
   }, [pathname]);
 
@@ -131,7 +151,14 @@ export function Sidebar() {
     filteredSellerNavigation.splice(targetIndex, 0, { name: 'Assinaturas', href: '/subscriptions', icon: Layers });
   }
 
-  const dynamicNavigation = user?.type === 'MASTER' ? masterNavigation : 
+  const dynamicMasterNavigation = masterNavigation.map(item => {
+    if (item.name === 'Leads Capturados') {
+      return { ...item, badge: unreadLeads };
+    }
+    return item;
+  });
+
+  const dynamicNavigation = user?.type === 'MASTER' ? dynamicMasterNavigation : 
                             (user?.type === 'SELLER' ? filteredSellerNavigation : 
                              (user?.type === 'AGENT' ? agentNavigation : []));
 
@@ -197,12 +224,19 @@ export function Sidebar() {
                         )} />
                         {item.name}
                       </div>
-                      {isActive && (
-                        <motion.div 
-                          layoutId="activeTabIndicator"
-                          className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary-base)]"
-                        />
-                      )}
+                      <div className="flex items-center gap-2">
+                        {item.badge ? (
+                          <span className="bg-rose-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm animate-pulse">
+                            {item.badge}
+                          </span>
+                        ) : null}
+                        {isActive && (
+                          <motion.div 
+                            layoutId="activeTabIndicator"
+                            className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary-base)]"
+                          />
+                        )}
+                      </div>
                     </Link>
                 )}
 

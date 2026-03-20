@@ -12,6 +12,7 @@ from app.models import product as product_models
 from app.models import catalog_support as catalog_models
 from app.models import marketing_showcase as marketing_models
 from app.models import subscription as subscription_models
+from app.models import lead as lead_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -27,6 +28,7 @@ from app.api import upload
 from app.api import dashboard
 from app.api import orders
 from app.api import subscriptions
+from app.api import leads
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -42,6 +44,7 @@ product_models.Base.metadata.create_all(bind=engine)
 catalog_models.Base.metadata.create_all(bind=engine)
 marketing_models.Base.metadata.create_all(bind=engine)
 subscription_models.Base.metadata.create_all(bind=engine)
+lead_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -83,6 +86,7 @@ app.include_router(upload.router, tags=["upload"])
 app.include_router(dashboard.router, tags=["dashboard"])
 app.include_router(orders.router, tags=["orders"])
 app.include_router(subscriptions.router, tags=["subscriptions"])
+app.include_router(leads.router, tags=["leads"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
