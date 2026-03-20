@@ -119,7 +119,7 @@ export function Sidebar() {
        const fetchLeadsSummary = async () => {
          try {
            const tokenStr = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
-           const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/leads/summary`, {
+           const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/leads/summary`, {
               headers: { 'Authorization': `Bearer ${tokenStr}` }
            });
            if (res.ok) {

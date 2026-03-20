@@ -24,7 +24,7 @@ export default function LeadsDashboard() {
     try {
       setLoading(true);
       const token = localStorage.getItem('cronuz_b2b_token') || '';
-      const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/leads/`);
+      const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/leads/`);
       if (filter !== 'all') {
         url.searchParams.append('status', filter);
       }
@@ -51,7 +51,7 @@ export default function LeadsDashboard() {
   const markAsRead = async (leadId: string) => {
     try {
       const token = localStorage.getItem('cronuz_b2b_token') || '';
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/leads/${leadId}/status`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/leads/${leadId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
