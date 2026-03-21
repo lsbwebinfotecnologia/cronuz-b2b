@@ -87,7 +87,7 @@ export default function HotsiteCheckoutPage() {
         if (!(window as any).$gn) {
             (window as any).$gn = {
                 validForm: true,
-                sign: false, // For subscriptions/assinaturas this must be false
+                sign: true, // MUST be true for the tokenizer to initialize properly
                 prefix: ''
             };
         }
