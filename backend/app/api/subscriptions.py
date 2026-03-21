@@ -496,9 +496,21 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
     # 3.1 Create EFI Plan if it doesn't exist
     if not plan.efi_plan_id:
         try:
+            freq_key = plan.delivery_frequency.value if hasattr(plan.delivery_frequency, 'value') else plan.delivery_frequency
+            months_map = {
+                "MONTHLY": 1,
+                "BIMONTHLY": 2,
+                "QUARTERLY": 3,
+                "SEMIANNUAL": 6,
+                "ANNUAL": 12
+            }
+            # Fallback to 1 for weekly/biweekly
+            interval = months_map.get(freq_key, 1)
+            
             efi_plan = efi_service.create_plan(
                 name=f"{plan.name} - Assinatura",
-                amount=first_delivery_price
+                amount=first_delivery_price,
+                interval=interval
             )
             print("EFI PLAN CREATION RESPONSE:", efi_plan, flush=True)
             if 'data' not in efi_plan:
@@ -659,10 +671,12 @@ def list_subscribers(
             "id": sub.id,
             "plan_id": sub.plan_id,
             "plan_name": plan.name if plan else "Plano Desconhecido",
+            "plan_frequency": plan.delivery_frequency.value if (plan and hasattr(plan.delivery_frequency, 'value')) else (plan.delivery_frequency if plan else "MONTHLY"),
             "customer_id": sub.customer_id,
             "customer_name": customer.name if customer else f"Cliente #{sub.customer_id}",
             "customer_document": customer.document if customer else "",
             "customer_email": customer.email if customer else "",
+            "efi_subscription_id": sub.efi_subscription_id,
             "status": sub.status.value if hasattr(sub.status, 'value') else sub.status,
             "current_delivery": sub.current_delivery_number,
             "shipping_address": f"{sub.shipping_street}, {sub.shipping_number} - {sub.shipping_city}/{sub.shipping_state} ({sub.shipping_zip_code})",
@@ -722,11 +736,13 @@ def get_subscriber_detail(
     return {
         "id": sub.id,
         "plan_name": plan.name if plan else "Desconhecido",
+        "plan_frequency": plan.delivery_frequency.value if (plan and hasattr(plan.delivery_frequency, 'value')) else (plan.delivery_frequency if plan else "MONTHLY"),
         "customer_id": sub.customer_id,
         "customer_name": customer.name if customer else f"Cliente #{sub.customer_id}",
         "customer_document": customer.document if customer else "",
         "customer_email": customer.email if customer else "",
         "customer_phone": customer.phone if customer else "",
+        "efi_subscription_id": sub.efi_subscription_id,
         "status": sub.status.value if hasattr(sub.status, 'value') else sub.status,
         "current_delivery": sub.current_delivery_number,
         "shipping_address": {

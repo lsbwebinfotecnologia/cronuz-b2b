@@ -29,15 +29,15 @@ type SubscriberDetail = {
     customer_phone?: string;
     status: string;
     current_delivery: number;
-    shipping_address: {
+    shipping_address?: {
         street: string;
         number: string;
-        complement: string | null;
-        neighborhood: string;
         city: string;
         state: string;
-        zipcode: string;
+        zip_code: string;
     };
+    plan_frequency?: string;
+    efi_subscription_id?: number;
     created_at: string;
     billings: Billing[];
 };
@@ -167,12 +167,38 @@ export default function SubscriberDetailPage() {
                         </div>
                         <div className="space-y-3 text-sm">
                             <div>
-                                <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Nome do Plano</p>
-                                <p className="font-medium text-slate-900">{subscriber.plan_name}</p>
+                                <div className="text-sm font-medium text-slate-500 mb-1 dark:text-slate-400">Plano Mestre</div>
+                                <div className="text-base text-slate-900 font-medium dark:text-white">
+                                    {subscriber.plan_name}
+                                </div>
                             </div>
+        
                             <div>
-                                <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider">Etapa Atual</p>
-                                <p className="font-medium text-slate-900">Remessa nº {subscriber.current_delivery}</p>
+                                <div className="text-sm font-medium text-slate-500 mb-1 dark:text-slate-400">Periodicidade Faturada</div>
+                                <div className="text-base text-slate-900 font-medium dark:text-white">
+                                    {subscriber.plan_frequency === 'MONTHLY' ? 'Mensal' : 
+                                     subscriber.plan_frequency === 'BIMONTHLY' ? 'Bimestral' :
+                                     subscriber.plan_frequency === 'QUARTERLY' ? 'Trimestral' :
+                                     subscriber.plan_frequency === 'SEMIANNUAL' ? 'Semestral' :
+                                     subscriber.plan_frequency === 'ANNUAL' ? 'Anual' : 
+                                     subscriber.plan_frequency || 'Mensal'}
+                                </div>
+                            </div>
+                            
+                            {subscriber.efi_subscription_id && (
+                                <div>
+                                    <div className="text-sm font-medium text-slate-500 mb-1 dark:text-slate-400">ID da Assinatura Efí</div>
+                                    <div className="text-base text-slate-900 font-mono dark:text-white">
+                                        #{subscriber.efi_subscription_id}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div>
+                                <div className="text-sm font-medium text-slate-500 mb-1 dark:text-slate-400">Fascículos (Envio Atual)</div>
+                                <div className="text-base text-slate-900 font-medium dark:text-white">
+                                    Lote #{subscriber.current_delivery}
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -186,14 +212,10 @@ export default function SubscriberDetailPage() {
                         </div>
                         <div className="space-y-1 text-sm text-slate-700">
                             <p className="font-medium text-slate-900 bg-slate-50 p-3 rounded-lg border border-slate-100">
-                                {subscriber.shipping_address.street}, {subscriber.shipping_address.number}
-                                {subscriber.shipping_address.complement ? ` - ${subscriber.shipping_address.complement}` : ''}
-                                <br />
-                                {subscriber.shipping_address.neighborhood}
-                                <br />
-                                {subscriber.shipping_address.city} - {subscriber.shipping_address.state}
-                                <br />
-                                CEP: {subscriber.shipping_address.zipcode}
+                                {subscriber.shipping_address?.street}, {subscriber.shipping_address?.number}
+                                {subscriber.shipping_address?.city && subscriber.shipping_address?.state ? 
+                                    <><br />{subscriber.shipping_address.city} - {subscriber.shipping_address.state}</> : ''}
+                                {subscriber.shipping_address?.zip_code ? <><br />CEP: {subscriber.shipping_address.zip_code}</> : ''}
                             </p>
                         </div>
                     </div>

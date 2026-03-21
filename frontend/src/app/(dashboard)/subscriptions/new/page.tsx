@@ -18,6 +18,7 @@ export default function NewSubscriptionPlanPage() {
         description: '',
         price_per_issue: '',
         issues_per_delivery: 1,
+        delivery_frequency: 'MONTHLY',
         max_subscribers_limit: '',
         is_active: true,
         presale_start_date: '',
@@ -212,6 +213,22 @@ export default function NewSubscriptionPlanPage() {
                                 onChange={handleChange}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all text-sm placeholder:text-slate-400 dark:bg-slate-950/50 dark:border-slate-800/60 dark:text-white"
                             />
+                        </div>
+                        <div className="space-y-1.5 md:col-span-2">
+                            <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Periodicidade de Cobrança e Envio</label>
+                            <select
+                                name="delivery_frequency"
+                                value={formData.delivery_frequency}
+                                onChange={handleChange as any}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all text-sm dark:bg-slate-950/50 dark:border-slate-800/60 dark:text-white"
+                            >
+                                <option value="MONTHLY">Mensal (Cobrado a cada 1 mês)</option>
+                                <option value="BIMONTHLY">Bimestral (Cobrado a cada 2 meses)</option>
+                                <option value="QUARTERLY">Trimestral (Cobrado a cada 3 meses)</option>
+                                <option value="SEMIANNUAL">Semestral (Cobrado a cada 6 meses)</option>
+                                <option value="ANNUAL">Anual (Cobrado a cada 12 meses)</option>
+                            </select>
+                            <p className="text-xs text-slate-500 mt-1">Este intervalo será registrado diretamente na Efí Pay e coordenará o faturamento.</p>
                         </div>
                         <div className="space-y-1.5 md:col-span-2">
                             <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Limite de Estoque da Coleção (Vagas/Assinantes)</label>

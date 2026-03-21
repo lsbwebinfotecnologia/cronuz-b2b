@@ -13,6 +13,8 @@ type Subscriber = {
     status: string;
     current_delivery: number;
     shipping_address: string;
+    plan_frequency?: string;
+    efi_subscription_id?: number;
     latest_payment_status: string;
     latest_payment_date: string | null;
     created_at: string;
@@ -69,6 +71,13 @@ export default function SubscribersPage() {
         const dataToExport = subscribers.map(sub => ({
             "ID da Assinatura": sub.id,
             "Plano": sub.plan_name,
+            "Periodicidade": sub.plan_frequency === 'MONTHLY' ? 'Mensal' : 
+                             sub.plan_frequency === 'BIMONTHLY' ? 'Bimestral' :
+                             sub.plan_frequency === 'QUARTERLY' ? 'Trimestral' :
+                             sub.plan_frequency === 'SEMIANNUAL' ? 'Semestral' :
+                             sub.plan_frequency === 'ANNUAL' ? 'Anual' : 
+                             sub.plan_frequency || 'Mensal',
+            "ID Efí": sub.efi_subscription_id || '-',
             "Cliente": sub.customer_name,
             "Status da Assinatura": sub.status === 'ACTIVE' ? 'Ativo' : sub.status === 'CANCELED' ? 'Cancelado' : sub.status,
             "Mod. Entrega Atual": sub.current_delivery,
@@ -152,6 +161,7 @@ export default function SubscribersPage() {
                                 <th className="px-6 py-4">ID</th>
                                 <th className="px-6 py-4">Cliente</th>
                                 <th className="px-6 py-4">Plano</th>
+                                <th className="px-6 py-4">Periodicidade</th>
                                 <th className="px-6 py-4">Status</th>
                                 <th className="px-6 py-4">Pagamento Atual</th>
                                 <th className="px-6 py-4">Local de Entrega</th>
@@ -162,14 +172,14 @@ export default function SubscribersPage() {
                         <tbody className="divide-y divide-slate-100">
                             {loading && subscribers.length === 0 ? (
                                 <tr>
-                                    <td colSpan={8} className="px-6 py-12 text-center text-slate-400">
+                                    <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
                                         <Loader2 className="h-8 w-8 animate-spin mx-auto mb-3 text-indigo-500" />
                                         Carregando assinaturas...
                                     </td>
                                 </tr>
                             ) : filteredSubscribers.length === 0 ? (
                                 <tr>
-                                    <td colSpan={8} className="px-6 py-12 text-center text-slate-500 bg-slate-50/50">
+                                    <td colSpan={9} className="px-6 py-12 text-center text-slate-500 bg-slate-50/50">
                                         Nenhum assinante encontrado com os filtros atuais.
                                     </td>
                                 </tr>
@@ -187,6 +197,17 @@ export default function SubscribersPage() {
                                             )}
                                         </td>
                                         <td className="px-6 py-4 font-medium">{sub.plan_name}</td>
+                                        <td className="px-6 py-4 text-sm text-slate-500 font-medium whitespace-nowrap">
+                                            {sub.plan_frequency === 'MONTHLY' ? 'Mensal' : 
+                                             sub.plan_frequency === 'BIMONTHLY' ? 'Bimestral' :
+                                             sub.plan_frequency === 'QUARTERLY' ? 'Trimestral' :
+                                             sub.plan_frequency === 'SEMIANNUAL' ? 'Semestral' :
+                                             sub.plan_frequency === 'ANNUAL' ? 'Anual' : 
+                                             sub.plan_frequency || 'Mensal'}
+                                             {sub.efi_subscription_id && (
+                                                <div className="text-xs text-slate-400 font-mono mt-0.5">ID Efí: {sub.efi_subscription_id}</div>
+                                             )}
+                                        </td>
                                         <td className="px-6 py-4">
                                             <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold leading-none ${
                                                 sub.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-800' :

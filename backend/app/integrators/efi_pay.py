@@ -161,10 +161,11 @@ class EFIPayIntegration:
         except Exception as e:
             raise Exception(f"Erro na Geração de QRCode EFI: {str(e)}")
 
-    def create_plan(self, name: str, amount: float):
+    def create_plan(self, name: str, amount: float, interval: int = 1):
         """
-        Creates a monthly Subscription Plan in EFI.
+        Creates a Subscription Plan in EFI.
         amount: Final value to be charged per cycle
+        interval: Billing frequency in months (1=Monthly, 2=Bimonthly, etc)
         """
         gn = self._get_charges_client()
         
@@ -175,7 +176,7 @@ class EFIPayIntegration:
              
         body = {
             'name': name,
-            'interval': 1 # 1 month
+            'interval': interval
         }
         
         res = gn.create_plan(body=body)
