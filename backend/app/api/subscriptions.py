@@ -272,7 +272,7 @@ def get_company_hub_plans(company_id: int, db: Session = Depends(get_db)):
             "description": plan.description,
             "hotsite_slug": plan.hotsite_slug,
             "cover_image": cover_image,
-            "payment_frequency": plan.payment_frequency,
+            "payment_frequency": plan.delivery_frequency.value if plan.delivery_frequency else "MONTHLY",
             "price_per_issue": float(plan.price_per_issue) if plan.price_per_issue else 0,
             "issues_per_delivery": plan.issues_per_delivery
         })
