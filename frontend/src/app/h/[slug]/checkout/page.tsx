@@ -92,7 +92,7 @@ export default function HotsiteCheckoutPage() {
             };
         }
 
-        const scriptId = `efi-${payeeCode}`;
+        const scriptId = payeeCode;
         if (!document.getElementById(scriptId)) {
             const s = document.createElement('script');
             s.type = 'text/javascript';
