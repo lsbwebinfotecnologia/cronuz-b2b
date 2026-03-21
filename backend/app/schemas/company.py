@@ -32,6 +32,8 @@ class CompanyCreate(CompanyBase):
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
+    domain: Optional[str] = None
+    custom_domain: Optional[str] = None
     horus_company: Optional[str] = None
     horus_branch: Optional[str] = None
     horus_default_b2b_guid: Optional[str] = None

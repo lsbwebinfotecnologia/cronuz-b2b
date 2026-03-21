@@ -7,10 +7,11 @@ import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Lo
 import { getToken } from '@/lib/auth';
 
 interface Company {
-  id: number;
+  id: string | number;
   name: string;
   document: string;
   domain: string;
+  custom_domain?: string;
   logo: string | null;
   zip_code?: string | null;
   street?: string | null;

@@ -7,12 +7,14 @@ import Link from 'next/link';
 import { getToken } from '@/lib/auth';
 
 interface Company {
-  id: number;
+  id: string | number;
   name: string;
   document: string;
   domain: string;
+  custom_domain?: string;
   logo: string | null;
   active: boolean;
+  created_at: string;
 }
 
 export default function CompaniesPage() {

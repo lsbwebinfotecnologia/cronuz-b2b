@@ -20,6 +20,7 @@ export default function CompanyProfilePage() {
     name: '',
     document: '',
     domain: '',
+    custom_domain: '',
     zip_code: '',
     street: '',
     number: '',
@@ -46,6 +47,7 @@ export default function CompanyProfilePage() {
         name: company.name || '',
         document: maskCNPJ(company.document || ''),
         domain: company.domain || '',
+        custom_domain: company.custom_domain || '',
         zip_code: company.zip_code || '',
         street: company.street || '',
         number: company.number || '',
@@ -204,14 +206,28 @@ export default function CompanyProfilePage() {
                   />
                 </div>
               </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Website / Domínio</label>
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Domínio B2B (Interno)</label>
                 <div className="relative">
                   <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                   <input
                     type="text"
                     name="domain"
                     value={formData.domain}
+                    onChange={handleInputChange}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5 md:col-span-2 mt-4 md:mt-0">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Domínio Customizado</label>
+                <div className="relative">
+                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    name="custom_domain"
+                    placeholder="www.suaempresa.com.br"
+                    value={formData.custom_domain}
                     onChange={handleInputChange}
                     className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
                   />
