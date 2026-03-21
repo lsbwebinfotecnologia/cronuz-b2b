@@ -2,20 +2,32 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
-import { Loader2, AlertCircle, ArrowRight } from 'lucide-react';
+import { Loader2, AlertCircle, ArrowRight, BookOpen } from 'lucide-react';
 import Link from 'next/link';
 import 'react-quill-new/dist/quill.snow.css';
 
-export default function DomainLandingPage() {
+export default function DomainRouter() {
     const params = useParams();
     const hostname = params.hostname as string;
+    const path = params.path as string[] | undefined;
     
+    // Route: /domain/[hostname]/h/[slug]
+    if (path && path.length >= 2 && path[0] === 'h') {
+        return <HotsitePage slug={path[1]} hostname={hostname} />;
+    }
+    
+    // Route: /domain/[hostname]
+    return <StorefrontHub hostname={hostname} />;
+}
+
+// ============== Storefront Hub Component ==============
+function StorefrontHub({ hostname }: { hostname: string }) {
     const [loading, setLoading] = useState(true);
-    const [planData, setPlanData] = useState<any>(null);
+    const [hubData, setHubData] = useState<any>(null);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        const fetchPlan = async () => {
+        const fetchHub = async () => {
             try {
                 const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
                 
@@ -28,9 +40,153 @@ export default function DomainLandingPage() {
                 }
                 const domainData = await domainResponse.json();
                 
-                // 2. Fetch the primary hotsite for this company
-                const hotsiteResponse = await fetch(`${apiUrl}/subscriptions/hotsite_by_company/${domainData.company_id}`);
+                // 2. Fetch all active subscriptions (Storefront Hub API)
+                const hubResponse = await fetch(`${apiUrl}/subscriptions/hub/${domainData.company_id}`);
                 
+                if (hubResponse.ok) {
+                    const data = await hubResponse.json();
+                    setHubData(data);
+                } else {
+                    setError("Ocorreu um erro ao carregar o catálogo de assinaturas.");
+                }
+            } catch (err) {
+                setError("Falha de conexão.");
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchHub();
+    }, [hostname]);
+
+    if (loading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-50">
+                <Loader2 className="h-10 w-10 animate-spin text-slate-800" />
+            </div>
+        );
+    }
+
+    if (error || !hubData) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+                <div className="text-center max-w-md w-full p-8 bg-white rounded-3xl shadow-xl border border-slate-100">
+                    <AlertCircle className="h-8 w-8 text-rose-500 mx-auto mb-4" />
+                    <h1 className="text-2xl font-bold text-slate-900 mb-2">Ops!</h1>
+                    <p className="text-slate-500">{error}</p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="min-h-screen bg-slate-50 font-sans">
+            {/* Elegant Hub Navbar */}
+            <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm">
+                <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-center md:justify-start">
+                    {hubData.logo_url ? (
+                        <img src={hubData.logo_url} alt={hubData.company_name} className="h-12 object-contain" />
+                    ) : (
+                        <div className="flex items-center gap-3">
+                            <BookOpen className="h-8 w-8 text-slate-900" />
+                            <span className="text-2xl font-black text-slate-900 tracking-tight">
+                                {hubData.company_name}
+                            </span>
+                        </div>
+                    )}
+                </div>
+            </header>
+
+            <main className="pb-24">
+                {/* Hero Banner Section */}
+                <div className="relative bg-slate-900 text-white min-h-[40vh] flex flex-col items-center justify-center text-center overflow-hidden mb-16 shadow-inner">
+                    <div className="absolute inset-0 bg-[#0f172a] mix-blend-multiply opacity-50 z-10"></div>
+                    {hubData.banner_url && (
+                        <div className="absolute inset-0 z-0">
+                            <img src={hubData.banner_url} alt="Banner" className="w-full h-full object-cover opacity-60" />
+                        </div>
+                    )}
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent z-10"></div>
+                    <div className="relative z-20 max-w-3xl px-6 pt-12 pb-8">
+                        <h1 className="text-4xl md:text-6xl font-black mb-6 tracking-tight drop-shadow-sm text-center">
+                            Assinaturas e <span className="text-indigo-400 font-serif italic font-medium">Coleções</span>
+                        </h1>
+                        <p className="text-xl text-slate-300 font-light mx-auto max-w-2xl text-center">
+                            Escolha o plano ideal para você e receba conteúdo exclusivo diretamente na sua casa com todo conforto e segurança.
+                        </p>
+                    </div>
+                </div>
+
+                {/* Plans Grid layout */}
+                <div className="max-w-7xl mx-auto px-6">
+                    {hubData.plans?.length > 0 ? (
+                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+                            {hubData.plans.map((plan: any) => (
+                                <div key={plan.id} className="bg-white rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 group border border-slate-100 flex flex-col h-full hover:-translate-y-2">
+                                    <div className="aspect-[16/10] bg-slate-100 relative overflow-hidden">
+                                        {plan.cover_image ? (
+                                            <img src={plan.cover_image} alt={plan.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+                                        ) : (
+                                            <div className="w-full h-full flex items-center justify-center text-slate-400 bg-slate-50"><BookOpen className="h-10 w-10 text-slate-300"/></div>
+                                        )}
+                                        <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-sm px-4 py-1.5 rounded-full text-[11px] font-black tracking-widest text-slate-900 shadow-sm border border-slate-100">
+                                            {plan.payment_frequency === 'MONTHLY' ? 'MENSAL' : 
+                                             plan.payment_frequency === 'YEARLY' ? 'ANUAL' : 
+                                             plan.payment_frequency === 'QUARTERLY' ? 'TRIMESTRAL' : 'ASSINATURA'}
+                                        </div>
+                                    </div>
+                                    <div className="p-6 flex flex-col flex-1">
+                                        <h3 className="text-2xl font-black text-slate-900 mb-2">{plan.name}</h3>
+                                        <p className="text-slate-500 line-clamp-2 mb-6 text-sm flex-1 leading-relaxed">{plan.description}</p>
+                                        
+                                        <div className="flex items-end justify-between mt-auto pt-5 border-t border-slate-100">
+                                            <div>
+                                                <p className="text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-widest">A partir de</p>
+                                                <div className="flex items-baseline gap-1">
+                                                    <span className="text-lg font-bold text-slate-900">R$</span>
+                                                    <span className="text-3xl font-black text-slate-900 leading-none">
+                                                        {plan.price_per_issue?.toFixed(2).replace('.', ',')}
+                                                    </span>
+                                                    <span className="text-sm text-slate-500 font-medium ml-1">/{plan.payment_frequency === 'MONTHLY' ? 'mês' : 'ciclo'}</span>
+                                                </div>
+                                            </div>
+                                            
+                                            <Link href={`/h/${plan.hotsite_slug}`} className="bg-indigo-600 hover:bg-indigo-700 text-white p-3.5 rounded-xl transition-all shadow-md hover:shadow-lg hover:shadow-indigo-500/20 active:scale-95 group-hover:bg-indigo-700">
+                                                <ArrowRight className="h-6 w-6" />
+                                            </Link>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="text-center py-24 bg-white rounded-3xl border border-dashed border-slate-300 shadow-sm">
+                            <BookOpen className="h-12 w-12 mx-auto text-slate-300 mb-6" />
+                            <h3 className="text-xl font-bold text-slate-900 mb-3">Nenhum plano disponível</h3>
+                            <p className="text-slate-500">Esta empresa ainda não possui assinaturas ativas no catálogo.</p>
+                        </div>
+                    )}
+                </div>
+            </main>
+            
+            <footer className="bg-slate-950 py-12 text-center text-slate-500 border-t border-slate-800">
+                <p>&copy; {new Date().getFullYear()} {hubData.company_name}. Todos os direitos reservados.</p>
+            </footer>
+        </div>
+    );
+}
+
+// ============== Hotsite Detail Component ==============
+function HotsitePage({ slug, hostname }: { slug: string, hostname: string }) {
+    const [loading, setLoading] = useState(true);
+    const [planData, setPlanData] = useState<any>(null);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const fetchPlan = async () => {
+            try {
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+                
+                const hotsiteResponse = await fetch(`${apiUrl}/subscriptions/hotsite/${slug}`);
                 if (hotsiteResponse.ok) {
                     const data = await hotsiteResponse.json();
                     setPlanData(data);
@@ -46,7 +202,7 @@ export default function DomainLandingPage() {
             }
         };
         fetchPlan();
-    }, [hostname]);
+    }, [slug]);
 
     if (loading) {
         return (
@@ -65,12 +221,14 @@ export default function DomainLandingPage() {
                     </div>
                     <h1 className="text-2xl font-bold text-slate-900 mb-2">Ops! Algo deu errado</h1>
                     <p className="text-slate-500">{error}</p>
+                    <Link href={`/`} className="mt-8 inline-block text-indigo-600 font-bold hover:underline">
+                        Voltar para a Loja
+                    </Link>
                 </div>
             </div>
         );
     }
     
-    const isSoldOut = planData.status.is_sold_out;
     const rawConfig = planData.config || {};
     
     // Normalize config
@@ -120,10 +278,13 @@ export default function DomainLandingPage() {
                                         {block.subtitle}
                                     </p>
                                 )}
-                                <div className="pt-8">
+                                <div className="pt-8 flex flex-col sm:flex-row items-start sm:items-center gap-4">
                                     <Link href={`/h/${planData.id}/checkout`} className="inline-flex items-center justify-center gap-3 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-bold px-10 py-5 rounded-lg text-xl uppercase tracking-wider transition-all hover:scale-105 active:scale-95 shadow-2xl shadow-[var(--color-primary-base)]/40 border-b-4 border-black/30">
                                         Assinar Agora
                                         <ArrowRight className="h-6 w-6" />
+                                    </Link>
+                                    <Link href="/" className="inline-flex items-center justify-center gap-3 bg-white/10 hover:bg-white/20 text-white font-bold px-8 py-5 rounded-lg text-lg uppercase tracking-wider transition-all backdrop-blur-md">
+                                        Explorar Loja
                                     </Link>
                                 </div>
                             </div>
@@ -268,7 +429,7 @@ export default function DomainLandingPage() {
             {/* Dynamic Header */}
             <header className="sticky top-0 z-50 bg-slate-950/90 backdrop-blur-md border-b border-white/10 shadow-2xl shadow-black/20">
                 <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-                    <div className="flex items-center gap-3 relative group">
+                    <Link href="/" className="flex items-center gap-3 relative group">
                         <div className="absolute inset-0 bg-[var(--color-primary-base)] blur-xl opacity-20 group-hover:opacity-40 transition-opacity"></div>
                         {globalConfig.logoUrl ? (
                             <img src={globalConfig.logoUrl} alt={planData.company_name} className="h-10 relative z-10" />
@@ -282,7 +443,7 @@ export default function DomainLandingPage() {
                                 </span>
                             </div>
                         )}
-                    </div>
+                    </Link>
                     
                     {globalConfig.topMenu && globalConfig.topMenu.length > 0 && (
                         <nav className="hidden md:flex items-center gap-8">
@@ -294,9 +455,14 @@ export default function DomainLandingPage() {
                         </nav>
                     )}
                     
-                    <Link href={`/h/${planData.id}/checkout`} className="hidden md:inline-flex bg-white hover:bg-slate-200 text-slate-900 font-bold px-6 py-2.5 rounded text-sm uppercase tracking-widest transition-colors transform skew-x-[-10deg] shadow-lg">
-                        <span className="skew-x-[10deg] block">Assinar VIP</span>
-                    </Link>
+                    <div className="flex items-center gap-4">
+                        <Link href="/" className="hidden md:inline-flex text-white hover:text-[var(--color-primary-base)] font-bold px-4 py-2 text-sm uppercase tracking-widest transition-colors">
+                            Ver Store
+                        </Link>
+                        <Link href={`/h/${planData.id}/checkout`} className="hidden md:inline-flex bg-white hover:bg-slate-200 text-slate-900 font-bold px-6 py-2.5 rounded text-sm uppercase tracking-widest transition-colors transform skew-x-[-10deg] shadow-lg">
+                            <span className="skew-x-[10deg] block">Assinar VIP</span>
+                        </Link>
+                    </div>
                 </div>
             </header>
 
@@ -318,7 +484,6 @@ export default function DomainLandingPage() {
                     </p>
                 </div>
             </footer>
-            
         </div>
     );
 }

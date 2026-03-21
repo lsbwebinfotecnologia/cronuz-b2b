@@ -232,6 +232,7 @@ def update_company_custom_domain(
 def get_hotsite_config_by_company(company_id: int, db: Session = Depends(get_db)):
     """
     Public Route: Used by Custom Domains to fetch the primary Hotsite for a Company
+    DEPRECATED: Custom Domains now use the Hub Storefront
     """
     plan = db.query(SubscriptionPlan).filter(
         SubscriptionPlan.company_id == company_id,
@@ -242,6 +243,53 @@ def get_hotsite_config_by_company(company_id: int, db: Session = Depends(get_db)
          raise HTTPException(status_code=404, detail="Nenhum Hotsite ativo encontrado para esta empresa.")
          
     return get_hotsite_config(plan.hotsite_slug, db)
+
+@router.get("/hub/{company_id}")
+def get_company_hub_plans(company_id: int, db: Session = Depends(get_db)):
+    """
+    Public Route: Fetch all active plans for a given company to display on the domain Hub.
+    """
+    plans = db.query(SubscriptionPlan).filter(
+        SubscriptionPlan.company_id == company_id,
+        SubscriptionPlan.is_active == True
+    ).order_by(SubscriptionPlan.created_at.desc()).all()
+    
+    result = []
+    for plan in plans:
+        raw_config = plan.hotsite_config or {}
+        blocks = raw_config.get("blocks", [])
+        
+        cover_image = raw_config.get("heroImage")
+        if not cover_image:
+             for b in blocks:
+                 if b.get("type") in ["BANNER", "TEXT_IMAGE"] and b.get("imageUrl"):
+                     cover_image = b.get("imageUrl")
+                     break
+                     
+        result.append({
+            "id": plan.id,
+            "name": plan.name,
+            "description": plan.description,
+            "hotsite_slug": plan.hotsite_slug,
+            "cover_image": cover_image,
+            "payment_frequency": plan.payment_frequency,
+            "price_per_issue": float(plan.price_per_issue) if plan.price_per_issue else 0,
+            "issues_per_delivery": plan.issues_per_delivery
+        })
+        
+    company = db.query(Company).filter(Company.id == company_id).first()
+    
+    from app.models.company_settings import CompanySettings
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    
+    hub_config = {
+        "company_name": company.name if company else "",
+        "logo_url": settings.logo_url if settings and hasattr(settings, 'logo_url') else None,
+        "banner_url": settings.cover_image_base_url if settings and hasattr(settings, 'cover_image_base_url') else None,
+        "plans": result
+    }
+    
+    return hub_config
 
 @router.get("/hotsite/{slug}")
 def get_hotsite_config(slug: str, db: Session = Depends(get_db)):
