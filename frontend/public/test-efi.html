@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>EFI Token Test</title>
+</head>
+<body>
+    <h1>EFI Tokenizer Test</h1>
+    
+    <form id="form" onsubmit="event.preventDefault(); tokenize();">
+        <input type="text" id="cardNumber" placeholder="Card Number (raw)" value="4111111111111111" />
+        <input type="text" id="cvv" placeholder="CVV" value="123" />
+        <input type="text" id="month" placeholder="MM" value="12" />
+        <input type="text" id="year" placeholder="YYYY" value="2030" />
+        <button type="submit">Generate Token</button>
+    </form>
+
+    <div id="result" style="margin-top: 20px; font-family: monospace; white-space: pre-wrap;"></div>
+
+    <script type="text/javascript">
+        // Replace with the actual payee code from local DB or just ask user for it, or use the one from the screenshot/db
+        var payeeCode = "8c67990ef324ccbb66df5522300edbf6"; // Placeholder - will replace with actual Mythos/Cronuz payee code if needed
+        
+        var $gn = {
+            validForm: true,
+            sign: false,
+            prefix: ''
+        };
+
+        var s = document.createElement('script');
+        s.type = 'text/javascript';
+        var v = parseInt(Math.random() * 1000000);
+        s.src = 'https://sandbox.gerencianet.com.br/v1/cdn/' + payeeCode + '/' + v;
+        s.async = false;
+        s.id = payeeCode;
+        if (!document.getElementById(payeeCode)) {
+            document.head.appendChild(s);
+        }
+
+        function tokenize() {
+            var gnParams = {
+                brand: 'visa',
+                number: document.getElementById('cardNumber').value,
+                cvv: document.getElementById('cvv').value,
+                expiration_month: document.getElementById('month').value,
+                expiration_year: document.getElementById('year').value
+            };
+
+            var resultDiv = document.getElementById('result');
+            resultDiv.innerText = "Generating token...";
+
+            try {
+                $gn.ready(function(checkout) {
+                    checkout.getPaymentToken(gnParams, function(error, response) {
+                        if (error) {
+                            resultDiv.innerText = "Error: " + JSON.stringify(error, null, 2);
+                        } else {
+                            resultDiv.innerText = "Success: " + JSON.stringify(response, null, 2);
+                        }
+                    });
+                });
+            } catch(e) {
+                resultDiv.innerText = "Exception: " + e.message;
+            }
+        }
+    </script>
+</body>
+</html>

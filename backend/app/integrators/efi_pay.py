@@ -175,7 +175,6 @@ class EFIPayIntegration:
              
         body = {
             'name': name,
-            'repeats': 0, # 0 = indefinite
             'interval': 1 # 1 month
         }
         
@@ -196,9 +195,33 @@ class EFIPayIntegration:
              
         params = {'id': plan_id}
         
+        body = {
+            'items': items
+        }
+        
+        res = gn.create_subscription(params=params, body=body)
+        return res
+        
+    def pay_subscription(self, subscription_id: int, payment_token: str, billing_address: dict, 
+                         customer_name: str, customer_document: str, customer_email: str, customer_phone: str):
+        """
+        Pays a Subscription using a Credit Card Token in EFI.
+        """
+        gn = self._get_charges_client()
+        
+        # MOCK for tests
+        if self.client_id == "dummy_client_id":
+             return {"data": {"status": "paid"}}
+             
+        params = {'id': subscription_id}
+        
         cpf = ''.join(filter(str.isdigit, customer_document))
         phone = ''.join(filter(str.isdigit, customer_phone))
-        
+        raw_zip = billing_address.get('zipcode', '01001000')
+        zipcode_clean = ''.join(filter(str.isdigit, raw_zip))
+        if not zipcode_clean:
+            zipcode_clean = '01001000'
+            
         customer_data = {
             'name': customer_name,
             'email': customer_email,
@@ -214,34 +237,15 @@ class EFIPayIntegration:
             }
             
         body = {
-            'items': items,
-            'customer': customer_data
-        }
-        
-        res = gn.create_subscription(params=params, body=body)
-        return res
-        
-    def pay_subscription(self, subscription_id: int, payment_token: str, billing_address: dict):
-        """
-        Pays a Subscription using a Credit Card Token in EFI.
-        """
-        gn = self._get_charges_client()
-        
-        # MOCK for tests
-        if self.client_id == "dummy_client_id":
-             return {"data": {"status": "paid"}}
-             
-        params = {'id': subscription_id}
-        
-        body = {
             'payment': {
                 'credit_card': {
                     'payment_token': payment_token,
+                    'customer': customer_data,
                     'billing_address': { 
                         'street': billing_address.get('street', 'Rua Padrão'),
                         'number': billing_address.get('number', 'S/N'),
                         'neighborhood': billing_address.get('neighborhood', 'Bairro'),
-                        'zipcode': billing_address.get('zipcode', '01001000'),
+                        'zipcode': zipcode_clean,
                         'city': billing_address.get('city', 'São Paulo'),
                         'state': billing_address.get('state', 'SP')
                     }

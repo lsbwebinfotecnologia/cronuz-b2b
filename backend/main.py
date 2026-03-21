@@ -67,6 +67,16 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"detail": exc.errors(), "body": body_text},
     )
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    import traceback
+    err_msg = traceback.format_exc()
+    print("GLOBAL ERROR:", err_msg, flush=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "traceback": err_msg},
+    )
+
 # Enable CORS for Next.js frontend (Allow all origins for Multitenant Custom Domains)
 app.add_middleware(
     CORSMiddleware,

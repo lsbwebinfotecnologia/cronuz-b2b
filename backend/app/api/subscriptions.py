@@ -430,9 +430,27 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
     if plan.max_subscribers_limit is not None and plan.current_subscribers_count >= plan.max_subscribers_limit:
         raise HTTPException(status_code=400, detail="Esgotado! Limite máximo de assinaturas atingido.")
 
-    # In a full flow, we would register or look up the crm_customer here.
-    # For now, we mock the customer ID as 1 for prototype purposes.
-    mock_customer_id = 1
+    # 1. Resolve CRM Customer
+    from app.models.customer import Customer
+    customer = db.query(Customer).filter(
+        Customer.company_id == plan.company_id,
+        Customer.document == payload.customer_document
+    ).first()
+    
+    if not customer:
+        customer = Customer(
+            company_id=plan.company_id,
+            name=payload.customer_name,
+            document=payload.customer_document,
+            email=payload.email,
+            phone=payload.phone,
+            customer_type="SUBSCRIBER",
+            corporate_name=payload.customer_name # fallback
+        )
+        db.add(customer)
+        db.flush() # get ID
+        
+    resolved_customer_id = customer.id
     
     config = get_hotsite_config(slug, db)
     first_delivery_price = config["pricing"]["first_delivery"]["final_price"]
@@ -440,7 +458,7 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
     # 1. Create the base Subscription Link
     sub = CustomerSubscription(
         company_id=plan.company_id,
-        customer_id=mock_customer_id,
+        customer_id=resolved_customer_id,
         plan_id=plan.id,
         current_delivery_number=1,
         status="ACTIVE",
@@ -482,6 +500,9 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
                 name=f"{plan.name} - Assinatura",
                 amount=first_delivery_price
             )
+            print("EFI PLAN CREATION RESPONSE:", efi_plan, flush=True)
+            if 'data' not in efi_plan:
+                raise Exception(f"Resposta inesperada da Efí ao criar plano: {efi_plan}")
             plan.efi_plan_id = int(efi_plan['data']['plan_id'])
             db.commit()
         except Exception as e:
@@ -503,6 +524,9 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
             customer_email=payload.email,
             customer_phone=payload.phone
         )
+        print("EFI SUB CREATION RESPONSE:", efi_sub, flush=True)
+        if 'data' not in efi_sub:
+             raise Exception(f"Resposta inesperada da Efí ao criar assinatura: {efi_sub}")
         sub.efi_subscription_id = int(efi_sub['data']['subscription_id'])
         db.commit()
     except Exception as e:
@@ -511,35 +535,39 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
         
     # 3.3 Pay EFI Subscription via Credit Card
     try:
-         bill_addr = {
+        bill_addr = {
             'street': payload.shipping_street,
             'number': payload.shipping_number,
             'neighborhood': payload.shipping_neighborhood,
             'zipcode': payload.shipping_zip_code,
             'city': payload.shipping_city,
             'state': payload.shipping_state
-         }
-         res_pay = efi_service.pay_subscription(
-             subscription_id=sub.efi_subscription_id,
-             payment_token=payload.payment_token,
-             billing_address=bill_addr
-         )
+        }
+        efi_payment = efi_service.pay_subscription(
+            subscription_id=sub.efi_subscription_id,
+            payment_token=payload.payment_token,
+            billing_address=bill_addr,
+            customer_name=payload.customer_name,
+            customer_document=payload.customer_document,
+            customer_email=payload.email,
+            customer_phone=payload.phone
+        )
+        print("EFI PAYMENT EXECUTION RESPONSE:", efi_payment, flush=True)
          
-         if 'data' in res_pay and 'status' in res_pay['data']:
-             status = res_pay['data']['status']
-             if status in ['paid', 'approved', 'authorized', 'active']:
-                 bill_status = "PAID"
-             else:
-                 bill_status = "PENDING"
-                 
-         else:
-             raise HTTPException(status_code=400, detail="Retorno inválido da operadora de cartão.")
+        if 'data' in efi_payment and 'status' in efi_payment['data']:
+            status = efi_payment['data']['status']
+            if status in ['paid', 'approved', 'authorized', 'active']:
+                bill_status = "PAID"
+            else:
+                bill_status = "PENDING"
+        else:
+            raise Exception(f"Unmapped status on payment: {efi_payment}")
              
     except Exception as e:
-         # In complete flow, we should rollback the subscription creation, but the customer already exists in EFI.
-         # So we just mark the local bill as FAILED, or raise the error.
-         db.rollback()
-         raise HTTPException(status_code=400, detail=str(e))
+        # In complete flow, we should rollback the subscription creation, but the customer already exists in EFI.
+        # So we just mark the local bill as FAILED, or raise the error.
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
         
     # 4. Create the Subscription Billing history
     bill = SubscriptionBilling(
@@ -605,7 +633,9 @@ def list_subscribers(
     if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
         raise HTTPException(status_code=403, detail="Acesso restrito")
         
-    query = db.query(CustomerSubscription).filter(CustomerSubscription.company_id == current_user.company_id)
+    query = db.query(CustomerSubscription)
+    if current_user.type == UserRole.SELLER:
+        query = query.filter(CustomerSubscription.company_id == current_user.company_id)
     
     if status is not None:
         query = query.filter(CustomerSubscription.status == status)
@@ -617,10 +647,8 @@ def list_subscribers(
     for sub in subscriptions:
         # Fetch the plan name
         plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == sub.plan_id).first()
-        
-        # We don't have a Customer model fully populated in the prototype usually,
-        # but in a complete flow we would join the CRM Customer table here.
-        # Since we just mocked customer_id = 1, we will return the billing address details as customer info.
+        from app.models.customer import Customer
+        customer = db.query(Customer).filter(Customer.id == sub.customer_id).first()
         
         # Get the latest payment status
         latest_bill = db.query(SubscriptionBilling).filter(
@@ -632,12 +660,13 @@ def list_subscribers(
             "plan_id": sub.plan_id,
             "plan_name": plan.name if plan else "Plano Desconhecido",
             "customer_id": sub.customer_id,
-            # In real system, these would come from the Customer Profile
-            "customer_name": f"Cliente #{sub.customer_id}", 
-            "status": sub.status,
+            "customer_name": customer.name if customer else f"Cliente #{sub.customer_id}",
+            "customer_document": customer.document if customer else "",
+            "customer_email": customer.email if customer else "",
+            "status": sub.status.value if hasattr(sub.status, 'value') else sub.status,
             "current_delivery": sub.current_delivery_number,
             "shipping_address": f"{sub.shipping_street}, {sub.shipping_number} - {sub.shipping_city}/{sub.shipping_state} ({sub.shipping_zip_code})",
-            "latest_payment_status": latest_bill.status if latest_bill else "PENDING",
+            "latest_payment_status": latest_bill.status.value if latest_bill and hasattr(latest_bill.status, 'value') else (latest_bill.status if latest_bill else "PENDING"),
             "latest_payment_date": latest_bill.paid_at.isoformat() if latest_bill and latest_bill.paid_at else None,
             "created_at": sub.created_at.isoformat() if sub.created_at else None
         })
@@ -646,3 +675,70 @@ def list_subscribers(
         "total": total,
         "items": result
     }
+
+@router.get("/subscribers/{sub_id}")
+def get_subscriber_detail(
+    sub_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.user import UserRole
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito")
+        
+    query = db.query(CustomerSubscription)
+    
+    if current_user.type == UserRole.SELLER:
+        sub = query.filter(
+            CustomerSubscription.id == sub_id,
+            CustomerSubscription.company_id == current_user.company_id
+        ).first()
+    else:
+        sub = query.filter(CustomerSubscription.id == sub_id).first()
+    
+    if not sub:
+        raise HTTPException(status_code=404, detail="Assinatura não encontrada")
+        
+    plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == sub.plan_id).first()
+    from app.models.customer import Customer
+    customer = db.query(Customer).filter(Customer.id == sub.customer_id).first()
+    
+    billings = db.query(SubscriptionBilling).filter(
+        SubscriptionBilling.subscription_id == sub.id
+    ).order_by(SubscriptionBilling.delivery_number.desc()).all()
+    
+    billings_data = []
+    for b in billings:
+        billings_data.append({
+            "id": b.id,
+            "delivery_number": b.delivery_number,
+            "amount": float(b.amount) if b.amount else 0,
+            "status": b.status.value if hasattr(b.status, 'value') else b.status,
+            "efi_charge_id": b.efi_charge_id,
+            "due_date": b.due_date.isoformat() if b.due_date else None,
+            "paid_at": b.paid_at.isoformat() if b.paid_at else None
+        })
+        
+    return {
+        "id": sub.id,
+        "plan_name": plan.name if plan else "Desconhecido",
+        "customer_id": sub.customer_id,
+        "customer_name": customer.name if customer else f"Cliente #{sub.customer_id}",
+        "customer_document": customer.document if customer else "",
+        "customer_email": customer.email if customer else "",
+        "customer_phone": customer.phone if customer else "",
+        "status": sub.status.value if hasattr(sub.status, 'value') else sub.status,
+        "current_delivery": sub.current_delivery_number,
+        "shipping_address": {
+            "street": sub.shipping_street,
+            "number": sub.shipping_number,
+            "complement": sub.shipping_complement,
+            "neighborhood": sub.shipping_neighborhood,
+            "city": sub.shipping_city,
+            "state": sub.shipping_state,
+            "zipcode": sub.shipping_zip_code
+        },
+        "created_at": sub.created_at.isoformat() if sub.created_at else None,
+        "billings": billings_data
+    }
+

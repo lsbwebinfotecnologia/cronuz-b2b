@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Loader2, CheckCircle2, AlertCircle, ShoppingBag, CreditCard, QrCode } from 'lucide-react';
 import { toast } from 'sonner';
@@ -27,6 +27,8 @@ export default function HotsiteCheckoutPage() {
     const [planData, setPlanData] = useState<any>(null);
     const [error, setError] = useState<string | null>(null);
     
+    // Configurações e estados UI
+
     // UI states
     const [paymentMethod, setPaymentMethod] = useState<'CREDIT_CARD'>('CREDIT_CARD');
     const [successData, setSuccessData] = useState<any>(null);
@@ -75,35 +77,7 @@ export default function HotsiteCheckoutPage() {
         fetchPlan();
     }, [slug]);
 
-    // EFI Tokenization Script Injection
-    useEffect(() => {
-        if (!planData || !planData.efi_settings?.payee_code) return;
-        
-        const payeeCode = planData.efi_settings.payee_code;
-        const isSandbox = planData.efi_settings.sandbox;
-        const envUrl = isSandbox ? 'https://sandbox.gerencianet.com.br/v1/cdn/' : 'https://api.gerencianet.com.br/v1/cdn/';
-        
-        // Define $gn variable as expected by the Gerencianet script BEFORE loading it
-        if (!(window as any).$gn) {
-            (window as any).$gn = {
-                validForm: true,
-                sign: true, // MUST be true for the tokenizer to initialize properly
-                prefix: ''
-            };
-        }
-
-        const scriptId = payeeCode;
-        if (!document.getElementById(scriptId)) {
-            const s = document.createElement('script');
-            s.type = 'text/javascript';
-            const v = parseInt((Math.random() * 1000000).toString());
-            s.src = `${envUrl}${payeeCode}/${v}`;
-            s.async = false;
-            s.id = scriptId;
-            document.head.appendChild(s);
-        }
-        
-    }, [planData]);
+    // No need for EFI legacy states or generic script injections!
 
     const handleFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         let { name, value } = e.target;
@@ -242,73 +216,84 @@ export default function HotsiteCheckoutPage() {
             setSubmitting(false);
             return;
         }
-        
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-            
             // Get Payment Token using Gerencianet JS
-            let paymentToken = '';
             const [expMonth, expYear] = ccData.expiry.split('/');
-            if (!expMonth || !expYear) throw new Error("Preencha a validade do cartão (MM/AA).");
+            if (!expMonth || !expYear) {
+                toast.error("Preencha a validade do cartão (MM/AA).");
+                setSubmitting(false);
+                return;
+            }
             
             const rawNumber = ccData.number.replace(/\D/g, '');
             const brand = getCardBrand(rawNumber);
+
+            const EfiPayModule = await import('payment-token-efi');
+            const EfiPay = EfiPayModule.default || (EfiPayModule as any);
 
             const gnParams = {
                 brand: brand,
                 number: rawNumber,
                 cvv: ccData.cvv,
-                expiration_month: expMonth,
-                expiration_year: expYear.length === 2 ? `20${expYear}` : expYear
+                expirationMonth: expMonth,
+                expirationYear: expYear.length === 2 ? `20${expYear}` : expYear,
+                holderName: ccData.name,
+                holderDocument: docRaw,
+                reuse: false
             };
 
-            try {
-                const tokenData: any = await new Promise((resolve, reject) => {
-                    const gn = (window as any).$gn;
-                    if (!gn || !gn.ready) {
-                        return reject(new Error("Script de pagamento seguro (EFI) ainda não carregado ou não configurado corretamente."));
-                    }
-                    gn.ready((checkout: any) => {
-                        checkout.getPaymentToken(gnParams, (error: any, response: any) => {
-                            if (error) {
-                                console.error("Erro Efi:", error);
-                                reject(new Error(error.error_description || "Cartão inválido ou falha na tokenização EFI."));
-                            } else {
-                                resolve(response);
-                            }
-                        });
-                    });
-                });
-                paymentToken = tokenData.data.payment_token;
-            } catch (efiErr: any) {
-                toast.error(efiErr.message || "Erro ao processar dados do cartão.");
+            const payeeCode = planData.efi_settings?.payee_code;
+            if (!payeeCode) {
+                toast.error("Configurações de pagamento (Client ID) não encontradas para este plano.");
                 setSubmitting(false);
                 return;
             }
 
-            const payload = { 
-                ...formData, 
-                payment_method: paymentMethod,
-                payment_token: paymentToken // Added token
-            };
+            const isSandbox = planData.efi_settings.sandbox;
 
-            const response = await fetch(`${apiUrl}/subscriptions/hotsite/${slug}/subscribe`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            
-            const data = await response.json();
-            
-            if (response.ok) {
-                toast.success("Assinatura confirmada com sucesso!");
-                setSuccessData(data.payment);
-            } else {
-                toast.error(data.detail || "Erro ao processar a assinatura.");
+            try {
+                const response: any = await EfiPay.CreditCard
+                    .setAccount(payeeCode)
+                    .setEnvironment(isSandbox ? 'sandbox' : 'production')
+                    .setCreditCardData(gnParams)
+                    .getPaymentToken();
+                
+                if (response.error || response.code) {
+                    throw response;
+                }
+
+                const paymentToken = response.payment_token;
+                
+                const payload = { 
+                    ...formData, 
+                    payment_method: paymentMethod,
+                    payment_token: paymentToken
+                };
+
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+                const apiRes = await fetch(`${apiUrl}/subscriptions/hotsite/${slug}/subscribe`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await apiRes.json();
+                
+                if (apiRes.ok) {
+                    toast.success("Assinatura confirmada com sucesso!");
+                    setSuccessData(data.payment);
+                } else {
+                    toast.error(data.detail || "Erro ao processar a assinatura no servidor.");
+                }
+            } catch (tokenErr: any) {
+                console.error("Erro Efí Tokenização:", tokenErr);
+                toast.error(tokenErr.error_description || "Cartão inválido ou falha na emissão de token Efí. Verifique as credenciais da Empresa (Client ID).");
+            } finally {
+                setSubmitting(false);
             }
         } catch (err) {
-            toast.error("Erro de comunicação com o servidor.");
-        } finally {
+            console.error("General Erro:", err);
+            toast.error("Ocorreu um erro interno. Tente novamente.");
             setSubmitting(false);
         }
     };
@@ -422,7 +407,7 @@ export default function HotsiteCheckoutPage() {
                                 </div>
                             ) : (
                                 /* FORM STATE */
-                                <form onSubmit={handleSubscribe}>
+                                <form id="form" onSubmit={handleSubscribe}>
                                     <div className="mb-10">
                                         <h3 className="text-xl font-bold text-slate-900 mb-6">1. Seus Dados Pessoais</h3>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

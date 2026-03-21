@@ -1,10 +1,15 @@
-from sqlalchemy import text
-from app.db.session import engine
+import sys
+import os
 
-with engine.begin() as conn:
-    conn.execute(text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_b2b_native BOOLEAN DEFAULT TRUE NOT NULL;"))
-    conn.execute(text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_products BOOLEAN DEFAULT TRUE NOT NULL;"))
-    conn.execute(text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_customers BOOLEAN DEFAULT TRUE NOT NULL;"))
-    conn.execute(text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_marketing BOOLEAN DEFAULT FALSE NOT NULL;"))
-    conn.execute(text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_agents BOOLEAN DEFAULT FALSE NOT NULL;"))
-print("Done!")
+sys.path.append(os.getcwd())
+
+from app.db.session import engine
+from sqlalchemy import text
+
+try:
+    with engine.connect() as conn:
+        conn.execute(text('ALTER TABLE sub_customer ADD COLUMN efi_subscription_id INTEGER;'))
+        conn.commit()
+        print("Column efi_subscription_id added successfully!")
+except Exception as e:
+    print(f"Error alternating table: {e}")
