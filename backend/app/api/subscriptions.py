@@ -164,6 +164,7 @@ def update_subscription_plan(
     if "description" in plan_data: plan.description = plan_data["description"]
     if "price_per_issue" in plan_data: plan.price_per_issue = plan_data["price_per_issue"]
     if "issues_per_delivery" in plan_data: plan.issues_per_delivery = plan_data["issues_per_delivery"]
+    if "delivery_frequency" in plan_data: plan.delivery_frequency = plan_data["delivery_frequency"]
     if "max_subscribers_limit" in plan_data: plan.max_subscribers_limit = plan_data["max_subscribers_limit"]
     if "presale_discount_percent" in plan_data: plan.presale_discount_percent = plan_data["presale_discount_percent"]
     if "launch_discount_percent" in plan_data: plan.launch_discount_percent = plan_data["launch_discount_percent"]
