@@ -569,18 +569,36 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
          
         if 'data' in efi_payment and 'status' in efi_payment['data']:
             status = efi_payment['data']['status']
-            if status in ['paid', 'approved', 'authorized', 'active']:
+            if status in ['paid', 'approved', 'authorized', 'active', 'settled']:
                 bill_status = "PAID"
+            elif status in ['declined', 'failed', 'refused']:
+                # The card was refused but the API technically succeeded returning HTTP 200.
+                error_msg = efi_payment.get('error_description', {}).get('message', "Transação recusada pela operadora do cartão.")
+                raise Exception(f"Pagamento Recusado: {error_msg}")
             else:
                 bill_status = "PENDING"
+        elif 'error' in efi_payment:
+             error_msg = efi_payment.get('error_description', {}).get('message', "Erro não identificado da Efí")
+             raise Exception(f"Erro na Operadora: {error_msg}")
         else:
-            raise Exception(f"Unmapped status on payment: {efi_payment}")
+            raise Exception(f"Retorno não mapeado do pagamento: {efi_payment}")
              
     except Exception as e:
         # In complete flow, we should rollback the subscription creation, but the customer already exists in EFI.
         # So we just mark the local bill as FAILED, or raise the error.
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        
+        # Extracts dict-like JSON strings from Gerencianet Exceptions
+        err_str = str(e)
+        if "error_description" in err_str and "mensagem" in err_str:
+            import json
+            try:
+                # Often gerencianet SDK prints a dict string
+                parsed = json.loads(err_str.replace("'", '"'))
+                if "mensagem" in parsed: err_str = parsed["mensagem"]
+            except: pass
+            
+        raise HTTPException(status_code=400, detail=f"Aprovação do Checkout Falhou: {err_str}")
         
     # 4. Create the Subscription Billing history
     bill = SubscriptionBilling(

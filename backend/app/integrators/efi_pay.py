@@ -257,4 +257,18 @@ class EFIPayIntegration:
         res = gn.pay_subscription(params=params, body=body)
         return res
 
+    def cancel_subscription(self, subscription_id: int):
+        """
+        Cancels an active Subscription in EFI.
+        """
+        gn = self._get_charges_client()
+        
+        # MOCK for tests
+        if self.client_id == "dummy_client_id":
+             return {"code": 200}
+             
+        params = {'id': subscription_id}
+        res = gn.cancel_subscription(params=params)
+        return res
+
 efi_service = EFIPayIntegration()

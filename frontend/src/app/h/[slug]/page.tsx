@@ -275,6 +275,9 @@ export default function HotsiteLandingPage() {
                     </nav>
 
                     <div className="flex items-center gap-4">
+                        <Link href={`/h/${slug}/login`} className="text-sm font-bold uppercase tracking-wider text-slate-300 hover:text-white transition-all hidden md:block group flex items-center gap-2">
+                            <span className="group-hover:italic">Área do Cliente</span>
+                        </Link>
                         <Link href={`/h/${slug}/checkout`} className="hidden md:flex bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-bold uppercase px-6 py-2.5 rounded transform -skew-x-12 transition-all">
                             <span className="skew-x-12">Assinar</span>
                         </Link>

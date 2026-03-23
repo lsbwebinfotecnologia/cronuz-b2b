@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plug, Loader2, Plus, Trash2, Edit2, Settings } from 'lucide-react';
+import { Plug, Loader2, Plus, Trash2, Settings } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
+import Link from 'next/link';
 
 interface Integrator {
   id: number;
@@ -24,11 +25,34 @@ export default function CompanyIntegrationsPage() {
   
   const [showModal, setShowModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [formData, setFormData] = useState({ platform: 'TRAY', credentials: '', active: true });
+  const [formData, setFormData] = useState({ platform: '', active: true });
+  
+  const [systemIntegrators, setSystemIntegrators] = useState<any[]>([]);
 
   useEffect(() => {
     fetchIntegrators();
+    fetchSystemIntegrators();
   }, [companyId]);
+
+  async function fetchSystemIntegrators() {
+    try {
+      const token = getToken();
+      if (!token) return;
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const activeIntegrators = data.filter((i: any) => i.active);
+        setSystemIntegrators(activeIntegrators);
+        if (activeIntegrators.length > 0) {
+           setFormData(f => ({ ...f, platform: activeIntegrators[0].code }));
+        }
+      }
+    } catch (error) {
+       console.error("Erro ao puxar integradores globais:", error);
+    }
+  }
 
   async function fetchIntegrators() {
     setLoading(true);
@@ -55,10 +79,16 @@ export default function CompanyIntegrationsPage() {
     setSubmitting(true);
     try {
       const token = getToken();
+      const payload = {
+         ...formData,
+         company_id: parseInt(companyId),
+         credentials: "{}"
+      };
+      
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/integrators/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ ...formData, company_id: parseInt(companyId) })
+        body: JSON.stringify(payload)
       });
       
       if (!res.ok) {
@@ -69,7 +99,7 @@ export default function CompanyIntegrationsPage() {
       const newIntegrator = await res.json();
       setIntegrators([...integrators, newIntegrator]);
       toast.success('Integração adicionada!');
-      setFormData({ platform: 'TRAY', credentials: '', active: true });
+      setFormData({ platform: systemIntegrators.length > 0 ? systemIntegrators[0].code : '', active: true });
       setShowModal(false);
     } catch (error: any) {
       toast.error(error.message);
@@ -180,6 +210,10 @@ export default function CompanyIntegrationsPage() {
                      </td>
                      <td className="px-6 py-4">
                         <div className="flex items-center justify-center gap-2">
+                           <Link href={`/companies/${companyId}/integrations/${int.id}`} className="text-xs font-semibold text-[var(--color-primary-base)] hover:underline transition-colors flex items-center gap-1">
+                             <Settings className="w-3 h-3" /> Configurar
+                           </Link>
+                           <span className="text-slate-300">|</span>
                            <button onClick={() => handleToggleIntegrator(int)} className={`text-xs font-medium hover:underline transition-colors ${int.active ? 'text-rose-600' : 'text-emerald-600'}`}>
                              {int.active ? 'Desativar' : 'Ativar'}
                            </button>
@@ -203,13 +237,13 @@ export default function CompanyIntegrationsPage() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden"
+              className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden"
             >
               <form onSubmit={handleAddIntegrator}>
-                <div className="p-6 border-b border-slate-200 dark:border-slate-800">
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Adicionar Integrador</h3>
+                <div className="p-5 border-b border-slate-200 dark:border-slate-800">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Nova Integração</h3>
                 </div>
-                <div className="p-6 space-y-4 bg-slate-50 dark:bg-slate-900/50">
+                <div className="p-5 space-y-4 bg-slate-50 dark:bg-slate-900/50">
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plataforma</label>
                     <select
@@ -217,9 +251,13 @@ export default function CompanyIntegrationsPage() {
                       onChange={(e) => setFormData({...formData, platform: e.target.value})}
                       className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
-                      <option value="TRAY">Tray Commerce</option>
-                      <option value="NUVEMSHOP">Nuvemshop</option>
-                      <option value="HORUS_V2">Horus ERP (V2)</option>
+                      {systemIntegrators.length === 0 ? (
+                        <option value="" disabled>Nenhum integrador disponível</option>
+                      ) : (
+                        systemIntegrators.map(int => (
+                          <option key={int.id} value={int.code}>{int.name}</option>
+                        ))
+                      )}
                     </select>
                   </div>
                 </div>
@@ -234,7 +272,7 @@ export default function CompanyIntegrationsPage() {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="px-6 py-2 bg-indigo-500 hover:bg-indigo-600 text-white font-medium rounded-xl flex items-center gap-2"
+                    className="px-6 py-2 bg-[var(--color-primary-base)] hover:bg-opacity-90 text-white font-medium rounded-xl flex items-center gap-2"
                   >
                     {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                     Adicionar

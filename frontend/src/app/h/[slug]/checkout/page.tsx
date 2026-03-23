@@ -26,6 +26,7 @@ export default function HotsiteCheckoutPage() {
     const [submitting, setSubmitting] = useState(false);
     const [planData, setPlanData] = useState<any>(null);
     const [error, setError] = useState<string | null>(null);
+    const [checkoutError, setCheckoutError] = useState<string | null>(null);
     
     // Configurações e estados UI
 
@@ -199,21 +200,22 @@ export default function HotsiteCheckoutPage() {
     const handleSubscribe = async (e: React.FormEvent) => {
         e.preventDefault();
         setSubmitting(true);
+        setCheckoutError(null);
         
         const docRaw = formData.customer_document.replace(/\D/g, '');
         if (docRaw.length === 11 && !validateCPF(docRaw)) {
-            toast.error("O CPF informado é inválido.");
-            setSubmitting(false);
+            const msg = "O CPF informado é inválido.";
+            toast.error(msg); setCheckoutError(msg); setSubmitting(false);
             return;
         }
         if (docRaw.length === 14 && !validateCNPJ(docRaw)) {
-            toast.error("O CNPJ informado é inválido.");
-            setSubmitting(false);
+            const msg = "O CNPJ informado é inválido.";
+            toast.error(msg); setCheckoutError(msg); setSubmitting(false);
             return;
         }
         if (docRaw.length !== 11 && docRaw.length !== 14) {
-            toast.error("Documento inválido. Informe CPF ou CNPJ com a quantidade correta de dígitos.");
-            setSubmitting(false);
+            const msg = "Documento inválido. Informe CPF ou CNPJ com a quantidade correta de dígitos.";
+            toast.error(msg); setCheckoutError(msg); setSubmitting(false);
             return;
         }
         try {
@@ -283,11 +285,15 @@ export default function HotsiteCheckoutPage() {
                     toast.success("Assinatura confirmada com sucesso!");
                     setSuccessData(data.payment);
                 } else {
-                    toast.error(data.detail || "Erro ao processar a assinatura no servidor.");
+                    const errorMsg = data.detail || "Houve um problema na aprovação. Por favor, verifique os dados do cartão e tente novamente.";
+                    toast.error(errorMsg);
+                    setCheckoutError(errorMsg);
                 }
             } catch (tokenErr: any) {
                 console.error("Erro Efí Tokenização:", tokenErr);
-                toast.error(tokenErr.error_description || "Cartão inválido ou falha na emissão de token Efí. Verifique as credenciais da Empresa (Client ID).");
+                const msg = tokenErr.error_description || "Cartão recusado ou falha na integração com a Efí. Verifique os dados.";
+                toast.error(msg);
+                setCheckoutError(msg);
             } finally {
                 setSubmitting(false);
             }
@@ -500,6 +506,16 @@ export default function HotsiteCheckoutPage() {
                                     </div>
                                     
                                     <div className="pt-4 border-t border-slate-100">
+                                        {checkoutError && (
+                                            <div className="mb-4 p-4 bg-rose-50 border border-rose-200 rounded-xl flex gap-3 text-rose-800 animate-in slide-in-from-bottom-2">
+                                                <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                                                <div className="text-sm">
+                                                    <p className="font-bold mb-1">Aviso Importante</p>
+                                                    <p>{checkoutError}</p>
+                                                    <p className="mt-2 text-rose-700/80 text-xs font-semibold">Por favor, revise os dados do cartão inseridos acima ou tente um diferente.</p>
+                                                </div>
+                                            </div>
+                                        )}
                                         <button
                                             type="submit"
                                             disabled={isSoldOut || submitting}

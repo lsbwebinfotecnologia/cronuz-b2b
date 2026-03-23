@@ -40,6 +40,7 @@ type UserData = {
 
 const masterNavigation: NavItem[] = [
   { name: 'Empresas', href: '/companies', icon: Users },
+  { name: 'Integradores', href: '/system-integrators', icon: Layers },
   { name: 'Leads', href: '/leads', icon: Inbox },
 ];
 

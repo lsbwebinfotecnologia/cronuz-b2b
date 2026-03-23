@@ -17,6 +17,7 @@ class Customer(Base):
     state_registration = Column(String(50), nullable=True) # IE Inscrição Estadual
     email = Column(String(255), nullable=True)
     phone = Column(String(50), nullable=True)
+    password_hash = Column(String(255), nullable=True) # Used for Customer Portal login
     customer_type = Column(String(20), default="PJ", nullable=False) # PF or PJ
     
     # Horus API references

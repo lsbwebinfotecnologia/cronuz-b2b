@@ -39,6 +39,13 @@ class CompanySettings(Base):
     efi_payee_code = Column(String(255), nullable=True) 
     efi_certificate_path = Column(String(500), nullable=True)
 
+    # SMTP Config (Transational Emails)
+    smtp_host = Column(String(255), nullable=True)
+    smtp_port = Column(Integer, nullable=True)
+    smtp_username = Column(String(255), nullable=True)
+    smtp_password = Column(String(255), nullable=True)
+    smtp_from_email = Column(String(255), nullable=True)
+
     # Audit trail
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 
@@ -25,6 +25,11 @@ export default function SettingsPage() {
     efi_client_secret: '',
     efi_payee_code: '',
     efi_certificate_path: '',
+    smtp_host: '',
+    smtp_port: 587,
+    smtp_username: '',
+    smtp_password: '',
+    smtp_from_email: '',
   });
 
   useEffect(() => {
@@ -60,6 +65,11 @@ export default function SettingsPage() {
         efi_client_secret: data.efi_client_secret || '',
         efi_payee_code: data.efi_payee_code || '',
         efi_certificate_path: data.efi_certificate_path || '',
+        smtp_host: data.smtp_host || '',
+        smtp_port: data.smtp_port || 587,
+        smtp_username: data.smtp_username || '',
+        smtp_password: data.smtp_password || '',
+        smtp_from_email: data.smtp_from_email || '',
       }));
     } catch (error) {
       toast.error('Erro ao carregar as configurações.');
@@ -354,6 +364,74 @@ export default function SettingsPage() {
                       </p>
                     )}
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Configurações de SMTP (E-mail Transacional) */}
+            <div className="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800/60">
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/60 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                    <Mail className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-white">E-mails Transacionais (SMTP)</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Credenciais para envio de comprovantes, resets de senha e notificações de clientes.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5 md:col-span-2 lg:col-span-1">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Host SMTP</label>
+                  <input
+                    type="text"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-indigo-500/50"
+                    placeholder="smtp.seudominio.com.br"
+                    value={settings.smtp_host}
+                    onChange={e => setSettings({ ...settings, smtp_host: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Porta</label>
+                  <input
+                    type="number"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-indigo-500/50"
+                    placeholder="587 ou 465"
+                    value={settings.smtp_port}
+                    onChange={e => setSettings({ ...settings, smtp_port: parseInt(e.target.value) || 587 })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">E-mail Remetente (De/From)</label>
+                  <input
+                    type="email"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-indigo-500/50"
+                    placeholder="contato@seudominio.com.br"
+                    value={settings.smtp_from_email}
+                    onChange={e => setSettings({ ...settings, smtp_from_email: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Usuário SMTP</label>
+                  <input
+                    type="text"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-indigo-500/50"
+                    placeholder="seu_usuario"
+                    value={settings.smtp_username}
+                    onChange={e => setSettings({ ...settings, smtp_username: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Senha SMTP</label>
+                  <input
+                    type="password"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-indigo-500/50"
+                    placeholder="********"
+                    value={settings.smtp_password}
+                    onChange={e => setSettings({ ...settings, smtp_password: e.target.value })}
+                  />
                 </div>
               </div>
             </div>

@@ -13,6 +13,7 @@ from app.models import catalog_support as catalog_models
 from app.models import marketing_showcase as marketing_models
 from app.models import subscription as subscription_models
 from app.models import lead as lead_models
+from app.models import system_integrator as system_integrator_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -31,6 +32,9 @@ from app.api import subscriptions
 from app.api import leads
 from app.api import company_notes
 from app.api import integrators
+from app.api import customer_auth
+from app.api import customer_portal
+from app.api import system_integrators
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -47,6 +51,7 @@ catalog_models.Base.metadata.create_all(bind=engine)
 marketing_models.Base.metadata.create_all(bind=engine)
 subscription_models.Base.metadata.create_all(bind=engine)
 lead_models.Base.metadata.create_all(bind=engine)
+system_integrator_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -101,6 +106,7 @@ app.include_router(subscriptions.router, tags=["subscriptions"])
 app.include_router(leads.router, tags=["leads"])
 app.include_router(company_notes.router, prefix="/company-notes", tags=["company-notes"])
 app.include_router(integrators.router, prefix="/integrators", tags=["integrators"])
+app.include_router(system_integrators.router, prefix="/system-integrators", tags=["system-integrators"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -364,8 +370,11 @@ def update_company_modules(
     company_id: int,
     module_update: ModuleUpdate,
     db: Session = Depends(get_db),
-    current_user: user_models.User = Depends(dependencies.require_master_user)
+    current_user: user_models.User = Depends(dependencies.get_current_user)
 ):
+    if current_user.type != user_models.UserRole.MASTER and current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Sem permissão para alterar os módulos desta empresa")
+        
     company = db.query(company_models.Company).filter(company_models.Company.id == company_id).first()
     if company is None:
         raise HTTPException(status_code=404, detail="Empresa não encontrada")

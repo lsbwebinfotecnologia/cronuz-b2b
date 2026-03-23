@@ -22,6 +22,7 @@ export default function CompanyHorusPage() {
     horus_port: '',
     horus_username: '',
     horus_password: '',
+    horus_enabled: false,
     allow_backorder: false,
     bookinfo_api_key: ''
   });
@@ -47,6 +48,7 @@ export default function CompanyHorusPage() {
              horus_port: data.horus_port || '',
              horus_username: data.horus_username || '',
              horus_password: data.horus_password || '',
+             horus_enabled: data.horus_enabled || false,
              allow_backorder: data.allow_backorder || false,
              bookinfo_api_key: data.bookinfo_api_key || ''
           }));
@@ -179,6 +181,26 @@ export default function CompanyHorusPage() {
              {/* API Configurations */}
              <div className="space-y-6 bg-slate-50/50 dark:bg-slate-900/20 p-6 rounded-2xl border border-slate-200 dark:border-slate-800/60 shadow-sm">
                 
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800/60 pb-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Ativar Processamento via ERP</h3>
+                    <p className="text-xs text-slate-500">Determine se a loja deverá utilizar essas credenciais para faturamento no carrinho e consultas de preço estáticas.</p>
+                  </div>
+                  <label className="relative flex items-center cursor-pointer shrink-0">
+                    <span className="mr-3 text-sm font-bold text-emerald-600 dark:text-emerald-400">Integração Ativa</span>
+                    <div className="relative">
+                      <input 
+                        type="checkbox" 
+                        name="horus_enabled"
+                        className="sr-only peer" 
+                        checked={formData.horus_enabled} 
+                        onChange={handleInputChange} 
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                    </div>
+                  </label>
+                </div>
+
                 <div className="space-y-3">
                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Modo de Operação (Catálogo e Preços)</label>
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

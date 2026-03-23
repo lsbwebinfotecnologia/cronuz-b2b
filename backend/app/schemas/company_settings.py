@@ -24,6 +24,11 @@ class CompanySettingsBase(BaseModel):
     efi_client_secret: Optional[str] = None
     efi_payee_code: Optional[str] = None
     efi_certificate_path: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from_email: Optional[str] = None
 
 class CompanySettingsUpdate(CompanySettingsBase):
     pass
