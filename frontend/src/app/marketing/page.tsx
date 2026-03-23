@@ -32,7 +32,7 @@ export default function MarketingPage() {
         }
         setSubmitting(true);
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, '') || 'http://localhost:8000';
             const res = await fetch(`${apiUrl}/leads/`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
