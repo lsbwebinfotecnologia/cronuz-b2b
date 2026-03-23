@@ -4,7 +4,7 @@ from sqlalchemy.sql import func
 from app.db.session import Base
 
 class SystemIntegrator(Base):
-    __tablename__ = "system_integrators"
+    __tablename__ = "b2b_system_integrators"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
@@ -18,10 +18,10 @@ class SystemIntegrator(Base):
     groups = relationship("SystemIntegratorGroup", back_populates="integrator", cascade="all, delete-orphan", order_by="SystemIntegratorGroup.order_index")
 
 class SystemIntegratorGroup(Base):
-    __tablename__ = "system_integrator_groups"
+    __tablename__ = "b2b_system_integrator_groups"
     
     id = Column(Integer, primary_key=True, index=True)
-    system_integrator_id = Column(Integer, ForeignKey("system_integrators.id"), nullable=False)
+    system_integrator_id = Column(Integer, ForeignKey("b2b_system_integrators.id"), nullable=False)
     name = Column(String(100), nullable=False)
     order_index = Column(Integer, default=0)
     
@@ -29,10 +29,10 @@ class SystemIntegratorGroup(Base):
     fields = relationship("SystemIntegratorField", back_populates="group", cascade="all, delete-orphan", order_by="SystemIntegratorField.order_index")
 
 class SystemIntegratorField(Base):
-    __tablename__ = "system_integrator_fields"
+    __tablename__ = "b2b_system_integrator_fields"
     
     id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(Integer, ForeignKey("system_integrator_groups.id"), nullable=False)
+    group_id = Column(Integer, ForeignKey("b2b_system_integrator_groups.id"), nullable=False)
     name = Column(String(100), nullable=False) # JSON key 
     label = Column(String(100), nullable=False) # UI Label
     type = Column(String(50), default="TEXT") # e.g. TEXT, PASSWORD, NUMBER, BOOLEAN
