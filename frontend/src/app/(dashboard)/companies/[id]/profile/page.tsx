@@ -177,6 +177,20 @@ export default function CompanyProfilePage() {
 
   async function handleSaveProfile() {
     if (!company) return;
+
+    if (!formData.name?.trim()) {
+      toast.error('A Razão Social é obrigatória.');
+      return;
+    }
+    if (!formData.document?.trim()) {
+      toast.error('O Documento (CNPJ) é obrigatório.');
+      return;
+    }
+    if (!formData.domain?.trim()) {
+      toast.error('O Domínio Interno é obrigatório para o Tenant.');
+      return;
+    }
+
     setSavingGlobal(true);
     try {
       const token = getToken();
