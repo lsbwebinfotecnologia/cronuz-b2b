@@ -13,6 +13,7 @@ interface Company {
   domain: string;
   custom_domain?: string;
   logo: string | null;
+  login_background_url?: string | null;
   active: boolean;
   created_at: string;
 }

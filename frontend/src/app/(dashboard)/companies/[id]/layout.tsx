@@ -14,6 +14,7 @@ interface Company {
   tenant_id?: string;
   custom_domain?: string;
   logo: string | null;
+  login_background_url?: string | null;
   zip_code?: string | null;
   street?: string | null;
   number?: string | null;
