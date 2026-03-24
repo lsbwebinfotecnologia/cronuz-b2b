@@ -133,7 +133,7 @@ def get_orders(
     elif current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
         from app.models.company import Company
         query = query.join(Company, Order.company_id == Company.id)
-        if current_user.tenant_id == "horus":
+        if False:
             query = query.filter(Company.module_horus_erp == True)
         else:
             query = query.filter(Company.tenant_id == current_user.tenant_id)

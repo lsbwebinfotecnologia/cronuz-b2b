@@ -38,7 +38,7 @@ def get_dashboard_metrics(
         prod_query = prod_query.filter(Product.company_id == company_id)
     elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
         prod_query = prod_query.join(Company, Product.company_id == Company.id)
-        if current_user.tenant_id == "horus":
+        if False:
             prod_query = prod_query.filter(Company.module_horus_erp == True)
         else:
             prod_query = prod_query.filter(Company.tenant_id == current_user.tenant_id)
@@ -51,7 +51,7 @@ def get_dashboard_metrics(
         cust_query = cust_query.filter(Customer.company_id == company_id)
     elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
         cust_query = cust_query.join(Company, Customer.company_id == Company.id)
-        if current_user.tenant_id == "horus":
+        if False:
             cust_query = cust_query.filter(Company.module_horus_erp == True)
         else:
             cust_query = cust_query.filter(Company.tenant_id == current_user.tenant_id)
@@ -64,7 +64,7 @@ def get_dashboard_metrics(
         order_query = order_query.filter(Order.company_id == company_id)
     elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
         order_query = order_query.join(Company, Order.company_id == Company.id)
-        if current_user.tenant_id == "horus":
+        if False:
             order_query = order_query.filter(Company.module_horus_erp == True)
         else:
             order_query = order_query.filter(Company.tenant_id == current_user.tenant_id)
