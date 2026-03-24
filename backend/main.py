@@ -173,7 +173,10 @@ def read_companies(
     query = db.query(company_models.Company)
     
     if current_user.type == user_models.UserRole.MASTER and current_user.tenant_id and current_user.tenant_id != "cronuz":
-        query = query.filter(company_models.Company.tenant_id == current_user.tenant_id)
+        if current_user.tenant_id == "horus":
+            query = query.filter(company_models.Company.module_horus_erp == True)
+        else:
+            query = query.filter(company_models.Company.tenant_id == current_user.tenant_id)
     elif current_user.type != user_models.UserRole.MASTER:
         query = query.filter(company_models.Company.id == current_user.company_id)
         
@@ -227,10 +230,16 @@ def read_users(
     if current_user.tenant_id and current_user.tenant_id != "cronuz":
         from app.models.company import Company
         query = query.outerjoin(Company, user_models.User.company_id == Company.id)
-        query = query.filter(
-            (Company.tenant_id == current_user.tenant_id) | 
-            ((user_models.User.type == user_models.UserRole.MASTER) & (user_models.User.tenant_id == current_user.tenant_id))
-        )
+        if current_user.tenant_id == "horus":
+            query = query.filter(
+                (Company.module_horus_erp == True) | 
+                ((user_models.User.type == user_models.UserRole.MASTER) & (user_models.User.tenant_id == current_user.tenant_id))
+            )
+        else:
+            query = query.filter(
+                (Company.tenant_id == current_user.tenant_id) | 
+                ((user_models.User.type == user_models.UserRole.MASTER) & (user_models.User.tenant_id == current_user.tenant_id))
+            )
         
     users = query.offset(skip).limit(limit).all()
     return users
