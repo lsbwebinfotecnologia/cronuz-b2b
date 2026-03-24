@@ -379,6 +379,12 @@ def update_company(
         raise HTTPException(status_code=403, detail="Não autorizado")
         
     update_data = company_update.model_dump(exclude_unset=True)
+    
+    # Handle empty strings to avoid Postgres UNIQUE constraint errors
+    for field in ["custom_domain", "login_background_url", "logo", "zip_code", "street", "number", "complement", "neighborhood", "city", "state"]:
+        if field in update_data and update_data[field] == "":
+            update_data[field] = None
+            
     for key, value in update_data.items():
         setattr(company, key, value)
         
