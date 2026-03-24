@@ -10,6 +10,7 @@ export function middleware(request: NextRequest) {
 
   const appDomains = [
     'localhost', '127.0.0.1', '64.23.182.183', 
+    'app.cronuzb2b.com.br', 'app.cronuzb2b.localhost',
     'app.fmz.com.br', 'app.fmz.localhost',
     'app.horusb2b.com.br', 'app.horusb2b.localhost'
   ];
