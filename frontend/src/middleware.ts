@@ -47,10 +47,14 @@ export function middleware(request: NextRequest) {
 
   // C. Custom Domain / Tenant Hotsite (Public)
   if (!appDomains.includes(hostname) && !marketingDomains.includes(hostname)) {
-    url.pathname = `/domain/${hostname}${url.pathname === '/' ? '' : url.pathname}`;
-    return NextResponse.rewrite(url, {
-      request: { headers: requestHeaders }
-    });
+    const isAppNativePath = url.pathname.startsWith('/store') || url.pathname.startsWith('/dashboard') || url.pathname.startsWith('/cart') || url.pathname.startsWith('/checkout');
+    
+    if (!isAppNativePath) {
+      url.pathname = `/domain/${hostname}${url.pathname === '/' ? '' : url.pathname}`;
+      return NextResponse.rewrite(url, {
+        request: { headers: requestHeaders }
+      });
+    }
   }
 
   // D. B2B System Application (Auth Protected)

@@ -69,7 +69,7 @@ export default function StorefrontLoginPage() {
       // Store token and redirect to storefront home
       setToken(data.access_token, data.user);
       toast.success('Acesso liberado!');
-      router.push('/');
+      router.push('/store');
       router.refresh();
       
     } catch (err: any) {
@@ -165,11 +165,15 @@ export default function StorefrontLoginPage() {
               </span>
             </button>
             <div className="text-center pt-8">
-              <span className="text-sm font-medium text-slate-500">Desenvolvido por </span>
               {storeInfo?.tenant_id === 'horus' ? (
-                <a href="https://fmz.com.br" target="_blank" rel="noopener noreferrer" className="text-sm font-black italic text-indigo-600 tracking-tight ml-1 hover:underline">FMZ</a>
+                <span className="text-[10px] font-medium text-slate-400">
+                  Desenvolvido por lsbwebinfo em parceria com fmz tecnologia em sistemas.
+                </span>
               ) : (
-                <a href="https://cronuzb2b.com.br" target="_blank" rel="noopener noreferrer" className="text-sm font-black italic text-indigo-600 tracking-tight ml-1 hover:underline">CRONUZ</a>
+                <>
+                  <span className="text-sm font-medium text-slate-500">Desenvolvido por </span>
+                  <a href="https://cronuzb2b.com.br" target="_blank" rel="noopener noreferrer" className="text-sm font-black italic text-indigo-600 tracking-tight ml-1 hover:underline">CRONUZ</a>
+                </>
               )}
             </div>
           </form>
