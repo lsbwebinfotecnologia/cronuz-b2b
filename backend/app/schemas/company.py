@@ -9,6 +9,7 @@ class CompanyBase(BaseModel):
     custom_domain: Optional[str] = None
     tenant_id: Optional[str] = "cronuz"
     logo: Optional[str] = None
+    login_background_url: Optional[str] = None
     
     zip_code: Optional[str] = None
     street: Optional[str] = None
@@ -36,6 +37,7 @@ class CompanyUpdate(BaseModel):
     domain: Optional[str] = None
     custom_domain: Optional[str] = None
     tenant_id: Optional[str] = None
+    login_background_url: Optional[str] = None
     horus_company: Optional[str] = None
     horus_branch: Optional[str] = None
     horus_default_b2b_guid: Optional[str] = None

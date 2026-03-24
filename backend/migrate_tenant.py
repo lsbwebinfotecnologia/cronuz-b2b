@@ -35,3 +35,10 @@ try:
         print("usr_user up to date")
 except Exception as e:
     print(f"Error usr_user: {e}")
+
+try:
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE cmp_company ADD COLUMN login_background_url VARCHAR(500);"))
+        print("login_background_url column up to date")
+except Exception as e:
+    print(f"Error login_background_url: {e}")
