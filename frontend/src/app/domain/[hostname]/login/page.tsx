@@ -113,7 +113,7 @@ export default function StorefrontLoginPage() {
               </div>
             )}
             <h2 className="text-xl font-bold text-slate-900 mb-2">Acesse sua conta</h2>
-            <p className="text-sm text-slate-500 text-center font-medium">Faça login para ver preços e produtos exclusivos da distribuidora.</p>
+            <p className="text-sm text-slate-500 text-center font-medium">Faça login para ver preços e produtos exclusivos da empresa {storeInfo?.name || 'Distribuidora'}.</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
@@ -136,9 +136,6 @@ export default function StorefrontLoginPage() {
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between px-1">
                   <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Senha</label>
-                  <Link href="#" className="text-xs font-bold text-indigo-600 hover:text-indigo-700 hover:underline">
-                    Esqueceu?
-                  </Link>
                 </div>
                 <div className="relative">
                   <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
