@@ -34,6 +34,7 @@ export default function CompanyProfilePage() {
   });
 
   const [uploadingBg, setUploadingBg] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   const [user, setUser] = useState<any>(null);
 
@@ -99,6 +100,33 @@ export default function CompanyProfilePage() {
       toast.error('Erro ao fazer upload da imagem.');
     } finally {
       setUploadingBg(false);
+    }
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    setUploadingLogo(true);
+    
+    try {
+      const data = new FormData();
+      data.append('file', file);
+      
+      const token = getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/image`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: data
+      });
+      
+      if (!res.ok) throw new Error('Falha no upload');
+      const responseData = await res.json();
+      setFormData(prev => ({ ...prev, logo: responseData.url }));
+      toast.success('Logo enviada! Lembre-se de clicar em Salvar Alterações.');
+    } catch (err) {
+      toast.error('Erro ao fazer upload da logo.');
+    } finally {
+      setUploadingLogo(false);
     }
   };
 
@@ -386,6 +414,32 @@ export default function CompanyProfilePage() {
            <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">Personalização (Storefront)</h3>
            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800/60 dark:bg-slate-900/40">
               
+              <div className="space-y-3">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Logo do Lojista (Fundo Transparente)</label>
+                <div className="relative group rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-[var(--color-primary-base)] transition-colors bg-slate-50 dark:bg-slate-900/50 flex flex-col items-center justify-center overflow-hidden" style={{ minHeight: '200px' }}>
+                  {formData.logo ? (
+                    <>
+                      <img src={formData.logo} alt="Logo Lojista" className="p-4 w-auto h-full max-h-[160px] object-contain group-hover:opacity-40 transition-opacity" />
+                      <div className="absolute inset-0 z-10 p-4 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="text-sm font-medium text-white shadow-sm bg-black/60 px-3 py-1 rounded-full">Clique para alterar</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="p-6 text-center flex flex-col items-center">
+                      {uploadingLogo ? <Loader2 className="h-8 w-8 text-[var(--color-primary-base)] animate-spin mb-3" /> : <ImageIcon className="h-10 w-10 text-slate-400 mb-3 group-hover:text-[var(--color-primary-base)] transition-colors" />}
+                      <span className="text-sm font-medium text-slate-600 dark:text-slate-400">{uploadingLogo ? 'Enviando logo...' : 'Clique para fazer upload da Logo'}</span>
+                    </div>
+                  )}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoUpload}
+                    disabled={uploadingLogo}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                  />
+                </div>
+              </div>
+
               <div className="space-y-3">
                 <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Fundo da Tela de Login B2B (Mínimo 1080p recomendado)</label>
                 <div className="relative group rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-[var(--color-primary-base)] transition-colors bg-slate-50 dark:bg-slate-900/50 flex flex-col items-center justify-center overflow-hidden" style={{ minHeight: '200px' }}>

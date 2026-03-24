@@ -166,7 +166,11 @@ export default function StorefrontLoginPage() {
             </button>
             <div className="text-center pt-8">
               <span className="text-sm font-medium text-slate-500">Desenvolvido por </span>
-              <a href="https://cronuzb2b.com.br" target="_blank" rel="noopener noreferrer" className="text-sm font-black italic text-indigo-600 tracking-tight ml-1 hover:underline">CRONUZ</a>
+              {storeInfo?.tenant_id === 'horus' ? (
+                <a href="https://fmz.com.br" target="_blank" rel="noopener noreferrer" className="text-sm font-black italic text-indigo-600 tracking-tight ml-1 hover:underline">FMZ</a>
+              ) : (
+                <a href="https://cronuzb2b.com.br" target="_blank" rel="noopener noreferrer" className="text-sm font-black italic text-indigo-600 tracking-tight ml-1 hover:underline">CRONUZ</a>
+              )}
             </div>
           </form>
         </motion.div>
