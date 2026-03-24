@@ -14,6 +14,11 @@ class CompanyBase(BaseModel):
     seo_title: Optional[str] = None
     seo_description: Optional[str] = None
     
+    operation_start_date: Optional[datetime] = None
+    trial_days: Optional[int] = 0
+    is_contract_signed: Optional[bool] = False
+    monthly_fee: Optional[str] = None
+    
     zip_code: Optional[str] = None
     street: Optional[str] = None
     number: Optional[str] = None
@@ -46,6 +51,12 @@ class CompanyUpdate(BaseModel):
     favicon_url: Optional[str] = None
     seo_title: Optional[str] = None
     seo_description: Optional[str] = None
+    
+    operation_start_date: Optional[datetime] = None
+    trial_days: Optional[int] = None
+    is_contract_signed: Optional[bool] = None
+    monthly_fee: Optional[str] = None
+    
     horus_company: Optional[str] = None
     horus_branch: Optional[str] = None
     horus_default_b2b_guid: Optional[str] = None

@@ -2,7 +2,7 @@
 
 import { useState, Suspense, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Building2, Save, ArrowLeft, Loader2, Globe, Mail, FileText, Image as ImageIcon } from 'lucide-react';
+import { Building2, Save, ArrowLeft, Loader2, Globe, Mail, FileText, Image as ImageIcon, Calendar } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getToken, getUser } from '@/lib/auth';
@@ -29,7 +29,8 @@ function NewCompanyForm() {
     document: initialDocument,
     domain: '',
     logo: '',
-    tenant_id: 'cronuz'
+    tenant_id: 'cronuz',
+    operation_start_date: new Date().toISOString().split('T')[0]
   });
   const [user, setUser] = useState<any>(null);
 
@@ -186,6 +187,20 @@ function NewCompanyForm() {
                   onChange={(e) => setFormData({...formData, logo: e.target.value})}
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
                   placeholder="https://meusite.com/logo.png"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Início da Operação</label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-slate-500" />
+                <input
+                  type="date"
+                  required
+                  value={formData.operation_start_date}
+                  onChange={(e) => setFormData({...formData, operation_start_date: e.target.value})}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
                 />
               </div>
             </div>

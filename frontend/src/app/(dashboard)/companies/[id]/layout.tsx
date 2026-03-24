@@ -18,6 +18,10 @@ interface Company {
   favicon_url?: string | null;
   seo_title?: string | null;
   seo_description?: string | null;
+  operation_start_date?: string | null;
+  trial_days?: number | null;
+  is_contract_signed?: boolean | null;
+  monthly_fee?: string | null;
   zip_code?: string | null;
   street?: string | null;
   number?: string | null;

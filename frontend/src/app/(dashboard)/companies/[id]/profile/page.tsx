@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, FileText, Image as ImageIcon, Save, CheckCircle2, XCircle } from 'lucide-react';
+import { Loader2, Globe, FileText, Image as ImageIcon, Save, CheckCircle2, XCircle, Calendar, AlertTriangle, DollarSign } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -33,7 +33,11 @@ export default function CompanyProfilePage() {
     login_background_url: '',
     favicon_url: '',
     seo_title: '',
-    seo_description: ''
+    seo_description: '',
+    operation_start_date: '',
+    trial_days: 0,
+    is_contract_signed: false,
+    monthly_fee: ''
   });
 
   const [uploadingBg, setUploadingBg] = useState(false);
@@ -47,6 +51,8 @@ export default function CompanyProfilePage() {
   }, []);
 
   const isGlobalMaster = user?.type === 'MASTER' && (!user?.tenant_id || user?.tenant_id === 'cronuz');
+  const isHorusMaster = user?.type === 'MASTER' && user?.tenant_id === 'horus';
+  const canViewContracts = isGlobalMaster || isHorusMaster;
 
   const maskCNPJ = (val: string) => {
     if (!val) return '';
@@ -78,7 +84,11 @@ export default function CompanyProfilePage() {
         login_background_url: company.login_background_url || '',
         favicon_url: company.favicon_url || '',
         seo_title: company.seo_title || '',
-        seo_description: company.seo_description || ''
+        seo_description: company.seo_description || '',
+        operation_start_date: company.operation_start_date ? company.operation_start_date.split('T')[0] : '',
+        trial_days: company.trial_days || 0,
+        is_contract_signed: company.is_contract_signed || false,
+        monthly_fee: company.monthly_fee || ''
       });
     }
   }, [company]);
@@ -205,6 +215,15 @@ export default function CompanyProfilePage() {
     } else if (name === 'zip_code') {
       const maskedCep = value.replace(/\D/g, '').replace(/^(\d{5})(\d)/, '$1-$2').slice(0, 9);
       setFormData(prev => ({ ...prev, [name]: maskedCep }));
+    } else if (name === 'is_contract_signed') {
+      setFormData(prev => ({ ...prev, [name]: e.target.checked }));
+    } else if (name === 'monthly_fee') {
+      // Basic monetary mask
+      let v = value.replace(/\D/g, '');
+      v = (Number(v) / 100).toFixed(2).replace('.', ',');
+      if(v === '0,00' && value === '') v = '';
+      else v = 'R$ ' + v.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+      setFormData(prev => ({ ...prev, [name]: v }));
     } else {
       setFormData(prev => ({ ...prev, [name]: value }));
     }
@@ -581,6 +600,116 @@ export default function CompanyProfilePage() {
               </div>
            </div>
         </section>
+
+        {/* Gestão Administrativa & Contratos (Restricted to Master) */}
+        {canViewContracts && (
+          <>
+            <hr className="border-slate-200 dark:border-slate-800" />
+            <section className="space-y-4">
+               <div className="flex items-center justify-between">
+                 <h3 className="text-sm font-bold uppercase tracking-widest text-[var(--color-primary-base)] flex items-center gap-2">
+                   <AlertTriangle className="w-4 h-4" /> Gestão Administrativa & Faturamento (Acesso Restrito)
+                 </h3>
+               </div>
+               
+               {/* Visual Alert Logic */}
+               {formData.operation_start_date && formData.trial_days > 0 && !formData.is_contract_signed && (
+                 (() => {
+                   const start = new Date(formData.operation_start_date);
+                   const deadline = new Date(start);
+                   deadline.setDate(deadline.getDate() + Number(formData.trial_days));
+                   const isExpired = new Date() > deadline;
+                   
+                   return isExpired ? (
+                     <div className="bg-rose-50 border border-rose-200 text-rose-700 p-4 rounded-xl flex items-start gap-3 dark:bg-rose-500/10 dark:border-rose-500/20 dark:text-rose-400 shadow-sm animate-pulse">
+                        <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="font-bold text-sm">Atenção! Período de Teste Expirado</h4>
+                          <p className="text-xs mt-1">
+                            A etapa de testes terminou em {deadline.toLocaleDateString('pt-BR')}. O contrato ainda não foi marcado como assinado. Considere suspender a operação do lojista na raiz da página.
+                          </p>
+                        </div>
+                     </div>
+                   ) : (
+                     <div className="bg-amber-50 border border-amber-200 text-amber-700 p-4 rounded-xl flex items-start gap-3 dark:bg-amber-500/10 dark:border-amber-500/20 dark:text-amber-400 shadow-sm">
+                        <Calendar className="w-5 h-5 shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="font-bold text-sm">Lojista em Período de Teste</h4>
+                          <p className="text-xs mt-1">
+                            A fase de degustação encerra em {deadline.toLocaleDateString('pt-BR')}. O contrato ainda não consta como assinado.
+                          </p>
+                        </div>
+                     </div>
+                   );
+                 })()
+               )}
+               {formData.is_contract_signed && (
+                 <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 p-4 rounded-xl flex items-center gap-3 dark:bg-emerald-500/10 dark:border-emerald-500/20 dark:text-emerald-400 shadow-sm">
+                    <CheckCircle2 className="w-5 h-5 shrink-0" />
+                    <div>
+                      <h4 className="font-bold text-sm">Contrato Vigente e Assinado!</h4>
+                    </div>
+                 </div>
+               )}
+
+               <div className="grid grid-cols-1 md:grid-cols-4 gap-6 p-6 rounded-2xl border border-rose-100 bg-rose-50/30 shadow-sm dark:border-rose-900/30 dark:bg-rose-950/10">
+                  <div className="space-y-1.5 md:col-span-1">
+                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Data de Início da Operação</label>
+                    <div className="relative">
+                      <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                      <input
+                        type="date"
+                        name="operation_start_date"
+                        value={formData.operation_start_date}
+                        onChange={handleInputChange}
+                        className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 md:col-span-1">
+                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Dias de Teste (Trial)</label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="0"
+                        name="trial_days"
+                        value={formData.trial_days}
+                        onChange={handleInputChange}
+                        className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 md:col-span-1">
+                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Mensalidade LSBWeb</label>
+                    <div className="relative">
+                      <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        name="monthly_fee"
+                        placeholder="R$ 0,00"
+                        value={formData.monthly_fee}
+                        onChange={handleInputChange}
+                        className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 md:col-span-1 flex flex-col justify-center mt-2 md:mt-0">
+                    <label className="relative inline-flex items-center cursor-pointer mt-4 group">
+                      <input 
+                        type="checkbox" 
+                        name="is_contract_signed"
+                        checked={formData.is_contract_signed} 
+                        onChange={handleInputChange}
+                        className="sr-only peer" 
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-emerald-500 group-hover:shadow-md transition-all"></div>
+                      <span className="ml-3 text-sm font-bold text-slate-700 dark:text-slate-300">Contrato Assinado?</span>
+                    </label>
+                  </div>
+               </div>
+            </section>
+          </>
+        )}
 
          {/* Actions Section */}
          <div className="flex justify-end pt-6 mb-8 border-t border-slate-200 dark:border-slate-800/60">

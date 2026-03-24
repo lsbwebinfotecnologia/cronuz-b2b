@@ -19,6 +19,12 @@ class Company(Base):
     seo_title = Column(String(255), nullable=True)
     seo_description = Column(String(500), nullable=True)
     
+    # Gestão de Contrato & Faturamento (Master Only)
+    operation_start_date = Column(DateTime, nullable=True)
+    trial_days = Column(Integer, nullable=True, default=0)
+    is_contract_signed = Column(Boolean, nullable=True, default=False)
+    monthly_fee = Column(String(50), nullable=True) # Using String/Decimal representation to avoid float issues
+    
     # Address
     zip_code = Column(String(20), nullable=True)
     street = Column(String(255), nullable=True)
