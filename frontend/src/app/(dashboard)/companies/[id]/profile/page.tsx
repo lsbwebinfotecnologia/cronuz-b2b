@@ -30,11 +30,15 @@ export default function CompanyProfilePage() {
     city: '',
     state: '',
     logo: '',
-    login_background_url: ''
+    login_background_url: '',
+    favicon_url: '',
+    seo_title: '',
+    seo_description: ''
   });
 
   const [uploadingBg, setUploadingBg] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [uploadingFavicon, setUploadingFavicon] = useState(false);
 
   const [user, setUser] = useState<any>(null);
 
@@ -71,7 +75,10 @@ export default function CompanyProfilePage() {
         city: company.city || '',
         state: company.state || '',
         logo: company.logo || '',
-        login_background_url: company.login_background_url || ''
+        login_background_url: company.login_background_url || '',
+        favicon_url: company.favicon_url || '',
+        seo_title: company.seo_title || '',
+        seo_description: company.seo_description || ''
       });
     }
   }, [company]);
@@ -129,6 +136,34 @@ export default function CompanyProfilePage() {
       toast.error('Erro ao fazer upload da logo.');
     } finally {
       setUploadingLogo(false);
+    }
+  };
+
+  const handleFaviconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    setUploadingFavicon(true);
+    
+    try {
+      const data = new FormData();
+      data.append('file', file);
+      if (companyId) data.append('company_id', companyId);
+      
+      const token = getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/image`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: data
+      });
+      
+      if (!res.ok) throw new Error('Falha no upload');
+      const responseData = await res.json();
+      setFormData(prev => ({ ...prev, favicon_url: responseData.url }));
+      toast.success('Favicon (Ícone) enviado! Lembre-se de clicar em Salvar Alterações.');
+    } catch (err) {
+      toast.error('Erro ao fazer upload do Favicon.');
+    } finally {
+      setUploadingFavicon(false);
     }
   };
 
@@ -428,7 +463,7 @@ export default function CompanyProfilePage() {
         {/* Branding & White-Label Section */}
         <section className="space-y-4">
            <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">Personalização (Storefront)</h3>
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800/60 dark:bg-slate-900/40">
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-6 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800/60 dark:bg-slate-900/40">
               
               <div className="space-y-3">
                 <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Logo do Lojista (Fundo Transparente)</label>
@@ -482,7 +517,68 @@ export default function CompanyProfilePage() {
                   />
                 </div>
               </div>
+
+              <div className="space-y-3">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Favicon (Ícone do Navegador - 32x32)</label>
+                <div className="relative group rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-[var(--color-primary-base)] transition-colors bg-slate-50 dark:bg-slate-900/50 flex flex-col items-center justify-center overflow-hidden" style={{ minHeight: '200px' }}>
+                  {formData.favicon_url ? (
+                    <>
+                      <img src={formData.favicon_url} alt="Favicon Lojista" className="object-contain w-16 h-16 group-hover:opacity-40 transition-opacity drop-shadow-sm" />
+                      <div className="absolute inset-0 z-10 p-4 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="text-[11px] font-medium text-white shadow-sm bg-black/60 px-3 py-1 rounded-full">Trocar Ícone</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="p-6 text-center flex flex-col items-center">
+                      {uploadingFavicon ? <Loader2 className="h-6 w-6 text-[var(--color-primary-base)] animate-spin mb-3" /> : <Globe className="h-10 w-10 text-slate-400 mb-3 group-hover:text-[var(--color-primary-base)] transition-colors" />}
+                      <span className="text-[13px] font-medium text-slate-600 dark:text-slate-400">{uploadingFavicon ? 'Enviando ícone...' : 'Upload (.png, .ico)'}</span>
+                    </div>
+                  )}
+                  <input
+                    type="file"
+                    accept="image/png, image/x-icon, image/jpeg"
+                    onChange={handleFaviconUpload}
+                    disabled={uploadingFavicon}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                  />
+                </div>
+              </div>
               
+           </div>
+        </section>
+
+        <hr className="border-slate-200 dark:border-slate-800" />
+
+        {/* SEO Section */}
+        <section className="space-y-4">
+           <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">SEO & Busca (Google)</h3>
+           <div className="grid grid-cols-1 gap-6 p-6 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800/60 dark:bg-slate-900/40">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Título SEO (Recomendado: 50~60 caracteres)</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    name="seo_title"
+                    placeholder="Ex: Minha Empresa | Distribuidora Oficial"
+                    value={formData.seo_title}
+                    onChange={handleInputChange}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Descrição SEO (Meta Description - Máx 160 caracteres)</label>
+                <div className="relative">
+                  <textarea
+                    name="seo_description"
+                    placeholder="Escreva uma breve descrição que aparecerá nos resultados de busca do Google..."
+                    rows={3}
+                    value={formData.seo_description}
+                    onChange={(e) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200 resize-none"
+                  ></textarea>
+                </div>
+              </div>
            </div>
         </section>
 

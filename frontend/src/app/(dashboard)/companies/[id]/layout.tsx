@@ -15,6 +15,9 @@ interface Company {
   custom_domain?: string;
   logo: string | null;
   login_background_url?: string | null;
+  favicon_url?: string | null;
+  seo_title?: string | null;
+  seo_description?: string | null;
   zip_code?: string | null;
   street?: string | null;
   number?: string | null;
