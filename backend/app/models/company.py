@@ -6,6 +6,7 @@ class Company(Base):
     __tablename__ = "cmp_company"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String(50), nullable=False, default="cronuz", server_default="cronuz")
     name = Column(String(255), nullable=False)
     document = Column(String(50), unique=True, index=True, nullable=False) # CNPJ or other
     

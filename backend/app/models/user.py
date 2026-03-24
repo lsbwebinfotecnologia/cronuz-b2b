@@ -20,6 +20,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     
     type = Column(Enum(UserRole), nullable=False)
+    tenant_id = Column(String(50), nullable=True) # Used by MASTER to restrict to specific brand (e.g. 'horus')
     
     # Nullable because MASTER doesn't have a company
     company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=True)

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { Loader2, Globe, FileText, Image as ImageIcon, Save, CheckCircle2, XCircle } from 'lucide-react';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
 
@@ -21,6 +21,7 @@ export default function CompanyProfilePage() {
     document: '',
     domain: '',
     custom_domain: '',
+    tenant_id: 'cronuz',
     zip_code: '',
     street: '',
     number: '',
@@ -29,6 +30,14 @@ export default function CompanyProfilePage() {
     city: '',
     state: ''
   });
+
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    setUser(getUser());
+  }, []);
+
+  const isGlobalMaster = user?.type === 'MASTER' && (!user?.tenant_id || user?.tenant_id === 'cronuz');
 
   const maskCNPJ = (val: string) => {
     if (!val) return '';
@@ -48,6 +57,7 @@ export default function CompanyProfilePage() {
         document: maskCNPJ(company.document || ''),
         domain: company.domain || '',
         custom_domain: company.custom_domain || '',
+        tenant_id: company.tenant_id || 'cronuz',
         zip_code: company.zip_code || '',
         street: company.street || '',
         number: company.number || '',
@@ -233,6 +243,24 @@ export default function CompanyProfilePage() {
                   />
                 </div>
               </div>
+              
+              {isGlobalMaster && (
+                <div className="space-y-1.5 md:col-span-2 mt-4 md:mt-0">
+                  <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Rede / Parceiro (White-Label)</label>
+                  <div className="relative">
+                    <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <select
+                      name="tenant_id"
+                      value={formData.tenant_id}
+                      onChange={(e) => setFormData({...formData, tenant_id: e.target.value})}
+                      className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium appearance-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                    >
+                      <option value="cronuz">Cronuz S.A. (Padrão)</option>
+                      <option value="horus">B2B Horus / FMZ</option>
+                    </select>
+                  </div>
+                </div>
+              )}
            </div>
         </section>
 

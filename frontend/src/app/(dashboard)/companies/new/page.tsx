@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { Building2, Save, ArrowLeft, Loader2, Globe, Mail, FileText, Image as ImageIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 
 export default function NewCompanyPage() {
@@ -28,8 +28,16 @@ function NewCompanyForm() {
     name: initialName,
     document: initialDocument,
     domain: '',
-    logo: ''
+    logo: '',
+    tenant_id: 'cronuz'
   });
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    setUser(getUser());
+  }, []);
+
+  const isGlobalMaster = user?.type === 'MASTER' && (!user?.tenant_id || user?.tenant_id === 'cronuz');
 
   const maskCNPJ = (val: string) => {
     return val.replace(/\D/g, '').replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5').substring(0, 18);
@@ -181,6 +189,23 @@ function NewCompanyForm() {
                 />
               </div>
             </div>
+
+            {isGlobalMaster && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Rede / Parceiro (White-Label)</label>
+                <div className="relative">
+                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-slate-500" />
+                  <select
+                    value={formData.tenant_id}
+                    onChange={(e) => setFormData({...formData, tenant_id: e.target.value})}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium appearance-none dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
+                  >
+                    <option value="cronuz">Cronuz S.A. (Padrão)</option>
+                    <option value="horus">B2B Horus / FMZ</option>
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end pt-4 border-t border-slate-200 dark:border-slate-800/60">

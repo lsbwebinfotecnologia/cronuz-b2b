@@ -7,6 +7,7 @@ class CompanyBase(BaseModel):
     document: str
     domain: str
     custom_domain: Optional[str] = None
+    tenant_id: Optional[str] = "cronuz"
     logo: Optional[str] = None
     
     zip_code: Optional[str] = None
@@ -34,6 +35,7 @@ class CompanyUpdate(BaseModel):
     name: Optional[str] = None
     domain: Optional[str] = None
     custom_domain: Optional[str] = None
+    tenant_id: Optional[str] = None
     horus_company: Optional[str] = None
     horus_branch: Optional[str] = None
     horus_default_b2b_guid: Optional[str] = None

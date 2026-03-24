@@ -1,16 +1,17 @@
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
+@custom-variant theme-horus (.theme-horus &);
 @theme {
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
-  --color-primary-base: #01A9AF;
-  --color-primary-hover: #018b90;
-  --color-secondary-base: #FF8A22;
-  --color-secondary-hover: #e07212;
+  --color-primary-base: var(--theme-primary-base, #01A9AF);
+  --color-primary-hover: var(--theme-primary-hover, #018b90);
+  --color-secondary-base: var(--theme-secondary-base, #FF8A22);
+  --color-secondary-hover: var(--theme-secondary-hover, #e07212);
 }
 
 @layer base {
@@ -40,6 +41,17 @@
     color: hsl(var(--foreground));
     @apply antialiased font-sans selection:bg-[#01A9AF]/30;
   }
+  .theme-horus {
+    --color-primary-base: #a4a1ff;
+    --color-primary-hover: #908df7;
+    --color-secondary-base: #FF8A22;
+    --color-secondary-hover: #e07212;
+  }
+}
+
+@layer utilities {
+  .theme-horus .cronuz-logo { display: none !important; }
+  .theme-horus .horus-logo { display: block !important; }
 }
 
 @import 'react-quill-new/dist/quill.snow.css';

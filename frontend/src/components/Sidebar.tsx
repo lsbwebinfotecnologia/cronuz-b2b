@@ -195,7 +195,12 @@ export function Sidebar() {
             <img 
               src="/images/cronuz-logo.png" 
               alt="Cronuz Logo" 
-              className="object-contain w-full h-full"
+              className="object-contain w-full h-full cronuz-logo"
+            />
+            <img 
+              src="/images/logo-square-horus.png" 
+              alt="Horus Logo" 
+              className="object-contain w-full h-full hidden horus-logo"
             />
           </div>
         </div>
@@ -206,7 +211,7 @@ export function Sidebar() {
             const isOpen = openMenus[item.name];
 
             return (
-              <div key={item.name} className="space-y-1">
+              <div key={item.name} className={cn("space-y-1", item.name === 'Integradores' ? 'theme-horus:hidden' : '')}>
                 {item.subItems ? (
                    <button
                       onClick={() => toggleMenu(item.name)}
@@ -301,8 +306,11 @@ export function Sidebar() {
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
             {user?.type === 'MASTER' ? 'Empresa Atual' : 'Sua Organização'}
           </p>
-          <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 truncate" title={user?.company_name || 'Empresa Vendedora'}>
+          <p className="theme-horus:hidden text-sm font-semibold text-slate-800 dark:text-slate-200 truncate" title={user?.company_name || 'Empresa Vendedora'}>
              {user?.company_name || (user?.type === 'MASTER' ? 'Sede Master Cronuz' : 'Empresa Vendedora')}
+          </p>
+          <p className="hidden theme-horus:block text-sm font-semibold text-slate-800 dark:text-slate-200 truncate" title={user?.company_name || 'Empresa Vendedora'}>
+             {user?.company_name || (user?.type === 'MASTER' ? 'Sede Parceiro' : 'Empresa Vendedora')}
           </p>
           {user?.type === 'MASTER' && (
             <Link href="/companies" className="text-xs text-[var(--color-primary-base)] mt-2 flex items-center gap-1 hover:text-[var(--color-primary-base)] transition-colors">

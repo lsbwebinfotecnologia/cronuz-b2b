@@ -8,33 +8,52 @@ export function middleware(request: NextRequest) {
   let hostname = request.headers.get('host') || '';
   hostname = hostname.split(':')[0]; // Remove port if exists
 
-  const appDomains = ['localhost', '127.0.0.1', '64.23.182.183', 'app.cronuzb2b.com.br', 'www.app.cronuzb2b.com.br'];
+  const appDomains = [
+    'localhost', '127.0.0.1', '64.23.182.183', 
+    'app.fmz.com.br', 'app.fmz.localhost',
+    'app.horusb2b.com.br', 'app.horusb2b.localhost'
+  ];
   const marketingDomains = [
     'cronuzb2b.com.br', 'www.cronuzb2b.com.br',
     'cronuz.com.br', 'www.cronuz.com.br',
-    'lsbwebinfo.com.br', 'www.lsbwebinfo.com.br'
+    'fmz.com.br', 'www.fmz.com.br',
+    'fmz.localhost',
+    'horusb2b.com.br', 'www.horusb2b.com.br', 'horusb2b.localhost'
   ];
 
-  // A. Marketing Site (Public)
+  // A. Tenant detection
+  let tenant = 'cronuz';
+  if (hostname.includes('fmz') || hostname.includes('horus')) {
+      tenant = 'horus';
+  }
+  
+  // Prepare headers to inject the tenant
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-tenant-id', tenant);
+
+  // B. Marketing Site (Public)
   if (marketingDomains.includes(hostname)) {
-    // If accessing root, rewrite to marketing
+    // se formos adicionar outras rotas como /marketing/contato, podemos fazer rewrite também
     if (url.pathname === '/') {
         url.pathname = '/marketing';
-        return NextResponse.rewrite(url);
+        return NextResponse.rewrite(url, {
+          request: { headers: requestHeaders }
+        });
     }
-    // Let other marketing pages pass through natively if we build them
-    return NextResponse.next();
+    return NextResponse.next({
+      request: { headers: requestHeaders }
+    });
   }
 
-  // B. Custom Domain / Tenant Hotsite (Public)
+  // C. Custom Domain / Tenant Hotsite (Public)
   if (!appDomains.includes(hostname) && !marketingDomains.includes(hostname)) {
-    // Rewrite all requests on this domain to /domain/[hostname]/[path]
-    // The Next.js catch-all page at /domain/[domain]/page.tsx will handle the presentation
     url.pathname = `/domain/${hostname}${url.pathname === '/' ? '' : url.pathname}`;
-    return NextResponse.rewrite(url);
+    return NextResponse.rewrite(url, {
+      request: { headers: requestHeaders }
+    });
   }
 
-  // C. B2B System Application (Auth Protected)
+  // D. B2B System Application (Auth Protected)
   const token = request.cookies.get('cronuz_b2b_token');
   const userCookie = request.cookies.get('cronuz_b2b_user');
   const isLoginPage = url.pathname === '/login';
@@ -43,7 +62,7 @@ export function middleware(request: NextRequest) {
 
   // Skip auth checks for public routes hitting the app domain directly
   if (isUploads || isPublicPage) {
-     return NextResponse.next();
+     return NextResponse.next({ request: { headers: requestHeaders } });
   }
 
   // If there's no token and we're not on the login page, redirect to login
@@ -79,9 +98,9 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  return NextResponse.next();
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
 export const config = {
-  matcher: ['/((?!api|_next/static|_next/image|images|favicon.ico).*)'],
+  matcher: ['/((?!api|_next/static|_next/image|images|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
 };

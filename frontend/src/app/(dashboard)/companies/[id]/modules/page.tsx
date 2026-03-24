@@ -102,7 +102,7 @@ export default function CompanyModulesPage() {
                  <p className="text-sm text-slate-600 dark:text-slate-300 font-medium">Modelos de negócio mutuamente exclusivos. Escolha como o catálogo e pedidos serão processados.</p>
               </div>
 
-              <div className="p-6 flex items-start sm:items-center justify-between border-t border-indigo-100/50 dark:border-slate-800 gap-4 flex-col sm:flex-row">
+              <div className="theme-horus:hidden p-6 flex items-start sm:items-center justify-between border-t border-indigo-100/50 dark:border-slate-800 gap-4 flex-col sm:flex-row">
                 <div className="space-y-1 pr-6">
                   <p className="text-sm font-bold text-slate-800 dark:text-slate-200">B2B Nativo (Cronuz)</p>
                   <p className="text-xs text-slate-500 dark:text-slate-400">A operação será 100% nativa. Catálogo próprio e pedidos locais. Habilita o módulo de Produtos automaticamente.</p>

@@ -85,6 +85,7 @@ def login_for_access_token(db: Session = Depends(get_db), form_data: OAuth2Passw
         "email": user.email,
         "type": user.type,
         "company_id": user.company_id,
-        "company_name": company_name
+        "company_name": company_name,
+        "tenant_id": user.tenant_id
          # Do not return password hash
     }}

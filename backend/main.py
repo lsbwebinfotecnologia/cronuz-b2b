@@ -144,6 +144,11 @@ def create_company(
 ):
     company_data = company.model_dump()
     lead_id = company_data.pop("lead_id", None)
+    
+    # Partner Masters can only create companies within their own tenant
+    if current_user.type == user_models.UserRole.MASTER and current_user.tenant_id and current_user.tenant_id != "cronuz":
+        company_data["tenant_id"] = current_user.tenant_id
+        
     db_company = company_models.Company(**company_data)
     db.add(db_company)
     db.commit()
@@ -165,7 +170,14 @@ def read_companies(
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user)
 ):
-    companies = db.query(company_models.Company).offset(skip).limit(limit).all()
+    query = db.query(company_models.Company)
+    
+    if current_user.type == user_models.UserRole.MASTER and current_user.tenant_id and current_user.tenant_id != "cronuz":
+        query = query.filter(company_models.Company.tenant_id == current_user.tenant_id)
+    elif current_user.type != user_models.UserRole.MASTER:
+        query = query.filter(company_models.Company.id == current_user.company_id)
+        
+    companies = query.offset(skip).limit(limit).all()
     return companies
 
 @app.post("/users", response_model=user_schemas.User)
@@ -182,9 +194,15 @@ def create_user(
     if user.type in [user_models.UserRole.SELLER, user_models.UserRole.CUSTOMER, user_models.UserRole.AGENT] and user.company_id is None:
          raise HTTPException(status_code=400, detail="This user type must belong to a company")
 
-    # Hash password properly
     user_data = user.model_dump()
     password = user_data.pop("password")
+    
+    # Restrict Partner Masters from creating Global Masters or users outside their tenant
+    if current_user.type == user_models.UserRole.MASTER and current_user.tenant_id and current_user.tenant_id != "cronuz":
+        if user_data.get("type") == user_models.UserRole.MASTER:
+            # Force the new Master to have the same partner tenant
+            user_data["tenant_id"] = current_user.tenant_id
+            
     db_user = user_models.User(**user_data, password_hash=security.get_password_hash(password))
     
     try:
@@ -203,7 +221,18 @@ def read_users(
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.require_master_user)
 ):
-    users = db.query(user_models.User).offset(skip).limit(limit).all()
+    query = db.query(user_models.User)
+    
+    # Partner Masters should only see users from companies belonging to their tenant, or other partner masters of their tenant
+    if current_user.tenant_id and current_user.tenant_id != "cronuz":
+        from app.models.company import Company
+        query = query.outerjoin(Company, user_models.User.company_id == Company.id)
+        query = query.filter(
+            (Company.tenant_id == current_user.tenant_id) | 
+            ((user_models.User.type == user_models.UserRole.MASTER) & (user_models.User.tenant_id == current_user.tenant_id))
+        )
+        
+    users = query.offset(skip).limit(limit).all()
     return users
 
 # User password and status update schemas

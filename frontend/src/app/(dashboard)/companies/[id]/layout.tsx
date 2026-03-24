@@ -11,6 +11,7 @@ interface Company {
   name: string;
   document: string;
   domain: string;
+  tenant_id?: string;
   custom_domain?: string;
   logo: string | null;
   zip_code?: string | null;

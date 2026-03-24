@@ -66,7 +66,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen bg-slate-950 theme-horus:bg-white flex items-center justify-center p-4 relative overflow-hidden transition-colors duration-500">
       {/* Background Effects */}
       <div className="absolute inset-0 z-0">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-[var(--color-primary-base)]/20 rounded-full blur-[120px] mix-blend-screen" />
@@ -80,16 +80,21 @@ export default function LoginPage() {
         transition={{ duration: 0.5, ease: "easeOut" }}
         className="relative z-10 w-full max-w-md"
       >
-        <div className="rounded-3xl border border-slate-800/60 bg-slate-900/50 p-8 backdrop-blur-xl shadow-2xl backdrop-saturate-150">
+        <div className="rounded-3xl border border-slate-800/60 theme-horus:border-slate-200 bg-slate-900/50 theme-horus:bg-white p-8 backdrop-blur-xl shadow-2xl backdrop-saturate-150 transition-colors duration-500">
           <div className="flex flex-col items-center mb-8">
             <div className="relative h-16 w-36 mb-4">
               <img 
                 src="/images/cronuz-logo.png" 
                 alt="Cronuz Logo" 
-                className="object-contain w-full h-full"
+                className="object-contain w-full h-full cronuz-logo"
+              />
+              <img 
+                src="/images/logo-b2b-horus.png" 
+                alt="Horus Logo" 
+                className="object-contain w-full h-full hidden horus-logo"
               />
             </div>
-            <p className="text-sm text-slate-400 mt-2 text-center">
+            <p className="text-sm text-slate-400 theme-horus:text-slate-500 mt-2 text-center font-medium">
               Faça login para acessar o portal da sua empresa.
             </p>
           </div>
@@ -104,7 +109,7 @@ export default function LoginPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="E-mail corporativo"
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950/50 py-3 pl-11 pr-4 text-sm text-slate-200 placeholder:text-slate-500 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-medium"
+                    className="w-full rounded-xl border border-slate-800 theme-horus:border-slate-200 bg-slate-950/50 theme-horus:bg-white py-3 pl-11 pr-4 text-sm text-slate-200 theme-horus:text-slate-800 placeholder:text-slate-500 theme-horus:placeholder:text-slate-400 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 theme-horus:focus:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-medium"
                   />
                 </div>
                 <div className="relative">
@@ -114,7 +119,7 @@ export default function LoginPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Senha"
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950/50 py-3 pl-11 pr-4 text-sm text-slate-200 placeholder:text-slate-500 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-medium"
+                    className="w-full rounded-xl border border-slate-800 theme-horus:border-slate-200 bg-slate-950/50 theme-horus:bg-white py-3 pl-11 pr-4 text-sm text-slate-200 theme-horus:text-slate-800 placeholder:text-slate-500 theme-horus:placeholder:text-slate-400 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 theme-horus:focus:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-medium"
                   />
                 </div>
               </div>
@@ -124,9 +129,9 @@ export default function LoginPage() {
                  animate={{ opacity: 1, x: 0 }}
                  className="space-y-4"
                >
-                <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-4 flex items-start gap-3">
-                  <ShieldCheck className="h-5 w-5 text-indigo-400 mt-0.5 flex-shrink-0" />
-                  <p className="text-sm text-indigo-200/90 leading-relaxed font-medium">
+                <div className="bg-indigo-500/10 theme-horus:bg-[var(--color-primary-base)]/10 border border-indigo-500/20 theme-horus:border-[var(--color-primary-base)]/20 rounded-xl p-4 flex items-start gap-3">
+                  <ShieldCheck className="h-5 w-5 text-indigo-400 theme-horus:text-[var(--color-primary-base)] mt-0.5 flex-shrink-0" />
+                  <p className="text-sm text-indigo-200/90 theme-horus:text-slate-700 leading-relaxed font-medium">
                     Autenticação em Duas Etapas obrigatória. Insira o código enviado para o seu dispositivo.
                   </p>
                 </div>
@@ -139,18 +144,18 @@ export default function LoginPage() {
                     value={twoFaCode}
                     onChange={(e) => setTwoFaCode(e.target.value)}
                     placeholder="Código 2FA (6 dígitos)"
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950/50 py-4 pl-11 pr-4 text-base tracking-widest text-slate-200 placeholder:text-slate-500 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-bold text-center"
+                    className="w-full rounded-xl border border-slate-800 theme-horus:border-[var(--color-primary-base)]/50 bg-slate-950/50 theme-horus:bg-white py-4 pl-11 pr-4 text-base tracking-widest text-slate-200 theme-horus:text-[var(--color-primary-base)] placeholder:text-slate-500 theme-horus:placeholder:text-[var(--color-primary-base)]/40 focus:border-[var(--color-primary-base)]/50 focus:bg-slate-900/80 theme-horus:focus:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 transition-all font-bold text-center"
                   />
                 </div>
                </motion.div>
             )}
 
             {!is2FA && (
-              <div className="flex items-center justify-center p-3 mt-4 border border-slate-800/60 rounded-xl bg-slate-950/30">
+              <div className="flex items-center justify-center p-3 mt-4 border border-slate-800/60 theme-horus:border-slate-200 rounded-xl bg-slate-950/30 theme-horus:bg-slate-50 transition-colors duration-500">
                 {/* Mock reCAPTCHA */}
                 <div className="flex items-center gap-3">
-                   <div className="h-5 w-5 rounded border border-slate-700 bg-slate-900 cursor-pointer flex items-center justify-center hover:border-slate-500 transition-colors"></div>
-                   <span className="text-sm font-medium text-slate-400">Não sou um robô</span>
+                   <div className="h-5 w-5 rounded border border-slate-700 theme-horus:border-slate-300 bg-slate-900 theme-horus:bg-white cursor-pointer flex items-center justify-center hover:border-slate-500 transition-colors"></div>
+                   <span className="text-sm font-medium text-slate-400 theme-horus:text-slate-500">Não sou um robô</span>
                 </div>
                 <div className="ml-auto flex items-center gap-1 opacity-50">
                   <img src="https://www.gstatic.com/recaptcha/api2/logo_48.png" className="h-6 w-6 grayscale" />
@@ -161,10 +166,10 @@ export default function LoginPage() {
             {!is2FA && (
               <div className="flex items-center justify-between pb-2 pt-2">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" className="rounded border-slate-800 bg-slate-950 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)]/50" />
-                  <span className="text-sm text-slate-400">Lembrar de mim</span>
+                  <input type="checkbox" className="rounded border-slate-800 theme-horus:border-slate-300 bg-slate-950 theme-horus:bg-white text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)]/50" />
+                  <span className="text-sm text-slate-400 theme-horus:text-slate-500 font-medium">Lembrar de mim</span>
                 </label>
-                <Link href="#" className="text-sm font-medium text-[var(--color-primary-base)] hover:text-indigo-300 transition-colors">
+                <Link href="#" className="text-sm font-medium text-[var(--color-primary-base)] hover:text-[var(--color-primary-hover)] transition-colors">
                   Esqueceu a senha?
                 </Link>
               </div>
@@ -184,9 +189,12 @@ export default function LoginPage() {
           </form>
         </div>
         
-        <p className="text-center text-xs text-slate-500 mt-6 font-medium">
+        <div className="theme-horus:hidden text-center text-xs text-slate-500 mt-6 font-medium">
           Deseja integrar sua empresa ao Cronuz IA? <Link href="#" className="text-[var(--color-primary-base)] hover:underline">Fale conosco</Link>
-        </p>
+        </div>
+        <div className="hidden theme-horus:block text-center text-xs text-slate-400 mt-6 font-medium">
+          Powered by Cronuz B2B Network
+        </div>
       </motion.div>
     </div>
   );

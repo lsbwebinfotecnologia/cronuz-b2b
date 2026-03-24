@@ -9,6 +9,7 @@ class UserBase(BaseModel):
     document: Optional[str] = None
     type: UserRole
     company_id: Optional[int] = None
+    tenant_id: Optional[str] = None
     active: bool = True
 
 class UserCreate(UserBase):
