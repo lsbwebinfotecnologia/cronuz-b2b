@@ -15,6 +15,9 @@ class Company(Base):
     custom_domain = Column(String(255), unique=True, index=True, nullable=True)
     logo = Column(String(500), nullable=True)
     login_background_url = Column(String(500), nullable=True)
+    favicon_url = Column(String(500), nullable=True)
+    seo_title = Column(String(255), nullable=True)
+    seo_description = Column(String(500), nullable=True)
     
     # Address
     zip_code = Column(String(20), nullable=True)

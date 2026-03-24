@@ -110,7 +110,10 @@ def get_storefront_domain_info(
         "custom_domain": company.custom_domain,
         "login_background_url": company.login_background_url,
         "logo": company.logo,
-        "tenant_id": company.tenant_id
+        "tenant_id": company.tenant_id,
+        "favicon_url": company.favicon_url,
+        "seo_title": company.seo_title,
+        "seo_description": company.seo_description
     }
 
 @router.get("/config")

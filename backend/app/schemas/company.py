@@ -10,6 +10,9 @@ class CompanyBase(BaseModel):
     tenant_id: Optional[str] = "cronuz"
     logo: Optional[str] = None
     login_background_url: Optional[str] = None
+    favicon_url: Optional[str] = None
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
     
     zip_code: Optional[str] = None
     street: Optional[str] = None
@@ -40,6 +43,9 @@ class CompanyUpdate(BaseModel):
     tenant_id: Optional[str] = None
     login_background_url: Optional[str] = None
     logo: Optional[str] = None
+    favicon_url: Optional[str] = None
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
     horus_company: Optional[str] = None
     horus_branch: Optional[str] = None
     horus_default_b2b_guid: Optional[str] = None
