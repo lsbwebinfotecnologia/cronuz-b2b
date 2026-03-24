@@ -130,7 +130,14 @@ def get_orders(
         query = query.filter(Order.company_id == current_user.company_id)
     elif current_user.type == "AGENT":
         query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
-        
+    elif current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
+        from app.models.company import Company
+        query = query.join(Company, Order.company_id == Company.id)
+        if current_user.tenant_id == "horus":
+            query = query.filter(Company.module_horus_erp == True)
+        else:
+            query = query.filter(Company.tenant_id == current_user.tenant_id)
+            
     query = query.filter(Order.status != "NEW")
     
     if search:

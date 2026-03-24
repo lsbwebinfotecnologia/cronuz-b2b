@@ -33,16 +33,28 @@ def get_dashboard_metrics(
     uses_horus = settings.horus_enabled if settings else False
     
     active_products = 0
-    if not uses_horus:
-        prod_query = db.query(Product).filter(Product.status == "ACTIVE")
-        if company_id:
-            prod_query = prod_query.filter(Product.company_id == company_id)
-        active_products = prod_query.count()
+    prod_query = db.query(Product).filter(Product.status == "ACTIVE")
+    if company_id:
+        prod_query = prod_query.filter(Product.company_id == company_id)
+    elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
+        prod_query = prod_query.join(Company, Product.company_id == Company.id)
+        if current_user.tenant_id == "horus":
+            prod_query = prod_query.filter(Company.module_horus_erp == True)
+        else:
+            prod_query = prod_query.filter(Company.tenant_id == current_user.tenant_id)
+            
+    active_products = prod_query.count()
 
     # 2. Total customers (empresas clientes)
     cust_query = db.query(Customer)
     if company_id:
         cust_query = cust_query.filter(Customer.company_id == company_id)
+    elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
+        cust_query = cust_query.join(Company, Customer.company_id == Company.id)
+        if current_user.tenant_id == "horus":
+            cust_query = cust_query.filter(Company.module_horus_erp == True)
+        else:
+            cust_query = cust_query.filter(Company.tenant_id == current_user.tenant_id)
     total_customers = cust_query.count()
 
     # 3. Active orders
@@ -50,6 +62,12 @@ def get_dashboard_metrics(
     order_query = db.query(Order).filter(Order.status.in_(["NEW", "PROCESSING", "SENT_TO_HORUS"]))
     if company_id:
         order_query = order_query.filter(Order.company_id == company_id)
+    elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
+        order_query = order_query.join(Company, Order.company_id == Company.id)
+        if current_user.tenant_id == "horus":
+            order_query = order_query.filter(Company.module_horus_erp == True)
+        else:
+            order_query = order_query.filter(Company.tenant_id == current_user.tenant_id)
     active_orders = order_query.count()
     
     # Get Company Modules
@@ -67,7 +85,10 @@ def get_dashboard_metrics(
     module_agents = company.module_agents if company else False
 
     # Uses horus is now strongly derived from the company flag
-    uses_horus = module_horus_erp
+    if current_user and current_user.type == "MASTER" and current_user.tenant_id == "horus":
+        uses_horus = True
+    else:
+        uses_horus = module_horus_erp
 
     # 4. Total revenue (Mocked for now since payment/invoicing is not fully done)
     total_revenue = 0.0
