@@ -680,7 +680,7 @@ export default function CompanyProfilePage() {
                     </div>
                   </div>
                   <div className="space-y-1.5 md:col-span-1">
-                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Mensalidade LSBWeb</label>
+                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Mensalidade</label>
                     <div className="relative">
                       <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                       <input
