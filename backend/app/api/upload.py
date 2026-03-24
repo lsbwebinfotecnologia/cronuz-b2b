@@ -49,23 +49,32 @@ async def upload_cover(
     
     return {"message": "Imagem de capa salva com sucesso.", "url": relative_url}
 
+from typing import Optional
+
 @router.post("/image")
 async def upload_image(
     file: UploadFile = File(...),
+    company_id: Optional[int] = Form(None),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Endpoint de uso geral para upload de imagens diversas (ex: Hotsite, Banners).
+    Endpoint de uso geral para upload de imagens diversas (ex: Hotsite, Banners, Backgrounds de Login).
     Opcional usar em conjunto com UUID para previnir conflitos.
     """
-    if not current_user.company_id:
-        raise HTTPException(status_code=400, detail="Usuário sem empresa vinculada.")
+    target_company_id = company_id or current_user.company_id
+    
+    if not target_company_id:
+        raise HTTPException(status_code=400, detail="Empresa não informada ou Usuário sem empresa vinculada.")
+        
+    from app.models.user import UserRole
+    if current_user.type != UserRole.MASTER and target_company_id != current_user.company_id:
+        raise HTTPException(status_code=403, detail="Acesso restrito. Você só pode enviar arquivos para a sua própria empresa.")
         
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="O arquivo de envio deve ser uma imagem.")
 
     # Diretorio para imagens gerais
-    images_dir = FRONTEND_PUBLIC_DIR / "images" / str(current_user.company_id)
+    images_dir = FRONTEND_PUBLIC_DIR / "images" / str(target_company_id)
     images_dir.mkdir(parents=True, exist_ok=True)
     
     # Manter a extensao original com base no content type ou nome do file
@@ -80,7 +89,7 @@ async def upload_image(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar o arquivo: {str(e)}")
         
-    relative_url = f"/uploads/images/{current_user.company_id}/{unique_filename}"
+    relative_url = f"/uploads/images/{target_company_id}/{unique_filename}"
     
     return {"message": "Imagem enviada com sucesso.", "url": relative_url}
 

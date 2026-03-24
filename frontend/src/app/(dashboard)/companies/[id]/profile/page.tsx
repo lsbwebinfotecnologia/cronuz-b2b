@@ -84,6 +84,7 @@ export default function CompanyProfilePage() {
     try {
       const data = new FormData();
       data.append('file', file);
+      if (companyId) data.append('company_id', companyId);
       
       const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/image`, {
@@ -111,6 +112,7 @@ export default function CompanyProfilePage() {
     try {
       const data = new FormData();
       data.append('file', file);
+      if (companyId) data.append('company_id', companyId);
       
       const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/image`, {
