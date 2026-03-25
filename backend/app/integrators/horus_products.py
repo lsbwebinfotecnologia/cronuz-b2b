@@ -138,7 +138,10 @@ class HorusProducts(HorusClient):
         """
         Fetches the complete taxonomy/category tree from Horus ERP.
         """
-        params = {"ID_DOC": id_doc, "OFFSET": 0, "LIMIT": 99999}
+        params: Dict[str, Any] = {"ID_DOC": id_doc}
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = 0
+            params["LIMIT"] = 99999
         params.update(kwargs)
         return await self.get("arvore_generos", params=params)
 
@@ -146,7 +149,10 @@ class HorusProducts(HorusClient):
         """
         Fetches the active publishers/brands from Horus ERP.
         """
-        params = {"ID_DOC": id_doc, "OFFSET": 0, "LIMIT": 99999}
+        params: Dict[str, Any] = {"ID_DOC": id_doc}
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = 0
+            params["LIMIT"] = 99999
         params.update(kwargs)
         return await self.get("Busca_editoras", params=params)
 

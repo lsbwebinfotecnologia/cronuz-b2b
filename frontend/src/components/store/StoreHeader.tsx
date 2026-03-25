@@ -57,44 +57,44 @@ export function StoreHeader() {
   return (
     <header className="sticky top-0 z-50 w-full bg-white/90 backdrop-blur-md border-b border-slate-200 shadow-sm dark:bg-slate-950/90 dark:border-slate-800 transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16 md:h-20">
+        <div className="flex justify-between items-center h-16 md:h-20 gap-4">
           
           {/* Logo & Mobile Menu Toggle */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 md:gap-4 shrink-0">
             <button 
-              className="md:hidden p-2 -ml-2 text-slate-600 hover:text-[var(--color-primary-base)] transition-colors dark:text-slate-300"
+              className="lg:hidden p-2 -ml-2 text-slate-600 hover:text-[var(--color-primary-base)] transition-colors dark:text-slate-300"
               onClick={() => setIsMobileMenuOpen(true)}
             >
               <Menu className="h-6 w-6" />
             </button>
             <Link href="/store" className="flex items-center gap-2 group">
-              <div className="bg-[var(--color-primary-base)] text-white p-2 rounded-xl shadow-lg shadow-[var(--color-primary-base)]/20 group-hover:scale-105 transition-transform">
-                <BookOpen className="h-5 w-5 md:h-6 md:w-6" />
+              <div className="bg-[var(--color-primary-base)] text-white p-2 md:p-2.5 rounded-xl shadow-lg shadow-[var(--color-primary-base)]/20 group-hover:scale-105 transition-transform hidden sm:flex">
+                <BookOpen className="h-4 w-4 md:h-5 md:w-5" />
               </div>
-              <span className="text-xl md:text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-400 tracking-tight">
+              <span className="text-lg md:text-xl lg:text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-400 tracking-tight leading-tight max-w-[140px] md:max-w-xs shrink-0 line-clamp-2">
                 {storeName}
               </span>
             </Link>
           </div>
 
-          {/* Nav Links (Desktop) */}
-          <div className="hidden md:flex items-center gap-6 ml-6 font-medium text-sm">
+          {/* Desktop Search Center Area */}
+          <div className="hidden lg:flex flex-1 items-center max-w-4xl ml-2 xl:ml-8 gap-4">
+             {/* Departments Dropdown */}
              {(categories.length > 0 || brands.length > 0) && (
-                <div className="relative group cursor-pointer z-50">
-                   <div className="flex items-center gap-1 text-slate-700 dark:text-slate-300 hover:text-[var(--color-primary-base)] transition-colors py-2">
-                      <Menu className="w-4 h-4"/>
+                <div className="relative group cursor-pointer z-50 shrink-0">
+                   <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300 hover:text-[var(--color-primary-base)] transition-colors py-2 font-bold text-sm">
+                      <Menu className="w-4 h-4 text-[var(--color-primary-base)]"/>
                       <span>Departamentos</span>
-                      <ChevronDown className="w-3 h-3 group-hover:rotate-180 transition-transform"/>
+                      <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform"/>
                    </div>
                    
-                   <div className="absolute top-full left-0 mt-2 w-max min-w-[200px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all flex origin-top-left scale-95 group-hover:scale-100">
-                      
+                   <div className="absolute top-full left-0 mt-2 w-max min-w-[220px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all flex origin-top-left scale-95 group-hover:scale-100 overflow-hidden">
                       {categories.length > 0 && (
-                         <div className="p-4 border-r border-slate-100 dark:border-slate-800/50">
+                         <div className="p-4 border-r border-slate-100 dark:border-slate-800/50 flex-1">
                             <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Categorias</h5>
                             <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                                {categories.map((cat, idx) => (
-                                  <Link key={idx} href={`/store/search?q=${encodeURIComponent(cat.name)}&filter=default`} className="px-3 py-1.5 text-sm text-slate-700 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 rounded-lg transition-colors whitespace-nowrap">
+                                  <Link key={idx} href={`/store/search?q=${encodeURIComponent(cat.name)}&filter=default`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
                                      {cat.name}
                                   </Link>
                                ))}
@@ -103,26 +103,23 @@ export function StoreHeader() {
                       )}
                       
                       {brands.length > 0 && (
-                         <div className="p-4">
+                         <div className="p-4 flex-1">
                             <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Marcas / Editoras</h5>
                             <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                                {brands.map((brand, idx) => (
-                                  <Link key={idx} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA`} className="px-3 py-1.5 text-sm text-slate-700 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 rounded-lg transition-colors whitespace-nowrap">
+                                  <Link key={idx} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
                                      {brand.name}
                                   </Link>
                                ))}
                             </div>
                          </div>
                       )}
-                      
                    </div>
                 </div>
              )}
-          </div>
 
-          {/* Desktop Search Bar */}
-          <div className="hidden md:flex flex-1 max-w-2xl mx-8">
-            <form onSubmit={handleSearch} className="w-full relative group flex shadow-sm rounded-2xl border border-slate-200 dark:border-slate-800 transition-colors focus-within:border-[var(--color-primary-base)] focus-within:ring-4 focus-within:ring-[var(--color-primary-base)]/10">
+            {/* Desktop Search Bar Form */}
+            <form onSubmit={handleSearch} className="flex-1 w-full relative group flex shadow-sm rounded-2xl border border-slate-200 dark:border-slate-800 transition-colors focus-within:border-[var(--color-primary-base)] focus-within:ring-4 focus-within:ring-[var(--color-primary-base)]/10 bg-white dark:bg-slate-900">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
                 <Search className="h-5 w-5 text-slate-400 group-focus-within:text-[var(--color-primary-base)] transition-colors" />
               </div>
@@ -130,15 +127,15 @@ export function StoreHeader() {
                 type="text"
                 required
                 placeholder="Busque por título, autor, editora ou ISBN..."
-                className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border-transparent text-slate-900 text-sm rounded-l-2xl focus:bg-white focus:ring-0 focus:outline-none transition-all dark:bg-slate-900 dark:text-white dark:placeholder-slate-500"
+                className="flex-1 w-full min-w-0 pl-11 pr-4 py-2.5 bg-transparent border-transparent text-slate-900 text-sm focus:ring-0 focus:outline-none transition-all dark:text-white dark:placeholder-slate-500"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
-              <div className="relative border-l border-slate-200 dark:border-slate-800 flex items-center bg-slate-100 dark:bg-slate-800">
+              <div className="relative border-l border-slate-200 dark:border-slate-800 flex items-center bg-slate-50 dark:bg-slate-800 shrink-0">
                 <select
                   value={searchFilter}
                   onChange={(e) => setSearchFilter(e.target.value)}
-                  className="pl-3 pr-8 py-2.5 bg-transparent border-none text-slate-600 dark:text-slate-300 text-sm focus:ring-0 cursor-pointer outline-none appearance-none font-medium z-10"
+                  className="pl-3 pr-8 py-2.5 bg-transparent border-none text-slate-600 dark:text-slate-300 text-sm focus:ring-0 cursor-pointer outline-none appearance-none font-medium z-10 w-[120px]"
                 >
                   <option value="default">Título/ISBN</option>
                   <option value="NOM_AUTOR">Autor</option>
@@ -155,27 +152,25 @@ export function StoreHeader() {
           </div>
 
           {/* Actions: Theme, Account, Cart */}
-          <div className="flex items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             <div className="hidden sm:block"><ThemeToggle /></div>
 
             {isCustomer && (
-              <>
-                <Link href="/store/orders" className="hidden lg:flex items-center gap-2 p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                  <ShoppingBag className="h-5 w-5" />
-                  <span className="text-sm font-bold">Pedidos</span>
-                </Link>
-              </>
+              <Link href="/store/orders" className="hidden lg:flex items-center gap-2 p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                <ShoppingBag className="h-5 w-5" />
+                <span className="text-sm font-bold">Pedidos</span>
+              </Link>
             )}
             
             <Link href="/store/account" className="hidden sm:flex items-center gap-2 p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
               <User className="h-5 w-5" />
               <div className="flex flex-col items-start leading-none">
-                <span className="text-xs text-slate-500 dark:text-slate-400">Olá, {user?.name?.split(' ')[0] || 'Visitante'}</span>
+                <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[80px]">Olá, {user?.name?.split(' ')[0] || 'Visitante'}</span>
                 <span className="text-sm font-bold">Minha Conta</span>
               </div>
             </Link>
 
-            <button onClick={openCart} className="relative p-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 transition-colors dark:bg-slate-900 dark:hover:bg-slate-800 dark:text-slate-300 group">
+            <button onClick={openCart} className="relative p-2 md:p-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 transition-colors dark:bg-slate-900 dark:hover:bg-slate-800 dark:text-slate-300 group">
               <ShoppingCart className="h-5 w-5 group-hover:scale-110 transition-transform" />
               {cartItemsCount > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full text-[10px] font-bold shadow-sm shadow-rose-500/30">
@@ -194,6 +189,38 @@ export function StoreHeader() {
             </button>
           </div>
         </div>
+
+        {/* Mobile & Tablet Search Bar (visible on md and smaller, hidden on lg) */}
+        <div className="pb-4 lg:hidden">
+            <form onSubmit={handleSearch} className="w-full relative flex shadow-sm rounded-xl border border-slate-200 dark:border-slate-800 focus-within:border-[var(--color-primary-base)] transition-colors bg-white dark:bg-slate-900">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <Search className="h-5 w-5 text-slate-400" />
+              </div>
+              <input
+                type="text"
+                required
+                placeholder="Busque por título, autor, editora..."
+                className="flex-1 w-full min-w-0 pl-10 pr-2 py-2.5 bg-transparent border-transparent text-slate-900 text-sm focus:ring-0 focus:outline-none dark:text-white dark:placeholder-slate-500"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              <div className="border-l border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 rounded-r-xl flex items-center shrink-0">
+                 <select
+                    value={searchFilter}
+                    onChange={(e) => setSearchFilter(e.target.value)}
+                    className="pl-2 pr-6 py-2.5 bg-transparent border-none text-slate-600 dark:text-slate-300 text-xs focus:ring-0 cursor-pointer outline-none appearance-none font-medium z-10 max-w-[90px] sm:max-w-none"
+                 >
+                    <option value="default" className="text-xs">Título/ISBN</option>
+                    <option value="NOM_AUTOR" className="text-xs">Autor</option>
+                    <option value="NOM_EDITORA" className="text-xs">Editora</option>
+                 </select>
+                 <button type="submit" className="h-full px-4 border-l border-slate-200 dark:border-slate-700 text-[var(--color-primary-base)] font-bold text-sm hover:bg-[var(--color-primary-base)] hover:text-white transition-colors rounded-r-xl">
+                    Ir
+                 </button>
+              </div>
+            </form>
+        </div>
+
       </div>
 
       {/* Mobile Menu Overlay */}
