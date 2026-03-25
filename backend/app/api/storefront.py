@@ -741,7 +741,7 @@ async def checkout_cart(
                     # mapping isbn to stock
                     stock_map = {}
                     for prod in stock_data:
-                        isbn = prod.get("BARRAS_ISBN") or prod.get("ISBN")
+                        isbn = prod.get("COD_BARRA_ITEM") or prod.get("BARRAS_ISBN") or prod.get("ISBN")
                         saldo_raw = prod.get("SALDO_DISPONIVEL", 0)
                         if isbn:
                             try:
