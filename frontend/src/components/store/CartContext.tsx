@@ -235,7 +235,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       updateQuantity,
       clearCart,
       totalItems,
-      subtotal: subtotal > 0 ? subtotal : computedSubtotal,
+      subtotal: computedSubtotal,
       totalWeight,
       isCartOpen,
       openCart,

@@ -209,10 +209,19 @@ export default function CheckoutPage() {
                                         {item.ean_gtin && <span className="text-slate-400">ISBN: {item.ean_gtin}</span>}
                                     </div>
                                     <div className="flex items-center justify-between text-sm">
-                                       <span className="text-slate-600 dark:text-slate-400">
-                                          {item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)}
-                                       </span>
-                                        <span className="font-bold text-slate-900 dark:text-white">
+                                       <div className="flex flex-col">
+                                          {item.promotional_price && item.promotional_price > 0 && item.promotional_price < item.base_price ? (
+                                              <>
+                                                <span className="line-through text-[10px] text-slate-400">{item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(item.base_price)}</span>
+                                                <span className="text-emerald-600 font-medium">{item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)}</span>
+                                              </>
+                                          ) : (
+                                              <span className="text-slate-600 dark:text-slate-400">
+                                                {item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)}
+                                              </span>
+                                          )}
+                                       </div>
+                                       <span className="font-bold text-slate-900 dark:text-white text-base">
                                           {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price * item.quantity)}
                                        </span>
                                     </div>

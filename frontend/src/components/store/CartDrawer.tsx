@@ -161,7 +161,14 @@ export function CartDrawer() {
                                 {item.ean_gtin && <span className="text-slate-400">ISBN: {item.ean_gtin}</span>}
                               </div>
                               <div className="text-xs text-slate-500 mb-3 flex items-center justify-between">
-                                 <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)} un</span>
+                                 {item.promotional_price && item.promotional_price > 0 && item.promotional_price < item.base_price ? (
+                                    <div className="flex flex-col">
+                                       <span className="line-through text-[10px] text-slate-400">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(item.base_price)} un</span>
+                                       <span className="text-emerald-600 font-bold">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)} un</span>
+                                    </div>
+                                 ) : (
+                                    <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)} un</span>
+                                 )}
                                  <span className="font-bold text-slate-800 dark:text-slate-200">
                                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price * item.quantity)}
                                  </span>
