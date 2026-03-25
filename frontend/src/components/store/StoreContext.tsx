@@ -6,12 +6,16 @@ interface StoreContextType {
   coverImageBaseUrl: string | null;
   companyId: number;
   usesHorus: boolean;
+  logo: string | null;
+  name: string | null;
 }
 
 const StoreContext = createContext<StoreContextType>({
   coverImageBaseUrl: null,
   companyId: 1,
-  usesHorus: false
+  usesHorus: false,
+  logo: null,
+  name: null
 });
 
 export const useStoreConfig = () => useContext(StoreContext);
@@ -20,15 +24,19 @@ export function StoreProvider({
   children, 
   coverImageBaseUrl,
   companyId,
-  usesHorus
+  usesHorus,
+  logo,
+  name
 }: { 
   children: React.ReactNode, 
   coverImageBaseUrl: string | null,
   companyId: number,
-  usesHorus: boolean
+  usesHorus: boolean,
+  logo: string | null,
+  name: string | null
 }) {
   return (
-    <StoreContext.Provider value={{ coverImageBaseUrl, companyId, usesHorus }}>
+    <StoreContext.Provider value={{ coverImageBaseUrl, companyId, usesHorus, logo, name }}>
       {children}
     </StoreContext.Provider>
   );

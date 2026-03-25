@@ -7,6 +7,7 @@ import { Search, ShoppingCart, User, Menu, X, BookOpen, ShoppingBag, Receipt, Lo
 import { motion, AnimatePresence } from 'framer-motion';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { getUser, removeToken } from '@/lib/auth';
+import { useStoreConfig } from '@/components/store/StoreContext';
 import { useCart } from '@/components/store/CartContext';
 
 export function StoreHeader() {
@@ -33,7 +34,8 @@ export function StoreHeader() {
     }
   }, []);
 
-  const storeName = user?.company_name || 'Cronuz';
+  const { logo, name } = useStoreConfig();
+  const storeName = name || user?.company_name || 'Cronuz';
   const isCustomer = user?.type === 'CUSTOMER';
   
   const { totalItems, openCart } = useCart();
@@ -68,13 +70,19 @@ export function StoreHeader() {
               <Menu className="h-6 w-6" />
             </button>
             
-            <Link href="/store" className="flex items-center gap-2 group shrink-0">
-              <div className="bg-[var(--color-primary-base)] text-white p-2 rounded-xl shadow-lg shadow-[var(--color-primary-base)]/20 group-hover:scale-105 transition-transform hidden sm:flex">
-                <BookOpen className="h-5 w-5" />
-              </div>
-              <span className="text-base md:text-lg lg:text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-400 tracking-tight truncate max-w-[120px] sm:max-w-[160px] lg:max-w-[180px]">
-                {storeName}
-              </span>
+            <Link href="/store" className="flex items-center gap-3 group shrink-0">
+              {logo ? (
+                <img src={logo} alt={storeName} className="h-8 md:h-10 object-contain rounded-lg shrink-0 transform group-hover:scale-105 transition-transform" />
+              ) : (
+                <>
+                  <div className="bg-[var(--color-primary-base)] text-white p-2 rounded-xl shadow-lg shadow-[var(--color-primary-base)]/20 group-hover:scale-105 transition-transform hidden sm:flex">
+                    <BookOpen className="h-5 w-5" />
+                  </div>
+                  <span className="text-base md:text-lg lg:text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-400 tracking-tight truncate max-w-[120px] sm:max-w-[160px] lg:max-w-[180px]">
+                    {storeName}
+                  </span>
+                </>
+              )}
             </Link>
 
             {/* Departments Dropdown */}

@@ -122,12 +122,16 @@ def get_storefront_config(
     db: Session = Depends(get_db)
 ):
     from app.models.company_settings import CompanySettings
+    from app.models.company import Company
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    company = db.query(Company).filter(Company.id == company_id).first()
     
     return {
         "cover_image_base_url": settings.cover_image_base_url if settings else None,
         "uses_horus": settings.horus_enabled if settings else False,
-        "b2b_showcases_config": settings.b2b_showcases_config if settings else None
+        "b2b_showcases_config": settings.b2b_showcases_config if settings else None,
+        "logo": company.logo if company else None,
+        "name": company.name if company else None
     }
 
 from pydantic import BaseModel
