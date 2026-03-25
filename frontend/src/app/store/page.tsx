@@ -126,15 +126,15 @@ export default function StoreHome() {
                autoplay={{ delay: 5000, disableOnInteraction: false }}
                pagination={{ clickable: true }}
                navigation
-               className="w-full h-[250px] sm:h-[350px] md:h-[400px] lg:h-[450px]"
+               className="w-full"
             >
                {config.rotating_banners.map((banner: any, idx: number) => (
                   <SwiperSlide key={idx}>
-                     <div className="relative w-full h-full">
+                     <div className="relative w-full">
                         <img 
                            src={banner.image_url} 
                            alt={banner.caption || `Banner ${idx + 1}`} 
-                           className="absolute inset-0 w-full h-full object-cover" 
+                           className="w-full h-auto block object-cover" 
                         />
                         {banner.link && (
                            <a href={banner.link} className="absolute inset-0 z-10">

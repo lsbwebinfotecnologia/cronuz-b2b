@@ -96,13 +96,16 @@ class HorusProducts(HorusClient):
                 params["LIMIT"] = limit
             
         # Company / Branch context from settings
+        # Busca_Acervo_Padrao typically only accepts SD_ parameters or no parameters.
         if getattr(self._settings, 'horus_hide_zero_balance', False):
+            # Even if hiding zero balance, standard acervo might reject AC_ variables for older endpoints.
+            # We'll stick to SD_ which has wider compatibility, or completely omit if necessary.
             if self._settings.horus_company:
-                params["AC_COD_EMPRESA"] = self._settings.horus_company
+                params["SD_COD_EMPRESA"] = self._settings.horus_company
             if self._settings.horus_branch:
-                params["AC_COD_FILIAL"] = self._settings.horus_branch
+                params["SD_COD_FILIAL"] = self._settings.horus_branch
             if getattr(self._settings, 'horus_stock_local', None):
-                params["AC_LOCAL_ESTOQUE"] = self._settings.horus_stock_local
+                params["SD_LOCAL_ESTOQUE"] = self._settings.horus_stock_local
         else:
             if self._settings.horus_company:
                 params["SD_COD_EMPRESA"] = self._settings.horus_company
@@ -135,7 +138,7 @@ class HorusProducts(HorusClient):
         """
         Fetches the complete taxonomy/category tree from Horus ERP.
         """
-        params = {"ID_DOC": id_doc}
+        params = {"ID_DOC": id_doc, "OFFSET": 0, "LIMIT": 99999}
         params.update(kwargs)
         return await self.get("arvore_generos", params=params)
 
@@ -143,7 +146,7 @@ class HorusProducts(HorusClient):
         """
         Fetches the active publishers/brands from Horus ERP.
         """
-        params = {"ID_DOC": id_doc}
+        params = {"ID_DOC": id_doc, "OFFSET": 0, "LIMIT": 99999}
         params.update(kwargs)
         return await self.get("Busca_editoras", params=params)
 
