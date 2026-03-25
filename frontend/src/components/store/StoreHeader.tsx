@@ -59,65 +59,66 @@ export function StoreHeader() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16 md:h-20 gap-4">
           
-          {/* Logo & Mobile Menu Toggle */}
-          <div className="flex items-center gap-2 md:gap-4 shrink-0">
+          {/* Logo, Departments & Mobile Menu Toggle */}
+          <div className="flex items-center gap-3 md:gap-4 shrink-0">
             <button 
               className="lg:hidden p-2 -ml-2 text-slate-600 hover:text-[var(--color-primary-base)] transition-colors dark:text-slate-300"
               onClick={() => setIsMobileMenuOpen(true)}
             >
               <Menu className="h-6 w-6" />
             </button>
-            <Link href="/store" className="flex items-center gap-2 group">
-              <div className="bg-[var(--color-primary-base)] text-white p-2 md:p-2.5 rounded-xl shadow-lg shadow-[var(--color-primary-base)]/20 group-hover:scale-105 transition-transform hidden sm:flex">
-                <BookOpen className="h-4 w-4 md:h-5 md:w-5" />
+            
+            <Link href="/store" className="flex items-center gap-2 group shrink-0">
+              <div className="bg-[var(--color-primary-base)] text-white p-2 rounded-xl shadow-lg shadow-[var(--color-primary-base)]/20 group-hover:scale-105 transition-transform hidden sm:flex">
+                <BookOpen className="h-5 w-5" />
               </div>
-              <span className="text-lg md:text-xl lg:text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-400 tracking-tight leading-tight max-w-[140px] md:max-w-xs shrink-0 line-clamp-2">
+              <span className="text-base md:text-lg lg:text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-400 tracking-tight truncate max-w-[120px] sm:max-w-[160px] lg:max-w-[180px]">
                 {storeName}
               </span>
             </Link>
+
+            {/* Departments Dropdown */}
+            {(categories.length > 0 || brands.length > 0) && (
+               <div className="relative group cursor-pointer z-50 shrink-0 hidden md:block">
+                  <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300 hover:text-[var(--color-primary-base)] transition-colors py-1.5 px-3 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-sm">
+                     <Menu className="w-4 h-4 text-[var(--color-primary-base)]"/>
+                     <span className="hidden lg:block">Departamentos</span>
+                     <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform"/>
+                  </div>
+                  
+                  <div className="absolute top-full left-0 mt-2 w-max min-w-[220px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all flex origin-top-left scale-95 group-hover:scale-100 overflow-hidden">
+                     {categories.length > 0 && (
+                        <div className="p-4 border-r border-slate-100 dark:border-slate-800/50 flex-1">
+                           <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Categorias</h5>
+                           <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                              {categories.map((cat, idx) => (
+                                 <Link key={idx} href={`/store/search?q=${encodeURIComponent(cat.name)}&filter=default`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
+                                    {cat.name}
+                                 </Link>
+                              ))}
+                           </div>
+                        </div>
+                     )}
+                     
+                     {brands.length > 0 && (
+                        <div className="p-4 flex-1">
+                           <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Marcas / Editoras</h5>
+                           <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                              {brands.map((brand, idx) => (
+                                 <Link key={idx} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
+                                    {brand.name}
+                                 </Link>
+                              ))}
+                           </div>
+                        </div>
+                     )}
+                  </div>
+               </div>
+            )}
           </div>
 
           {/* Desktop Search Center Area */}
-          <div className="hidden lg:flex flex-1 items-center max-w-4xl ml-2 xl:ml-8 gap-4">
-             {/* Departments Dropdown */}
-             {(categories.length > 0 || brands.length > 0) && (
-                <div className="relative group cursor-pointer z-50 shrink-0">
-                   <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300 hover:text-[var(--color-primary-base)] transition-colors py-2 font-bold text-sm">
-                      <Menu className="w-4 h-4 text-[var(--color-primary-base)]"/>
-                      <span>Departamentos</span>
-                      <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform"/>
-                   </div>
-                   
-                   <div className="absolute top-full left-0 mt-2 w-max min-w-[220px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all flex origin-top-left scale-95 group-hover:scale-100 overflow-hidden">
-                      {categories.length > 0 && (
-                         <div className="p-4 border-r border-slate-100 dark:border-slate-800/50 flex-1">
-                            <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Categorias</h5>
-                            <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                               {categories.map((cat, idx) => (
-                                  <Link key={idx} href={`/store/search?q=${encodeURIComponent(cat.name)}&filter=default`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
-                                     {cat.name}
-                                  </Link>
-                               ))}
-                            </div>
-                         </div>
-                      )}
-                      
-                      {brands.length > 0 && (
-                         <div className="p-4 flex-1">
-                            <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Marcas / Editoras</h5>
-                            <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                               {brands.map((brand, idx) => (
-                                  <Link key={idx} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
-                                     {brand.name}
-                                  </Link>
-                               ))}
-                            </div>
-                         </div>
-                      )}
-                   </div>
-                </div>
-             )}
-
+          <div className="hidden lg:flex flex-1 items-center max-w-4xl ml-4 lg:ml-8 lg:mr-4 gap-4">
             {/* Desktop Search Bar Form */}
             <form onSubmit={handleSearch} className="flex-1 w-full relative group flex shadow-sm rounded-2xl border border-slate-200 dark:border-slate-800 transition-colors focus-within:border-[var(--color-primary-base)] focus-within:ring-4 focus-within:ring-[var(--color-primary-base)]/10 bg-white dark:bg-slate-900">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
