@@ -15,10 +15,12 @@ class HorusClients(HorusClient):
         """
         params = {
             "CNPJ_DESTINO": cnpj_destino,
-            "CNPJ": cnpj_cliente,
-            "OFFSET": 0,
-            "LIMIT": limit
+            "CNPJ": cnpj_cliente
         }
+        
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = 0
+            params["LIMIT"] = limit
         
         result = await self.get("Busca_ClienteB2B", params=params)
         
@@ -50,10 +52,12 @@ class HorusClients(HorusClient):
         """
         params = {
             "CNPJ_DESTINO": cnpj_destino,
-            "CNPJ": cnpj_cliente,
-            "OFFSET": 0,
-            "LIMIT": 1
+            "CNPJ": cnpj_cliente
         }
+        
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = 0
+            params["LIMIT"] = 1
         
         result = await self.get("Busca_ClienteB2B", params=params)
         
@@ -94,10 +98,12 @@ class HorusClients(HorusClient):
         We will mimic the catalog struct returned.
         """
         params = {
-            "BUSCA": query,
-            "OFFSET": 0,
-            "LIMIT": limit
+            "BUSCA": query
         }
+        
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = 0
+            params["LIMIT"] = limit
         
         # Depending on Horus version, endpoint might be Busca_Produto or TServerB2B equivalents
         # We will try a hypothetical common GET endpoint. If we don't have the exact name, we guess.

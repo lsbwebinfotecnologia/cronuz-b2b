@@ -247,11 +247,16 @@ export default function CompanyProfilePage() {
 
     setSavingGlobal(true);
     try {
+      const payload = { ...formData };
+      if ((payload as any).operation_start_date === '') (payload as any).operation_start_date = null;
+      if (payload.trial_days === '' || payload.trial_days === null) payload.trial_days = 0;
+      else payload.trial_days = Number(payload.trial_days);
+      
       const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error('Falha ao salvar dados');
       toast.success('Perfil atualizado com sucesso!');

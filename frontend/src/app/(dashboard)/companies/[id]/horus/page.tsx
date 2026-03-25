@@ -24,6 +24,7 @@ export default function CompanyHorusPage() {
     horus_password: '',
     horus_enabled: false,
     allow_backorder: false,
+    horus_legacy_pagination: false,
     bookinfo_api_key: ''
   });
 
@@ -49,6 +50,7 @@ export default function CompanyHorusPage() {
              horus_username: data.horus_username || '',
              horus_password: data.horus_password || '',
              horus_enabled: data.horus_enabled || false,
+             horus_legacy_pagination: data.horus_legacy_pagination || false,
              allow_backorder: data.allow_backorder || false,
              bookinfo_api_key: data.bookinfo_api_key || ''
           }));
@@ -337,6 +339,24 @@ export default function CompanyHorusPage() {
                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${formData.allow_backorder ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}`}
                    >
                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${formData.allow_backorder ? 'translate-x-5' : 'translate-x-0'}`} />
+                   </button>
+                </div>
+             </div>
+
+             <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-200 dark:border-slate-800/60 rounded-2xl p-6 shadow-sm flex items-center justify-between">
+                <div className="space-y-1">
+                   <h3 className="text-sm font-bold text-amber-600 tracking-widest uppercase">PAGINAÇÃO LEGADA (OFFSET/LIMIT)</h3>
+                   <p className="text-xs text-slate-500">Marque caso o banco de dados do Oracle deste parceiro seja antigo e não suporte limites na consulta.</p>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                   <span className="text-sm font-bold text-slate-600 dark:text-slate-300">Modo Legado</span>
+                   <button 
+                     type="button"
+                     onClick={() => setFormData(prev => ({ ...prev, horus_legacy_pagination: !prev.horus_legacy_pagination }))}
+                     className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 ${formData.horus_legacy_pagination ? 'bg-amber-500' : 'bg-slate-200 dark:bg-slate-700'}`}
+                   >
+                     <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${formData.horus_legacy_pagination ? 'translate-x-5' : 'translate-x-0'}`} />
                    </button>
                 </div>
              </div>

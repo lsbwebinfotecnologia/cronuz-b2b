@@ -27,9 +27,10 @@ class HorusProducts(HorusClient):
         }
         
         # Pagination
-        if limit is not None:
-            params["OFFSET"] = offset
-            params["LIMIT"] = limit
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            if limit is not None:
+                params["OFFSET"] = offset
+                params["LIMIT"] = limit
             
         # Company / Branch context from settings
         if self._settings.horus_company:
@@ -79,9 +80,10 @@ class HorusProducts(HorusClient):
         params: Dict[str, Any] = {}
         
         # Pagination
-        if limit is not None:
-            params["OFFSET"] = offset
-            params["LIMIT"] = limit
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            if limit is not None:
+                params["OFFSET"] = offset
+                params["LIMIT"] = limit
             
         # Company / Branch context from settings
         if self._settings.horus_company:

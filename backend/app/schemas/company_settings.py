@@ -12,6 +12,7 @@ class CompanySettingsBase(BaseModel):
     horus_branch: Optional[str] = None
     horus_default_b2b_guid: Optional[str] = None
     horus_api_mode: Optional[str] = "B2B"
+    horus_legacy_pagination: Optional[bool] = False
     bookinfo_api_key: Optional[str] = None
     metabooks_api_key: Optional[str] = None
     cover_image_base_url: Optional[str] = None

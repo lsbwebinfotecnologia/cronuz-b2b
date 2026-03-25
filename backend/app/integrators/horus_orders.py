@@ -15,9 +15,10 @@ class HorusOrders(HorusClient):
             "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
         }
         
-        if limit > 0:
-            params["OFFSET"] = 0
-            params["LIMIT"] = limit
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            if limit > 0:
+                params["OFFSET"] = 0
+                params["LIMIT"] = limit
             
         result = await self.get("Busca_PedidosVenda", params=params)
         
@@ -116,8 +117,9 @@ class HorusOrders(HorusClient):
         if self._settings.horus_branch:
             params["COD_FILIAL"] = self._settings.horus_branch
             
-        if limit > 0:
-            params["OFFSET"] = 0
-            params["LIMIT"] = limit
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            if limit > 0:
+                params["OFFSET"] = 0
+                params["LIMIT"] = limit
             
         return await self.get("Busca_ItensPedidosVenda", params=params)
