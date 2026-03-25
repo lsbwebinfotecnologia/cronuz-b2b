@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -50,7 +50,9 @@ class CompanySettings(Base):
     smtp_from_email = Column(String(255), nullable=True)
 
     # Audit trail
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # B2B Dynamics
+    b2b_showcases_config = Column(JSON, nullable=True)
 
     company = relationship("Company")

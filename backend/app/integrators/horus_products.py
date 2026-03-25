@@ -130,3 +130,20 @@ class HorusProducts(HorusClient):
             return await self.post("Busca_Acervo", json_data=isbns, params=params)
         else:
             return await self.get("Busca_Acervo", params=params)
+
+    async def arvore_generos(self, id_doc: str, **kwargs) -> Any:
+        """
+        Fetches the complete taxonomy/category tree from Horus ERP.
+        """
+        params = {"ID_DOC": id_doc}
+        params.update(kwargs)
+        return await self.get("arvore_generos", params=params)
+
+    async def busca_editoras(self, id_doc: str, **kwargs) -> Any:
+        """
+        Fetches the active publishers/brands from Horus ERP.
+        """
+        params = {"ID_DOC": id_doc}
+        params.update(kwargs)
+        return await self.get("Busca_editoras", params=params)
+

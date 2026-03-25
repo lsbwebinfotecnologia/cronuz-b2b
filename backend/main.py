@@ -11,6 +11,7 @@ from app.models import company_settings as settings_models
 from app.models import product as product_models
 from app.models import catalog_support as catalog_models
 from app.models import marketing_showcase as marketing_models
+from app.models import marketing_navigation as marketing_nav_models
 from app.models import subscription as subscription_models
 from app.models import lead as lead_models
 from app.models import system_integrator as system_integrator_models
@@ -24,6 +25,7 @@ from app.api import products
 from app.api import catalog_support
 from app.api import promotions
 from app.api import marketing_showcases
+from app.api import marketing_navigation
 from app.api import storefront
 from app.api import upload
 from app.api import dashboard
@@ -52,6 +54,7 @@ marketing_models.Base.metadata.create_all(bind=engine)
 subscription_models.Base.metadata.create_all(bind=engine)
 lead_models.Base.metadata.create_all(bind=engine)
 system_integrator_models.Base.metadata.create_all(bind=engine)
+marketing_nav_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -98,6 +101,7 @@ app.include_router(products.router, tags=["products"])
 app.include_router(catalog_support.router, tags=["catalog-metadata"])
 app.include_router(promotions.router, tags=["promotions"])
 app.include_router(marketing_showcases.router, tags=["marketing"])
+app.include_router(marketing_navigation.router, prefix="/marketing-navigation", tags=["marketing-navigation"])
 app.include_router(storefront.router, tags=["storefront"])
 app.include_router(upload.router, tags=["upload"])
 app.include_router(dashboard.router, tags=["dashboard"])
@@ -111,6 +115,9 @@ app.include_router(system_integrators.router, prefix="/system-integrators", tags
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 @app.on_event("startup")
 def seed_master_user():

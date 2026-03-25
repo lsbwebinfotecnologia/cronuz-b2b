@@ -64,7 +64,8 @@ const sellerNavigation: NavItem[] = [
     icon: Megaphone,
     subItems: [
        { name: 'Promoções', href: '/promotions' },
-       { name: 'Vitrines da Loja', href: '/marketing/showcases' }
+       { name: 'Vitrines da Loja', href: '/marketing/showcases' },
+       { name: 'Menu de Navegação', href: '/marketing/navigation' }
     ]
   },
   { name: 'Vendedores/Rep', href: '/agents', icon: MonitorSmartphone },

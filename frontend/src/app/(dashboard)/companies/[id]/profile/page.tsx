@@ -513,6 +513,13 @@ export default function CompanyProfilePage() {
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
                   />
                 </div>
+                {formData.logo && (
+                  <div className="flex justify-end mt-1">
+                    <button type="button" onClick={() => setFormData(p => ({...p, logo: ''}))} className="text-[11px] text-rose-500 hover:text-rose-600 font-medium">
+                      Remover Logo
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-3">
@@ -540,6 +547,13 @@ export default function CompanyProfilePage() {
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
                   />
                 </div>
+                {formData.login_background_url && (
+                  <div className="flex justify-end mt-1">
+                    <button type="button" onClick={() => setFormData(p => ({...p, login_background_url: ''}))} className="text-[11px] text-rose-500 hover:text-rose-600 font-medium">
+                      Remover Fundo
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-3">
@@ -566,6 +580,13 @@ export default function CompanyProfilePage() {
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
                   />
                 </div>
+                {formData.favicon_url && (
+                  <div className="flex justify-end mt-1">
+                    <button type="button" onClick={() => setFormData(p => ({...p, favicon_url: ''}))} className="text-[11px] text-rose-500 hover:text-rose-600 font-medium">
+                      Remover Ícone
+                    </button>
+                  </div>
+                )}
               </div>
               
            </div>

@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Search, ShoppingCart, User, Menu, X, BookOpen, ShoppingBag, Receipt, LogOut } from 'lucide-react';
+import { Search, ShoppingCart, User, Menu, X, BookOpen, ShoppingBag, Receipt, LogOut, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { getUser, removeToken } from '@/lib/auth';
@@ -15,9 +15,22 @@ export function StoreHeader() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFilter, setSearchFilter] = useState('default');
   const [user, setUser] = useState<any>(null);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [brands, setBrands] = useState<any[]>([]);
 
   React.useEffect(() => {
-    setUser(getUser());
+    const currentUser = getUser();
+    setUser(currentUser);
+    
+    if (currentUser?.company_id) {
+       fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/navigation?company_id=${currentUser.company_id}`)
+         .then(r => r.json())
+         .then(data => {
+            if (data.categories) setCategories(data.categories);
+            if (data.brands) setBrands(data.brands);
+         })
+         .catch(console.error);
+    }
   }, []);
 
   const storeName = user?.company_name || 'Cronuz';
@@ -62,6 +75,49 @@ export function StoreHeader() {
                 {storeName}
               </span>
             </Link>
+          </div>
+
+          {/* Nav Links (Desktop) */}
+          <div className="hidden md:flex items-center gap-6 ml-6 font-medium text-sm">
+             {(categories.length > 0 || brands.length > 0) && (
+                <div className="relative group cursor-pointer z-50">
+                   <div className="flex items-center gap-1 text-slate-700 dark:text-slate-300 hover:text-[var(--color-primary-base)] transition-colors py-2">
+                      <Menu className="w-4 h-4"/>
+                      <span>Departamentos</span>
+                      <ChevronDown className="w-3 h-3 group-hover:rotate-180 transition-transform"/>
+                   </div>
+                   
+                   <div className="absolute top-full left-0 mt-2 w-max min-w-[200px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all flex origin-top-left scale-95 group-hover:scale-100">
+                      
+                      {categories.length > 0 && (
+                         <div className="p-4 border-r border-slate-100 dark:border-slate-800/50">
+                            <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Categorias</h5>
+                            <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                               {categories.map((cat, idx) => (
+                                  <Link key={idx} href={`/store/search?q=${encodeURIComponent(cat.name)}&filter=default`} className="px-3 py-1.5 text-sm text-slate-700 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 rounded-lg transition-colors whitespace-nowrap">
+                                     {cat.name}
+                                  </Link>
+                               ))}
+                            </div>
+                         </div>
+                      )}
+                      
+                      {brands.length > 0 && (
+                         <div className="p-4">
+                            <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Marcas / Editoras</h5>
+                            <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                               {brands.map((brand, idx) => (
+                                  <Link key={idx} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA`} className="px-3 py-1.5 text-sm text-slate-700 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 rounded-lg transition-colors whitespace-nowrap">
+                                     {brand.name}
+                                  </Link>
+                               ))}
+                            </div>
+                         </div>
+                      )}
+                      
+                   </div>
+                </div>
+             )}
           </div>
 
           {/* Desktop Search Bar */}
@@ -212,6 +268,22 @@ export function StoreHeader() {
                   <button onClick={handleLogout} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-rose-50 text-slate-700 hover:text-rose-600 font-medium dark:text-slate-300 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 transition-colors mt-4">
                     <LogOut className="w-5 h-5" /> Sair
                   </button>
+
+                  {(categories.length > 0 || brands.length > 0) && (
+                     <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800">
+                        <span className="font-bold text-slate-500 text-xs uppercase px-3 block mb-2">Departamentos</span>
+                        {categories.map((cat, idx) => (
+                           <Link key={`cat-${idx}`} href={`/store/search?q=${encodeURIComponent(cat.name)}&filter=default`} onClick={() => setIsMobileMenuOpen(false)} className="block p-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
+                              {cat.name}
+                           </Link>
+                        ))}
+                        {brands.map((brand, idx) => (
+                           <Link key={`brand-${idx}`} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA`} onClick={() => setIsMobileMenuOpen(false)} className="block p-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
+                              {brand.name}
+                           </Link>
+                        ))}
+                     </div>
+                  )}
                 </nav>
               </div>
 

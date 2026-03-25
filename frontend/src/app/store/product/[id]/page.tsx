@@ -11,11 +11,13 @@ import {
   Image as ImageIcon,
   BookOpen,
   Tag,
-  Star
+  Star,
+  Sparkles
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
 import { ProductImage } from '@/components/store/ProductImage';
+import { ProductCard } from '@/components/store/ProductCard';
 import { useCart } from '@/components/store/CartContext';
 
 export default function ProductDetailsPage() {
@@ -28,6 +30,7 @@ export default function ProductDetailsPage() {
   const [quantity, setQuantity] = useState(1);
   const [errorText, setErrorText] = useState('');
   const [addedTemp, setAddedTemp] = useState(false);
+  const [relatedProducts, setRelatedProducts] = useState<any[]>([]);
   const { addToCart } = useCart();
 
   useEffect(() => {
@@ -42,6 +45,27 @@ export default function ProductDetailsPage() {
          if (res.ok) {
             const data = await res.json();
             setProduct(data);
+            
+            // Tenta buscar produtos relacionados (Cross-Sell)
+            const searchBase = data?.brand?.name || data?.category?.name;
+            const searchFilter = data?.brand?.name ? 'NOM_EDITORA' : 'default';
+            
+            if (searchBase) {
+               try {
+                  const relatedRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/search?q=${encodeURIComponent(searchBase)}&filter=${searchFilter}&limit=12`, {
+                     headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+                  });
+                  if (relatedRes.ok) {
+                     const relData = await relatedRes.json();
+                     // Filter out the current product itself and cap to 5 items visually
+                     const items = (relData.items || []).filter((item: any) => item.id !== data.id).slice(0, 5);
+                     setRelatedProducts(items);
+                  }
+               } catch (e) {
+                  console.error("Erro fetch cross-sell", e);
+               }
+            }
+            
          } else {
             setErrorText('Produto não encontrado.');
          }
@@ -296,6 +320,23 @@ export default function ProductDetailsPage() {
 
            </div>
         </div>
+
+        {/* Cross-Sell Sugestões de Compra */}
+        {relatedProducts.length > 0 && (
+           <div className="mt-20">
+              <div className="flex items-center gap-3 mb-8">
+                 <Sparkles className="w-6 h-6 text-[#f4a261]" />
+                 <h2 className="text-2xl font-black text-slate-800 dark:text-white">Mais de {product.brand?.name || product.category?.name || 'Sugestões'}</h2>
+              </div>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                 {relatedProducts.map((relProd, idx) => (
+                    <ProductCard key={idx} product={relProd} />
+                 ))}
+              </div>
+           </div>
+        )}
+
       </div>
     </div>
   );

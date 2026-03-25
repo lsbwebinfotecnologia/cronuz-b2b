@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
-import { motion } from 'framer-motion';
-import { Loader2, Globe, Save } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Loader2, Globe, Save, Search, Plus, Trash2, Link as LinkIcon, Image as ImageIcon } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -16,9 +16,23 @@ export default function CompanySettingsPage() {
   const [loading, setLoading] = useState(true);
   const [savingGeral, setSavingGeral] = useState(false);
 
+  const defaultShowcases = {
+      hero_collection: { title: 'Nova Coleção Exclusiva B2B', isbns: [] },
+      clearance: { title: 'Queima de Estoque', isbns: [] },
+      restock: { title: 'Reposição Rápida', isbns: [] },
+      featured: { title: 'Lançamento', isbn: '', banner_url: '', link: '' }
+  };
+
   const [settings, setSettings] = useState({
-    cover_image_base_url: ''
+    cover_image_base_url: '',
+    b2b_showcases_config: defaultShowcases
   });
+
+  // Search State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [activeSearchSlot, setActiveSearchSlot] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchSettings() {
@@ -31,7 +45,8 @@ export default function CompanySettingsPage() {
         if (res.ok) {
           const data = await res.json();
           setSettings({
-            cover_image_base_url: data.cover_image_base_url || ''
+            cover_image_base_url: data.cover_image_base_url || '',
+            b2b_showcases_config: data.b2b_showcases_config || defaultShowcases
           });
         }
       } catch (e) {
@@ -64,6 +79,71 @@ export default function CompanySettingsPage() {
     }
   }
 
+  // --- Search Engine ---
+  useEffect(() => {
+    const delayDebounceFn = setTimeout(() => {
+      if (searchQuery.trim().length >= 3) {
+        performSearch(searchQuery);
+      } else {
+        setSearchResults([]);
+      }
+    }, 600);
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchQuery]);
+
+  async function performSearch(query: string) {
+    setSearching(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/search?q=${encodeURIComponent(query)}&limit=5`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSearchResults(data.items || []);
+      }
+    } catch (e) {
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  const handleAddIsbn = (slot: string, isbn: string) => {
+     if(!isbn) {
+        toast.error("Produto sem ISBN mapeado.");
+        return;
+     }
+     
+     const config = { ...settings.b2b_showcases_config } as any;
+     
+     if (slot === 'featured') {
+         config[slot].isbn = isbn;
+     } else {
+         if (!config[slot].isbns) config[slot].isbns = [];
+         if (!config[slot].isbns.includes(isbn)) {
+             config[slot].isbns.push(isbn);
+         } else {
+             toast.info("Produto já está na vitrine.");
+         }
+     }
+     
+     setSettings({ ...settings, b2b_showcases_config: config });
+     setSearchQuery('');
+     setActiveSearchSlot(null);
+  };
+
+  const handleRemoveIsbn = (slot: string, index: number) => {
+     const config = { ...settings.b2b_showcases_config } as any;
+     config[slot].isbns.splice(index, 1);
+     setSettings({ ...settings, b2b_showcases_config: config });
+  };
+
+  const updateTitle = (slot: string, title: string) => {
+     const config = { ...settings.b2b_showcases_config } as any;
+     config[slot].title = title;
+     setSettings({ ...settings, b2b_showcases_config: config });
+  };
+
   if (loading || !company) {
     return (
        <div className="flex h-64 items-center justify-center">
@@ -74,13 +154,13 @@ export default function CompanySettingsPage() {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full overflow-y-auto">
-      <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-10 flex items-center justify-between">
+      <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-20 flex items-center justify-between">
          <div>
            <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-             Configurações Gerais
+             Configurações Gerais & Vitrines
            </h2>
            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-             Configurações globais de exibição e integração de catálogo.
+             Configurações globais e layout dinâmico da Home B2B.
            </p>
          </div>
          <button
@@ -93,27 +173,24 @@ export default function CompanySettingsPage() {
          </button>
       </div>
 
-      <div className="p-6 space-y-8">
+      <div className="p-6 space-y-8 max-w-5xl mx-auto w-full pb-32">
         <section className="space-y-4">
-           <div className="rounded-2xl border border-slate-200 bg-slate-50 overflow-hidden shadow-sm p-6 dark:border-slate-800/60 dark:bg-slate-900/20">
-              <h3 className="text-sm font-bold text-blue-600 tracking-wide uppercase mb-1">CONFIGURAÇÕES GERAIS</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">Configurações globais de exibição e integração de catálogo.</p>
+           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 dark:border-slate-800/60 dark:bg-slate-900/40">
+              <h3 className="text-sm font-bold text-blue-600 tracking-wide uppercase mb-1">INTEGRAÇÃO DE CAPAS</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">Servidor fallback global para imagens de referência rápida.</p>
               
               <div className="space-y-3">
-                <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Servidor Local de Capas (Base URL)</label>
                 <input
                   type="text"
                   value={settings.cover_image_base_url}
                   onChange={(e) => setSettings(prev => ({ ...prev, cover_image_base_url: e.target.value }))}
                   placeholder="https://capas.cronuz.com.br"
-                  className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm font-mono text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 px-4 text-sm font-mono text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
                 />
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Deixe em branco para forçar o uso de imagens cadastradas individualmente em cada produto. A imagem procurada será {"<base_url>/<isbn>.jpg"}.
-                </p>
               </div>
            </div>
         </section>
+
       </div>
     </motion.div>
   );

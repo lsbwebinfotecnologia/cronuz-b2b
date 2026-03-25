@@ -126,8 +126,39 @@ def get_storefront_config(
     
     return {
         "cover_image_base_url": settings.cover_image_base_url if settings else None,
-        "uses_horus": settings.horus_enabled if settings else False
+        "uses_horus": settings.horus_enabled if settings else False,
+        "b2b_showcases_config": settings.b2b_showcases_config if settings else None
     }
+
+from pydantic import BaseModel
+class B2BShowcaseConfigUpdate(BaseModel):
+    b2b_showcases_config: dict
+
+@router.put("/config")
+def update_storefront_config(
+    data: B2BShowcaseConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="Usuário sem empresa")
+        
+    from app.models.company_settings import CompanySettings
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    
+    if not settings:
+        settings = CompanySettings(company_id=current_user.company_id)
+        db.add(settings)
+        
+    settings.b2b_showcases_config = data.b2b_showcases_config
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Erro ao salvar configurações")
+        
+    return {"message": "Configurações atualizadas", "b2b_showcases_config": settings.b2b_showcases_config}
 
 @router.get("/home", response_model=List[schemas.StorefrontShowcase])
 def get_storefront_home(
@@ -228,41 +259,60 @@ async def _fetch_from_horus_storefront(
     Centralized point to fetch products from Horus for the Storefront.
     """
     from fastapi import HTTPException
-    from app.models.customer import Customer
     from app.models.company import Company
     
-    if not current_user or current_user.type != "CUSTOMER":
-        raise HTTPException(status_code=403, detail="Acesso não autorizado ao catálogo Horus.")
-        
-    customer = db.query(Customer).filter(Customer.document == current_user.document, Customer.company_id == company_id).first()
     company = db.query(Company).filter(Company.id == company_id).first()
-    
-    if not customer or not customer.id_guid or not company or not company.document:
-        raise HTTPException(status_code=403, detail="Cadastro de cliente incompleto para Horus.")
+    if not company or not company.document:
+        raise HTTPException(status_code=403, detail="Empresa não configurada para Horus.")
         
     from app.integrators.horus_products import HorusProducts
     horus_client = HorusProducts(db, company_id)
     
+    is_customer = current_user and current_user.type == "CUSTOMER"
+    
     try:
-        # Improved logic: Apply custom filters if specified, otherwise fallback to auto-detection
-        if search_type == "SEARCH":
-            if search_filter == "NOM_AUTOR":
-                search_option = "NOM_AUTOR"
-            elif search_filter == "NOM_EDITORA":
-                search_option = "NOM_EDITORA"
-            else:
-                search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
-        else: # PRODUCT
-            search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "COD_ITEM"
-            
-        horus_response = await horus_client.busca_acervo_b2b(
-            id_doc=company.document,
-            id_guid=customer.id_guid,
-            term=term,
-            search_option=search_option,
-            offset=skip,
-            limit=limit
-        )
+        if is_customer:
+            from app.models.customer import Customer
+            customer = db.query(Customer).filter(Customer.document == current_user.document, Customer.company_id == company_id).first()
+            if not customer or not customer.id_guid:
+                raise HTTPException(status_code=403, detail="Cadastro de cliente incompleto para Horus.")
+                
+            if search_type == "SEARCH":
+                if search_filter == "NOM_AUTOR":
+                    search_option = "NOM_AUTOR"
+                elif search_filter == "NOM_EDITORA":
+                    search_option = "NOM_EDITORA"
+                else:
+                    search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
+            else: # PRODUCT
+                search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "COD_ITEM"
+                
+            horus_response = await horus_client.busca_acervo_b2b(
+                id_doc=company.document,
+                id_guid=customer.id_guid,
+                term=term,
+                search_option=search_option,
+                offset=skip,
+                limit=limit
+            )
+        else:
+            if search_type == "SEARCH":
+                if search_filter == "NOM_AUTOR":
+                    search_option = "NOM_AUTOR"
+                elif search_filter == "NOM_EDITORA":
+                    search_option = "NOM_EDITORA"
+                else:
+                    search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
+            else: # PRODUCT
+                search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOME"
+                
+            horus_response = await horus_client.busca_acervo_padrao(
+                id_doc=company.document,
+                term=term,
+                search_option=search_option,
+                offset=skip,
+                limit=limit
+            )
         
         if isinstance(horus_response, list) and len(horus_response) > 0 and hasattr(horus_response[0], "Falha"):
             return []
@@ -1159,3 +1209,86 @@ def update_customer_password(
     db.commit()
     
     return {"message": "Senha atualizada com sucesso"}
+
+@router.get("/navigation")
+async def get_navigation_tree(
+    company_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns the store's top-level navigation elements: Categories and Brands.
+    If the company acts as a hybrid Horus B2B, it streams from the ERP APIs.
+    Otherwise, returns local catalog representations.
+    """
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings:
+        raise HTTPException(status_code=404, detail="Configurações da empresa não encontradas")
+        
+    categories = []
+    brands = []
+    
+    # 1. Custom Menu explicitly defined in Marketing Dashboard
+    try:
+        from app.models.marketing_navigation import NavigationMenuItem, NavigationMenuType
+        menu_items = db.query(NavigationMenuItem).filter(
+            NavigationMenuItem.company_id == company_id,
+            NavigationMenuItem.is_active == True
+        ).order_by(NavigationMenuItem.position.asc()).all()
+        
+        if menu_items:
+            categories = [{"id": i.external_id, "name": i.label} for i in menu_items if i.item_type == NavigationMenuType.CATEGORY]
+            brands = [{"id": i.external_id, "name": i.label} for i in menu_items if i.item_type == NavigationMenuType.BRAND]
+            return {"categories": categories, "brands": brands}
+    except Exception as e:
+        print("Erro ao carregar menu customizado:", e)
+    
+    # 2. Legacy / Fallback Automatic Horus Sync
+    if settings.horus_enabled:
+        try:
+            from app.integrators.horus_products import HorusProducts
+            client = HorusProducts(db=db, company_id=company_id)
+            
+            # Default ID_DOC fallback (could be parametrized based on specific logic)
+            id_doc = "0"
+            if settings.horus_company and settings.horus_branch:
+                id_doc = f"{settings.horus_company}{settings.horus_branch}"
+                
+            horus_generos = await client.arvore_generos(id_doc=id_doc)
+            horus_editoras = await client.busca_editoras(id_doc=id_doc)
+            
+            # Map horus arrays to standard format safely
+            if isinstance(horus_generos, list) and len(horus_generos) > 0 and not horus_generos[0].get("Falha"):
+                for gen in horus_generos:
+                    # Common keys in Horus taxonomy:
+                    cat_id = gen.get("COD_SECAO") or gen.get("COD_GENERO") or gen.get("ID_GENERO") or gen.get("ID")
+                    cat_nome = gen.get("DESCRICAO") or gen.get("NOM_SECAO") or gen.get("NOM_GENERO") or gen.get("NOME")
+                    if cat_id and cat_nome:
+                        categories.append({"id": str(cat_id), "name": str(cat_nome).title()})
+                        
+            if isinstance(horus_editoras, list) and len(horus_editoras) > 0 and not horus_editoras[0].get("Falha"):
+                for ed in horus_editoras:
+                    # Common keys in Horus publishers/brands:
+                    ed_id = ed.get("COD_EDITORA") or ed.get("ID_EDITORA") or ed.get("ID")
+                    ed_nome = ed.get("NOM_FANTASIA") or ed.get("NOM_EDITORA") or ed.get("NOME")
+                    if ed_id and ed_nome:
+                        brands.append({"id": str(ed_id), "name": str(ed_nome).title()})
+                        
+        except Exception as e:
+            print("Horus navigation fetch error:", e)
+            # if API fails, we gracefully fallback to local definitions
+            pass
+            
+    # Default to local catalog entries if not using Horus or if the ERP sync yielded nothing
+    if not categories and not brands:
+        from app.models.catalog_support import Category, Brand
+        local_cats = db.query(Category).filter(Category.company_id == company_id).all()
+        categories = [{"id": str(c.id), "name": c.name} for c in local_cats]
+        
+        local_brands = db.query(Brand).filter(Brand.company_id == company_id).all()
+        brands = [{"id": str(b.id), "name": b.name} for b in local_brands]
+        
+    return {
+        "categories": categories,
+        "brands": brands
+    }
+

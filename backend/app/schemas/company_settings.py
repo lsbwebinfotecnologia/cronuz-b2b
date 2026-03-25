@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
 
 class CompanySettingsBase(BaseModel):
@@ -32,6 +32,7 @@ class CompanySettingsBase(BaseModel):
     smtp_username: Optional[str] = None
     smtp_password: Optional[str] = None
     smtp_from_email: Optional[str] = None
+    b2b_showcases_config: Optional[Dict[str, Any]] = None
 
 class CompanySettingsUpdate(CompanySettingsBase):
     pass
@@ -39,7 +40,7 @@ class CompanySettingsUpdate(CompanySettingsBase):
 class CompanySettingsInDBBase(CompanySettingsBase):
     id: int
     company_id: int
-    created_at: datetime
+    created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
     class Config:
