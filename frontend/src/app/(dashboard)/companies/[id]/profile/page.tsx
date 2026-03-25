@@ -249,7 +249,7 @@ export default function CompanyProfilePage() {
     try {
       const payload = { ...formData };
       if ((payload as any).operation_start_date === '') (payload as any).operation_start_date = null;
-      if (payload.trial_days === '' || payload.trial_days === null) payload.trial_days = 0;
+      if ((payload as any).trial_days === '' || payload.trial_days === null) payload.trial_days = 0;
       else payload.trial_days = Number(payload.trial_days);
       
       const token = getToken();
