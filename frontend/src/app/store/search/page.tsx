@@ -23,7 +23,9 @@ function SearchResults() {
         const headers: any = {};
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/search?q=${encodeURIComponent(query)}&limit=50`, {
+        const filter = searchParams.get('filter') || 'default';
+
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/search?q=${encodeURIComponent(query)}&filter=${encodeURIComponent(filter)}&limit=50`, {
           headers
         });
 

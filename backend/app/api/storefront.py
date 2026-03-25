@@ -221,7 +221,8 @@ async def _fetch_from_horus_storefront(
     search_type: str,
     skip: int,
     limit: int,
-    settings: CompanySettings
+    settings: CompanySettings,
+    search_filter: str = "default"
 ) -> list[dict]:
     """
     Centralized point to fetch products from Horus for the Storefront.
@@ -243,9 +244,14 @@ async def _fetch_from_horus_storefront(
     horus_client = HorusProducts(db, company_id)
     
     try:
-        # Improved logic: only treat as ISBN if it has at least 10 digits
+        # Improved logic: Apply custom filters if specified, otherwise fallback to auto-detection
         if search_type == "SEARCH":
-            search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
+            if search_filter == "NOM_AUTOR":
+                search_option = "NOM_AUTOR"
+            elif search_filter == "NOM_EDITORA":
+                search_option = "NOM_EDITORA"
+            else:
+                search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
         else: # PRODUCT
             search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "COD_ITEM"
             
@@ -280,6 +286,7 @@ async def _fetch_from_horus_storefront(
 @router.get("/search", response_model=dict)
 async def search_storefront(
     q: str = Query(..., min_length=1),
+    filter: str = Query("default"),
     skip: int = Query(0, ge=0),
     limit: int = Query(24, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -300,7 +307,7 @@ async def search_storefront(
     
     if settings and settings.horus_enabled:
         try:
-            mapped_items = await _fetch_from_horus_storefront(db, company_id, current_user, q, "SEARCH", skip, limit, settings)
+            mapped_items = await _fetch_from_horus_storefront(db, company_id, current_user, q, "SEARCH", skip, limit, settings, filter)
             return {
                 "items": mapped_items,
                 "total": len(mapped_items),

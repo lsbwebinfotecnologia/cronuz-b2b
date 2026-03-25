@@ -20,6 +20,8 @@ class CompanySettings(Base):
     horus_default_b2b_guid = Column(String(100), nullable=True) # Fallback GUID for PDV and public searches
     horus_api_mode = Column(String(20), default='B2B', nullable=False) # 'B2B' or 'STANDARD'
     horus_legacy_pagination = Column(Boolean, default=False, nullable=False) # True = omit OFFSET and LIMIT
+    horus_stock_local = Column(String(50), nullable=True)
+    horus_hide_zero_balance = Column(Boolean, default=False, nullable=False)
     
     bookinfo_api_key = Column(String(255), nullable=True)
     metabooks_api_key = Column(String(255), nullable=True)
