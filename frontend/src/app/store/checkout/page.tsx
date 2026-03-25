@@ -274,7 +274,9 @@ export default function CheckoutPage() {
                            className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-3 focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent outline-none transition-all dark:bg-slate-800 dark:border-slate-700 dark:text-white"
                        >
                            <option value="V">VENDA</option>
-                           <option value="C">CONSIGNADO</option>
+                           {customer?.consignment_status === 'ACTIVE' && (
+                               <option value="C">CONSIGNADO</option>
+                           )}
                        </select>
                    </div>
 

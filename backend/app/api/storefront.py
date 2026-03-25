@@ -60,7 +60,7 @@ def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dic
         "id": int(item.get("COD_ITEM", 0)),
         "company_id": company_id,
         "sku": str(item.get("COD_ITEM", "")),
-        "ean_gtin": item.get("COD_BARRA_ITEM", ""),
+        "ean_gtin": str(item.get("BARRAS_ISBN") or item.get("COD_BARRA_ITEM") or item.get("ISBN") or ""),
         "name": item.get("NOM_ITEM", ""),
         "base_price": vlr_capa,
         "promotional_price": vlr_liq if vlr_liq < vlr_capa else None,
