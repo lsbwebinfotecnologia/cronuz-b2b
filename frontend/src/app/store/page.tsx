@@ -118,34 +118,36 @@ export default function StoreHome() {
     <div className="flex-1 w-full bg-slate-50 dark:bg-[#0a0f1c]">
       {/* Rotating Banners (Top Slider) */}
       {config?.rotating_banners && config.rotating_banners.length > 0 && (
-         <section className="w-full relative bg-black">
-            <Swiper
-               modules={[Autoplay, Pagination, Navigation]}
-               spaceBetween={0}
-               slidesPerView={1}
-               autoplay={{ delay: 5000, disableOnInteraction: false }}
-               pagination={{ clickable: true }}
-               navigation
-               className="w-full"
-            >
-               {config.rotating_banners.map((banner: any, idx: number) => (
-                  <SwiperSlide key={idx}>
-                     <div className="relative w-full">
-                        <img 
-                           src={banner.image_url} 
-                           alt={banner.caption || `Banner ${idx + 1}`} 
-                           className="w-full h-auto block object-cover" 
-                        />
-                        {banner.link && (
-                           <a href={banner.link} className="absolute inset-0 z-10">
-                              <span className="sr-only">Ver mais detalhes</span>
-                           </a>
-                        )}
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent pointer-events-none"></div>
-                     </div>
-                  </SwiperSlide>
-               ))}
-            </Swiper>
+         <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 md:pt-8 w-full relative">
+            <div className="rounded-3xl overflow-hidden shadow-xl border border-slate-200 dark:border-slate-800 bg-slate-900">
+               <Swiper
+                  modules={[Autoplay, Pagination, Navigation]}
+                  spaceBetween={0}
+                  slidesPerView={1}
+                  autoplay={{ delay: 5000, disableOnInteraction: false }}
+                  pagination={{ clickable: true }}
+                  navigation
+                  className="w-full"
+               >
+                  {config.rotating_banners.map((banner: any, idx: number) => (
+                     <SwiperSlide key={idx}>
+                        <div className="relative w-full">
+                           <img 
+                              src={banner.image_url} 
+                              alt={banner.caption || `Banner ${idx + 1}`} 
+                              className="w-full h-auto block object-cover" 
+                           />
+                           {banner.link && (
+                              <a href={banner.link} className="absolute inset-0 z-10">
+                                 <span className="sr-only">Ver mais detalhes</span>
+                              </a>
+                           )}
+                           <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent pointer-events-none"></div>
+                        </div>
+                     </SwiperSlide>
+                  ))}
+               </Swiper>
+            </div>
          </section>
       )}
 
