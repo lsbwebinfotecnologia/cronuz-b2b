@@ -96,6 +96,13 @@ export default function CompanyProfilePage() {
   const handleBackgroundUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
+    
+    if (file.size > 2 * 1024 * 1024) {
+        toast.error('A imagem excede o limite máximo de 2MB.');
+        e.target.value = '';
+        return;
+    }
+    
     setUploadingBg(true);
     
     try {
@@ -124,6 +131,13 @@ export default function CompanyProfilePage() {
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
+    
+    if (file.size > 2 * 1024 * 1024) {
+        toast.error('A logo excede o limite máximo de 2MB.');
+        e.target.value = '';
+        return;
+    }
+    
     setUploadingLogo(true);
     
     try {
@@ -152,6 +166,13 @@ export default function CompanyProfilePage() {
   const handleFaviconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
+    
+    if (file.size > 2 * 1024 * 1024) {
+        toast.error('O ícone excede o limite máximo de 2MB.');
+        e.target.value = '';
+        return;
+    }
+    
     setUploadingFavicon(true);
     
     try {
