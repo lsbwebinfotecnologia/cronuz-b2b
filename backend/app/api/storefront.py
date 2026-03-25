@@ -601,7 +601,7 @@ async def validate_cart_stock(
             stock_map = {}
             if stock_data and isinstance(stock_data, list):
                 for prod in stock_data:
-                    isbn = prod.get("BARRAS_ISBN") or prod.get("ISBN")
+                    isbn = prod.get("COD_BARRA_ITEM") or prod.get("BARRAS_ISBN") or prod.get("ISBN")
                     if isbn:
                         try:
                             s = float(prod.get("SALDO_DISPONIVEL", 0))
