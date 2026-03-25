@@ -33,7 +33,7 @@ class HorusProducts(HorusClient):
                 params["LIMIT"] = limit
             
         # Company / Branch context from settings
-        if getattr(self._settings, 'horus_hide_zero_balance', False):
+        if getattr(self._settings, 'horus_hide_zero_balance', False) and not isbns:
             if self._settings.horus_company:
                 params["AC_COD_EMPRESA"] = self._settings.horus_company
             if self._settings.horus_branch:
