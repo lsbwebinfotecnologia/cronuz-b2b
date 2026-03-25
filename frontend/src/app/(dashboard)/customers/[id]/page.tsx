@@ -130,6 +130,28 @@ export default function CustomerDetailsPage() {
     }
   }
 
+  async function handleToggleConsignment() {
+    const newStatus = customer.consignment_status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}`, {
+        method: 'PATCH',
+        headers: { 
+          'Authorization': `Bearer ${getToken()}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ consignment_status: newStatus })
+      });
+      if (res.ok) {
+        toast.success(`Consignação ${newStatus === 'ACTIVE' ? 'ativada' : 'desativada'}!`);
+        setCustomer({ ...customer, consignment_status: newStatus });
+      } else {
+        toast.error("Erro ao alterar status de consignação.");
+      }
+    } catch(e) {
+      toast.error("Erro de sistema.");
+    }
+  }
+
   async function handleSaveGeneralEdit(e: React.FormEvent) {
     e.preventDefault();
     setSavingEdit(true);
@@ -375,9 +397,13 @@ export default function CustomerDetailsPage() {
                 >
                   {customer.name}
                 </h1>
-                <span className={`px-2.5 py-1 text-xs font-medium rounded-full border ${customer.consignment_status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/50 dark:text-slate-400 dark:border-slate-700'}`}>
-                   {customer.consignment_status === 'ACTIVE' ? 'Consignação Ativa' : 'Faturamento Padrão'}
-                </span>
+                <button 
+                  onClick={handleToggleConsignment} 
+                  title="Clique para habilitar/desabilitar permissão de compras consignadas"
+                  className={`cursor-pointer hover:opacity-80 transition-opacity px-2.5 py-1 text-xs font-medium rounded-full border flex items-center gap-1.5 ${customer.consignment_status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/50 dark:text-slate-400 dark:border-slate-700'}`}
+                >
+                   {customer.consignment_status === 'ACTIVE' ? <><CheckCircle className="w-3.5 h-3.5"/> Consignação Ativa</> : 'Faturamento Padrão'}
+                </button>
 
               </div>
               <div className="flex flex-wrap items-center gap-4 mt-1.5 text-sm text-slate-500 dark:text-slate-400">
