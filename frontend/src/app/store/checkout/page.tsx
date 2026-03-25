@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft, PackageOpen, CheckCircle, MapPin, Truck, CreditCard, Loader2, AlertCircle } from 'lucide-react';
+import { ChevronLeft, PackageOpen, CheckCircle, MapPin, Truck, CreditCard, Loader2, AlertCircle, Plus, Minus, Trash2 } from 'lucide-react';
 import { useCart } from '@/components/store/CartContext';
 import { ProductImage } from '@/components/store/ProductImage';
 import { getToken } from '@/lib/auth';
@@ -10,7 +10,7 @@ import Link from 'next/link';
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const { items, subtotal, clearCart } = useCart();
+  const { items, subtotal, clearCart, updateQuantity, removeFromCart } = useCart();
   const [placingOrder, setPlacingOrder] = useState(false);
   const [orderComplete, setOrderComplete] = useState<{order_id: string, horus_id: string} | null>(null);
   const [customer, setCustomer] = useState<any>(null);
@@ -237,10 +237,26 @@ export default function CheckoutPage() {
                                                 <span className="font-bold">{err.label}</span>
                                                 {err.message && <span>{err.message}</span>}
                                              </div>
-                                          </div>
-                                       );
-                                    })()}
-                                 </div>
+                                           </div>
+                                        );
+                                     })()}
+                                     
+                                     {/* Mutation Controls */}
+                                     <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                                        <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg p-0.5 dark:bg-slate-950 dark:border-slate-700">
+                                          <button onClick={() => updateQuantity(item.id, item.quantity - 1)} disabled={item.quantity <= 1} className="p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-200 rounded-md disabled:opacity-30 dark:hover:bg-slate-800 transition-colors">
+                                            <Minus className="w-3.5 h-3.5" />
+                                          </button>
+                                          <span className="w-8 text-center text-xs font-bold text-slate-700 dark:text-slate-300">{item.quantity}</span>
+                                          <button onClick={() => updateQuantity(item.id, item.quantity + 1)} disabled={item.quantity >= (item.stock_quantity || 999)} className="p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-200 rounded-md disabled:opacity-30 dark:hover:bg-slate-800 transition-colors">
+                                            <Plus className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                        <button onClick={() => removeFromCart(item.id)} className="text-xs text-rose-500 hover:bg-rose-50 px-2 py-1.5 rounded-lg flex items-center gap-1 font-bold transition-colors dark:hover:bg-rose-500/10 dark:hover:text-rose-400">
+                                          <Trash2 className="w-3.5 h-3.5" /> Remover
+                                        </button>
+                                     </div>
+                                  </div>
                               </div>
                           );
                        })}
