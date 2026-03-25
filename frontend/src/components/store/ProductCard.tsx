@@ -99,7 +99,12 @@ export function ProductCard({ product }: ProductProps) {
           <h4 className="font-bold text-sm text-slate-900 dark:text-white line-clamp-2 leading-tight group-hover:text-[var(--color-primary-base)] transition-colors">
             {product.name}
           </h4>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-1">
+          {product.ean_gtin && (
+             <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono mt-0.5">
+               ISBN: {product.ean_gtin}
+             </span>
+          )}
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-1 uppercase tracking-tight font-medium">
             {product.brand || (product.category ? product.category.name : 'Vários Autores')}
           </p>
           
