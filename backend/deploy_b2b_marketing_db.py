@@ -6,6 +6,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from sqlalchemy import text
 from app.db.session import engine
+import app.models.company
 from app.models import marketing_navigation, marketing_showcase
 
 def deploy_db():
