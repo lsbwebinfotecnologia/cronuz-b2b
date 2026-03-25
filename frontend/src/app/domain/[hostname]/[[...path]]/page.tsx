@@ -81,6 +81,20 @@ function StorefrontHub({ hostname }: { hostname: string }) {
     }
 
     const isMythos = domainInfo?.domain?.includes('mythos') || domainInfo?.custom_domain?.includes('mythos');
+    const isHorus = hostname.includes('horus') || domainInfo?.custom_domain?.includes('horus');
+
+    const t = {
+        bg: isHorus ? 'bg-violet-600' : 'bg-[#00d0b0]',
+        hover: isHorus ? 'hover:bg-violet-700' : 'hover:bg-[#00b095]',
+        text: isHorus ? 'text-violet-600' : 'text-[#00d0b0]',
+        lightBg: isHorus ? 'bg-violet-50' : 'bg-teal-50',
+        gradStart: isHorus ? 'from-slate-900' : 'from-slate-900',
+        gradVia: isHorus ? 'via-violet-950' : 'via-teal-950',
+        gradEnd: isHorus ? 'to-slate-900' : 'to-slate-900',
+        accent: isHorus ? 'text-violet-400' : 'text-[#00d0b0]',
+        border: isHorus ? 'border-violet-100' : 'border-teal-100',
+        ring: isHorus ? 'ring-violet-500/20' : 'ring-teal-500/20'
+    };
 
     return (
         <div className="min-h-screen bg-slate-50 font-sans flex flex-col">
@@ -91,7 +105,7 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                         <img src={hubData.logo_url || domainInfo?.logo} alt={domainInfo?.name || hubData.company_name} className="h-12 object-contain" />
                     ) : (
                         <div className="flex items-center gap-3">
-                            <BookOpen className="h-8 w-8 text-slate-900" />
+                            <BookOpen className={`h-8 w-8 ${t.text}`} />
                             <span className="text-2xl font-black text-slate-900 tracking-tight">
                                 {domainInfo?.name || hubData.company_name}
                             </span>
@@ -99,7 +113,7 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                     )}
                     
                     {!isMythos && (
-                        <Link href="/login" className="hidden md:inline-flex bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-6 rounded-lg transition-colors shadow flex items-center gap-2">
+                        <Link href="/login" className={`hidden md:inline-flex ${t.bg} ${t.hover} text-white font-bold py-2.5 px-6 rounded-lg transition-colors shadow flex items-center gap-2`}>
                             Acessar Portal <ArrowRight className="h-4 w-4" />
                         </Link>
                     )}
@@ -108,20 +122,20 @@ function StorefrontHub({ hostname }: { hostname: string }) {
 
             <main className="flex-1 pb-24">
                 {/* Hero Banner Section */}
-                <div className="relative bg-slate-900 text-white min-h-[45vh] flex flex-col items-center justify-center text-center overflow-hidden mb-16 shadow-inner">
-                    <div className="absolute inset-0 bg-[#0f172a] mix-blend-multiply opacity-50 z-10"></div>
+                <div className={`relative bg-gradient-to-br ${t.gradStart} ${t.gradVia} ${t.gradEnd} text-white min-h-[50vh] flex flex-col items-center justify-center text-center overflow-hidden mb-16 shadow-inner`}>
+                    <div className="absolute inset-0 bg-[#0f172a] mix-blend-multiply opacity-60 z-10"></div>
                     {(hubData.banner_url || domainInfo?.login_background_url) && (
                         <div className="absolute inset-0 z-0">
-                            <img src={hubData.banner_url || domainInfo?.login_background_url} alt="Banner" className="w-full h-full object-cover opacity-60" />
+                            <img src={hubData.banner_url || domainInfo?.login_background_url} alt="Banner" className="w-full h-full object-cover opacity-40 mix-blend-overlay" />
                         </div>
                     )}
-                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent z-10"></div>
+                    <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-slate-50 to-transparent z-10"></div>
                     
-                    <div className="relative z-20 max-w-3xl px-6 pt-12 pb-8">
+                    <div className="relative z-20 max-w-4xl px-6 pt-16 pb-16">
                         {isMythos ? (
                             <>
                                 <h1 className="text-4xl md:text-6xl font-black mb-6 tracking-tight drop-shadow-sm text-center">
-                                    Assinaturas e <span className="text-indigo-400 font-serif italic font-medium">Coleções</span>
+                                    Assinaturas e <span className={`${t.accent} font-serif italic font-medium`}>Coleções</span>
                                 </h1>
                                 <p className="text-xl text-slate-300 font-light mx-auto max-w-2xl text-center">
                                     Escolha o plano ideal para você e receba conteúdo exclusivo diretamente na sua casa com todo conforto e segurança.
@@ -129,19 +143,44 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                             </>
                         ) : (
                             <>
-                                <h1 className="text-4xl md:text-6xl font-black mb-6 tracking-tight drop-shadow-sm text-center">
-                                    Portal B2B <span className="text-indigo-400 font-serif italic text-3xl md:text-5xl block mt-2">{domainInfo?.name}</span>
+                                <span className={`inline-block py-1 px-3 rounded-full ${t.lightBg} text-slate-900 text-sm font-semibold tracking-wider mb-6 shadow-sm`}>
+                                   Autoatendimento Corporativo
+                                </span>
+                                <h1 className="text-4xl md:text-6xl font-black mb-6 tracking-tight drop-shadow-md text-center">
+                                    Portal B2B <span className={`${t.accent} block mt-2`}>{domainInfo?.name || hubData?.company_name}</span>
                                 </h1>
-                                <p className="text-xl text-slate-300 font-light mx-auto max-w-2xl text-center mb-8">
-                                    Acesse a plataforma integrada para realizar orçamentos, consultar estoques em tempo real e visualizar faturas e consignações.
+                                <p className="text-lg md:text-xl text-slate-200 font-light mx-auto max-w-2xl text-center mb-10 leading-relaxed shadow-sm">
+                                    Acesse sua plataforma integrada projetada para impulsionar suas compras corporativas com autonomia, segurança e agilidade.
                                 </p>
-                                <Link href="/login" className="inline-flex bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-10 rounded-xl transition-all shadow-lg items-center gap-3 text-lg group">
+                                <Link href="/login" className={`inline-flex ${t.bg} ${t.hover} text-white font-bold py-4 px-10 rounded-xl transition-all shadow-xl hover:shadow-2xl hover:-translate-y-1 items-center gap-3 text-lg group ring-4 ${t.ring}`}>
                                     Fazer Login <ArrowRight className="h-5 w-5 transform group-hover:translate-x-1 transition-transform" />
                                 </Link>
                             </>
                         )}
                     </div>
                 </div>
+
+                {/* Features Grid layout (Only for B2B) */}
+                {!isMythos && (
+                    <div className="max-w-7xl mx-auto px-6 -mt-8 relative z-20">
+                        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+                            {[
+                                { title: 'Estoque em Tempo Real', desc: 'Consulte a disponibilidade de produtos, lançamentos e campanhas.', icon: '📦' },
+                                { title: 'Orçamentos Rápidos', desc: 'Crie, edite e efetive orçamentos e pedidos com total autonomia.', icon: '🛒' },
+                                { title: 'Faturas e Boletos', desc: 'Acesse a 2ª via de seus boletos financeiros e notas fiscais a qualquer momento.', icon: '🧾' },
+                                { title: 'Consignações', desc: 'Verifique produtos em consignação, acertos e faturamento de saldos.', icon: '🔄' },
+                            ].map((feat, idx) => (
+                                <div key={idx} className="bg-white rounded-2xl p-6 shadow-xl shadow-slate-200/40 border border-slate-100 hover:-translate-y-1 transition-transform duration-300">
+                                    <div className={`w-12 h-12 rounded-xl ${t.lightBg} flex items-center justify-center text-2xl mb-4 shadow-inner ${t.border} border`}>
+                                        {feat.icon}
+                                    </div>
+                                    <h3 className="text-lg font-bold text-slate-900 mb-2">{feat.title}</h3>
+                                    <p className="text-slate-500 text-sm leading-relaxed">{feat.desc}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Plans Grid layout (Only for Mythos) */}
                 {isMythos && (
@@ -178,7 +217,7 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                                                     </div>
                                                 </div>
                                                 
-                                                <Link href={`/h/${plan.hotsite_slug}`} className="bg-indigo-600 hover:bg-indigo-700 text-white p-3.5 rounded-xl transition-all shadow-md hover:shadow-lg hover:shadow-indigo-500/20 active:scale-95 group-hover:bg-indigo-700">
+                                                <Link href={`/h/${plan.hotsite_slug}`} className={`${t.bg} ${t.hover} text-white p-3.5 rounded-xl transition-all shadow-md hover:shadow-lg hover:shadow-indigo-500/20 active:scale-95 group-hover:${t.bg}`}>
                                                     <ArrowRight className="h-6 w-6" />
                                                 </Link>
                                             </div>
