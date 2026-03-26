@@ -364,9 +364,9 @@ async def search_storefront(
             mapped_items = await _fetch_from_horus_storefront(db, company_id, current_user, q, "SEARCH", skip, limit, settings, filter)
             return {
                 "items": mapped_items,
-                "total": len(mapped_items),
+                "total": skip + len(mapped_items),
                 "page": (skip // limit) + 1,
-                "pages": 1 if len(mapped_items) < limit else (skip // limit) + 2
+                "pages": ((skip // limit) + 1) if len(mapped_items) < limit else ((skip // limit) + 2)
             }
         except HTTPException:
             return {"items": [], "total": 0, "page": 1, "pages": 0}
