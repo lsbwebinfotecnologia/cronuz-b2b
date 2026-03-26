@@ -31,9 +31,9 @@ async def upload_cover(
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="O arquivo de envio deve ser uma imagem.")
 
-    MAX_FILE_SIZE = 2 * 1024 * 1024 # 2MB
+    MAX_FILE_SIZE = 4 * 1024 * 1024 # 4MB
     if file.size and file.size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="O arquivo excede o limite de 2MB.")
+        raise HTTPException(status_code=400, detail="O arquivo excede o limite de 4MB.")
 
     company_dir = STATIC_DIR / str(current_user.company_id)
     company_dir.mkdir(parents=True, exist_ok=True)
@@ -77,9 +77,9 @@ async def upload_image(
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="O arquivo de envio deve ser uma imagem.")
 
-    MAX_FILE_SIZE = 2 * 1024 * 1024 # 2MB
+    MAX_FILE_SIZE = 4 * 1024 * 1024 # 4MB
     if file.size and file.size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="O arquivo excede o limite de 2MB.")
+        raise HTTPException(status_code=400, detail="O arquivo excede o limite de 4MB.")
 
     # Diretorio para imagens gerais
     images_dir = FRONTEND_PUBLIC_DIR / "images" / str(target_company_id)

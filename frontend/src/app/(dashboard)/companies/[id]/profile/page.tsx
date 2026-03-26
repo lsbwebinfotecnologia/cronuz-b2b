@@ -97,8 +97,8 @@ export default function CompanyProfilePage() {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
     
-    if (file.size > 2 * 1024 * 1024) {
-        toast.error('A imagem excede o limite máximo de 2MB.');
+    if (file.size > 4 * 1024 * 1024) {
+        toast.error('A imagem excede o limite máximo de 4MB.');
         e.target.value = '';
         return;
     }
@@ -132,8 +132,8 @@ export default function CompanyProfilePage() {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
     
-    if (file.size > 2 * 1024 * 1024) {
-        toast.error('A logo excede o limite máximo de 2MB.');
+    if (file.size > 4 * 1024 * 1024) {
+        toast.error('A logo excede o limite máximo de 4MB.');
         e.target.value = '';
         return;
     }
@@ -167,8 +167,8 @@ export default function CompanyProfilePage() {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
     
-    if (file.size > 2 * 1024 * 1024) {
-        toast.error('O ícone excede o limite máximo de 2MB.');
+    if (file.size > 4 * 1024 * 1024) {
+        toast.error('O ícone excede o limite máximo de 4MB.');
         e.target.value = '';
         return;
     }
