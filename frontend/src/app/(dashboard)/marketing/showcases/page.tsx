@@ -360,8 +360,8 @@ export default function SellerShowcasesPage() {
                                            onChange={async (e) => {
                                               const file = e.target.files?.[0];
                                               if (!file) return;
-                                              if (file.size > 4 * 1024 * 1024) {
-                                                  toast.error('A imagem excede o limite máximo de 4MB.');
+                                              if (file.size > 10 * 1024 * 1024) {
+                                                  toast.error('A imagem excede o limite máximo de 10MB.');
                                                   e.target.value = '';
                                                   return;
                                               }
@@ -477,8 +477,8 @@ export default function SellerShowcasesPage() {
                                 onChange={async (e) => {
                                    const file = e.target.files?.[0];
                                    if (!file) return;
-                                   if (file.size > 4 * 1024 * 1024) {
-                                       toast.error('A imagem excede o limite máximo de 4MB.');
+                                   if (file.size > 10 * 1024 * 1024) {
+                                       toast.error('A imagem excede o limite máximo de 10MB.');
                                        e.target.value = '';
                                        return;
                                    }
