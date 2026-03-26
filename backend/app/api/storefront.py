@@ -287,7 +287,7 @@ async def _fetch_from_horus_storefront(
                 elif search_filter == "NOM_EDITORA":
                     search_option = "NOM_EDITORA"
                 else:
-                    search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
+                    search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOME"
             else: # PRODUCT
                 search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "COD_ITEM"
                 
@@ -306,7 +306,7 @@ async def _fetch_from_horus_storefront(
                 elif search_filter == "NOM_EDITORA":
                     search_option = "NOM_EDITORA"
                 else:
-                    search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
+                    search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOME"
             else: # PRODUCT
                 search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOME"
                 
