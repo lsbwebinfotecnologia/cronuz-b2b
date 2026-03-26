@@ -287,7 +287,7 @@ async def _fetch_from_horus_storefront(
                 elif search_filter == "NOM_EDITORA":
                     search_option = "NOM_EDITORA"
                 else:
-                    search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOME"
+                    search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
             else: # PRODUCT
                 search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "COD_ITEM"
                 
@@ -318,7 +318,7 @@ async def _fetch_from_horus_storefront(
                 limit=limit
             )
         
-        if isinstance(horus_response, list) and len(horus_response) > 0 and hasattr(horus_response[0], "Falha"):
+        if isinstance(horus_response, list) and len(horus_response) > 0 and horus_response[0].get("Falha"):
             return []
             
         horus_items = horus_response if isinstance(horus_response, list) else []
