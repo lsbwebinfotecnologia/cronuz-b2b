@@ -154,7 +154,15 @@ export function Sidebar() {
     if (!moduleMarketing && nav.name === 'Marketing') return false;
     if (!moduleAgents && nav.href === '/agents') return false;
     return true;
-  })];
+  })].map(nav => {
+    if (nav.name === 'Marketing' && usesHorus) {
+      return {
+        ...nav,
+        subItems: nav.subItems?.filter(sub => sub.name !== 'Promoções')
+      };
+    }
+    return nav;
+  });
   
   if (moduleSubscriptions) {
     // Insert Assinaturas before Configurações
