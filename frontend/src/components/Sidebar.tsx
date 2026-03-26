@@ -68,6 +68,15 @@ const sellerNavigation: NavItem[] = [
        { name: 'Menu de Navegação', href: '/marketing/navigation' }
     ]
   },
+  {
+    name: 'Bookinfo',
+    href: '/bookinfo/orders',
+    icon: Layers,
+    subItems: [
+       { name: 'Bookinfo (Pedidos Venda)', href: '/bookinfo/orders' },
+       { name: 'Bookinfo (Pedidos Compra)', href: '/bookinfo/purchases' }
+    ]
+  },
   { name: 'Vendedores/Rep', href: '/agents', icon: MonitorSmartphone },
   { name: 'Configurações', href: '/settings', icon: Settings },
 ];
@@ -84,6 +93,7 @@ export function Sidebar() {
   const [user, setUser] = useState<UserData | null>(null);
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
   const [usesHorus, setUsesHorus] = useState(false);
+  const [usesBookinfo, setUsesBookinfo] = useState(false);
   const [moduleProducts, setModuleProducts] = useState(true);
   const [moduleCustomers, setModuleCustomers] = useState(true);
   const [moduleMarketing, setModuleMarketing] = useState(false);
@@ -115,6 +125,7 @@ export function Sidebar() {
             if (res.ok) {
                const data = await res.json();
                setUsesHorus(data.uses_horus || false);
+               setUsesBookinfo(data.uses_bookinfo || false);
                setModuleProducts(data.module_products ?? true);
                setModuleCustomers(data.module_customers ?? true);
                setModuleMarketing(data.module_marketing || false);
@@ -152,6 +163,7 @@ export function Sidebar() {
     if (!moduleProducts && nav.name === 'Produtos') return false;
     if (!moduleCustomers && nav.name === 'Clientes') return false;
     if (!moduleMarketing && nav.name === 'Marketing') return false;
+    if (!usesBookinfo && nav.name === 'Bookinfo') return false;
     if (!moduleAgents && nav.href === '/agents') return false;
     return true;
   })].map(nav => {

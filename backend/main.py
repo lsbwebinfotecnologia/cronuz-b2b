@@ -37,6 +37,7 @@ from app.api import integrators
 from app.api import customer_auth
 from app.api import customer_portal
 from app.api import system_integrators
+from app.api import bookinfo_hub
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -111,6 +112,7 @@ app.include_router(leads.router, tags=["leads"])
 app.include_router(company_notes.router, prefix="/company-notes", tags=["company-notes"])
 app.include_router(integrators.router, prefix="/integrators", tags=["integrators"])
 app.include_router(system_integrators.router, prefix="/system-integrators", tags=["system-integrators"])
+app.include_router(bookinfo_hub.router, tags=["bookinfo"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)

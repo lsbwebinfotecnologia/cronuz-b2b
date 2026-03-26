@@ -7,6 +7,7 @@ from app.models.product import Product
 from app.models.customer import Customer
 from app.models.company import Company
 from app.models.company_settings import CompanySettings
+from app.models.integrator import Integrator
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -70,6 +71,19 @@ def get_dashboard_metrics(
             order_query = order_query.filter(Company.tenant_id == current_user.tenant_id)
     active_orders = order_query.count()
     
+    # Check Integrations
+    integrations = []
+    if company_id: # Only query integrations if company_id is available
+        integrations = db.query(Integrator.platform).filter(
+            Integrator.company_id == company_id,
+            Integrator.active == True
+        ).all()
+    
+    active_integrations = [i[0] for i in integrations]
+
+    uses_horus = "HORUS" in active_integrations
+    uses_bookinfo = "BOOKINFO" in active_integrations
+
     # Get Company Modules
     company = None
     if company_id:
@@ -99,6 +113,7 @@ def get_dashboard_metrics(
         "active_orders": active_orders,
         "total_revenue": total_revenue,
         "uses_horus": uses_horus,
+        "uses_bookinfo": uses_bookinfo,
         "module_b2b_native": module_b2b_native,
         "module_horus_erp": module_horus_erp,
         "module_products": module_products,
