@@ -243,14 +243,14 @@ export function StoreHeader() {
             />
             <motion.div 
               initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="fixed inset-y-0 left-0 w-[280px] bg-white shadow-2xl z-50 flex flex-col dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 md:hidden"
+              className="fixed inset-y-0 left-0 w-[280px] h-full h-[100dvh] min-h-[100dvh] max-h-[100dvh] bg-white shadow-2xl z-50 flex flex-col dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 md:hidden"
             >
-              <div className="p-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
+              <div className="p-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800 shrink-0 bg-white dark:bg-slate-950">
                 <span className="font-bold text-lg dark:text-white">Menu</span>
                 <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg dark:hover:bg-slate-900"><X className="w-5 h-5"/></button>
               </div>
               
-              <div className="p-4 space-y-6 flex-1 overflow-y-auto">
+              <div className="p-4 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar bg-white dark:bg-slate-950 pb-20">
                 <form onSubmit={handleSearch} className="relative flex flex-col gap-2">
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
@@ -322,8 +322,8 @@ export function StoreHeader() {
                   )}
                 </nav>
               </div>
-
-              <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center">
+              
+              <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center shrink-0 bg-white dark:bg-slate-950">
                 <span className="text-sm font-medium text-slate-500">Tema</span>
                 <ThemeToggle />
               </div>
