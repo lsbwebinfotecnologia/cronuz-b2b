@@ -15,6 +15,7 @@ from app.models import marketing_navigation as marketing_nav_models
 from app.models import subscription as subscription_models
 from app.models import lead as lead_models
 from app.models import system_integrator as system_integrator_models
+from app.models import order as order_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -56,6 +57,7 @@ subscription_models.Base.metadata.create_all(bind=engine)
 lead_models.Base.metadata.create_all(bind=engine)
 system_integrator_models.Base.metadata.create_all(bind=engine)
 marketing_nav_models.Base.metadata.create_all(bind=engine)
+order_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
