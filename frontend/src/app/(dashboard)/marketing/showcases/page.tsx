@@ -360,6 +360,11 @@ export default function SellerShowcasesPage() {
                                            onChange={async (e) => {
                                               const file = e.target.files?.[0];
                                               if (!file) return;
+                                              if (file.size > 4 * 1024 * 1024) {
+                                                  toast.error('A imagem excede o limite máximo de 4MB.');
+                                                  e.target.value = '';
+                                                  return;
+                                              }
                                               const formData = new FormData();
                                               formData.append('file', file);
                                               const toastId = toast.loading('Fazendo upload...');
@@ -370,15 +375,18 @@ export default function SellerShowcasesPage() {
                                                     headers: { 'Authorization': `Bearer ${token}` },
                                                     body: formData
                                                   });
-                                                  if (!res.ok) throw new Error('Erro');
+                                                  if (!res.ok) {
+                                                      const errData = await res.json().catch(() => ({}));
+                                                      throw new Error(errData.detail || 'Erro no upload da imagem.');
+                                                  }
                                                   const data = await res.json();
                                                   
                                                   const config = { ...settings.b2b_showcases_config };
                                                   config.rotating_banners[idx].image_url = data.url;
                                                   setSettings({ ...settings, b2b_showcases_config: config });
                                                   toast.success('Upload concluído!', { id: toastId });
-                                              } catch(err) {
-                                                  toast.error('Erro no upload.', { id: toastId });
+                                              } catch(err: any) {
+                                                  toast.error(err.message || 'Erro no upload.', { id: toastId });
                                               }
                                            }}
                                            className="w-1/3 text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100 cursor-pointer dark:file:bg-blue-900/30 dark:file:text-blue-400"
@@ -469,6 +477,11 @@ export default function SellerShowcasesPage() {
                                 onChange={async (e) => {
                                    const file = e.target.files?.[0];
                                    if (!file) return;
+                                   if (file.size > 4 * 1024 * 1024) {
+                                       toast.error('A imagem excede o limite máximo de 4MB.');
+                                       e.target.value = '';
+                                       return;
+                                   }
                                    const formData = new FormData();
                                    formData.append('file', file);
                                    
@@ -480,15 +493,18 @@ export default function SellerShowcasesPage() {
                                          headers: { 'Authorization': `Bearer ${token}` },
                                          body: formData
                                        });
-                                       if (!res.ok) throw new Error('Erro no upload');
+                                       if (!res.ok) {
+                                           const errData = await res.json().catch(() => ({}));
+                                           throw new Error(errData.detail || 'Erro no upload da imagem.');
+                                       }
                                        const data = await res.json();
                                        
                                        const config = { ...settings.b2b_showcases_config };
                                        config.featured.banner_url = data.url;
                                        setSettings({ ...settings, b2b_showcases_config: config });
                                        toast.success('Imagem salva com sucesso!', { id: toastId });
-                                   } catch(err) {
-                                       toast.error('Erro no upload.', { id: toastId });
+                                   } catch(err: any) {
+                                       toast.error(err.message || 'Erro no upload.', { id: toastId });
                                    }
                                 }}
                                 className="w-full text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border file:border-slate-200 file:text-sm file:font-semibold file:bg-white file:text-slate-700 hover:file:bg-slate-50 dark:file:bg-slate-800 dark:file:border-slate-700 dark:file:text-slate-300 dark:hover:file:bg-slate-700 cursor-pointer"
