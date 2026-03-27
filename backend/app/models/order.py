@@ -23,7 +23,10 @@ class Order(Base):
     horus_pedido_venda = Column(String(100), nullable=True) # external reference ID
 
     tracking_code = Column(String(100), nullable=True)
+    invoice_number = Column(String(100), nullable=True)
+    invoice_key = Column(String(100), nullable=True)
     invoice_xml = Column(String, nullable=True) # Could be Text but String without limit works just as well in PG
+    bookinfo_nfe_sent = Column(Boolean, nullable=False, default=False)
 
     subtotal = Column(Float, nullable=False, default=0.0)
     discount = Column(Float, nullable=False, default=0.0)

@@ -138,10 +138,13 @@ def seed_master_user():
                 company_id=None
             )
             db.add(master_user)
-            db.commit()
             print("INFO:     Master user seeded successfully")
     finally:
         db.close()
+        
+    # Start Background Jobs
+    from app.core.scheduler import start_scheduler
+    start_scheduler()
 
 @app.get("/")
 def read_root():

@@ -24,6 +24,7 @@ class CompanySettings(Base):
     horus_hide_zero_balance = Column(Boolean, default=False, nullable=False)
     
     bookinfo_api_key = Column(String(255), nullable=True)
+    bookinfo_notify_processing_early = Column(Boolean, default=False, nullable=False) # True = avisar antes de faturar
     metabooks_api_key = Column(String(255), nullable=True)
     cover_image_base_url = Column(String(500), nullable=True)
     
