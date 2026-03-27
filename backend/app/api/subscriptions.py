@@ -615,7 +615,11 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
             else:
                 bill_status = "PENDING"
         elif 'error' in efi_payment:
-             error_msg = efi_payment.get('error_description', {}).get('message', "Erro não identificado da Efí")
+             err_desc = efi_payment.get('error_description', "Erro não identificado da Efí")
+             if isinstance(err_desc, dict):
+                 error_msg = err_desc.get('message', str(err_desc))
+             else:
+                 error_msg = str(err_desc)
              raise Exception(f"Erro na Operadora: {error_msg}")
         else:
             raise Exception(f"Retorno não mapeado do pagamento: {efi_payment}")
