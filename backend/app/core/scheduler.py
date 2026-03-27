@@ -11,8 +11,19 @@ from app.models.customer import Customer
 import asyncio
 import json
 import logging
+import os
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("background_jobs")
+logger.setLevel(logging.INFO)
+
+# Create a file handler for jobs logging
+log_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "jobs.log")
+fh = logging.FileHandler(log_file)
+fh.setLevel(logging.INFO)
+
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+logger.addHandler(fh)
 
 # Temporary: For later refactoring to share HTTP client
 import httpx

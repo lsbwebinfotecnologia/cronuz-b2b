@@ -52,6 +52,28 @@ def get_bookinfo_client(company_id: int, db: Session):
         verify=False
     )
 
+@router.get("/logs")
+async def get_background_logs(
+    limit: int = 100,
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in [UserRole.MASTER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    import os
+    log_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "jobs.log")
+    
+    if not os.path.exists(log_file):
+        return {"logs": ["Nenhum log encontrado. Os jobs ainda não rodaram."]}
+        
+    try:
+        with open(log_file, "r") as f:
+            lines = f.readlines()
+            # Return last N lines
+            return {"logs": [line.strip() for line in lines[-limit:]]}
+    except Exception as e:
+        return {"logs": [f"Erro ao ler log: {str(e)}"]}
+
 @router.get("/orders")
 async def get_orders(
     pagina: int = 0,
