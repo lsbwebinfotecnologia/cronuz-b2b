@@ -280,7 +280,7 @@ async def acknowledge_order(
 
 class CustomerSyncRequest(BaseModel):
     cnpj: str
-    fallback_name: str | None = None
+    fallback_name: Optional[str] = None
 
 @router.post("/customers/sync")
 async def sync_customer_from_horus(
