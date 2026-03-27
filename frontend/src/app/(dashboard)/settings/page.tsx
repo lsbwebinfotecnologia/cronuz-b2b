@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database } from 'lucide-react';
+import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 
@@ -156,6 +157,28 @@ export default function SettingsPage() {
           Gerencie as preferências e parâmetros operacionais do seu negócio.
         </p>
       </div>
+
+      {/* Link de Migração */}
+      {currentUser?.type === 'MASTER' && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-2xl border border-indigo-200 bg-indigo-50/50 shadow-sm p-6 dark:bg-indigo-900/10 dark:border-indigo-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+        >
+          <div>
+            <h2 className="text-lg font-bold text-indigo-900 dark:text-indigo-400 flex items-center gap-2">
+              <Database className="w-5 h-5" />
+              Migração de Dados Legados
+            </h2>
+            <p className="text-sm text-indigo-700 dark:text-indigo-500 mt-1 max-w-xl">
+              Sincronize pedidos antigos e identificadores em lote a partir do banco de dados MySQL legado. Restrito a contas Master.
+            </p>
+          </div>
+          <Link href="/settings/legacy-migration" className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors shadow-sm whitespace-nowrap text-center">
+            Acessar Ferramenta
+          </Link>
+        </motion.div>
+      )}
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}
