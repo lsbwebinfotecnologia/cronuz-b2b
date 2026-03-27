@@ -210,7 +210,8 @@ async def get_order_detail(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
-                    cod_pedido_origem=order.id
+                    cod_pedido_origem=order.id,
+                    cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None
                 )
                 
                 if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:

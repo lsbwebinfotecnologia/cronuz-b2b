@@ -4,7 +4,7 @@ from app.integrators.horus import HorusClient
 
 class HorusOrders(HorusClient):
     
-    async def get_order(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int], limit: int = 0) -> Any:
+    async def get_order(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int], limit: int = 0, cod_ped_venda: Optional[str] = None) -> Any:
         """
         Translates getOrder from HsOrders.php
         """
@@ -14,6 +14,15 @@ class HorusOrders(HorusClient):
             "ID_GUID": id_guid,
             "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
         }
+        
+        if getattr(self, '_settings', None):
+            if self._settings.horus_company:
+                params["COD_EMPRESA"] = self._settings.horus_company
+            if self._settings.horus_branch:
+                params["COD_FILIAL"] = self._settings.horus_branch
+                
+        if cod_ped_venda:
+            params["COD_PED_VENDA"] = cod_ped_venda
         
         if not getattr(self._settings, 'horus_legacy_pagination', False):
             if limit > 0:
