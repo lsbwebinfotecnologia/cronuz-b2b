@@ -494,8 +494,9 @@ async def get_horus_debug_preview(
                 id_doc=customer.document,
                 id_guid=customer.id_guid,
                 cnpj_destino=company.document,
-                cod_pedido_origem=order.id if order.origin != "bookinfo" else None,
-                cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None
+                cod_pedido_origem=order.tracking_code if order.origin == "bookinfo" else order.id,
+                cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None,
+                ignore_customer_context=(order.origin == "bookinfo")
             )
             if raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0:
                 horus_data = raw_horus_data[0]
@@ -509,12 +510,16 @@ async def get_horus_debug_preview(
             await horus_client.close()
             
             request_params = {
-                "ID_DOC": customer.document,
-                "ID_GUID": customer.id_guid,
-                "CNPJ_DESTINO": company.document,
-                "COD_PEDIDO_ORIGEM": order.id if order.origin != "bookinfo" else None,
+                "COD_PEDIDO_ORIGEM": order.tracking_code if order.origin == "bookinfo" else order.id,
                 "COD_PED_VENDA": order.horus_pedido_venda if order.origin == "bookinfo" else None
             }
+            if order.origin != "bookinfo":
+                request_params["ID_DOC"] = customer.document
+                request_params["ID_GUID"] = customer.id_guid
+                request_params["CNPJ_DESTINO"] = company.document
+            if company:
+                request_params["COD_EMPRESA"] = horus_client._settings.horus_company
+                request_params["COD_FILIAL"] = horus_client._settings.horus_branch
             
     return {
         "params_enviados": request_params,
@@ -561,8 +566,9 @@ async def manual_sync_horus(
                 id_doc=customer.document,
                 id_guid=customer.id_guid,
                 cnpj_destino=company.document,
-                cod_pedido_origem=order.id if order.origin != "bookinfo" else None,
-                cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None
+                cod_pedido_origem=order.tracking_code if order.origin == "bookinfo" else order.id,
+                cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None,
+                ignore_customer_context=(order.origin == "bookinfo")
             )
             
             if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:

@@ -4,16 +4,17 @@ from app.integrators.horus import HorusClient
 
 class HorusOrders(HorusClient):
     
-    async def get_order(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int], limit: int = 0, cod_ped_venda: Optional[str] = None) -> Any:
+    async def get_order(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int, None] = None, limit: int = 0, cod_ped_venda: Optional[str] = None, ignore_customer_context: bool = False) -> Any:
         """
         Translates getOrder from HsOrders.php
         """
-        params = {
-            "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
-            "ID_GUID": id_guid,
-            "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
-        }
-        if cod_pedido_origem is not None:
+        params = {}
+        if not ignore_customer_context:
+            params["ID_DOC"] = re.sub(r'\D', '', str(id_doc)) if id_doc else None
+            params["ID_GUID"] = id_guid
+            params["CNPJ_DESTINO"] = re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None
+        
+        if cod_pedido_origem is not None and cod_pedido_origem != "":
             params["COD_PEDIDO_ORIGEM"] = cod_pedido_origem
         
         if getattr(self, '_settings', None):
