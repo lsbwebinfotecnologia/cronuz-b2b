@@ -621,23 +621,33 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
             raise Exception(f"Retorno não mapeado do pagamento: {efi_payment}")
              
     except Exception as e:
-        # In complete flow, we should rollback the subscription creation, but the customer already exists in EFI.
-        # So we just mark the local bill as FAILED, or raise the error.
-        db.rollback()
-        
-        # Extracts dict-like JSON strings from Gerencianet Exceptions
+        # The subscription was already created in EFI (Step 3.2), so we MUST save it locally
+        # even if the credit card was declined, so the store owner can see the EFI ID.
         err_str = str(e)
         if "error_description" in err_str and "mensagem" in err_str:
             import json
             try:
-                # Often gerencianet SDK prints a dict string
                 parsed = json.loads(err_str.replace("'", '"'))
                 if "mensagem" in parsed: err_str = parsed["mensagem"]
             except: pass
             
+        # Create the FAILED billing history
+        bill = SubscriptionBilling(
+            subscription_id=sub.id,
+            delivery_number=1,
+            amount=first_delivery_price,
+            status="FAILED",
+            due_date=get_current_br_time()
+        )
+        db.add(bill)
+        
+        # Mark subscription as Suspended/Pending Payment
+        sub.status = "SUSPENDED"
+        db.commit()
+        
         raise HTTPException(status_code=400, detail=f"Aprovação do Checkout Falhou: {err_str}")
         
-    # 4. Create the Subscription Billing history
+    # 4. Create the Subscription Billing history for Success
     bill = SubscriptionBilling(
         subscription_id=sub.id,
         delivery_number=1,
