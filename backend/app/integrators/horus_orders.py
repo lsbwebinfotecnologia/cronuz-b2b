@@ -9,11 +9,12 @@ class HorusOrders(HorusClient):
         Translates getOrder from HsOrders.php
         """
         params = {
-            "COD_PEDIDO_ORIGEM": cod_pedido_origem,
             "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
             "ID_GUID": id_guid,
             "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
         }
+        if cod_pedido_origem is not None:
+            params["COD_PEDIDO_ORIGEM"] = cod_pedido_origem
         
         if getattr(self, '_settings', None):
             if self._settings.horus_company:

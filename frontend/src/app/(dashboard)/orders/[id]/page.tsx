@@ -648,6 +648,17 @@ export default function OrderDetailPage() {
                             </div>
                         ) : horusPreviewData ? (
                             <div className="space-y-6">
+                                {horusPreviewData.params_enviados && (
+                                    <div>
+                                        <h3 className="font-bold text-slate-900 dark:text-white mb-3 text-sm flex items-center gap-2">
+                                            <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
+                                            Parâmetros Enviados
+                                        </h3>
+                                        <pre className="bg-slate-900 text-yellow-400 p-4 rounded-2xl overflow-x-auto text-xs font-mono shadow-inner border border-slate-800">
+                                            {JSON.stringify(horusPreviewData.params_enviados, null, 2)}
+                                        </pre>
+                                    </div>
+                                )}
                                 <div>
                                     <h3 className="font-bold text-slate-900 dark:text-white mb-3 text-sm flex items-center gap-2">
                                         <div className="w-2 h-2 rounded-full bg-emerald-500"></div>

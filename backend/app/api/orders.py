@@ -494,7 +494,7 @@ async def get_horus_debug_preview(
                 id_doc=customer.document,
                 id_guid=customer.id_guid,
                 cnpj_destino=company.document,
-                cod_pedido_origem=order.id,
+                cod_pedido_origem=order.id if order.origin != "bookinfo" else None,
                 cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None
             )
             if raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0:
@@ -508,7 +508,16 @@ async def get_horus_debug_preview(
         finally:
             await horus_client.close()
             
+            request_params = {
+                "ID_DOC": customer.document,
+                "ID_GUID": customer.id_guid,
+                "CNPJ_DESTINO": company.document,
+                "COD_PEDIDO_ORIGEM": order.id if order.origin != "bookinfo" else None,
+                "COD_PED_VENDA": order.horus_pedido_venda if order.origin == "bookinfo" else None
+            }
+            
     return {
+        "params_enviados": request_params,
         "order_details": horus_data,
         "order_items": horus_items_data
     }
@@ -552,7 +561,7 @@ async def manual_sync_horus(
                 id_doc=customer.document,
                 id_guid=customer.id_guid,
                 cnpj_destino=company.document,
-                cod_pedido_origem=order.id,
+                cod_pedido_origem=order.id if order.origin != "bookinfo" else None,
                 cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None
             )
             
@@ -611,8 +620,11 @@ async def manual_sync_horus(
                     try:
                         h_qty_req = int(float(h_item.get("QT_PEDIDA", 0)))
                         h_qty_f = int(float(h_item.get("QTD_ATENDIDA", 0)))
-                        h_price_str = str(h_item.get("VLR_LIQUIDO", "0")).replace(".", "").replace(",", ".")
-                        h_unit_price = float(h_price_str)
+                        raw_price = h_item.get("VLR_LIQUIDO", 0)
+                        if isinstance(raw_price, str):
+                            h_unit_price = float(raw_price.replace(".", "").replace(",", "."))
+                        else:
+                            h_unit_price = float(raw_price)
                     except (ValueError, TypeError):
                         continue
                         
