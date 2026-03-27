@@ -280,6 +280,7 @@ async def acknowledge_order(
 
 class CustomerSyncRequest(BaseModel):
     cnpj: str
+    fallback_name: str | None = None
 
 @router.post("/customers/sync")
 async def sync_customer_from_horus(
@@ -328,7 +329,7 @@ async def sync_customer_from_horus(
          
     # Sucesso, extract
     h_data = res.get("data", {})
-    name = h_data.get("NOME_FANTASIA") or h_data.get("RAZAO_SOCIAL") or h_data.get("DESCRICAO") or f"Cliente {cnpj_clean}"
+    name = h_data.get("NOME_FANTASIA") or h_data.get("RAZAO_SOCIAL") or h_data.get("DESCRICAO") or payload.fallback_name or f"Cliente {cnpj_clean}"
     razao = h_data.get("RAZAO_SOCIAL") or name
     email = h_data.get("EMAIL", f"{cnpj_clean}@placeholder.com")
     

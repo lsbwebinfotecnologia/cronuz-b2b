@@ -56,7 +56,7 @@ export default function BookinfoOrdersPage() {
     }
   };
 
-  const handleSyncCustomer = async (cnpj: string) => {
+  const handleSyncCustomer = async (cnpj: string, fallbackName?: string) => {
     if (!cnpj) return;
     setSyncingCnpj(cnpj);
     
@@ -68,7 +68,7 @@ export default function BookinfoOrdersPage() {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ cnpj })
+        body: JSON.stringify({ cnpj, fallback_name: fallbackName })
       });
       
       const data = await res.json();
@@ -270,7 +270,7 @@ export default function BookinfoOrdersPage() {
                             <span>CNPJ: {formatCnpj(order.cnpjComprador)}</span>
                             {!order.enable && (
                                <button
-                                  onClick={() => handleSyncCustomer(order.cnpjComprador)}
+                                  onClick={() => handleSyncCustomer(order.cnpjComprador, order.nomeComprador)}
                                   disabled={syncingCnpj === order.cnpjComprador}
                                   className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 transition-colors border border-emerald-200 dark:border-emerald-500/20 w-fit"
                                >
