@@ -494,7 +494,7 @@ async def get_horus_debug_preview(
                 id_doc=customer.document,
                 id_guid=customer.id_guid,
                 cnpj_destino=company.document,
-                cod_pedido_origem=order.tracking_code if order.origin == "bookinfo" else order.id,
+                cod_pedido_origem=None if order.origin == "bookinfo" else order.id,
                 cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None,
                 ignore_customer_context=(order.origin == "bookinfo")
             )
@@ -510,7 +510,7 @@ async def get_horus_debug_preview(
             await horus_client.close()
             
             request_params = {
-                "COD_PEDIDO_ORIGEM": order.tracking_code if order.origin == "bookinfo" else order.id,
+                "COD_PEDIDO_ORIGEM": None if order.origin == "bookinfo" else order.id,
                 "COD_PED_VENDA": order.horus_pedido_venda if order.origin == "bookinfo" else None
             }
             if order.origin != "bookinfo":
@@ -566,7 +566,7 @@ async def manual_sync_horus(
                 id_doc=customer.document,
                 id_guid=customer.id_guid,
                 cnpj_destino=company.document,
-                cod_pedido_origem=order.tracking_code if order.origin == "bookinfo" else order.id,
+                cod_pedido_origem=None if order.origin == "bookinfo" else order.id,
                 cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None,
                 ignore_customer_context=(order.origin == "bookinfo")
             )
