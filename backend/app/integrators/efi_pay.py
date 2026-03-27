@@ -196,26 +196,8 @@ class EFIPayIntegration:
              
         params = {'id': plan_id}
         
-        cpf = ''.join(filter(str.isdigit, customer_document))
-        phone = ''.join(filter(str.isdigit, customer_phone))
-        
-        customer_data = {
-            'name': customer_name,
-            'email': customer_email,
-            'phone_number': phone
-        }
-        if len(cpf) <= 11:
-            customer_data['cpf'] = cpf
-        else:
-            customer_data['cnpj'] = cpf
-            customer_data['juridical_person'] = {
-                'corporate_name': customer_name,
-                'cnpj': cpf
-            }
-        
         body = {
-            'items': items,
-            'customer': customer_data
+            'items': items
         }
         
         res = gn.create_subscription(params=params, body=body)
