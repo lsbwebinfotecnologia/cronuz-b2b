@@ -641,8 +641,8 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
         )
         db.add(bill)
         
-        # Mark subscription as Suspended/Pending Payment
-        sub.status = "SUSPENDED"
+        # Mark subscription as Paused/Pending Payment
+        sub.status = "PAUSED"
         db.commit()
         
         raise HTTPException(status_code=400, detail=f"Aprovação do Checkout Falhou: {err_str}")
