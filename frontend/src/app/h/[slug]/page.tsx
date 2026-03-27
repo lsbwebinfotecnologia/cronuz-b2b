@@ -112,12 +112,14 @@ export default function HotsiteLandingPage() {
                                         {block.subtitle}
                                     </p>
                                 )}
-                                <div className="pt-8">
-                                    <Link href={`/h/${slug}/checkout`} className="inline-flex items-center justify-center gap-3 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-bold px-10 py-5 rounded-lg text-xl uppercase tracking-wider transition-all hover:scale-105 active:scale-95 shadow-2xl shadow-[var(--color-primary-base)]/40 border-b-4 border-black/30">
-                                        Assinar Agora
-                                        <ArrowRight className="h-6 w-6" />
-                                    </Link>
-                                </div>
+                                {index === 0 && (
+                                    <div className="pt-8">
+                                        <Link href={`/h/${slug}/checkout`} className="inline-flex items-center justify-center gap-3 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-bold px-10 py-5 rounded-lg text-xl uppercase tracking-wider transition-all hover:scale-105 active:scale-95 shadow-2xl shadow-[var(--color-primary-base)]/40 border-b-4 border-black/30">
+                                            Assinar Agora
+                                            <ArrowRight className="h-6 w-6" />
+                                        </Link>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -174,9 +176,9 @@ export default function HotsiteLandingPage() {
                                             const container = e.currentTarget.parentElement?.querySelector('.carousel-container');
                                             if(container) container.scrollBy({ left: -container.clientWidth * 0.8, behavior: 'smooth' });
                                         }}
-                                        className="absolute left-8 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/80 text-white p-3 rounded-full opacity-0 group-hover/carousel:opacity-100 transition-opacity backdrop-blur-md border border-white/10 hidden md:block"
+                                        className="absolute left-2 lg:left-8 top-1/2 -translate-y-1/2 z-20 text-[#fde047] hover:scale-110 p-2 rounded-full transition-transform drop-shadow-[0_4px_8px_rgba(0,0,0,0.8)] hidden md:block"
                                     >
-                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M15 19l-7-7 7-7" /></svg>
+                                        <svg className="w-14 h-14 lg:w-20 lg:h-20 fill-current" viewBox="0 0 24 24"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/></svg>
                                     </button>
                                     
                                     <button 
@@ -185,15 +187,15 @@ export default function HotsiteLandingPage() {
                                             const container = e.currentTarget.parentElement?.querySelector('.carousel-container');
                                             if(container) container.scrollBy({ left: container.clientWidth * 0.8, behavior: 'smooth' });
                                         }}
-                                        className="absolute right-8 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/80 text-white p-3 rounded-full opacity-0 group-hover/carousel:opacity-100 transition-opacity backdrop-blur-md border border-white/10 hidden md:block"
+                                        className="absolute right-2 lg:right-8 top-1/2 -translate-y-1/2 z-20 text-[#fde047] hover:scale-110 p-2 rounded-full transition-transform drop-shadow-[0_4px_8px_rgba(0,0,0,0.8)] hidden md:block"
                                     >
-                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
+                                        <svg className="w-14 h-14 lg:w-20 lg:h-20 fill-current" viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
                                     </button>
                                 </>
                             )}
-                            <div className="carousel-container flex overflow-x-auto gap-6 pb-8 snap-x snap-mandatory no-scrollbar relative scroll-smooth">
+                            <div className="carousel-container flex overflow-x-auto gap-6 pb-8 snap-x snap-mandatory no-scrollbar relative scroll-smooth items-center">
                                 {block.images.filter((i: any) => i.url).map((img: any, i: number) => (
-                                    <div key={i} className="min-w-[85vw] lg:min-w-[700px] shrink-0 snap-center rounded-3xl overflow-hidden shadow-2xl relative border border-white/10 group aspect-video">
+                                    <div key={i} className="min-w-[80vw] lg:min-w-[450px] shrink-0 snap-center rounded-2xl overflow-hidden shadow-2xl relative group aspect-[4/3] border border-white/10">
                                         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent z-10 pointer-events-none"></div>
                                         <img src={img.url} alt={`Banner Carrossel ${i+1}`} className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" />
                                     </div>

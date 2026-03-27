@@ -112,11 +112,20 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                         </div>
                     )}
                     
-                    {!isMythos && (
-                        <Link href="/login" className={`hidden md:inline-flex ${t.bg} ${t.hover} text-white font-bold py-2.5 px-6 rounded-lg transition-colors shadow flex items-center gap-2`}>
-                            Acessar Portal <ArrowRight className="h-4 w-4" />
-                        </Link>
+                    {isMythos && (
+                        <nav className="hidden md:flex gap-6 text-sm font-bold text-slate-700 uppercase tracking-widest hidden lg:flex">
+                            <a href="#" className="hover:text-red-600 transition-colors">Início</a>
+                            <a href="#planos" className="hover:text-red-600 transition-colors">Coleções</a>
+                            <a href="#fale-conosco" className="hover:text-red-600 transition-colors">Fale Conosco</a>
+                        </nav>
                     )}
+                    <div className="flex items-center">
+                        {!isMythos && (
+                            <Link href="/login" className={`hidden md:inline-flex ${t.bg} ${t.hover} text-white font-bold py-2.5 px-6 rounded-lg transition-colors shadow flex items-center gap-2`}>
+                                Acessar Portal <ArrowRight className="h-4 w-4" />
+                            </Link>
+                        )}
+                    </div>
                 </div>
             </header>
 
@@ -134,11 +143,12 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                     <div className="relative z-20 max-w-4xl px-6 pt-16 pb-16">
                         {isMythos ? (
                             <>
-                                <h1 className="text-4xl md:text-6xl font-black mb-6 tracking-tight drop-shadow-sm text-center">
-                                    Assinaturas e <span className={`${t.accent} font-serif italic font-medium`}>Coleções</span>
+                                <h1 className="text-3xl md:text-5xl font-black mb-6 tracking-tight drop-shadow-sm text-center uppercase">
+                                    Uma Nova Fase para as <span className={`text-red-500 font-serif italic font-medium`}>Coleções</span>
                                 </h1>
-                                <p className="text-xl text-slate-300 font-light mx-auto max-w-2xl text-center">
-                                    Escolha o plano ideal para você e receba conteúdo exclusivo diretamente na sua casa com todo conforto e segurança.
+                                <p className="text-lg md:text-xl text-slate-300 font-light mx-auto max-w-4xl text-center leading-relaxed">
+                                    A <strong>Mythos Editora</strong> inicia uma nova fase ao assumir as operações da Salvat no Brasil, ampliando sua atuação com a criação da Mythos Colecionáveis.<br/><br className="hidden md:block"/>
+                                    Com isso, coleções consagradas passam a contar com a curadoria e a distribuição da Mythos, assegurando continuidade e expansão do portfólio.
                                 </p>
                             </>
                         ) : (
@@ -184,7 +194,7 @@ function StorefrontHub({ hostname }: { hostname: string }) {
 
                 {/* Plans Grid layout (Only for Mythos) */}
                 {isMythos && (
-                    <div className="max-w-7xl mx-auto px-6">
+                    <div id="planos" className="max-w-7xl mx-auto px-6">
                         {hubData.plans?.length > 0 ? (
                             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
                                 {hubData.plans.map((plan: any) => (
@@ -234,10 +244,39 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                         )}
                     </div>
                 )}
+                
+                {/* Mythos Fale Conosco layout */}
+                {isMythos && (
+                    <div id="fale-conosco" className="max-w-5xl mx-auto px-6 py-24 text-center">
+                        <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tight mb-4">Fale Conosco</h2>
+                        <div className="w-16 h-1.5 bg-red-600 mx-auto mb-8"></div>
+                        <p className="text-lg text-slate-600 mb-12">Para qualquer consulta que você quiser fazer, temos os seguintes canais:</p>
+                        
+                        <div className="flex flex-col md:flex-row items-center justify-center gap-8 mb-10">
+                            <div className="p-8 bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-200/50 flex flex-col items-center flex-1 w-full max-w-sm hover:-translate-y-1 transition-transform">
+                                <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center mb-6">
+                                    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
+                                </div>
+                                <h3 className="font-black text-xl text-slate-900 mb-4 uppercase text-red-600">Telefones</h3>
+                                <p className="text-slate-700 font-medium text-lg">(11) 3024-7707</p>
+                                <p className="text-slate-700 font-medium text-lg">(11) 97623-4950</p>
+                            </div>
+                            <div className="p-8 bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-200/50 flex flex-col items-center flex-1 w-full max-w-sm hover:-translate-y-1 transition-transform">
+                                <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center mb-6">
+                                    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                </div>
+                                <h3 className="font-black text-xl text-slate-900 mb-4 uppercase text-red-600">Atendimento</h3>
+                                <p className="text-slate-700 font-medium text-lg">Segunda à Sexta</p>
+                                <p className="text-slate-700 font-medium text-lg">das 9:00 às 18:00</p>
+                                <p className="text-slate-400 text-sm mt-3 font-medium">exceto feriados</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </main>
             
             <footer className="bg-slate-950 py-12 text-center text-slate-500 border-t border-slate-800 flex-shrink-0">
-                <p>&copy; {new Date().getFullYear()} {domainInfo?.name || hubData.company_name}. Todos os direitos reservados.</p>
+                <p>&copy; {isMythos ? 'Mythos Editora 2026' : `${new Date().getFullYear()} ${domainInfo?.name || hubData.company_name}`}. Todos os direitos reservados.</p>
             </footer>
         </div>
     );

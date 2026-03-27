@@ -377,10 +377,10 @@ export default function HotsiteBuilder({ value, onChange }: Props) {
                                 {block.type === 'CAROUSEL' && (
                                     <div className="space-y-4">
                                         <div className="flex items-center justify-between">
-                                            <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300">Imagens do Carrossel ({block.images?.length || 0}/10)</h4>
+                                            <h4 className="text-sm font-bold text-slate-700 dark:text-slate-300">Imagens do Carrossel ({block.images?.length || 0}/50)</h4>
                                             <button 
                                                 type="button" 
-                                                disabled={(block.images?.length || 0) >= 10}
+                                                disabled={(block.images?.length || 0) >= 50}
                                                 onClick={() => {
                                                     const newImages = [...(block.images || []), {url: ''}];
                                                     updateBlock(i, 'images', newImages);

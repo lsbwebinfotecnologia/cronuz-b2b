@@ -10,11 +10,9 @@ const getCardBrand = (number: string) => {
     if (/^4/.test(number)) return 'visa';
     if (/^5[1-5]/.test(number)) return 'mastercard';
     if (/^3[47]/.test(number)) return 'amex';
-    if (/^6(?:011|5)/.test(number)) return 'discover';
-    if (/^3[68]/.test(number)) return 'diners';
-    if (/^35/.test(number)) return 'jcb';
     if (/^(606282|384100|384140|384160)/.test(number)) return 'hipercard';
-    if (/^(5067|5090|4576|4011|4389|4514|5041|5094|6362|6363|6277|6500|6504|6505|6507|6509|6516|6550|6582|6583|6584|6585|6586|6587|6588|6589|6590|6591|6592|6593|6594|6595|6596|6597|6598|6599|6592|6593|6594|6595|6596|6597|6598|6599)/.test(number)) return 'elo';
+    if (/^(5067|5090|4576|4011|4389|4514|5041|5094|6362|6363|6277|6500|6504|6505|6507|6509|6516|6550|6582|6583|6584|6585|6586|6587|6588|6589|6590|6591|6592|6593|6594|6595|6596|6597|6598|6599)/.test(number)) return 'elo';
+    if (/^6/.test(number)) return 'elo'; // Fallback genérico de 6 para elo no BR
     return 'visa'; // Fallback
 };
 
