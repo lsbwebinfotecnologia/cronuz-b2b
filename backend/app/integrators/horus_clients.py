@@ -24,12 +24,17 @@ class HorusClients(HorusClient):
         
         result = await self.get("Busca_ClienteB2B", params=params)
         
+        item = None
         if result and isinstance(result, list) and len(result) > 0:
             item = result[0]
-            if item.get("Falha"):
+        elif result and isinstance(result, dict):
+            item = result
+            
+        if item:
+            if item.get("Falha") or item.get("FALHA") == "S":
                 return {
                     "error": True,
-                    "msg": item.get("Mensagem", "Erro na API Horus")
+                    "msg": item.get("Mensagem", item.get("MENSAGEM", "Erro na API Horus"))
                 }
             
             # If successfully found, return normalized response similar to original PHP implementation

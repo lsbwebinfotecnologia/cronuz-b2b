@@ -66,7 +66,7 @@ class HorusClient:
             base_url=base_url,
             auth=auth,
             headers=headers,
-            timeout=30.0,
+            timeout=25.0,
             follow_redirects=True
         )
     
