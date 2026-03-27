@@ -50,25 +50,31 @@ def migrate_legacy_data(
         # Migrate Customers (empresas_b2b) -> crm_customer (id_guid)
         if payload.mode in ["both", "customers"]:
             try:
-                # Assuming typical legacy table structure based on older codebases:
-                # Table: empresas_b2b
-                # Fields: cnpj, id_guid
+                # Schema based on the provided screenshot for usr_users
                 cursor.execute("""
-                    SELECT cnpj, id_guid 
-                    FROM empresas_b2b 
-                    WHERE id_company = %s AND id_guid IS NOT NULL AND id_guid != ''
+                    SELECT document, idGuid 
+                    FROM usr_users 
+                    WHERE idCompany = %s AND idGuid IS NOT NULL AND idGuid != ''
                 """, (payload.legacy_company_id,))
                 legacy_customers = cursor.fetchall()
                 
                 for l_cust in legacy_customers:
-                    cnpj_clean = "".join(filter(str.isdigit, str(l_cust['cnpj'])))
+                    # Clean document mapping
+                    raw_doc = str(l_cust.get('document', ''))
+                    if not raw_doc or raw_doc.lower() == 'none':
+                        continue
+                    cnpj_clean = "".join(filter(str.isdigit, raw_doc))
                     
+                    if not cnpj_clean:
+                        continue
+
                     db_cust = db.query(Customer).filter(
                         Customer.company_id == payload.target_company_id,
                         Customer.document == cnpj_clean
                     ).first()
+                    
                     if db_cust and not db_cust.id_guid:
-                        db_cust.id_guid = l_cust['id_guid']
+                        db_cust.id_guid = l_cust['idGuid']
                         customers_updated += 1
                 db.commit()
                 
