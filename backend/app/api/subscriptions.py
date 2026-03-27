@@ -606,6 +606,9 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
          
         if 'data' in efi_payment and 'status' in efi_payment['data']:
             status = efi_payment['data']['status']
+            if 'charge' in efi_payment['data'] and 'id' in efi_payment['data']['charge']:
+                txid = str(efi_payment['data']['charge']['id'])
+                
             if status in ['paid', 'approved', 'authorized', 'active', 'settled']:
                 bill_status = "PAID"
             elif status in ['declined', 'failed', 'refused']:

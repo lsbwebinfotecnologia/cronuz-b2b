@@ -158,50 +158,50 @@ export default function SubscriberDetailPage() {
                         </div>
                     </div>
 
-                    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                        <div className="flex items-center gap-3 mb-4">
-                            <div className="p-2.5 bg-amber-50 text-amber-600 rounded-xl">
-                                <Package className="h-5 w-5" />
-                            </div>
-                            <h2 className="font-bold text-slate-900">Plano Físico</h2>
-                        </div>
-                        <div className="space-y-3 text-sm">
-                            <div>
-                                <div className="text-sm font-medium text-slate-500 mb-1 dark:text-slate-400">Plano Mestre</div>
-                                <div className="text-base text-slate-900 font-medium dark:text-white">
-                                    {subscriber.plan_name}
-                                </div>
-                            </div>
-        
-                            <div>
-                                <div className="text-sm font-medium text-slate-500 mb-1 dark:text-slate-400">Periodicidade Faturada</div>
-                                <div className="text-base text-slate-900 font-medium dark:text-white">
-                                    {subscriber.plan_frequency === 'MONTHLY' ? 'Mensal' : 
-                                     subscriber.plan_frequency === 'BIMONTHLY' ? 'Bimestral' :
-                                     subscriber.plan_frequency === 'QUARTERLY' ? 'Trimestral' :
-                                     subscriber.plan_frequency === 'SEMIANNUAL' ? 'Semestral' :
-                                     subscriber.plan_frequency === 'ANNUAL' ? 'Anual' : 
-                                     subscriber.plan_frequency || 'Mensal'}
-                                </div>
-                            </div>
-                            
-                            {subscriber.efi_subscription_id && (
-                                <div>
-                                    <div className="text-sm font-medium text-slate-500 mb-1 dark:text-slate-400">ID da Assinatura Efí</div>
-                                    <div className="text-base text-slate-900 font-mono dark:text-white">
-                                        #{subscriber.efi_subscription_id}
-                                    </div>
-                                </div>
-                            )}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+            <div className="flex items-center gap-3 mb-4">
+                <div className="p-2.5 bg-amber-50 text-amber-600 rounded-xl">
+                    <Package className="h-5 w-5" />
+                </div>
+                <h2 className="font-bold text-slate-900">Plano Físico</h2>
+            </div>
+            <div className="space-y-3 text-sm">
+                <div>
+                    <div className="text-sm font-medium text-slate-500 mb-1">Plano Mestre</div>
+                    <div className="text-base text-slate-900 font-medium">
+                        {subscriber.plan_name}
+                    </div>
+                </div>
 
-                            <div>
-                                <div className="text-sm font-medium text-slate-500 mb-1 dark:text-slate-400">Fascículos (Envio Atual)</div>
-                                <div className="text-base text-slate-900 font-medium dark:text-white">
-                                    Lote #{subscriber.current_delivery}
-                                </div>
-                            </div>
+                <div>
+                    <div className="text-sm font-medium text-slate-500 mb-1">Periodicidade Faturada</div>
+                    <div className="text-base text-slate-900 font-medium">
+                        {subscriber.plan_frequency === 'MONTHLY' ? 'Mensal' : 
+                         subscriber.plan_frequency === 'BIMONTHLY' ? 'Bimestral' :
+                         subscriber.plan_frequency === 'QUARTERLY' ? 'Trimestral' :
+                         subscriber.plan_frequency === 'SEMIANNUAL' ? 'Semestral' :
+                         subscriber.plan_frequency === 'ANNUAL' ? 'Anual' : 
+                         subscriber.plan_frequency || 'Mensal'}
+                    </div>
+                </div>
+                
+                {subscriber.efi_subscription_id && (
+                    <div>
+                        <div className="text-sm font-medium text-slate-500 mb-1">ID da Assinatura Efí</div>
+                        <div className="text-base text-slate-900 font-mono">
+                            #{subscriber.efi_subscription_id}
                         </div>
                     </div>
+                )}
+
+                <div>
+                    <div className="text-sm font-medium text-slate-500 mb-1">Fascículos (Envio Atual)</div>
+                    <div className="text-base text-slate-900 font-medium">
+                        Lote #{subscriber.current_delivery}
+                    </div>
+                </div>
+            </div>
+        </div>
 
                     <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                         <div className="flex items-center gap-3 mb-4">
