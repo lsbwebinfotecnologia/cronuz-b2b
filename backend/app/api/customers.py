@@ -93,6 +93,38 @@ def read_customers(
     customers = query.offset(skip).limit(limit).all()
     return customers
 
+@router.get("/customers/stats")
+def get_customers_stats(
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.company_id is None:
+        raise HTTPException(status_code=403, detail="Usuário sem empresa vinculada.")
+
+    from sqlalchemy import func
+    
+    query = db.query(
+        func.count(Customer.id).label("total_customers"),
+        func.sum(Customer.credit_limit).label("total_credit"),
+        func.sum(Customer.open_debts).label("total_debts")
+    ).filter(Customer.company_id == current_user.company_id)
+    
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            (Customer.name.ilike(search_term)) | 
+            (Customer.document.ilike(search_term)) |
+            (Customer.corporate_name.ilike(search_term))
+        )
+
+    result = query.first()
+    return {
+        "total_customers": result.total_customers or 0,
+        "total_credit": result.total_credit or 0,
+        "total_debts": result.total_debts or 0
+    }
+
 @router.get("/customers/{customer_id}", response_model=CustomerSchema)
 def read_customer(
     customer_id: int,

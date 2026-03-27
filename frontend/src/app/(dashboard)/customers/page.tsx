@@ -18,6 +18,7 @@ interface Customer {
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [stats, setStats] = useState({ total_customers: 0, total_credit: 0, total_debts: 0 });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -61,6 +62,20 @@ export default function CustomersPage() {
         setCustomers(data);
         setHasMore(data.length === limit); // basic heuristic for next page
       }
+      
+      // Fetch Stats in parallel
+      let statsUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/stats`;
+      if (searchTerm) {
+        statsUrl += `?search=${encodeURIComponent(searchTerm)}`;
+      }
+      const statsRes = await fetch(statsUrl, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (statsRes.ok) {
+        const statsData = await statsRes.json();
+        setStats(statsData);
+      }
+      
     } catch (error) {
       toast.error('Erro ao listar clientes');
     } finally {
@@ -75,9 +90,6 @@ export default function CustomersPage() {
       </div>
     );
   }
-
-  const totalCredit = customers.reduce((sum, c) => sum + c.credit_limit, 0);
-  const totalDebts = customers.reduce((sum, c) => sum + c.open_debts, 0);
 
   return (
     <div className="space-y-8">
@@ -122,7 +134,7 @@ export default function CustomersPage() {
           </div>
           <div>
             <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Total de Clientes</p>
-            <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">{customers.length}</h3>
+            <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">{stats.total_customers}</h3>
           </div>
         </div>
         
@@ -133,7 +145,7 @@ export default function CustomersPage() {
           <div>
             <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Crédito Liberado</p>
             <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">
-              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalCredit)}
+              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(stats.total_credit)}
             </h3>
           </div>
         </div>
@@ -145,7 +157,7 @@ export default function CustomersPage() {
           <div>
             <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Débitos B2B (Múltiplos Clientes)</p>
             <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">
-              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalDebts)}
+              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(stats.total_debts)}
             </h3>
           </div>
         </div>
