@@ -548,7 +548,7 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
         
     except Exception as e:
         err_str = str(e)
-        if "401" in err_str or "unauthorized" in err_str.lower():
+        if "401" in err_str or "unauthorized" in err_str.lower() or "3500010" in err_str or "não existe" in err_str.lower() or "not found" in err_str.lower():
             # Plan ID might be invalid for this credential/environment. Let's try recreating the plan.
             db.rollback()
             try:
