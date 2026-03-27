@@ -113,8 +113,82 @@ async def get_orders(
             else:
                 order["badge"] = {"slug": "slate", "label": s.replace("_", " ").title()}
                 
+            # If order is already processed in Bookinfo and customer exists, ensure it's mirrored locally
+            if order["enable"] and s in ["RECEBIDO", "PROCESSADO", "FATURADO", "CONCLUIDO"]:
+                try:
+                    __upsert_bookinfo_order_local(db, current_user.company_id, order["idCustomer"], order)
+                except Exception as e:
+                    print(f"Warning: failed to auto-sync processed order {order['id']}: {e}")
+                
         data["itens"] = orders
         return data
+
+def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int, bookinfo_order: dict) -> Order:
+    order_id = bookinfo_order["id"]
+    existing_order = db.query(Order).filter(
+        Order.company_id == company_id,
+        Order.tracking_code == order_id,
+        Order.origin == "bookinfo"
+    ).first()
+    
+    status_mapped = bookinfo_order.get("status", "RECEBIDO")
+    nro_erp = bookinfo_order.get("numeroPedidoERP") or bookinfo_order.get("nroPedido") or ""
+    
+    if existing_order:
+        updated = False
+        if existing_order.status != status_mapped:
+            existing_order.status = status_mapped
+            updated = True
+        if nro_erp and existing_order.horus_pedido_venda != nro_erp:
+            existing_order.horus_pedido_venda = nro_erp
+            updated = True
+        if updated:
+            db.commit()
+        return existing_order
+
+    items_payload = bookinfo_order.get("itens", [])
+    total_price = 0.0
+    for dt_item in items_payload:
+        qty = int(dt_item.get("quantidade", 1))
+        unit = float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
+        total_price += (qty * unit)
+        
+    new_order = Order(
+        company_id=company_id,
+        customer_id=customer_id,
+        status=status_mapped,
+        type_order="C" if bookinfo_order.get("compraConsignacao") == "S" else "V",
+        origin="bookinfo",
+        horus_pedido_venda=nro_erp,
+        tracking_code=order_id,
+        subtotal=total_price, discount=0.0, total=total_price
+    )
+    db.add(new_order)
+    db.commit()
+    db.refresh(new_order)
+    
+    for dt_item in items_payload:
+        qty = int(dt_item.get("quantidade", 1))
+        unit = float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
+        isbn = str(dt_item.get("isbn13") or "")
+        t_name = dt_item.get("titulo") or dt_item.get("nome") or "Livro Genérico"
+        # Extract situation from item if it exists (e.g., from a previous validation)
+        sit = dt_item.get("observacao") or dt_item.get("SITUACAO_ITEM") or ""
+        
+        oi = OrderItem(
+            order_id=new_order.id,
+            ean_isbn=isbn,
+            name=t_name,
+            quantity=qty,
+            quantity_requested=qty,
+            unit_price=unit,
+            total_price=(qty * unit),
+            observation=sit
+        )
+        db.add(oi)
+        
+    db.commit()
+    return new_order
 
 @router.get("/orders/{order_id}")
 async def get_order_detail(
@@ -180,51 +254,8 @@ async def acknowledge_order(
         if not customer:
              raise HTTPException(status_code=400, detail="Cliente não existe ou não está sincronizado no dashboard B2B")
              
-        # Calculate totals from items
-        items_payload = bookinfo_order.get("itens", [])
-        total_qty = 0
-        total_price = 0.0
-        
-        for dt_item in items_payload:
-            qty = int(dt_item.get("quantidade", 1))
-            unit = float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
-            total_price += (qty * unit)
-            total_qty += qty
-            
-        # Save local mirror
-        new_order = Order(
-            company_id=current_user.company_id,
-            customer_id=customer.id,
-            status="RECEBIDO",
-            type_order="C" if bookinfo_order.get("compraConsignacao") == "S" else "V",
-            origin="bookinfo",
-            horus_pedido_venda=bookinfo_order.get("numeroPedidoERP") or bookinfo_order.get("nroPedido") or "",  # Se já foi processado na origem
-            tracking_code=order_id, # Bookinfo Remote Hash
-            subtotal=total_price, discount=0.0, total=total_price
-        )
-        db.add(new_order)
-        db.commit()
-        db.refresh(new_order)
-        
-        # Persist physical Items
-        for dt_item in items_payload:
-            qty = int(dt_item.get("quantidade", 1))
-            unit = float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
-            isbn = str(dt_item.get("isbn13") or "")
-            t_name = dt_item.get("titulo") or dt_item.get("nome") or "Livro Genérico"
-            
-            oi = OrderItem(
-                order_id=new_order.id,
-                ean_isbn=isbn,
-                name=t_name,
-                quantity=qty,
-                quantity_requested=qty,
-                unit_price=unit,
-                total_price=(qty * unit)
-            )
-            db.add(oi)
-            
-        db.commit()
+        # Save local mirror using helper
+        new_order = __upsert_bookinfo_order_local(db, current_user.company_id, customer.id, bookinfo_order)
         
         # Notify Bookhub
         try:
@@ -253,7 +284,7 @@ async def sync_customer_from_horus(
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
-    if not settings or not settings.horus_api_url:
+    if not settings or not settings.horus_url:
         raise HTTPException(status_code=400, detail="ERP Horus não configurado para busca de clientes.")
         
     cnpj_clean = "".join(filter(str.isdigit, str(payload.cnpj)))
