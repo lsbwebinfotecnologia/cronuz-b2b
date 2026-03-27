@@ -28,9 +28,8 @@ class HorusProducts(HorusClient):
         
         # Pagination
         if not getattr(self._settings, 'horus_legacy_pagination', False):
-            if limit is not None:
-                params["OFFSET"] = offset
-                params["LIMIT"] = limit
+            params["OFFSET"] = offset
+            params["LIMIT"] = limit if (limit is not None and limit > 0) else 10000
             
         # Company / Branch context from settings
         if getattr(self._settings, 'horus_hide_zero_balance', False) and not isbns:
@@ -91,9 +90,8 @@ class HorusProducts(HorusClient):
         
         # Pagination
         if not getattr(self._settings, 'horus_legacy_pagination', False):
-            if limit is not None:
-                params["OFFSET"] = offset
-                params["LIMIT"] = limit
+            params["OFFSET"] = offset
+            params["LIMIT"] = limit if (limit is not None and limit > 0) else 10000
             
         # Company / Branch context from settings
         # Busca_Acervo_Padrao typically only accepts SD_ parameters or no parameters.
@@ -141,7 +139,7 @@ class HorusProducts(HorusClient):
         params: Dict[str, Any] = {"ID_DOC": id_doc}
         if not getattr(self._settings, 'horus_legacy_pagination', False):
             params["OFFSET"] = 0
-            params["LIMIT"] = 99999
+            params["LIMIT"] = 10000
         params.update(kwargs)
         return await self.get("arvore_generos", params=params)
 
@@ -152,7 +150,7 @@ class HorusProducts(HorusClient):
         params: Dict[str, Any] = {"ID_DOC": id_doc}
         if not getattr(self._settings, 'horus_legacy_pagination', False):
             params["OFFSET"] = 0
-            params["LIMIT"] = 99999
+            params["LIMIT"] = 10000
         params.update(kwargs)
         return await self.get("Busca_editoras", params=params)
 

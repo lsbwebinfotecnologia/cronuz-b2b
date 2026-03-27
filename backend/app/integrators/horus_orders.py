@@ -25,9 +25,8 @@ class HorusOrders(HorusClient):
             params["COD_PED_VENDA"] = cod_ped_venda
         
         if not getattr(self._settings, 'horus_legacy_pagination', False):
-            if limit > 0:
-                params["OFFSET"] = 0
-                params["LIMIT"] = limit
+            params["OFFSET"] = 0
+            params["LIMIT"] = limit if limit > 0 else 10000
             
         result = await self.get("Busca_PedidosVenda", params=params)
         
@@ -127,8 +126,7 @@ class HorusOrders(HorusClient):
             params["COD_FILIAL"] = self._settings.horus_branch
             
         if not getattr(self._settings, 'horus_legacy_pagination', False):
-            if limit > 0:
-                params["OFFSET"] = 0
-                params["LIMIT"] = limit
+            params["OFFSET"] = 0
+            params["LIMIT"] = limit if limit > 0 else 10000
             
         return await self.get("Busca_ItensPedidosVenda", params=params)
