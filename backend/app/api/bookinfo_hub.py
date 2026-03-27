@@ -80,19 +80,29 @@ async def get_orders(
             
         orders = data.get("itens", [])
         
+        # Collect CNPJs
+        cnpjs_in_orders = set()
+        for order in orders:
+            if order.get("cnpjComprador"):
+                cnpjs_in_orders.add("".join(filter(str.isdigit, str(order.get("cnpjComprador")))))
+                
+        # Batch fetch real Customer profiles (to satisfy ord_order foreign key)
+        mapped_customers = {}
+        if cnpjs_in_orders:
+            db_customers = db.query(Customer).filter(
+                Customer.company_id == current_user.company_id,
+                Customer.document.in_(cnpjs_in_orders)
+            ).all()
+            mapped_customers = {c.document: c.id for c in db_customers if c.document}
+            
         # Validate CNPJs
         for order in orders:
             cnpj = order.get("cnpjComprador")
             if cnpj:
                 cnpj_clean = "".join(filter(str.isdigit, str(cnpj)))
-                # check if customer exists
-                customer = db.query(User).filter(
-                    User.company_id == current_user.company_id,
-                    User.document == cnpj_clean,
-                    User.type == UserRole.CUSTOMER
-                ).first()
-                order["enable"] = bool(customer)
-                order["idCustomer"] = customer.id if customer else None
+                c_id = mapped_customers.get(cnpj_clean)
+                order["enable"] = bool(c_id)
+                order["idCustomer"] = c_id
             else:
                 order["enable"] = False
                 
