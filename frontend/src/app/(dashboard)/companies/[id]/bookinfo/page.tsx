@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Loader2, Save, BookOpen } from 'lucide-react';
-import { getToken } from '@/lib/auth';
+import { Database, ShieldCheck, Play, Loader2, Save, BookOpen } from 'lucide-react';
+import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
 
@@ -18,6 +18,63 @@ export default function CompanyBookinfoPage() {
     environment: 'HOMOL',
     token: ''
   });
+
+  const currentUser = getUser();
+  const [migrationLoading, setMigrationLoading] = useState(false);
+  const [migrationStats, setMigrationStats] = useState<any>(null);
+  const [migrationData, setMigrationData] = useState({
+    host: '',
+    port: '3306',
+    user: '',
+    password: '',
+    database: '',
+    legacy_company_id: ''
+  });
+
+  const handleMigrationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMigrationData({ ...migrationData, [e.target.name]: e.target.value });
+  };
+
+  const handleMigration = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!migrationData.host || !migrationData.user || !migrationData.database || !migrationData.legacy_company_id || !company) {
+      toast.error('Preencha os campos de host, user, banco e id da empresa legada.');
+      return;
+    }
+
+    setMigrationLoading(true);
+    setMigrationStats(null);
+    const token = getToken();
+
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/settings/migration/mysql`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          db_host: migrationData.host,
+          db_port: parseInt(migrationData.port) || 3306,
+          db_user: migrationData.user,
+          db_pass: migrationData.password,
+          db_name: migrationData.database,
+          legacy_company_id: parseInt(migrationData.legacy_company_id),
+          target_company_id: Number(company.id)
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message || 'Migração iniciada com sucesso!');
+        setMigrationStats(data.stats);
+      } else {
+        toast.error(data.detail || 'Erro na migração log');
+      }
+    } catch (err) {
+      toast.error('Erro de conexão com o painel.');
+    } finally {
+      setMigrationLoading(false);
+    }
+  };
+
 
   useEffect(() => {
     async function fetchIntegration() {
@@ -196,6 +253,150 @@ export default function CompanyBookinfoPage() {
              </button>
            </div>
         </form>
+
+        {currentUser?.type === 'MASTER' && (
+          <div className="mt-12 pt-10 border-t border-slate-200 dark:border-slate-800">
+            <h2 className="text-xl font-bold flex items-center gap-2 text-slate-900 dark:text-white mb-2">
+              <Database className="h-6 w-6 text-indigo-500" />
+              Migração de Histórico Legado (MySQL)
+            </h2>
+            <p className="text-sm text-slate-500 mb-6">
+              Esta ferramenta copia a numeração de Pedidos ERP (Horus) e de Clientes (ID_GUID) que já foram sincronizados em bancos antigos. Recomendável rodar apenas 1 vez.
+            </p>
+            
+            <div className="bg-white dark:bg-slate-900 shadow-sm border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+              <div className="p-5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/20">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-slate-900 dark:text-white">Conexão do Banco de Dados Origem</h3>
+                    <p className="text-xs text-slate-500">Credenciais diretas para a máquina legada da Livraria.</p>
+                  </div>
+                </div>
+              </div>
+
+              <form onSubmit={handleMigration} className="p-6 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Servidor MySQL (IP ou Domínio)</label>
+                    <input
+                      type="text"
+                      name="host"
+                      value={migrationData.host}
+                      onChange={handleMigrationChange}
+                      placeholder="Ex: 53.112.5.12"
+                      className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white transition-all shadow-sm"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Porta</label>
+                    <input
+                      type="number"
+                      name="port"
+                      value={migrationData.port}
+                      onChange={handleMigrationChange}
+                      placeholder="3306"
+                      className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white transition-all shadow-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Usuário do Banco</label>
+                    <input
+                      type="text"
+                      name="user"
+                      value={migrationData.user}
+                      onChange={handleMigrationChange}
+                      placeholder="Ex: root"
+                      className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white transition-all shadow-sm"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Senha</label>
+                    <input
+                      type="password"
+                      name="password"
+                      value={migrationData.password}
+                      onChange={handleMigrationChange}
+                      className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white transition-all shadow-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Nome do Database</label>
+                    <input
+                      type="text"
+                      name="database"
+                      value={migrationData.database}
+                      onChange={handleMigrationChange}
+                      placeholder="Ex: cronuz_b2b"
+                      className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white transition-all shadow-sm"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">ID da Empresa (No Banco MySQL)</label>
+                    <input
+                      type="number"
+                      name="legacy_company_id"
+                      value={migrationData.legacy_company_id}
+                      onChange={handleMigrationChange}
+                      placeholder="Id da empresa dessa livraria no DB antigo"
+                      className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:text-white transition-all shadow-sm"
+                      required
+                    />
+                  </div>
+                </div>
+                
+                <div className="pt-4 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={migrationLoading}
+                    className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-6 rounded-xl transition-all disabled:opacity-50"
+                  >
+                    {migrationLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
+                    {migrationLoading ? 'Migrando...' : 'Sincronizar Lote'}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {migrationStats && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="mt-6 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-2xl p-6"
+              >
+                <h3 className="text-lg font-bold text-emerald-800 dark:text-emerald-400 mb-4 flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5" />
+                  Relatório de Execução
+                </h3>
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="bg-white dark:bg-slate-900 rounded-xl p-4 shadow-sm border border-emerald-100 dark:border-emerald-500/10">
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">Clientes Atualizados</p>
+                    <p className="text-2xl font-bold text-slate-900 dark:text-white">{migrationStats.customers_updated}</p>
+                  </div>
+                  <div className="bg-white dark:bg-slate-900 rounded-xl p-4 shadow-sm border border-emerald-100 dark:border-emerald-500/10">
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">Pedidos Atualizados</p>
+                    <p className="text-2xl font-bold text-slate-900 dark:text-white">{migrationStats.orders_updated}</p>
+                  </div>
+                </div>
+                {migrationStats.errors && migrationStats.errors.length > 0 && (
+                   <div className="mt-4 p-4 rounded-xl bg-orange-50 border border-orange-200 text-sm text-orange-800 break-words dark:bg-orange-500/10 dark:border-orange-500/20 dark:text-orange-400 bg-opacity-80">
+                     <p className="font-semibold mb-2">Avisos e Exceções:</p>
+                     <ul className="list-disc pl-5 space-y-1">
+                       {migrationStats.errors.map((e: string, idx: number) => (
+                         <li key={idx}>{e}</li>
+                       ))}
+                     </ul>
+                   </div>
+                )}
+              </motion.div>
+            )}
+          </div>
+        )}
       </div>
     </motion.div>
   );

@@ -11,17 +11,18 @@ from app.models.order import Order
 
 router = APIRouter(prefix="/settings/migration", tags=["migration"])
 
-class MysqlMigrationPayload(BaseModel):
-    host: str
-    port: int = 3306
-    user: str
-    password: str
-    database: str
+class LegacyMigrationRequest(BaseModel):
+    db_host: str
+    db_user: str
+    db_pass: str
+    db_name: str
+    db_port: int = 3306
     legacy_company_id: int
+    target_company_id: int
 
 @router.post("/mysql")
 def migrate_legacy_data(
-    payload: MysqlMigrationPayload,
+    payload: LegacyMigrationRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -61,7 +62,7 @@ def migrate_legacy_data(
                 cnpj_clean = "".join(filter(str.isdigit, str(l_cust['cnpj'])))
                 
                 db_cust = db.query(Customer).filter(
-                    Customer.company_id == current_user.company_id,
+                    Customer.company_id == payload.target_company_id,
                     Customer.document == cnpj_clean
                 ).first()
                 if db_cust and not db_cust.id_guid:
@@ -88,7 +89,7 @@ def migrate_legacy_data(
                 nro_erp = str(l_ord['numeroPedidoERP'])
                 
                 db_ord = db.query(Order).filter(
-                    Order.company_id == current_user.company_id,
+                    Order.company_id == payload.target_company_id,
                     Order.tracking_code == tracking,
                     Order.origin == "bookinfo"
                 ).first()
