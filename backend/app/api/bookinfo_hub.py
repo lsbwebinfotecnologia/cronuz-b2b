@@ -305,11 +305,16 @@ async def sync_customer_from_horus(
         h_client = HorusClients(db, current_user.company_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    # Using branch CNPJ as origin/filter context is standard, but some versions just need branch ID. Let's send settings.horus_branch.
-    res = await h_client.get_client(cnpj_destino=settings.horus_branch or "1", cnpj_cliente=cnpj_clean)
+    try:
+        from app.models.company import Company
+        company = db.query(Company).filter(Company.id == current_user.company_id).first()
+        cnpj_destino = company.document if company else (settings.horus_branch or "1")
+        res = await h_client.get_client(cnpj_destino=cnpj_destino, cnpj_cliente=cnpj_clean)
+    except Exception as e:
+        raise HTTPException(status_code=504, detail=f"Erro de comunicação/timeout com a API do Horus: {str(e)}")
     
     if res.get("error"):
-         raise HTTPException(status_code=404, detail="Cliente não encontrado no Horus. Verifique se ele já é cliente cadastrado no ERP.")
+         raise HTTPException(status_code=404, detail=res.get("msg", "Cliente não encontrado no Horus."))
          
     # Sucesso, extract
     h_data = res.get("data", {})
