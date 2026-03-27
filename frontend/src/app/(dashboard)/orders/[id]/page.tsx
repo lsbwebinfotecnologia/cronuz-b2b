@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Package, ArrowLeft, Building2, User, FileText, Download, Truck, MessageSquare, Send, Check, CheckCheck } from "lucide-react";
+import { Package, ArrowLeft, Building2, User, FileText, Download, Truck, MessageSquare, Send, Check, CheckCheck, Terminal, X, RefreshCw, AlertCircle } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { getToken } from "@/lib/auth";
@@ -57,6 +57,7 @@ interface OrderDetail {
     tracking_code?: string;
     invoice_xml_available: boolean;
     invoice_xml?: string;
+    origin?: string;
     items: OrderItem[];
     customer?: Customer;
     logs: OrderLog[];
@@ -88,26 +89,32 @@ export default function OrderDetailPage() {
     const [loading, setLoading] = useState(true);
     const [replyMessage, setReplyMessage] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
+    
+    // Horus Debug Modal State
+    const [isDebugModalOpen, setIsDebugModalOpen] = useState(false);
+    const [horusPreviewLoading, setHorusPreviewLoading] = useState(false);
+    const [horusPreviewData, setHorusPreviewData] = useState<any>(null);
+    const [horusSyncing, setHorusSyncing] = useState(false);
+
+    const fetchOrder = async () => {
+        try {
+            const token = getToken();
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const response = await fetch(`${apiUrl}/orders/${params.id}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setOrder(data);
+            }
+        } catch (error) {
+            console.error("Error fetching order detail:", error);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
-        const fetchOrder = async () => {
-            try {
-                const token = getToken();
-                const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-                const response = await fetch(`${apiUrl}/orders/${params.id}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                if (response.ok) {
-                    const data = await response.json();
-                    setOrder(data);
-                }
-            } catch (error) {
-                console.error("Error fetching order detail:", error);
-            } finally {
-                setLoading(false);
-            }
-        };
-
         if (params.id) {
             fetchOrder();
         }
@@ -213,6 +220,53 @@ export default function OrderDetailPage() {
         }
     };
 
+    const handleOpenDebugModal = async () => {
+        setIsDebugModalOpen(true);
+        setHorusPreviewLoading(true);
+        setHorusPreviewData(null);
+        try {
+            const token = getToken();
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const res = await fetch(`${apiUrl}/orders/${order?.id}/horus-debug-preview`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setHorusPreviewData(data);
+            } else {
+                setHorusPreviewData({ error: data.detail || "Erro desconhecido ao consultar Horus" });
+            }
+        } catch (e) {
+            setHorusPreviewData({ error: "Falha de conexão com a API local ao consultar Horus" });
+        } finally {
+            setHorusPreviewLoading(false);
+        }
+    };
+
+    const handleSyncHorus = async () => {
+        setHorusSyncing(true);
+        try {
+            const token = getToken();
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const res = await fetch(`${apiUrl}/orders/${order?.id}/sync-horus`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("Sincronizado com sucesso!");
+                setIsDebugModalOpen(false);
+                fetchOrder(); // reload
+            } else {
+                alert("Erro ao sincronizar: " + (data.detail || "Erro desconhecido"));
+            }
+        } catch (e) {
+            alert("Falha de conexão com o servidor ao sincronizar.");
+        } finally {
+            setHorusSyncing(false);
+        }
+    };
+
     if (loading) {
         return (
             <div className="p-8 flex items-center justify-center h-64">
@@ -234,6 +288,7 @@ export default function OrderDetailPage() {
     }
 
     return (
+        <>
         <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
             
             {/* Header Actions */}
@@ -258,6 +313,15 @@ export default function OrderDetailPage() {
                     <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-semibold uppercase tracking-wide ${statusColorMap[order.status] || "bg-slate-100 text-slate-800"}`}>
                         {statusLabelMap[order.status] || order.status}
                     </span>
+                    {order.origin === 'bookinfo' && order.horus_pedido_venda && (
+                        <button
+                            onClick={handleOpenDebugModal}
+                            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
+                        >
+                            <Terminal className="w-4 h-4" />
+                            Sincronizar com ERP (Debug)
+                        </button>
+                    )}
                     {order.invoice_xml_available && (
                         <button
                             onClick={handleDownloadInvoice}
@@ -548,5 +612,83 @@ export default function OrderDetailPage() {
             </div>
 
         </div>
+
+        {/* Horus Debug Modal */}
+        {isDebugModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+                <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-800">
+                    <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/20">
+                        <div>
+                            <h2 className="text-xl font-bold flex items-center gap-2 text-slate-900 dark:text-white">
+                                <Terminal className="w-6 h-6 text-purple-600" />
+                                Debug de Sincronização Horus
+                            </h2>
+                            <p className="text-sm text-slate-500 mt-1">
+                                Visualização dos dados retornados pela API do Horus antes de aplicar localmente.
+                            </p>
+                        </div>
+                        <button onClick={() => setIsDebugModalOpen(false)} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-500">
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto p-6 bg-slate-50 dark:bg-slate-950">
+                        {horusPreviewLoading ? (
+                            <div className="flex flex-col items-center justify-center h-64 space-y-4">
+                                <RefreshCw className="w-8 h-8 animate-spin text-purple-600" />
+                                <p className="text-slate-500 font-medium">Consultando API do Horus em tempo real...</p>
+                            </div>
+                        ) : horusPreviewData?.error ? (
+                            <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-2xl p-6 flex items-start gap-4">
+                                <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400 shrink-0" />
+                                <div>
+                                    <h3 className="font-bold text-red-900 dark:text-red-400 mb-1">Erro na Consulta</h3>
+                                    <p className="text-red-800 dark:text-red-300 text-sm whitespace-pre-wrap">{horusPreviewData.error}</p>
+                                </div>
+                            </div>
+                        ) : horusPreviewData ? (
+                            <div className="space-y-6">
+                                <div>
+                                    <h3 className="font-bold text-slate-900 dark:text-white mb-3 text-sm flex items-center gap-2">
+                                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                                        Payload do Pedido (Busca_PedidosVenda)
+                                    </h3>
+                                    <pre className="bg-slate-900 text-emerald-400 p-4 rounded-2xl overflow-x-auto text-xs font-mono shadow-inner border border-slate-800">
+                                        {JSON.stringify(horusPreviewData.order_details, null, 2)}
+                                    </pre>
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-slate-900 dark:text-white mb-3 text-sm flex items-center gap-2">
+                                        <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                                        Payload dos Itens (Busca_ItensPedidosVenda)
+                                    </h3>
+                                    <pre className="bg-slate-900 text-blue-400 p-4 rounded-2xl overflow-x-auto text-xs font-mono shadow-inner border border-slate-800">
+                                        {JSON.stringify(horusPreviewData.order_items, null, 2)}
+                                    </pre>
+                                </div>
+                            </div>
+                        ) : null}
+                    </div>
+                    
+                    <div className="p-6 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex justify-end gap-3">
+                        <button
+                            onClick={() => setIsDebugModalOpen(false)}
+                            className="px-6 py-2.5 rounded-xl text-sm font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            onClick={handleSyncHorus}
+                            disabled={horusPreviewLoading || !!horusPreviewData?.error || horusSyncing}
+                            className="px-6 py-2.5 rounded-xl text-sm font-bold bg-purple-600 hover:bg-purple-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        >
+                            {horusSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                            Aplicar Sincronização
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+        </>
     );
 }
