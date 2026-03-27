@@ -35,8 +35,7 @@ export default function CompanyBookinfoPage() {
     setMigrationData({ ...migrationData, [e.target.name]: e.target.value });
   };
 
-  const handleMigration = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleMigration = async (mode: 'customers' | 'orders') => {
     if (!migrationData.host || !migrationData.user || !migrationData.database || !migrationData.legacy_company_id || !company) {
       toast.error('Preencha os campos de host, user, banco e id da empresa legada.');
       return;
@@ -57,13 +56,14 @@ export default function CompanyBookinfoPage() {
           db_pass: migrationData.password,
           db_name: migrationData.database,
           legacy_company_id: parseInt(migrationData.legacy_company_id),
-          target_company_id: Number(company.id)
+          target_company_id: Number(company.id),
+          mode: mode
         })
       });
 
       const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || 'Migração iniciada com sucesso!');
+        toast.success(data.message || 'Sincronização iniciada com sucesso!');
         setMigrationStats(data.stats);
       } else {
         toast.error(data.detail || 'Erro na migração log');
@@ -277,7 +277,7 @@ export default function CompanyBookinfoPage() {
                 </div>
               </div>
 
-              <form onSubmit={handleMigration} className="p-6 space-y-6">
+              <div className="p-6 space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Servidor MySQL (IP ou Domínio)</label>
@@ -350,17 +350,27 @@ export default function CompanyBookinfoPage() {
                   </div>
                 </div>
                 
-                <div className="pt-4 flex justify-end">
+                <div className="pt-4 flex justify-end gap-4">
                   <button
-                    type="submit"
+                    type="button"
+                    onClick={() => handleMigration('customers')}
+                    disabled={migrationLoading}
+                    className="inline-flex items-center gap-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium py-3 px-6 rounded-xl transition-all disabled:opacity-50 border border-slate-200 dark:border-slate-700"
+                  >
+                    {migrationLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
+                    Sincronizar Clientes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleMigration('orders')}
                     disabled={migrationLoading}
                     className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-6 rounded-xl transition-all disabled:opacity-50"
                   >
                     {migrationLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
-                    {migrationLoading ? 'Migrando...' : 'Sincronizar Lote'}
+                    Sincronizar Pedidos
                   </button>
                 </div>
-              </form>
+              </div>
             </div>
 
             {migrationStats && (
