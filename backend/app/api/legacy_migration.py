@@ -32,11 +32,11 @@ def migrate_legacy_data(
         
     try:
         conn = pymysql.connect(
-            host=payload.host,
-            user=payload.user,
-            password=payload.password,
-            database=payload.database,
-            port=payload.port,
+            host=payload.db_host,
+            user=payload.db_user,
+            password=payload.db_pass,
+            database=payload.db_name,
+            port=payload.db_port,
             cursorclass=pymysql.cursors.DictCursor
         )
     except Exception as e:
