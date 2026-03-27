@@ -302,7 +302,7 @@ async def sync_customer_from_horus(
          return {"error": False, "message": "Cliente já está sincronizado no painel B2B!"}
          
     # Fetch from Horus
-    h_client = HorusClients(settings)
+    h_client = HorusClients(db, current_user.company_id)
     # Using branch CNPJ as origin/filter context is standard, but some versions just need branch ID. Let's send settings.horus_branch.
     res = await h_client.get_client(cnpj_destino=settings.horus_branch or "1", cnpj_cliente=cnpj_clean)
     
