@@ -81,21 +81,20 @@ def migrate_legacy_data(
             except Exception as e:
                 errors.append(f"Erro em Clientes: {str(e)}")
             
-        # Migrate Orders (pedidos_bookinfo) -> ord_order (horus_pedido_venda)
+        # Migrate Orders (ord_orders) -> ord_order (horus_pedido_venda)
         if payload.mode in ["both", "orders"]:
             try:
-                # Table: pedidos_bookinfo
-                # Fields: id_pedido_bookinfo, numeroPedidoERP
+                # Schema based on screenshot for ord_orders
                 cursor.execute("""
-                    SELECT id_pedido_bookinfo, numeroPedidoERP 
-                    FROM pedidos_bookinfo 
-                    WHERE id_company = %s AND numeroPedidoERP IS NOT NULL AND numeroPedidoERP != ''
+                    SELECT idOrderPartner, idErp 
+                    FROM ord_orders 
+                    WHERE idCompany = %s AND idErp IS NOT NULL AND idErp != '' AND idOrderPartner IS NOT NULL AND idOrderPartner != ''
                 """, (payload.legacy_company_id,))
                 legacy_orders = cursor.fetchall()
                 
                 for l_ord in legacy_orders:
-                    tracking = str(l_ord['id_pedido_bookinfo'])
-                    nro_erp = str(l_ord['numeroPedidoERP'])
+                    tracking = str(l_ord['idOrderPartner']).strip()
+                    nro_erp = str(l_ord['idErp']).strip()
                     
                     db_ord = db.query(Order).filter(
                         Order.company_id == payload.target_company_id,
