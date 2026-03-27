@@ -141,7 +141,13 @@ export default function CompaniesPage() {
                       </Link>
                     </td>
                     <td className="px-6 py-4 text-slate-500 font-mono text-xs dark:text-slate-400">{company.document}</td>
-                    <td className="px-6 py-4 text-slate-500 dark:text-slate-400">{company.domain}</td>
+                    <td className="px-6 py-4 text-slate-500 dark:text-slate-400">
+                      {company.domain ? (
+                        <a href={company.domain.startsWith('http') ? company.domain : `https://${company.domain}`} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-indigo-600 transition-colors">
+                          {company.domain}
+                        </a>
+                      ) : '-'}
+                    </td>
                     <td className="px-6 py-4">
                       {company.active ? (
                         <span className="px-2.5 py-1 text-xs font-medium rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">

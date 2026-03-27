@@ -329,6 +329,7 @@ async def sync_customer_from_horus(
         name=name,
         document=cnpj_clean,
         email=email,
+        password_hash=get_password_hash(cnpj_clean), # Senha padrão B2B é o CNPJ
         active=True
     )
     db.add(new_user)
@@ -343,7 +344,7 @@ async def sync_customer_from_horus(
         document=cnpj_clean,
         email=email,
         id_doc=h_data.get("ID_CLIENTE") or "",
-        password_hash=get_password_hash(cnpj_clean) # Senha padrão B2B é o CNPJ
+        id_guid=h_data.get("ID_GUID") or ""
     )
     db.add(new_customer)
     db.commit()
@@ -364,7 +365,7 @@ async def evaluate_preview(
         
     # Get horus settings
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
-    if not settings or not settings.horus_api_url:
+    if not settings or not settings.horus_url:
         raise HTTPException(status_code=400, detail="ERP Horus não configurado nesta empresa.")
     
     # 1. Fetch Order from Bookinfo to get requested Items
