@@ -523,28 +523,65 @@ def subscribe_to_plan(slug: str, payload: SubscribeRequest, db: Session = Depend
             raise HTTPException(status_code=400, detail=f"Erro ao criar Plano na EFI: {str(e)}")
             
     # 3.2 Create EFI Subscription (Link customer to Plan)
-    try:
+    def _safe_create_subscription(current_plan_id):
         items = [{
             "name": "Fascículos mensais",
             "amount": 1,
             "value": int(first_delivery_price * 100) # Cents
         }]
-        efi_sub = efi_service.create_subscription(
-            plan_id=plan.efi_plan_id,
+        return efi_service.create_subscription(
+            plan_id=current_plan_id,
             items=items,
             customer_name=payload.customer_name,
             customer_document=payload.customer_document,
             customer_email=payload.email,
             customer_phone=payload.phone
         )
-        print("EFI SUB CREATION RESPONSE:", efi_sub, flush=True)
+
+    try:
+        efi_sub = _safe_create_subscription(plan.efi_plan_id)
         if 'data' not in efi_sub:
              raise Exception(f"Resposta inesperada da Efí ao criar assinatura: {efi_sub}")
+             
         sub.efi_subscription_id = int(efi_sub['data']['subscription_id'])
         db.commit()
+        
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"Erro ao criar Assinatura na EFI: {str(e)}")
+        err_str = str(e)
+        if "401" in err_str or "unauthorized" in err_str.lower():
+            # Plan ID might be invalid for this credential/environment. Let's try recreating the plan.
+            db.rollback()
+            try:
+                freq_key = plan.delivery_frequency.value if hasattr(plan.delivery_frequency, 'value') else plan.delivery_frequency
+                months_map = {"MONTHLY": 1, "BIMONTHLY": 2, "QUARTERLY": 3, "SEMIANNUAL": 6, "ANNUAL": 12}
+                interval = months_map.get(freq_key, 1)
+                
+                efi_plan = efi_service.create_plan(
+                    name=f"{plan.name} - Assinatura",
+                    amount=first_delivery_price,
+                    interval=interval
+                )
+                
+                if 'data' not in efi_plan:
+                    raise Exception(f"Resposta inesperada ao recriar plano: {efi_plan}")
+                    
+                plan.efi_plan_id = int(efi_plan['data']['plan_id'])
+                db.commit()
+                
+                # Retry Subscription Creation
+                efi_sub = _safe_create_subscription(plan.efi_plan_id)
+                if 'data' not in efi_sub:
+                     raise Exception(f"Resposta inesperada na 2a tentativa (Assinatura): {efi_sub}")
+                     
+                sub.efi_subscription_id = int(efi_sub['data']['subscription_id'])
+                db.commit()
+                
+            except Exception as retry_e:
+                db.rollback()
+                raise HTTPException(status_code=400, detail=f"Falha de Autorização e falha ao recriar Plano na EFI: {str(retry_e)}")
+        else:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=f"Erro ao criar Assinatura na EFI: {str(e)}")
         
     # 3.3 Pay EFI Subscription via Credit Card
     try:
