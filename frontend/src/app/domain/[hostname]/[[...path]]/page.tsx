@@ -542,7 +542,7 @@ function HotsitePage({ slug, hostname }: { slug: string, hostname: string }) {
                         <Link href="/" className="hidden md:inline-flex text-white hover:text-[var(--color-primary-base)] font-bold px-4 py-2 text-sm uppercase tracking-widest transition-colors">
                             Ver Store
                         </Link>
-                        <Link href={`/h/${planData.id}/checkout`} className="hidden md:inline-flex bg-white hover:bg-slate-200 text-slate-900 font-bold px-6 py-2.5 rounded text-sm uppercase tracking-widest transition-colors transform skew-x-[-10deg] shadow-lg">
+                        <Link href={`/h/${slug}/checkout`} className="hidden md:inline-flex bg-white hover:bg-slate-200 text-slate-900 font-bold px-6 py-2.5 rounded text-sm uppercase tracking-widest transition-colors transform skew-x-[-10deg] shadow-lg">
                             <span className="skew-x-[10deg] block">Assinar</span>
                         </Link>
                     </div>
