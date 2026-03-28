@@ -363,37 +363,28 @@ function HotsitePage({ slug, hostname }: { slug: string, hostname: string }) {
         switch(block.type) {
             case 'BANNER':
                 return (
-                    <div id={block.id} key={block.id} className="relative bg-zinc-950 text-white min-h-[70vh] flex items-center overflow-hidden" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
+                    <div id={block.id} key={block.id} className="relative bg-zinc-950 text-white min-h-[60vh] md:min-h-[80vh] flex items-center overflow-hidden" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
                         
                         {block.imageUrl && (
-                            <div className="absolute inset-0 z-0 flex items-center justify-center pt-20">
-                                <img src={block.imageUrl} alt={block.title || "Banner"} className="w-full max-w-[1400px] h-full object-contain opacity-70" />
+                            <div className="absolute inset-0 z-0">
+                                <img src={block.imageUrl} alt={block.title || "Banner"} className="w-full h-full object-cover" />
                             </div>
                         )}
                         
-                        <div className="max-w-7xl mx-auto px-6 relative z-10 w-full pt-32 pb-20">
-                            <div className="max-w-2xl space-y-6 bg-black/60 p-8 lg:p-12 rounded-3xl backdrop-blur-md shadow-2xl border border-white/10">
+                        {(block.title || block.subtitle) && (
+                            <div className="max-w-7xl mx-auto px-6 relative z-10 w-full pt-32 pb-20 text-center">
                                 {block.title && (
-                                    <h1 className="text-5xl lg:text-7xl font-black tracking-tight leading-[1.1] text-white uppercase italic transform -skew-x-6">
+                                    <h1 className="text-4xl md:text-6xl lg:text-8xl font-black tracking-tight leading-[1.1] text-white uppercase italic transform -skew-x-6 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)]">
                                         {block.title}
                                     </h1>
                                 )}
                                 {block.subtitle && (
-                                    <p className="text-xl lg:text-3xl text-slate-300 font-bold uppercase tracking-wide">
+                                    <p className="text-xl md:text-2xl lg:text-3xl text-slate-100 font-bold uppercase tracking-wide mt-6 drop-shadow-[0_5px_10px_rgba(0,0,0,0.8)]">
                                         {block.subtitle}
                                     </p>
                                 )}
-                                <div className="pt-8 flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                                    <Link href={`/h/${planData.id}/checkout`} className="inline-flex items-center justify-center gap-3 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-bold px-10 py-5 rounded-lg text-xl uppercase tracking-wider transition-all hover:scale-105 active:scale-95 shadow-2xl shadow-[var(--color-primary-base)]/40 border-b-4 border-black/30">
-                                        Assinar Agora
-                                        <ArrowRight className="h-6 w-6" />
-                                    </Link>
-                                    <Link href="/" className="inline-flex items-center justify-center gap-3 bg-white/10 hover:bg-white/20 text-white font-bold px-8 py-5 rounded-lg text-lg uppercase tracking-wider transition-all backdrop-blur-md">
-                                        Explorar Loja
-                                    </Link>
-                                </div>
                             </div>
-                        </div>
+                        )}
                     </div>
                 );
                 
@@ -437,8 +428,8 @@ function HotsitePage({ slug, hostname }: { slug: string, hostname: string }) {
             case 'CAROUSEL':
                 if (!block.images || block.images.length === 0) return null;
                 return (
-                    <div id={block.id} key={block.id} className="py-24 bg-zinc-950 border-y border-white/5 relative overflow-hidden group/carousel" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
-                        <div className="max-w-[1400px] mx-auto px-6 relative z-10">
+                    <div id={block.id} key={block.id} className="py-16 md:py-24 bg-zinc-950 border-y border-white/5 relative overflow-hidden group/carousel w-full" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
+                        <div className="w-full relative z-10">
                             {/* Arrows */}
                             {block.images.filter((i: any) => i.url).length > 1 && (
                                 <>
@@ -446,29 +437,29 @@ function HotsitePage({ slug, hostname }: { slug: string, hostname: string }) {
                                         type="button"
                                         onClick={(e) => {
                                             const container = e.currentTarget.parentElement?.querySelector('.carousel-container');
-                                            if(container) container.scrollBy({ left: -container.clientWidth * 0.8, behavior: 'smooth' });
+                                            if(container) container.scrollBy({ left: -container.clientWidth, behavior: 'smooth' });
                                         }}
-                                        className="absolute left-8 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/80 text-white p-3 rounded-full opacity-0 group-hover/carousel:opacity-100 transition-opacity backdrop-blur-md border border-white/10 hidden md:block"
+                                        className="absolute left-2 md:left-12 top-1/2 -translate-y-1/2 z-20 text-[#fde047] hover:scale-110 p-2 rounded-full transition-transform drop-shadow-[0_10px_10px_rgba(0,0,0,0.8)]"
                                     >
-                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M15 19l-7-7 7-7" /></svg>
+                                        <svg className="w-12 h-12 md:w-20 md:h-20 fill-current" viewBox="0 0 24 24"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/></svg>
                                     </button>
                                     
                                     <button 
                                         type="button"
                                         onClick={(e) => {
                                             const container = e.currentTarget.parentElement?.querySelector('.carousel-container');
-                                            if(container) container.scrollBy({ left: container.clientWidth * 0.8, behavior: 'smooth' });
+                                            if(container) container.scrollBy({ left: container.clientWidth, behavior: 'smooth' });
                                         }}
-                                        className="absolute right-8 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/80 text-white p-3 rounded-full opacity-0 group-hover/carousel:opacity-100 transition-opacity backdrop-blur-md border border-white/10 hidden md:block"
+                                        className="absolute right-2 md:right-12 top-1/2 -translate-y-1/2 z-20 text-[#fde047] hover:scale-110 p-2 rounded-full transition-transform drop-shadow-[0_10px_10px_rgba(0,0,0,0.8)]"
                                     >
-                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
+                                        <svg className="w-12 h-12 md:w-20 md:h-20 fill-current" viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
                                     </button>
                                 </>
                             )}
-                            <div className="carousel-container flex overflow-x-auto gap-12 pb-8 snap-x snap-mandatory no-scrollbar relative scroll-smooth items-center">
+                            <div className="carousel-container flex overflow-x-auto snap-x snap-mandatory no-scrollbar relative scroll-smooth items-center w-full">
                                 {block.images.filter((i: any) => i.url).map((img: any, i: number) => (
-                                    <div key={i} className="min-w-[80vw] lg:min-w-[800px] shrink-0 snap-center flex justify-center items-center relative group p-4">
-                                        <img src={img.url} alt={`Banner Carrossel ${i+1}`} className="w-full max-w-[1000px] max-h-[70vh] object-contain drop-shadow-[0_20px_30px_rgba(0,0,0,0.7)] group-hover:scale-105 transition-transform duration-700" />
+                                    <div key={i} className="min-w-full w-full shrink-0 snap-center flex justify-center items-center relative group px-16 py-8">
+                                        <img src={img.url} alt={`Carousel Slide ${i+1}`} className="w-full max-w-[1200px] max-h-[85vh] object-contain drop-shadow-[0_25px_35px_rgba(0,0,0,0.8)] group-hover:scale-105 transition-transform duration-700" />
                                     </div>
                                 ))}
                             </div>
