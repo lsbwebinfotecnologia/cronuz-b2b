@@ -90,18 +90,16 @@ export default function HotsiteLandingPage() {
         switch(block.type) {
             case 'BANNER':
                 return (
-                    <div id={block.id} key={block.id} className="relative bg-slate-950 text-white min-h-[70vh] flex items-center overflow-hidden" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
-                        <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] mix-blend-overlay"></div>
-                        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent"></div>
+                    <div id={block.id} key={block.id} className="relative bg-zinc-950 text-white min-h-[70vh] flex items-center overflow-hidden" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
                         
                         {block.imageUrl && (
-                            <div className="absolute inset-0 z-0">
-                                <img src={block.imageUrl} alt={block.title || "Banner"} className="w-full h-full object-cover opacity-50" />
+                            <div className="absolute inset-0 z-0 flex items-center justify-center pt-20">
+                                <img src={block.imageUrl} alt={block.title || "Banner"} className="w-full max-w-[1400px] h-full object-contain opacity-70" />
                             </div>
                         )}
                         
                         <div className="max-w-7xl mx-auto px-6 relative z-10 w-full pt-32 pb-20">
-                            <div className="max-w-2xl space-y-6">
+                            <div className="max-w-2xl space-y-6 bg-black/60 p-8 lg:p-12 rounded-3xl backdrop-blur-md shadow-2xl border border-white/10">
                                 {block.title && (
                                     <h1 className="text-5xl lg:text-7xl font-black tracking-tight leading-[1.1] text-white uppercase italic transform -skew-x-6">
                                         {block.title}
@@ -193,11 +191,10 @@ export default function HotsiteLandingPage() {
                                     </button>
                                 </>
                             )}
-                            <div className="carousel-container flex overflow-x-auto gap-6 pb-8 snap-x snap-mandatory no-scrollbar relative scroll-smooth items-center">
+                            <div className="carousel-container flex overflow-x-auto gap-12 pb-8 snap-x snap-mandatory no-scrollbar relative scroll-smooth items-center">
                                 {block.images.filter((i: any) => i.url).map((img: any, i: number) => (
-                                    <div key={i} className="min-w-[80vw] lg:min-w-[450px] shrink-0 snap-center rounded-2xl overflow-hidden shadow-2xl relative group aspect-[4/3] border border-white/10">
-                                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent z-10 pointer-events-none"></div>
-                                        <img src={img.url} alt={`Banner Carrossel ${i+1}`} className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" />
+                                    <div key={i} className="min-w-[80vw] lg:min-w-[800px] shrink-0 snap-center flex justify-center items-center relative group p-4">
+                                        <img src={img.url} alt={`Banner Carrossel ${i+1}`} className="w-full max-w-[1000px] max-h-[70vh] object-contain drop-shadow-[0_20px_30px_rgba(0,0,0,0.7)] group-hover:scale-105 transition-transform duration-700" />
                                     </div>
                                 ))}
                             </div>
@@ -261,11 +258,7 @@ export default function HotsiteLandingPage() {
             <header className="fixed top-0 w-full z-50 transition-all duration-300 bg-black text-white border-b-4 border-[var(--color-primary-base)] shadow-[0_10px_30px_rgba(0,0,0,0.5)]">
                 <div className="max-w-[1400px] mx-auto px-4 lg:px-8 h-20 flex items-center justify-between">
                     <div className="flex-shrink-0 h-12 flex items-center">
-                        {globalConfig.logoUrl ? (
-                            <img src={globalConfig.logoUrl} alt={planData.name} className="h-full object-contain" />
-                        ) : (
-                            <span className="text-2xl font-black uppercase italic tracking-tighter text-white">{planData.name}</span>
-                        )}
+                        <span className="text-2xl font-black uppercase italic tracking-tighter text-white">{planData.name}</span>
                     </div>
                     
                     <nav className="hidden md:flex items-center gap-8">

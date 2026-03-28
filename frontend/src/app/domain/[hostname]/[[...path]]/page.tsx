@@ -363,18 +363,16 @@ function HotsitePage({ slug, hostname }: { slug: string, hostname: string }) {
         switch(block.type) {
             case 'BANNER':
                 return (
-                    <div id={block.id} key={block.id} className="relative bg-slate-950 text-white min-h-[70vh] flex items-center overflow-hidden" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
-                        <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] mix-blend-overlay"></div>
-                        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent"></div>
+                    <div id={block.id} key={block.id} className="relative bg-zinc-950 text-white min-h-[70vh] flex items-center overflow-hidden" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
                         
                         {block.imageUrl && (
-                            <div className="absolute inset-0 z-0">
-                                <img src={block.imageUrl} alt={block.title || "Banner"} className="w-full h-full object-cover opacity-50" />
+                            <div className="absolute inset-0 z-0 flex items-center justify-center pt-20">
+                                <img src={block.imageUrl} alt={block.title || "Banner"} className="w-full max-w-[1400px] h-full object-contain opacity-70" />
                             </div>
                         )}
                         
                         <div className="max-w-7xl mx-auto px-6 relative z-10 w-full pt-32 pb-20">
-                            <div className="max-w-2xl space-y-6">
+                            <div className="max-w-2xl space-y-6 bg-black/60 p-8 lg:p-12 rounded-3xl backdrop-blur-md shadow-2xl border border-white/10">
                                 {block.title && (
                                     <h1 className="text-5xl lg:text-7xl font-black tracking-tight leading-[1.1] text-white uppercase italic transform -skew-x-6">
                                         {block.title}
@@ -467,11 +465,10 @@ function HotsitePage({ slug, hostname }: { slug: string, hostname: string }) {
                                     </button>
                                 </>
                             )}
-                            <div className="carousel-container flex overflow-x-auto gap-6 pb-8 snap-x snap-mandatory no-scrollbar relative scroll-smooth">
+                            <div className="carousel-container flex overflow-x-auto gap-12 pb-8 snap-x snap-mandatory no-scrollbar relative scroll-smooth items-center">
                                 {block.images.filter((i: any) => i.url).map((img: any, i: number) => (
-                                    <div key={i} className="min-w-[85vw] lg:min-w-[700px] shrink-0 snap-center rounded-3xl overflow-hidden shadow-2xl relative border border-white/10 group aspect-video">
-                                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent z-10 pointer-events-none"></div>
-                                        <img src={img.url} alt={`Banner Carrossel ${i+1}`} className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" />
+                                    <div key={i} className="min-w-[80vw] lg:min-w-[800px] shrink-0 snap-center flex justify-center items-center relative group p-4">
+                                        <img src={img.url} alt={`Banner Carrossel ${i+1}`} className="w-full max-w-[1000px] max-h-[70vh] object-contain drop-shadow-[0_20px_30px_rgba(0,0,0,0.7)] group-hover:scale-105 transition-transform duration-700" />
                                     </div>
                                 ))}
                             </div>
@@ -537,19 +534,7 @@ function HotsitePage({ slug, hostname }: { slug: string, hostname: string }) {
             <header className="sticky top-0 z-50 bg-slate-950/90 backdrop-blur-md border-b border-white/10 shadow-2xl shadow-black/20">
                 <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
                     <Link href="/" className="flex items-center gap-3 relative group">
-                        <div className="absolute inset-0 bg-[var(--color-primary-base)] blur-xl opacity-20 group-hover:opacity-40 transition-opacity"></div>
-                        {globalConfig.logoUrl ? (
-                            <img src={globalConfig.logoUrl} alt={planData.company_name} className="h-10 relative z-10" />
-                        ) : (
-                            <div className="flex items-center gap-3 relative z-10">
-                                <div className="bg-[var(--color-primary-base)] p-2 rounded-lg transform -rotate-6">
-                                    <span className="text-white font-black italic">B2B</span>
-                                </div>
-                                <span className="text-xl font-black text-white italic tracking-wider uppercase">
-                                    {planData.company_name}
-                                </span>
-                            </div>
-                        )}
+                        <span className="text-2xl font-black uppercase italic tracking-tighter text-white">{planData.name}</span>
                     </Link>
                     
                     {globalConfig.topMenu && globalConfig.topMenu.length > 0 && (
@@ -567,7 +552,7 @@ function HotsitePage({ slug, hostname }: { slug: string, hostname: string }) {
                             Ver Store
                         </Link>
                         <Link href={`/h/${planData.id}/checkout`} className="hidden md:inline-flex bg-white hover:bg-slate-200 text-slate-900 font-bold px-6 py-2.5 rounded text-sm uppercase tracking-widest transition-colors transform skew-x-[-10deg] shadow-lg">
-                            <span className="skew-x-[10deg] block">Assinar VIP</span>
+                            <span className="skew-x-[10deg] block">Assinar</span>
                         </Link>
                     </div>
                 </div>
