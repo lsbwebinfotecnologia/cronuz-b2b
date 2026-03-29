@@ -16,7 +16,9 @@ export default function CompanyBookinfoPage() {
   const [formData, setFormData] = useState({
     active: false,
     environment: 'HOMOL',
-    token: ''
+    token: '',
+    bookinfo_sync_enabled: false,
+    bookinfo_notify_processing_early: false
   });
 
 
@@ -37,6 +39,11 @@ export default function CompanyBookinfoPage() {
           const data = await res.json();
           const bookinfo = data.find((i: any) => i.platform === 'BOOKINFO');
           
+          const settingsRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${company.id}/settings`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+          });
+          const settings = settingsRes.ok ? await settingsRes.json() : {};
+
           if (bookinfo) {
             setIntegratorId(bookinfo.id);
             let creds = {};
@@ -51,8 +58,16 @@ export default function CompanyBookinfoPage() {
             setFormData({
               active: bookinfo.active,
               environment: (creds as any).Ambiente || 'HOMOL',
-              token: (creds as any).Token || ''
+              token: (creds as any).Token || '',
+              bookinfo_sync_enabled: settings.bookinfo_sync_enabled || false,
+              bookinfo_notify_processing_early: settings.bookinfo_notify_processing_early || false
             });
+          } else {
+            setFormData(prev => ({
+              ...prev,
+              bookinfo_sync_enabled: settings.bookinfo_sync_enabled || false,
+              bookinfo_notify_processing_early: settings.bookinfo_notify_processing_early || false
+            }));
           }
         }
       } catch (e) {
@@ -102,7 +117,16 @@ export default function CompanyBookinfoPage() {
         body: JSON.stringify(payload)
       });
       
-      if (!res.ok) throw new Error('Falha ao salvar configurações da Bookinfo');
+      const settingsRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${company.id}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({
+           bookinfo_sync_enabled: formData.bookinfo_sync_enabled,
+           bookinfo_notify_processing_early: formData.bookinfo_notify_processing_early
+        })
+      });
+
+      if (!res.ok || !settingsRes.ok) throw new Error('Falha ao salvar configurações da Bookinfo');
       
       const savedData = await res.json();
       if (!integratorId && savedData.id) {
@@ -142,8 +166,8 @@ export default function CompanyBookinfoPage() {
            <div className="space-y-6 bg-slate-50/50 dark:bg-slate-900/20 p-6 rounded-2xl border border-slate-200 dark:border-slate-800/60 shadow-sm">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800/60 pb-4">
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Automação Bookinfo</h3>
-                  <p className="text-xs text-slate-500">Determine se a loja deverá baixar os novos pedidos da Bookinfo.</p>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Credenciais Ativas</h3>
+                  <p className="text-xs text-slate-500">Permite que a plataforma conecte-se com a API da Bookinfo.</p>
                 </div>
                 <label className="relative flex items-center cursor-pointer shrink-0">
                   <span className="mr-3 text-sm font-bold text-emerald-600 dark:text-emerald-400">Ativa</span>
@@ -153,6 +177,44 @@ export default function CompanyBookinfoPage() {
                       name="active"
                       className="sr-only peer" 
                       checked={formData.active} 
+                      onChange={handleInputChange} 
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                  </div>
+                </label>
+              </div>
+
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800/60 pb-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Automações em Segundo Plano</h3>
+                  <p className="text-xs text-slate-500">Liga/Desliga o processamento automatizado de pedidos em fila (Jobs) a cada X minutos.</p>
+                </div>
+                <label className="relative flex items-center cursor-pointer shrink-0">
+                  <div className="relative">
+                    <input 
+                      type="checkbox" 
+                      name="bookinfo_sync_enabled"
+                      className="sr-only peer" 
+                      checked={formData.bookinfo_sync_enabled} 
+                      onChange={handleInputChange} 
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                  </div>
+                </label>
+              </div>
+
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800/60 pb-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Notificar Bookinfo (Processando) antecipadamente</h3>
+                  <p className="text-xs text-slate-500">Muda o status na Bookinfo antes do faturamento final assim que inserido no Horus ERP.</p>
+                </div>
+                <label className="relative flex items-center cursor-pointer shrink-0">
+                  <div className="relative">
+                    <input 
+                      type="checkbox" 
+                      name="bookinfo_notify_processing_early"
+                      className="sr-only peer" 
+                      checked={formData.bookinfo_notify_processing_early} 
                       onChange={handleInputChange} 
                     />
                     <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
