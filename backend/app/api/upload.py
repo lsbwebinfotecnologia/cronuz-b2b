@@ -11,12 +11,12 @@ from app.models.user import User
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
-# Directory to store uploaded covers/images (pointing to the Next.js public directory)
-# This assumes backend and frontend are siblings in the project root
-FRONTEND_PUBLIC_DIR = Path(__file__).parent.parent.parent.parent / "frontend" / "public" / "uploads"
-FRONTEND_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
+# Directory to store uploaded covers/images
+# This saves the files internally to be served by FastAPI's StaticFiles under /uploads
+UPLOADS_DIR = Path(__file__).parent.parent.parent / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-STATIC_DIR = FRONTEND_PUBLIC_DIR / "covers"
+STATIC_DIR = UPLOADS_DIR / "covers"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 @router.post("/cover")
@@ -82,7 +82,7 @@ async def upload_image(
         raise HTTPException(status_code=400, detail="O arquivo excede o limite de 10MB.")
 
     # Diretorio para imagens gerais
-    images_dir = FRONTEND_PUBLIC_DIR / "images" / str(target_company_id)
+    images_dir = UPLOADS_DIR / "images" / str(target_company_id)
     images_dir.mkdir(parents=True, exist_ok=True)
     
     # Manter a extensao original com base no content type ou nome do file

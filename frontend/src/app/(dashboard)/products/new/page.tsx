@@ -16,8 +16,8 @@ const ReactQuill = dynamic(() => import('react-quill-new'), { ssr: false });
 
 const tabs = [
   { id: 'general', label: 'Geral' },
-  { id: 'characteristics', label: 'Características e Ficha Técnica' },
   { id: 'stock', label: 'Estoque e variações' },
+  { id: 'characteristics', label: 'Características' },
   { id: 'images', label: 'Imagens' },
 ];
 
@@ -379,7 +379,7 @@ export default function NewProductPage() {
                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 dark:bg-slate-900/50 dark:border-slate-800">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-                        <ListTree className="w-5 h-5 text-slate-400" /> Ficha Técnica
+                        <ListTree className="w-5 h-5 text-slate-400" /> Características
                       </h3>
                       <button type="button" onClick={handleAddCharacteristic} className="text-sm px-3 py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg flex items-center gap-1 font-medium transition dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20">
                         <Plus className="w-4 h-4" /> Adicionar Característica
