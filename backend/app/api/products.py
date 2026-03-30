@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from app.db.session import get_db
 from app.models.product import Product
-from app.models.catalog_support import StockMovement, PriceHistory
+from app.models.catalog_support import StockMovement, PriceHistory, ProductCharacteristic
 from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse
 from app.core.dependencies import get_current_user, get_current_user_optional
 from app.models.user import User
@@ -27,12 +27,23 @@ def create_product(
     if existing:
         raise HTTPException(status_code=400, detail="Já existe um produto com este SKU.")
 
+    product_data = product_in.dict()
+    characteristics_data = product_data.pop("characteristics", [])
+
     db_product = Product(
-        **product_in.dict(),
+        **product_data,
         company_id=current_user.company_id
     )
     db.add(db_product)
     db.flush() # flush to get db_product.id
+
+    if characteristics_data:
+        for char in characteristics_data:
+            db.add(ProductCharacteristic(
+                product_id=db_product.id,
+                characteristic_id=char["characteristic_id"],
+                value=char["value"]
+            ))
 
     # Initial Audit Logs
     if db_product.stock_quantity > 0:
@@ -234,6 +245,7 @@ def update_product(
         raise HTTPException(status_code=404, detail="Produto não encontrado.")
         
     update_data = product_in.dict(exclude_unset=True)
+    characteristics_data = update_data.pop("characteristics", None)
     
     if "sku" in update_data and update_data["sku"] != db_product.sku:
         existing = db.query(Product).filter(
@@ -290,6 +302,15 @@ def update_product(
     for field, value in update_data.items():
         setattr(db_product, field, value)
         
+    if characteristics_data is not None:
+        db.query(ProductCharacteristic).filter(ProductCharacteristic.product_id == db_product.id).delete()
+        for char in characteristics_data:
+            db.add(ProductCharacteristic(
+                product_id=db_product.id,
+                characteristic_id=char["characteristic_id"],
+                value=char["value"]
+            ))
+
     db.commit()
     db.refresh(db_product)
     return db_product

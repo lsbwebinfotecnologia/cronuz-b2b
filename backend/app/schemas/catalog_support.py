@@ -59,3 +59,18 @@ class CharacteristicResponse(CharacteristicBase):
 
     class Config:
         from_attributes = True
+
+class ProductCharacteristicBase(BaseModel):
+    characteristic_id: int
+    value: str
+
+class ProductCharacteristicCreate(ProductCharacteristicBase):
+    pass
+
+class ProductCharacteristicResponse(ProductCharacteristicBase):
+    id: int
+    product_id: int
+    characteristic: Optional[CharacteristicResponse] = None
+
+    class Config:
+        from_attributes = True

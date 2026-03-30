@@ -46,6 +46,7 @@ class Product(Base):
     is_out_of_print = Column(Boolean, default=False, nullable=False)
     allow_purchase = Column(Boolean, default=True, nullable=True)
     stock_status_label = Column(String(100), nullable=True)
+    cover_url = Column(String(500), nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -54,3 +55,4 @@ class Product(Base):
     company = relationship("Company")
     category = relationship("Category")
     brand_rel = relationship("Brand")
+    characteristics = relationship("ProductCharacteristic", viewonly=True)

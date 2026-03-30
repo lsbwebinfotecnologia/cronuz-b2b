@@ -16,6 +16,7 @@ const ReactQuill = dynamic(() => import('react-quill-new'), { ssr: false });
 
 const tabs = [
   { id: 'general', label: 'Geral' },
+  { id: 'characteristics', label: 'Características e Ficha Técnica' },
   { id: 'stock', label: 'Estoque e logística' },
   { id: 'images', label: 'Imagens' },
   { id: 'history', label: 'Histórico' },
@@ -49,8 +50,12 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
     model: '',
     ean_gtin: '',
     status: 'ACTIVE',
-    stock_quantity: 0
+    stock_quantity: 0,
+    cover_url: '',
+    characteristics: [] as { characteristic_id: number, value: string }[]
   });
+
+  const [availableCharacteristics, setAvailableCharacteristics] = useState<any[]>([]);
 
   const [coverBaseUrl, setCoverBaseUrl] = useState('');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -68,24 +73,31 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
           fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories`, { headers }),
           fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/brands`, { headers }),
           fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/${resolvedParams.id}`, { headers }),
-          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/${resolvedParams.id}/history`, { headers })
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/${resolvedParams.id}/history`, { headers }),
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/characteristics`, { headers })
         ];
 
         if (user?.company_id) {
           promises.push(fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${user.company_id}/settings`, { headers }));
         }
 
-        const [catRes, brandRes, prodRes, histRes, settingsRes] = await Promise.all(promises);
+        const [catRes, brandRes, prodRes, histRes, charRes, settingsRes] = await Promise.all(promises);
 
         if (catRes.ok) setCategories(await catRes.json());
         if (brandRes.ok) setBrands(await brandRes.json());
+        if (charRes?.ok) {
+           const chars = await charRes.json();
+           setAvailableCharacteristics(chars);
+        }
         
         if (prodRes.ok) {
            const pData = await prodRes.json();
            setProduct({
                ...pData,
                category_id: pData.category_id || '',
-               brand_id: pData.brand_id || ''
+               brand_id: pData.brand_id || '',
+               cover_url: pData.cover_url || '',
+               characteristics: pData.characteristics || []
            });
            
            if (settingsRes?.ok) {
@@ -93,13 +105,17 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
              if (settings.cover_image_base_url) {
                const baseUrl = settings.cover_image_base_url.replace(/\/$/, '');
                setCoverBaseUrl(baseUrl);
-               if (pData.ean_gtin) {
+               if (pData.cover_url) {
+                 setImagePreview(pData.cover_url.startsWith('http') ? pData.cover_url : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${pData.cover_url}`);
+               } else if (pData.ean_gtin) {
                  // Try to automatically load the image if it exists
                  setImagePreview(`${baseUrl}/${pData.ean_gtin}.jpg`);
                }
              } else {
-                 if (pData.ean_gtin && pData.brand_id && pData.category_id) { // simple check if product acts populated
-                    setImagePreview(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/static/covers/${user.company_id}/${pData.ean_gtin}.jpg`);
+                 if (pData.cover_url) {
+                     setImagePreview(pData.cover_url.startsWith('http') ? pData.cover_url : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${pData.cover_url}`);
+                 } else if (pData.ean_gtin && pData.brand_id && pData.category_id) { // simple check if product acts populated
+                     setImagePreview(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/static/covers/${user.company_id}/${pData.ean_gtin}.jpg`);
                  }
              }
            }
@@ -134,6 +150,25 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
     }));
   };
 
+  const handleAddCharacteristic = () => {
+    setProduct(prev => ({
+      ...prev,
+      characteristics: [...prev.characteristics, { characteristic_id: 0, value: '' }]
+    }));
+  };
+
+  const handleCharacteristicChange = (index: number, field: string, value: any) => {
+    const newChars = [...product.characteristics];
+    newChars[index] = { ...newChars[index], [field]: value };
+    setProduct(prev => ({ ...prev, characteristics: newChars }));
+  };
+
+  const handleRemoveCharacteristic = (index: number) => {
+    const newChars = [...product.characteristics];
+    newChars.splice(index, 1);
+    setProduct(prev => ({ ...prev, characteristics: newChars }));
+  };
+
   const handleSubmit = async () => {
     if (!product.name || !product.sku) {
       toast.error('Preencha os campos obrigatórios (Nome e SKU).');
@@ -154,6 +189,8 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
           cost_price: product.cost_price || undefined,
           category_id: product.category_id || undefined,
           brand_id: product.brand_id || undefined,
+          cover_url: product.cover_url || undefined,
+          characteristics: product.characteristics.filter(c => c.characteristic_id && c.value)
         })
       });
 
@@ -306,6 +343,66 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
               </motion.div>
             )}
 
+            {activeTab === 'characteristics' && (
+              <motion.div
+                key="characteristics"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-6"
+              >
+                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 dark:bg-slate-900/50 dark:border-slate-800">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                        <ListTree className="w-5 h-5 text-slate-400" /> Ficha Técnica
+                      </h3>
+                      <button type="button" onClick={handleAddCharacteristic} className="text-sm px-3 py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg flex items-center gap-1 font-medium transition dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20">
+                        <Plus className="w-4 h-4" /> Adicionar Característica
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                       {product.characteristics.length === 0 && (
+                         <div className="text-center p-6 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-slate-500">
+                           <p className="text-sm mb-2">Nenhuma característica informada.</p>
+                           <button type="button" onClick={handleAddCharacteristic} className="text-sm font-medium text-[var(--color-primary-base)] hover:underline">Adicionar a primeira</button>
+                         </div>
+                       )}
+                       {product.characteristics.map((char, index) => (
+                         <div key={index} className="flex items-center gap-4 bg-slate-50 dark:bg-slate-950 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+                           <div className="flex-1">
+                              <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wider">Característica</label>
+                              <select 
+                                value={char.characteristic_id} 
+                                onChange={(e) => handleCharacteristicChange(index, 'characteristic_id', Number(e.target.value))}
+                                className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-sm rounded-lg p-2.5 focus:ring-2 focus:ring-[var(--color-primary-base)]/20 focus:border-[var(--color-primary-base)]"
+                              >
+                                <option value={0}>Selecione...</option>
+                                {availableCharacteristics.map((ac) => (
+                                  <option key={ac.id} value={ac.id}>{ac.name}</option>
+                                ))}
+                              </select>
+                           </div>
+                           <div className="flex-1">
+                              <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wider">Valor Registrado</label>
+                              <input 
+                                type="text" 
+                                value={char.value} 
+                                onChange={(e) => handleCharacteristicChange(index, 'value', e.target.value)}
+                                placeholder="Ex: Machado de Assis, 320..."
+                                className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-sm rounded-lg p-2.5 focus:ring-2 focus:ring-[var(--color-primary-base)]/20 focus:border-[var(--color-primary-base)]"
+                              />
+                           </div>
+                           <button type="button" onClick={() => handleRemoveCharacteristic(index)} className="mt-5 p-2.5 text-rose-500 hover:bg-rose-50 rounded-lg transition dark:hover:bg-rose-500/10">
+                             <Trash2 className="w-4 h-4" />
+                           </button>
+                         </div>
+                       ))}
+                    </div>
+                 </div>
+              </motion.div>
+            )}
+
             {activeTab === 'stock' && (
                <motion.div key="stock" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 dark:bg-slate-900/50 dark:border-slate-800">
@@ -390,7 +487,11 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
                             
                             <div className="flex gap-3">
                               {coverBaseUrl && (
-                                <button type="button" onClick={() => setImagePreview(`${coverBaseUrl}/${product.ean_gtin}.jpg`)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-xl transition-colors dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                                <button type="button" onClick={() => {
+                                  const cUrl = `${coverBaseUrl}/${product.ean_gtin}.jpg`;
+                                  setImagePreview(cUrl);
+                                  setProduct(prev => ({...prev, cover_url: cUrl}));
+                                }} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-xl transition-colors dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
                                   Tentar Sincronizar
                                 </button>
                               )}
@@ -414,6 +515,7 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
                                     if(res.ok) {
                                       const data = await res.json();
                                       setImagePreview(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${data.url}`);
+                                      setProduct(prev => ({...prev, cover_url: data.url}));
                                       toast.success("Imagem enviada com sucesso!");
                                     } else {
                                       const err = await res.json();

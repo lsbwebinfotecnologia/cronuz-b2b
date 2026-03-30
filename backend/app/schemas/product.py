@@ -2,7 +2,8 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from app.models.product import ProductStatus
-from app.schemas.catalog_support import CategoryResponse, BrandResponse
+from app.schemas.catalog_support import CategoryResponse, BrandResponse, ProductCharacteristicCreate, ProductCharacteristicResponse
+from typing import List
 
 class ProductBase(BaseModel):
     sku: str
@@ -25,9 +26,10 @@ class ProductBase(BaseModel):
     stock_quantity: int = 0
     allow_purchase: Optional[bool] = None
     stock_status_label: Optional[str] = None
+    cover_url: Optional[str] = None
 
 class ProductCreate(ProductBase):
-    pass
+    characteristics: Optional[List[ProductCharacteristicCreate]] = []
 
 class ProductUpdate(BaseModel):
     sku: Optional[str] = None
@@ -48,6 +50,10 @@ class ProductUpdate(BaseModel):
     brand_id: Optional[int] = None
     status: Optional[str] = None
     stock_quantity: Optional[int] = None
+    allow_purchase: Optional[bool] = None
+    stock_status_label: Optional[str] = None
+    cover_url: Optional[str] = None
+    characteristics: Optional[List[ProductCharacteristicCreate]] = []
 
 class ProductResponse(ProductBase):
     id: int
@@ -56,6 +62,7 @@ class ProductResponse(ProductBase):
     updated_at: Optional[datetime]
     category: Optional[CategoryResponse] = None
     brand_rel: Optional[BrandResponse] = None
+    characteristics: Optional[List[ProductCharacteristicResponse]] = []
 
     class Config:
         from_attributes = True
