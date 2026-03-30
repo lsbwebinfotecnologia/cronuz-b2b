@@ -86,6 +86,8 @@ def list_products(
     search: Optional[str] = None,
     source: Optional[str] = None,
     customer_id: Optional[int] = Query(None, description="Obrigatório no modo B2B para tabelas de preço"),
+    category_id: Optional[int] = None,
+    order_by: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
@@ -197,8 +199,27 @@ def list_products(
             (Product.sku.ilike(search_filter))
         )
         
+    if category_id:
+        query = query.filter(Product.category_id == category_id)
+        
     local_total = query.count()
-    local_products = query.order_by(Product.name.asc()).offset(skip).limit(limit).all()
+    
+    if order_by == 'name':
+        query = query.order_by(Product.name.asc())
+    elif order_by == 'name_desc':
+        query = query.order_by(Product.name.desc())
+    elif order_by == 'sku':
+        query = query.order_by(Product.sku.asc())
+    elif order_by == 'sku_desc':
+        query = query.order_by(Product.sku.desc())
+    elif order_by == 'price':
+        query = query.order_by(Product.promotional_price.asc().nulls_last(), Product.base_price.asc())
+    elif order_by == 'price_desc':
+        query = query.order_by(Product.promotional_price.desc().nulls_last(), Product.base_price.desc())
+    else:
+        query = query.order_by(Product.name.asc())
+
+    local_products = query.offset(skip).limit(limit).all()
     
     # Convert local products to dictionary matching schema
     items = []

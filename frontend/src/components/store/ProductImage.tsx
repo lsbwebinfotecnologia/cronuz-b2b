@@ -11,9 +11,10 @@ interface ProductImageProps {
   iconClassName?: string;
   baseUrl?: string | null;
   companyIdProp?: number;
+  coverUrl?: string | null;
 }
 
-export function ProductImage({ eanGtin, alt, className = "", iconClassName = "w-10 h-10", baseUrl, companyIdProp }: ProductImageProps) {
+export function ProductImage({ coverUrl, eanGtin, alt, className = "", iconClassName = "w-10 h-10", baseUrl, companyIdProp }: ProductImageProps) {
   const storeConfig = useStoreConfig();
   
   const coverImageBaseUrl = baseUrl !== undefined ? baseUrl : storeConfig.coverImageBaseUrl;
@@ -25,6 +26,12 @@ export function ProductImage({ eanGtin, alt, className = "", iconClassName = "w-
   const [fallbackLevel, setFallbackLevel] = useState(0);
 
   useEffect(() => {
+    if (coverUrl) {
+      setImgSrc(coverUrl.startsWith('http') ? coverUrl : `${apiUrl}${coverUrl}`);
+      setFallbackLevel(3); // Custom Image
+      return;
+    }
+
     if (!eanGtin) {
       setHasError(true);
       return;
@@ -47,7 +54,18 @@ export function ProductImage({ eanGtin, alt, className = "", iconClassName = "w-
   }, [eanGtin, coverImageBaseUrl, companyId, apiUrl]);
 
   const handleError = () => {
-    if (fallbackLevel === 1 && companyId) {
+    if (fallbackLevel === 3 && eanGtin) {
+      // If custom image fails, try CDN
+       if (coverImageBaseUrl) {
+         setImgSrc(`${coverImageBaseUrl.replace(/\/$/, '')}/${eanGtin}.jpg`);
+         setFallbackLevel(1);
+       } else if (companyId) {
+         setImgSrc(`${apiUrl}/static/covers/${companyId}/${eanGtin}.jpg`);
+         setFallbackLevel(2);
+       } else {
+         setHasError(true);
+       }
+    } else if (fallbackLevel === 1 && companyId) {
       // Fallback from external CDN to local server
       setImgSrc(`${apiUrl}/static/covers/${companyId}/${eanGtin}.jpg`);
       setFallbackLevel(2);

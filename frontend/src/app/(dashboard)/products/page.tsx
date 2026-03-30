@@ -27,6 +27,9 @@ export default function ProductsPage() {
   
   const [coverBaseUrl, setCoverBaseUrl] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<number>(1);
+  const [categoryId, setCategoryId] = useState<string>('');
+  const [orderBy, setOrderBy] = useState<string>('name');
+  const [categories, setCategories] = useState<any[]>([]);
 
   // Pagination
   const [page, setPage] = useState(1);
@@ -40,6 +43,12 @@ export default function ProductsPage() {
       let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/?skip=${skip}&limit=${limit}`;
       if (searchTerm) {
         url += `&search=${encodeURIComponent(searchTerm)}`;
+      }
+      if (categoryId) {
+        url += `&category_id=${categoryId}`;
+      }
+      if (orderBy) {
+        url += `&order_by=${orderBy}`;
       }
       
       const res = await fetch(url, {
@@ -79,6 +88,15 @@ export default function ProductsPage() {
            const data = await res.json();
            setCoverBaseUrl(data.cover_image_base_url || null);
         }
+        
+        // Load categories
+        const catRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories/`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (catRes.ok) {
+          const catData = await catRes.json();
+          setCategories(catData.items || []);
+        }
       } catch (e) {
         console.error("Error loading settings", e);
       }
@@ -95,6 +113,18 @@ export default function ProductsPage() {
     setPage(1);
     fetchProducts();
   };
+
+  const handleFilterChange = (setter: any) => (e: any) => {
+    setter(e.target.value);
+    setPage(1);
+  };
+
+  useEffect(() => {
+    if(!loading) {
+      setPage(1);
+      fetchProducts();
+    }
+  }, [categoryId, orderBy]);
 
   return (
     <div className="space-y-6 max-w-[1400px] mx-auto pb-10">
@@ -134,12 +164,33 @@ export default function ProductsPage() {
           </div>
           
           <div className="flex items-center gap-2">
-            <button className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-              <ArrowUpDown className="h-4 w-4 text-slate-400" /> Ordenar
-            </button>
-            <button className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-              <Filter className="h-4 w-4 text-slate-400" /> Filtros
-            </button>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-600 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300">
+              <ArrowUpDown className="h-4 w-4 text-slate-400" /> 
+              <select 
+                value={orderBy} 
+                onChange={handleFilterChange(setOrderBy)}
+                className="bg-transparent border-none outline-none focus:ring-0 cursor-pointer"
+              >
+                <option value="name">A-Z</option>
+                <option value="name_desc">Z-A</option>
+                <option value="sku">SKU</option>
+                <option value="price">Menor Preço</option>
+                <option value="price_desc">Maior Preço</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-600 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300">
+              <Filter className="h-4 w-4 text-slate-400" />
+              <select 
+                value={categoryId} 
+                onChange={handleFilterChange(setCategoryId)}
+                className="bg-transparent border-none outline-none focus:ring-0 cursor-pointer w-28 truncate"
+              >
+                <option value="">Todas</option>
+                {categories.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
             <div className="px-3 py-2 bg-slate-100 text-slate-600 text-sm rounded-lg font-medium ml-2 dark:bg-slate-800 dark:text-slate-300">
                {total > 0 ? `${(page - 1) * limit + 1} - ${Math.min(page * limit, total)} de ${total}` : '0 registros'}
             </div>
@@ -215,6 +266,7 @@ export default function ProductsPage() {
                           alt={product.name}
                           baseUrl={coverBaseUrl}
                           companyIdProp={companyId}
+                          coverUrl={product.cover_url}
                           className="w-full h-full object-cover p-1"
                           iconClassName="h-6 w-6 text-slate-400"
                         />
