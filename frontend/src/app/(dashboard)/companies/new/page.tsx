@@ -30,6 +30,7 @@ function NewCompanyForm() {
     domain: '',
     logo: '',
     tenant_id: 'cronuz',
+    business_model: 'B2B_CRONUZ',
     operation_start_date: new Date().toISOString().split('T')[0]
   });
   const [user, setUser] = useState<any>(null);
@@ -95,6 +96,18 @@ function NewCompanyForm() {
         const errorData = await res.json();
         throw new Error(errorData.detail || 'Erro ao cadastrar empresa');
       }
+      
+      const newCompany = await res.json();
+      
+      // Update settings with business model
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${newCompany.id}/settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ business_model: formData.business_model })
+      });
 
       toast.success('Empresa base criada com sucesso!');
       router.push('/companies');
@@ -202,6 +215,22 @@ function NewCompanyForm() {
                   onChange={(e) => setFormData({...formData, operation_start_date: e.target.value})}
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
                 />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Modelo de Negócio (Plataforma)</label>
+              <div className="relative">
+                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-slate-500" />
+                <select
+                  value={formData.business_model}
+                  onChange={(e) => setFormData({...formData, business_model: e.target.value})}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium appearance-none dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
+                >
+                  <option value="B2B_CRONUZ">B2B Cronuz (Padrão)</option>
+                  <option value="B2B_HORUS">B2B Horus Emissor (ERP)</option>
+                  <option value="CRONUZ_COMMERCE">Cronuz Commerce (Virtual Store)</option>
+                </select>
               </div>
             </div>
 

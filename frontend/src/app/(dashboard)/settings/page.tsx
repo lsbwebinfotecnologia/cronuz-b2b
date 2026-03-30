@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2 } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -15,6 +15,7 @@ export default function SettingsPage() {
   const companyId = currentUser?.company_id;
 
   const [settings, setSettings] = useState({
+    business_model: 'B2B_CRONUZ',
     pdv_type: 'NON_FISCAL',
     horus_api_mode: 'B2B',
     allow_backorder: false,
@@ -55,6 +56,7 @@ export default function SettingsPage() {
       const data = await res.json();
       setSettings(prev => ({
         ...prev,
+        business_model: data.business_model || 'B2B_CRONUZ',
         pdv_type: data.pdv_type || 'NON_FISCAL',
         horus_api_mode: data.horus_api_mode || 'B2B',
         allow_backorder: data.allow_backorder || false,
@@ -167,6 +169,30 @@ export default function SettingsPage() {
           <div className="p-6 md:p-8 space-y-8">
             {/* Seção PDV */}
             <div className="space-y-4">
+              <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">
+                <div className="p-2 bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] rounded-lg">
+                  <Building2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Modelo de Negócio</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Configure a engine base que esta empresa utilizará.</p>
+                </div>
+              </div>
+              <div className="relative max-w-sm">
+                <select
+                  value={settings.business_model}
+                  onChange={(e) => setSettings({...settings, business_model: e.target.value})}
+                  className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium appearance-none dark:border-slate-800 dark:bg-slate-900 dark:text-white"
+                >
+                  <option value="B2B_CRONUZ">B2B Cronuz (Portal de Vendas)</option>
+                  <option value="B2B_HORUS">B2B Horus Emissor (ERP)</option>
+                  <option value="CRONUZ_COMMERCE">Cronuz Commerce (Loja Virtual UI)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Seção PDV */}
+            <div className="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800/60">
               <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">
                 <div className="p-2 bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] rounded-lg">
                   <MonitorSmartphone className="h-5 w-5" />

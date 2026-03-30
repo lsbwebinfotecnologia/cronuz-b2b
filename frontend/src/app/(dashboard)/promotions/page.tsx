@@ -13,7 +13,7 @@ export default function PromotionsListPage() {
   const fetchPromotions = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/promotions`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/promotions/`, {
         headers: { 'Authorization': `Bearer ${getToken()}` }
       });
       if (res.ok) {

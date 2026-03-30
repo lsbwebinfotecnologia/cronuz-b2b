@@ -8,6 +8,8 @@ class CompanySettings(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("cmp_company.id"), unique=True, nullable=False)
+    # Business Model (Platform Mode)
+    business_model = Column(String(50), default='B2B_CRONUZ', nullable=False) # B2B_HORUS, B2B_CRONUZ, CRONUZ_COMMERCE
     
     # Horus ERP Integration
     horus_enabled = Column(Boolean, default=False, nullable=False)

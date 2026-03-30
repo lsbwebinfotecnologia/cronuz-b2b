@@ -3,6 +3,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 
 class CompanySettingsBase(BaseModel):
+    business_model: Optional[str] = "B2B_CRONUZ"
     horus_enabled: Optional[bool] = False
     horus_url: Optional[str] = None
     horus_port: Optional[str] = None

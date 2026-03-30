@@ -82,7 +82,7 @@ def create_product(
 @router.get("/", response_model=dict)
 def list_products(
     skip: int = Query(0, ge=0),
-    limit: int = Query(25, ge=1, le=100),
+    limit: int = Query(25, ge=1, le=5000),
     search: Optional[str] = None,
     source: Optional[str] = None,
     customer_id: Optional[int] = Query(None, description="Obrigatório no modo B2B para tabelas de preço"),
