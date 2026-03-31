@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Loader2, Save, Database, Key } from 'lucide-react';
+import { Loader2, Save, Database, Key, Activity } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -12,6 +12,7 @@ export default function CompanyHorusPage() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [togglingModule, setTogglingModule] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
 
   const [formData, setFormData] = useState({
     horus_company: '',
@@ -117,6 +118,40 @@ export default function CompanyHorusPage() {
       toast.error('Erro ao mudar status do módulo.');
     } finally {
       setTogglingModule(false);
+    }
+  }
+
+  async function handleTestConnection() {
+    if (!company) return;
+    if (!formData.horus_url) {
+       toast.error("Informe a URL do servidor antes de testar.");
+       return;
+    }
+    
+    setTestingConnection(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${company.id}/settings/test-horus`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+           url: formData.horus_url,
+           port: formData.horus_port,
+           username: formData.horus_username,
+           password: formData.horus_password,
+        })
+      });
+      
+      const data = await res.json();
+      if (res.ok && data.success) {
+         toast.success(data.message);
+      } else {
+         toast.error(data.detail || 'Falha ao conectar no Horus. Verifique URL e porta.');
+      }
+    } catch (error) {
+       toast.error('Erro local ou de rede ao tentar testar a conexão.');
+    } finally {
+       setTestingConnection(false);
     }
   }
 
@@ -395,10 +430,20 @@ export default function CompanyHorusPage() {
 
 
 
-             <div className="flex justify-end pt-4 mb-8">
+             <div className="flex justify-end gap-3 pt-4 mb-8">
+               <button
+                 type="button"
+                 onClick={handleTestConnection}
+                 disabled={testingConnection || saving}
+                 className="px-6 py-3 text-[15px] rounded-xl font-bold flex items-center gap-2 transition-all bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 active:scale-[0.98] transform"
+               >
+                 {testingConnection ? <Loader2 className="h-5 w-5 animate-spin" /> : <Activity className="h-5 w-5" />}
+                 {testingConnection ? 'Testando...' : 'Testar Conexão'}
+               </button>
+
                <button
                  type="submit"
-                 disabled={saving}
+                 disabled={saving || testingConnection}
                  className="px-8 py-3 text-[15px] rounded-xl font-bold flex items-center gap-2 transition-all bg-[var(--color-primary-base)] text-white hover:bg-[var(--color-primary-hover)] shadow-lg shadow-[var(--color-primary-base)]/25 active:scale-[0.98] transform hover:scale-[1.02]"
                >
                  {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : <Save className="h-5 w-5" />}

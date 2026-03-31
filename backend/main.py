@@ -508,3 +508,52 @@ def update_company_settings(
     db.commit()
     db.refresh(settings)
     return settings
+
+class HorusTestRequest(BaseModel):
+    url: str
+    port: str
+    username: str
+    password: str
+
+@app.post("/companies/{company_id}/settings/test-horus")
+async def test_horus_connection(
+    company_id: int,
+    payload: HorusTestRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    import httpx
+    
+    if current_user.type != user_models.UserRole.MASTER and current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Sem permissão para testar configurações desta empresa")
+        
+    url = str(payload.url).strip().rstrip("/")
+    port = str(payload.port).strip()
+    
+    if not url:
+        raise HTTPException(status_code=400, detail="A URL é obrigatória para o teste.")
+        
+    base_url = f"{url}:{port}" if port and port != '80' and port != '443' else url
+    endpoint = f"{base_url}/Teste1"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+            auth_tuple = (payload.username, payload.password) if payload.username else None
+            
+            response = await client.get(endpoint, auth=auth_tuple)
+            response.raise_for_status()
+            
+            return {
+                "success": True, 
+                "status_code": response.status_code,
+                "message": "Conexão bem-sucedida! O servidor Horus respondeu perfeitamente.",
+                "body": response.text[:200]
+            }
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail=f"Timeout: O servidor {base_url} não respondeu a tempo. Verifique port forwarding e firewalls do cliente.")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail=f"Erro de Conexão: Não foi possível alcançar {base_url}. Verifique IP, Porta e se o serviço Tomcat/Rest está online.")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"Servidor acessível, mas retornou erro HTTP {e.response.status_code}. Caminho ou permissão incorreta.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Falha de comunicação: {str(e)}")
