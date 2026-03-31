@@ -12,7 +12,8 @@ import {
   ChevronDown,
   Layers,
   MonitorSmartphone,
-  Inbox
+  Inbox,
+  Plug
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -78,6 +79,16 @@ const sellerNavigation: NavItem[] = [
     ]
   },
   { name: 'Vendedores/Rep', href: '/agents', icon: MonitorSmartphone },
+  {
+    name: 'Módulos Integrados',
+    href: '/settings/modules',
+    icon: Plug,
+    subItems: [
+       { name: 'B2B & Aplicativos', href: '/settings/modules' },
+       { name: 'Horus ERP', href: '/settings/horus' },
+       { name: 'Bookinfo Hub', href: '/settings/bookinfo' }
+    ]
+  },
   { name: 'Configurações', href: '/settings', icon: Settings },
 ];
 

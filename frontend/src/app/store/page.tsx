@@ -12,6 +12,7 @@ import { Autoplay, Pagination, Navigation } from 'swiper/modules';
 import 'swiper/css';
 import 'swiper/css/pagination';
 import 'swiper/css/navigation';
+import { getImageUrl } from '@/lib/image_helper';
 
 // Placeholder Component for the Product Grid
 function ProductGridSkeleton() {
@@ -133,7 +134,7 @@ export default function StoreHome() {
                      <SwiperSlide key={idx}>
                         <div className="relative w-full">
                            <img 
-                              src={banner.image_url} 
+                              src={getImageUrl(banner.image_url)} 
                               alt={banner.caption || `Banner ${idx + 1}`} 
                               className="w-full h-auto block object-cover" 
                            />
@@ -159,7 +160,7 @@ export default function StoreHome() {
              <div className={`${(clearanceProducts.length > 0 || restockProducts.length > 0) ? "md:col-span-2" : "md:col-span-1 border-emerald-500 border-b-4"} relative overflow-hidden rounded-3xl bg-slate-900 text-white min-h-[250px] sm:min-h-[300px] flex items-center shadow-lg group`}>
                {/* Banner Image as Background */}
                {config.featured?.banner_url ? (
-                  <img src={config.featured.banner_url} className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity duration-700" alt="Super Destaque" />
+                  <img src={getImageUrl(config.featured.banner_url)} className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity duration-700" alt="Super Destaque" />
                ) : (
                   <div className="absolute inset-0 bg-gradient-to-br from-[var(--color-primary-base)] to-slate-900 opacity-60"></div>
                )}

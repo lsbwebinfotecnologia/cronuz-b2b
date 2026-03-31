@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Save, Search, UploadCloud, X, LayoutTemplate, Image as LuImage, Plus as LuPlus, Trash2 as LuTrash2, Percent as LuPercent, ImageIcon, Plus, Trash2 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
+import { getImageUrl } from '@/lib/image_helper';
 
 export default function SellerShowcasesPage() {
   const [companyId, setCompanyId] = useState<number | null>(null);
@@ -332,7 +333,7 @@ export default function SellerShowcasesPage() {
                            {/* Preview Image */}
                            <div className="w-full md:w-32 shrink-0">
                                {banner.image_url ? (
-                                  <img src={banner.image_url} alt="Banner" className="w-full h-20 object-cover rounded-xl border border-slate-200 dark:border-slate-700" />
+                                  <img src={getImageUrl(banner.image_url)} alt="Banner" className="w-full h-20 object-cover rounded-xl border border-slate-200 dark:border-slate-700" />
                                ) : (
                                   <div className="w-full h-20 bg-slate-200 dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-400">
                                      <LuImage className="w-6 h-6"/>
@@ -469,7 +470,7 @@ export default function SellerShowcasesPage() {
                           </label>
                           <div className="flex flex-col gap-3">
                              {settings.b2b_showcases_config?.featured?.banner_url && (
-                                <img src={settings.b2b_showcases_config.featured.banner_url} alt="Preview" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
+                                <img src={getImageUrl(settings.b2b_showcases_config.featured.banner_url)} alt="Preview" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
                              )}
                              <input
                                 type="file"
