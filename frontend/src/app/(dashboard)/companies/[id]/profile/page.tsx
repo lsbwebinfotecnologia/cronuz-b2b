@@ -369,19 +369,7 @@ export default function CompanyProfilePage() {
         <section className="space-y-4">
            <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">Identificação</h3>
            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800/60 dark:bg-slate-900/40">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Empresa / Razão Social</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    name="name"
-                    value={formData.name}
-                    onChange={handleInputChange}
-                    className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
-                  />
-                </div>
-              </div>
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 md:col-span-1">
                 <label className="text-xs font-medium text-slate-700 dark:text-slate-300">CNPJ / Documento</label>
                 <div className="relative">
                   <input
@@ -390,6 +378,18 @@ export default function CompanyProfilePage() {
                     value={formData.document}
                     onChange={handleInputChange}
                     className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 font-mono text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5 md:col-span-1">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Empresa / Razão Social</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    name="name"
+                    value={formData.name}
+                    onChange={handleInputChange}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
                   />
                 </div>
               </div>
@@ -406,43 +406,30 @@ export default function CompanyProfilePage() {
                   />
                 </div>
               </div>
-              <div className="space-y-1.5 md:col-span-2 mt-4 md:mt-0">
-                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Domínio Customizado</label>
-                <div className="relative">
-                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
-                    type="text"
-                    name="custom_domain"
-                    placeholder="www.suaempresa.com.br"
-                    value={formData.custom_domain}
-                    onChange={handleInputChange}
-                    className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
-                  />
+              {isGlobalMaster && (
+                <div className="space-y-1.5 md:col-span-4 mt-4 md:mt-0">
+                  <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Modelo de Negócio / Plataforma</label>
+                  <div className="relative">
+                    <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <select
+                      name="business_model"
+                      value={formData.business_model}
+                      onChange={(e) => {
+                        const bm = e.target.value;
+                        let tenant = 'cronuz';
+                        if (bm === 'B2B_HORUS') tenant = 'horus';
+                        setFormData({...formData, business_model: bm, tenant_id: tenant});
+                      }}
+                      className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-10 text-sm text-slate-900 font-medium appearance-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                    >
+                      <option value="B2B_CRONUZ">B2B Cronuz (Padrão)</option>
+                      <option value="B2B_HORUS">B2B Horus Emissor (ERP)</option>
+                      <option value="CRONUZ_COMMERCE">Cronuz Commerce (Virtual Store)</option>
+                    </select>
+                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                  </div>
                 </div>
-              </div>
-              
-              <div className="space-y-1.5 md:col-span-4 mt-4 md:mt-0">
-                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Modelo de Negócio / Plataforma</label>
-                <div className="relative">
-                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <select
-                    name="business_model"
-                    value={formData.business_model}
-                    onChange={(e) => {
-                      const bm = e.target.value;
-                      let tenant = 'cronuz';
-                      if (bm === 'B2B_HORUS') tenant = 'horus';
-                      setFormData({...formData, business_model: bm, tenant_id: tenant});
-                    }}
-                    className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-10 text-sm text-slate-900 font-medium appearance-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
-                  >
-                    <option value="B2B_CRONUZ">B2B Cronuz (Padrão)</option>
-                    <option value="B2B_HORUS">B2B Horus Emissor (ERP)</option>
-                    <option value="CRONUZ_COMMERCE">Cronuz Commerce (Virtual Store)</option>
-                  </select>
-                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                </div>
-              </div>
+              )}
            </div>
         </section>
 
