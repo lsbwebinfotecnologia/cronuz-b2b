@@ -681,3 +681,64 @@ async def job_sync_new_orders(
                 results.append({"company_id": company_id, "error": str(e), "status": "failed"})
                 
     return {"status": "ok", "executions": results}
+
+class ImportedOrderMapping(BaseModel):
+    bookinfo_id: str
+    reference: Optional[str] = None
+    horus_id: str
+
+class ImportSpreadsheetRequest(BaseModel):
+    mappings: List[ImportedOrderMapping]
+
+@router.post("/import-horus-orders")
+async def import_horus_orders(
+    payload: ImportSpreadsheetRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Importa um de/para de pedidos Bookinfo para alimentar o número de pedido Horus localmente.
+    """
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    updated_count = 0
+    not_found = 0
+    
+    bookinfo_ids = [str(m.bookinfo_id).strip() for m in payload.mappings if str(m.bookinfo_id).strip()]
+    
+    if not bookinfo_ids:
+        return {"updated": 0, "not_found": 0, "message": "Nenhum ID Bookinfo fornecido na planilha."}
+        
+    # Batch query pra melhor performance
+    orders = db.query(Order).filter(
+        Order.company_id == current_user.company_id,
+        Order.origin == "bookinfo",
+        Order.tracking_code.in_(bookinfo_ids)
+    ).all()
+    
+    order_dict = {str(o.tracking_code).strip(): o for o in orders if o.tracking_code}
+    
+    for mapping in payload.mappings:
+        b_id = str(mapping.bookinfo_id).strip()
+        h_id = str(mapping.horus_id).strip()
+        
+        if not b_id or not h_id:
+            continue
+            
+        order = order_dict.get(b_id)
+        if order:
+            if order.horus_pedido_venda != h_id:
+                order.horus_pedido_venda = h_id
+                updated_count += 1
+        else:
+            not_found += 1
+            
+    if updated_count > 0:
+        db.commit()
+        
+    return {
+        "updated": updated_count, 
+        "not_found": not_found, 
+        "message": f"{updated_count} pedidos identificados e atualizados."
+    }

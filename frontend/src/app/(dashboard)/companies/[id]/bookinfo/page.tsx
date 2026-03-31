@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Database, ShieldCheck, Play, Loader2, Save, BookOpen } from 'lucide-react';
+import { Database, ShieldCheck, Play, Loader2, Save, BookOpen, FileUp, Download } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -88,6 +88,97 @@ export default function CompanyBookinfoPage() {
     } else {
         setFormData(prev => ({ ...prev, [name]: value }));
     }
+  };
+
+  const [importing, setImporting] = useState(false);
+  
+  const handleDownloadTemplate = () => {
+    const csvContent = "Numero Pedido Bookinfo,Referencia,Numero Pedido Horus\n";
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'modelo_importacao_bookinfo.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+  
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.csv')) {
+       toast.error('O arquivo precisa ser um CSV.');
+       return;
+    }
+
+    setImporting(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        // Split by newline and remove empty lines
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+        if (lines.length <= 1) {
+            toast.error('O arquivo parece vazio ou inválido.');
+            setImporting(false);
+            return;
+        }
+
+        const separator = lines[0].includes(';') ? ';' : ',';
+        const mappings: { bookinfo_id: string, reference: string, horus_id: string }[] = [];
+
+        // line 0 is header
+        for (let i = 1; i < lines.length; i++) {
+           const cols = lines[i].split(separator).map(c => c.trim().replace(/^"|"$/g, ''));
+           if (cols.length >= 3) {
+               const b_id = cols[0];
+               const ref = cols[1];
+               const h_id = cols[2];
+               
+               if (b_id && h_id) {
+                   mappings.push({ bookinfo_id: b_id, reference: ref, horus_id: h_id });
+               }
+           } else if (cols.length === 2 && separator === ',') {
+               // Fallback just in case they ignored Reference col
+               const b_id = cols[0];
+               const h_id = cols[1];
+               if (b_id && h_id) {
+                   mappings.push({ bookinfo_id: b_id, reference: '', horus_id: h_id });
+               }
+           }
+        }
+
+        if (mappings.length === 0) {
+            toast.error('Nenhum dado válido encontrado para importar.');
+            setImporting(false);
+            return;
+        }
+
+        const authToken = getToken();
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/import-horus-orders`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+            body: JSON.stringify({ mappings })
+        });
+
+        if (res.ok) {
+            const result = await res.json();
+            toast.success(result.message || 'Importação finalizada!');
+        } else {
+            const erroData = await res.json();
+            toast.error(erroData.detail || 'Falha ao importar planilha.');
+        }
+
+      } catch (err) {
+          toast.error('Falha ao processar o arquivo.');
+      } finally {
+          setImporting(false);
+          e.target.value = '';
+      }
+    };
+    reader.readAsText(file);
   };
 
   async function handleSaveSettings(e: React.FormEvent) {
@@ -262,6 +353,46 @@ export default function CompanyBookinfoPage() {
            </div>
         </form>
 
+        <hr className="border-slate-200 dark:border-slate-800 my-8" />
+        
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 dark:bg-slate-900/40 dark:border-slate-800/60 shadow-sm">
+           <h3 className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2 mb-2">
+             <Database className="w-5 h-5 text-indigo-500" /> Migrador de Pedidos (Legado) para o ERP
+           </h3>
+           <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 max-w-2xl">
+             Utilize esta ferramenta para importar uma planilha relacionando o pedido na Bookinfo com o seu equivalente no Horus ERP. 
+             Isso serve para retroalimentar os IDs dos pedidos já recebidos no sistema antigo, para que não fiquem órfãos agora.
+           </p>
+
+           <div className="flex flex-col sm:flex-row gap-4 items-center">
+              <button 
+                onClick={handleDownloadTemplate}
+                type="button"
+                className="w-full sm:w-auto px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition flex items-center justify-center gap-2"
+              >
+                  <Download className="w-4 h-4" /> Baixar Modelo
+              </button>
+
+              <div className="relative w-full sm:w-auto">
+                 <button 
+                   disabled={importing}
+                   type="button"
+                   className="w-full sm:w-auto px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 transition flex items-center justify-center gap-2 disabled:opacity-70"
+                 >
+                     {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
+                     {importing ? 'Importando...' : 'Fazer Upload CSV'}
+                 </button>
+                 <input 
+                   disabled={importing}
+                   title="Enviar arquivo CSV"
+                   type="file" 
+                   accept=".csv"
+                   onChange={handleFileUpload}
+                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed" 
+                 />
+              </div>
+           </div>
+        </div>
 
       </div>
     </motion.div>
