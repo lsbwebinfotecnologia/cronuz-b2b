@@ -1,12 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+import uuid
 import re
 
 from app.db.session import get_db
 from app.models.customer import Customer
 from app.models.company import Company
+from app.models.user_session import UserSession
 from app.core.security import verify_password, get_password_hash, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/auth/customer", tags=["customer_auth"])
@@ -27,7 +29,7 @@ def clean_document(doc: str) -> str:
     return re.sub(r"\D", "", doc)
 
 @router.post("/login")
-def login_customer(payload: CustomerLoginRequest, db: Session = Depends(get_db)):
+def login_customer(request: Request, payload: CustomerLoginRequest, db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.hotsite_slug == payload.tenant_slug).first()
     if not company:
         raise HTTPException(status_code=404, detail="Loja não encontrada.")
@@ -49,12 +51,32 @@ def login_customer(payload: CustomerLoginRequest, db: Session = Depends(get_db))
     if not verify_password(payload.password, customer.password_hash):
         raise HTTPException(status_code=401, detail="E-mail ou senha incorretos.")
 
+    jti = str(uuid.uuid4())
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire_date = datetime.now(timezone.utc) + access_token_expires
+
+    # Store new session
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")[:255] if request.headers.get("user-agent") else None
+    
+    new_session = UserSession(
+        customer_id=customer.id,
+        role="CUSTOMER",
+        jti=jti,
+        ip_address=client_ip,
+        user_agent=user_agent,
+        expires_at=expire_date,
+        is_active=True
+    )
+    db.add(new_session)
+    db.commit()
+
     access_token = create_access_token(
         data={
             "sub": str(customer.id), 
             "role": "customer",
-            "company_id": company.id
+            "company_id": company.id,
+            "jti": jti
         },
         expires_delta=access_token_expires
     )

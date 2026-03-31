@@ -202,7 +202,17 @@ export function Sidebar() {
                             (user?.type === 'SELLER' ? filteredSellerNavigation : 
                              (user?.type === 'AGENT' ? agentNavigation : []));
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      const tokenStr = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+      if (tokenStr) {
+        await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/logout`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${tokenStr}` }
+        });
+      }
+    } catch(e) {}
+    
     removeToken();
     router.push('/login');
     router.refresh();

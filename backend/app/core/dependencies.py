@@ -6,6 +6,7 @@ from app.db.session import get_db
 from app.core.security import SECRET_KEY, ALGORITHM
 from app.models.user import User, UserRole
 from app.models.customer import Customer
+from app.models.user_session import UserSession
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
@@ -18,8 +19,15 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
-        if email is None:
+        jti: str = payload.get("jti")
+        if email is None or jti is None:
             raise credentials_exception
+            
+        # Check if session is explicitly active
+        session_log = db.query(UserSession).filter(UserSession.jti == jti).first()
+        if not session_log or not session_log.is_active:
+            raise credentials_exception
+            
     except JWTError:
         raise credentials_exception
         
@@ -34,8 +42,15 @@ def get_current_user_optional(token: str = Depends(OAuth2PasswordBearer(tokenUrl
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
-        if email is None:
+        jti: str = payload.get("jti")
+        if email is None or jti is None:
             return None
+            
+        # Check if session is explicitly active
+        session_log = db.query(UserSession).filter(UserSession.jti == jti).first()
+        if not session_log or not session_log.is_active:
+            return None
+            
     except JWTError:
         return None
         
@@ -57,8 +72,15 @@ def get_current_customer(token: str = Depends(oauth2_scheme), db: Session = Depe
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         role: str = payload.get("role")
         customer_id_str: str = payload.get("sub")
-        if not customer_id_str or role != "customer":
+        jti: str = payload.get("jti")
+        if not customer_id_str or role != "customer" or not jti:
             raise credentials_exception
+            
+        # Check session explicitly
+        session_log = db.query(UserSession).filter(UserSession.jti == jti).first()
+        if not session_log or not session_log.is_active:
+            raise credentials_exception
+            
     except JWTError:
         raise credentials_exception
         

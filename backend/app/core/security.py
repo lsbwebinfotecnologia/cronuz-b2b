@@ -5,7 +5,7 @@ from passlib.context import CryptContext
 
 SECRET_KEY = "SUPER_SECRET_KEY_FOR_CRONUZ_B2B_DEV"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 7 days for dev
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 # 1 hour
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
