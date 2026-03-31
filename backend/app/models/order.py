@@ -21,6 +21,7 @@ class Order(Base):
     type_order = Column(String(50), nullable=False, default="V") # V=Venda, C=Consignado
     origin = Column(String(50), nullable=False, default="store") # store, bookinfo, metabook, ml, shopee, amazon
     horus_pedido_venda = Column(String(100), nullable=True) # external reference ID
+    external_id = Column(String(100), nullable=True) # Used for Bookinfo ID, Hub IDs, etc.
 
     tracking_code = Column(String(100), nullable=True)
     invoice_number = Column(String(100), nullable=True)

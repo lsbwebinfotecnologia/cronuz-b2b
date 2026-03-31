@@ -1104,6 +1104,7 @@ async def get_customer_order_detail(
     order_dict = OrderResponse.model_validate(order).model_dump()
     order_dict["invoice_xml_available"] = bool(order.invoice_xml)
     order_dict["tracking_code"] = order.tracking_code
+    order_dict["external_id"] = order.external_id
     
     return order_dict
 

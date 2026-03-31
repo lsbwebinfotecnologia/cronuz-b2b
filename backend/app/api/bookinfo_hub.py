@@ -159,7 +159,7 @@ def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int
     order_id = bookinfo_order["id"]
     existing_order = db.query(Order).filter(
         Order.company_id == company_id,
-        Order.tracking_code == order_id,
+        Order.external_id == order_id,
         Order.origin == "bookinfo"
     ).first()
     
@@ -192,7 +192,7 @@ def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int
         type_order="C" if bookinfo_order.get("compraConsignacao") == "S" else "V",
         origin="bookinfo",
         horus_pedido_venda=nro_erp,
-        tracking_code=order_id,
+        external_id=order_id,
         subtotal=total_price, discount=0.0, total=total_price
     )
     db.add(new_order)
@@ -256,7 +256,7 @@ async def acknowledge_order(
     # Prevent duplicate
     existing_order = db.query(Order).filter(
         Order.company_id == current_user.company_id,
-        Order.tracking_code == order_id, # tracking_code represents the remote Bookinfo platform ID
+        Order.external_id == order_id, # external_id represents the remote Bookinfo platform ID
         Order.origin == "bookinfo"
     ).first()
     
@@ -618,7 +618,7 @@ async def job_sync_new_orders(
                     # 4. Prevent duplicate local mirroring
                     existing_order = db.query(Order).filter(
                         Order.company_id == company_id,
-                        Order.tracking_code == order_id,
+                        Order.external_id == order_id,
                         Order.origin == "bookinfo"
                     ).first()
                     
@@ -640,7 +640,7 @@ async def job_sync_new_orders(
                         type_order="C" if order.get("compraConsignacao") == "S" else "V",
                         origin="bookinfo",
                         horus_pedido_venda=order.get("numeroPedidoERP") or order.get("nroPedido") or "",
-                        tracking_code=order_id,
+                        external_id=order_id,
                         subtotal=total_price, discount=0, total=total_price
                     )
                     db.add(new_order)
@@ -714,10 +714,10 @@ async def import_horus_orders(
     orders = db.query(Order).filter(
         Order.company_id == current_user.company_id,
         Order.origin == "bookinfo",
-        Order.tracking_code.in_(bookinfo_ids)
+        Order.external_id.in_(bookinfo_ids)
     ).all()
     
-    order_dict = {str(o.tracking_code).strip(): o for o in orders if o.tracking_code}
+    order_dict = {str(o.external_id).strip(): o for o in orders if o.external_id}
     
     for mapping in payload.mappings:
         b_id = str(mapping.bookinfo_id).strip()

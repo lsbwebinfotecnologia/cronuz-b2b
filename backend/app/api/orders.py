@@ -358,6 +358,7 @@ async def get_order_detail(
     order_dict = OrderResponse.model_validate(order).model_dump()
     order_dict["invoice_xml_available"] = bool(order.invoice_xml)
     order_dict["tracking_code"] = order.tracking_code
+    order_dict["external_id"] = order.external_id
     
     # Also fetch full customer details to display in the CRM
     if order.customer:
