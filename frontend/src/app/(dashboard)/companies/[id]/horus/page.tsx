@@ -144,7 +144,10 @@ export default function CompanyHorusPage() {
       
       const data = await res.json();
       if (res.ok && data.success) {
-         toast.success(data.message);
+         toast.success(data.message, {
+             description: data.body ? `Payload Retornado: ${String(data.body).substring(0, 250)}` : '',
+             duration: 12000
+         });
       } else {
          toast.error(data.detail || 'Falha ao conectar no Horus. Verifique URL e porta.');
       }

@@ -165,7 +165,10 @@ export default function CompanyBookinfoPage() {
 
         if (res.ok) {
             const result = await res.json();
-            toast.success(result.message || 'Importação finalizada!');
+            toast.success('Processamento Concluído!', {
+                description: `Lidos do CSV: ${mappings.length}\nAtualizados com sucesso: ${result.updated}\nNão encontrados no B2B: ${result.not_found}`,
+                duration: 10000
+            });
         } else {
             const erroData = await res.json();
             toast.error(erroData.detail || 'Falha ao importar planilha.');
