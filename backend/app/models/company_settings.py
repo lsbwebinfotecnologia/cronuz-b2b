@@ -46,6 +46,25 @@ class CompanySettings(Base):
     efi_payee_code = Column(String(255), nullable=True) 
     efi_certificate_path = Column(String(500), nullable=True)
 
+    # Gateways de Pagamento (Loja Virtual)
+    payment_gateway_active = Column(String(50), default='EFI', nullable=False) # EFI, CIELO, REDE, VINDI
+    cielo_client_id = Column(String(255), nullable=True)
+    cielo_client_secret = Column(String(255), nullable=True)
+    cielo_merchant_id = Column(String(255), nullable=True)
+    rede_pv = Column(String(255), nullable=True)
+    rede_token = Column(String(255), nullable=True)
+    vindi_api_key = Column(String(255), nullable=True)
+
+    # Gateways de Frete (Loja Virtual)
+    freight_gateway_active = Column(String(50), nullable=True) # CORREIOS, FRENET, JADLOG, TRAY
+    origin_zip_code = Column(String(20), nullable=True)
+    correios_user = Column(String(255), nullable=True)
+    correios_password = Column(String(255), nullable=True)
+    frenet_token = Column(String(255), nullable=True)
+    jadlog_token = Column(String(255), nullable=True)
+    tray_envios_token = Column(String(255), nullable=True)
+
+
     # SMTP Config (Transational Emails)
     smtp_host = Column(String(255), nullable=True)
     smtp_port = Column(Integer, nullable=True)

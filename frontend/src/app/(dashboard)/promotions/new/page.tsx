@@ -34,7 +34,7 @@ export default function NewPromotionPage() {
         const [catRes, brandRes, prodRes] = await Promise.all([
           fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories`, { headers }),
           fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/brands`, { headers }),
-          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/?limit=1000`, { headers })
+          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/?limit=1000&source=admin`, { headers })
         ]);
         if (catRes.ok) setCategories(await catRes.json());
         if (brandRes.ok) setBrands(await brandRes.json());

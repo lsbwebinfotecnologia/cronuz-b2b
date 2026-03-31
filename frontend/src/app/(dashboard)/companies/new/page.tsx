@@ -2,7 +2,7 @@
 
 import { useState, Suspense, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Building2, Save, ArrowLeft, Loader2, Globe, Mail, FileText, Image as ImageIcon, Calendar } from 'lucide-react';
+import { Building2, Save, ArrowLeft, Loader2, Globe, Mail, FileText, Image as ImageIcon, Calendar, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getToken, getUser } from '@/lib/auth';
@@ -218,38 +218,27 @@ function NewCompanyForm() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Modelo de Negócio (Plataforma)</label>
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Modelo de Negócio / Plataforma</label>
               <div className="relative">
                 <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-slate-500" />
                 <select
                   value={formData.business_model}
-                  onChange={(e) => setFormData({...formData, business_model: e.target.value})}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium appearance-none dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
+                  onChange={(e) => {
+                    const bm = e.target.value;
+                    let tenant = 'cronuz';
+                    if (bm === 'B2B_HORUS') tenant = 'horus';
+                    setFormData({...formData, business_model: bm, tenant_id: tenant});
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-10 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium appearance-none dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
                 >
                   <option value="B2B_CRONUZ">B2B Cronuz (Padrão)</option>
                   <option value="B2B_HORUS">B2B Horus Emissor (ERP)</option>
                   <option value="CRONUZ_COMMERCE">Cronuz Commerce (Virtual Store)</option>
                 </select>
+                <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
               </div>
             </div>
-
-            {isGlobalMaster && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Rede / Parceiro (White-Label)</label>
-                <div className="relative">
-                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-slate-500" />
-                  <select
-                    value={formData.tenant_id}
-                    onChange={(e) => setFormData({...formData, tenant_id: e.target.value})}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm text-slate-900 focus:border-[var(--color-primary-base)] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-medium appearance-none dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-[var(--color-primary-base)]/50 dark:focus:bg-slate-900/80 dark:focus:ring-1 dark:focus:ring-[var(--color-primary-base)]/50"
-                  >
-                    <option value="cronuz">Cronuz S.A. (Padrão)</option>
-                    <option value="horus">B2B Horus / FMZ</option>
-                  </select>
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="flex justify-end pt-4 border-t border-slate-200 dark:border-slate-800/60">

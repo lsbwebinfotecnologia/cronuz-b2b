@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, FileText, Image as ImageIcon, Save, CheckCircle2, XCircle, Calendar, AlertTriangle, DollarSign } from 'lucide-react';
+import { Loader2, Globe, FileText, Image as ImageIcon, Save, CheckCircle2, XCircle, Calendar, AlertTriangle, DollarSign, ChevronDown } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -37,7 +37,8 @@ export default function CompanyProfilePage() {
     operation_start_date: '',
     trial_days: 0,
     is_contract_signed: false,
-    monthly_fee: ''
+    monthly_fee: '',
+    business_model: 'B2B_CRONUZ'
   });
 
   const [uploadingBg, setUploadingBg] = useState(false);
@@ -48,7 +49,18 @@ export default function CompanyProfilePage() {
 
   useEffect(() => {
     setUser(getUser());
-  }, []);
+    if (companyId) {
+      const token = getToken();
+      fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      .then(r => r.json())
+      .then(data => {
+        setFormData(prev => ({...prev, business_model: data.business_model || 'B2B_CRONUZ'}));
+      })
+      .catch(console.error);
+    }
+  }, [companyId]);
 
   const isGlobalMaster = user?.type === 'MASTER' && (!user?.tenant_id || user?.tenant_id === 'cronuz');
   const isHorusMaster = user?.type === 'MASTER' && user?.tenant_id === 'horus';
@@ -67,7 +79,8 @@ export default function CompanyProfilePage() {
 
   useEffect(() => {
     if (company) {
-      setFormData({
+      setFormData(prev => ({
+        ...prev,
         name: company.name || '',
         document: maskCNPJ(company.document || ''),
         domain: company.domain || '',
@@ -89,7 +102,7 @@ export default function CompanyProfilePage() {
         trial_days: company.trial_days || 0,
         is_contract_signed: company.is_contract_signed || false,
         monthly_fee: company.monthly_fee || ''
-      });
+      }));
     }
   }, [company]);
 
@@ -280,6 +293,13 @@ export default function CompanyProfilePage() {
         body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error('Falha ao salvar dados');
+
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ business_model: formData.business_model })
+      });
+
       toast.success('Perfil atualizado com sucesso!');
       refreshCompany();
     } catch (error) {
@@ -401,23 +421,28 @@ export default function CompanyProfilePage() {
                 </div>
               </div>
               
-              {isGlobalMaster && (
-                <div className="space-y-1.5 md:col-span-2 mt-4 md:mt-0">
-                  <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Rede / Parceiro (White-Label)</label>
-                  <div className="relative">
-                    <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                    <select
-                      name="tenant_id"
-                      value={formData.tenant_id}
-                      onChange={(e) => setFormData({...formData, tenant_id: e.target.value})}
-                      className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium appearance-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
-                    >
-                      <option value="cronuz">Cronuz S.A. (Padrão)</option>
-                      <option value="horus">B2B Horus / FMZ</option>
-                    </select>
-                  </div>
+              <div className="space-y-1.5 md:col-span-4 mt-4 md:mt-0">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Modelo de Negócio / Plataforma</label>
+                <div className="relative">
+                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <select
+                    name="business_model"
+                    value={formData.business_model}
+                    onChange={(e) => {
+                      const bm = e.target.value;
+                      let tenant = 'cronuz';
+                      if (bm === 'B2B_HORUS') tenant = 'horus';
+                      setFormData({...formData, business_model: bm, tenant_id: tenant});
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-10 text-sm text-slate-900 font-medium appearance-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                  >
+                    <option value="B2B_CRONUZ">B2B Cronuz (Padrão)</option>
+                    <option value="B2B_HORUS">B2B Horus Emissor (ERP)</option>
+                    <option value="CRONUZ_COMMERCE">Cronuz Commerce (Virtual Store)</option>
+                  </select>
+                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
                 </div>
-              )}
+              </div>
            </div>
         </section>
 

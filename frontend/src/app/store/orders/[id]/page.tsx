@@ -63,10 +63,11 @@ const statusColorMap: Record<string, string> = {
 
 const statusLabelMap: Record<string, string> = {
     "NEW": "Novo",
-    "PROCESSING": "Processando",
-    "SENT_TO_HORUS": "Aprovado / ERP",
+    "PROCESSING": "Aguardando Pagamento",
+    "SENT_TO_HORUS": "Pago",
     "DISPATCH": "Em Separação",
     "INVOICED": "Faturado",
+    "COMPLETED": "Concluído",
     "CANCELLED": "Cancelado"
 };
 
@@ -255,13 +256,15 @@ export default function StoreOrderDetailPage() {
                                 <div className="absolute left-[10%] right-[10%] top-1/2 -translate-y-1/2 h-1 bg-slate-200 dark:bg-slate-700 -z-10"></div>
                                 
                                 {[
-                                    { key: "NEW", label: "Realizado", i: 0 },
-                                    { key: "PROCESSING", label: "Processando", i: 1 },
-                                    { key: "SENT_TO_HORUS", label: "Aprovado (ERP)", i: 2 },
-                                    { key: "DISPATCH", label: "Em Separação", i: 3 },
-                                    { key: "INVOICED", label: "Faturado", i: 4 }
+                                    { key: "NEW", label: "Novo", i: 0 },
+                                    { key: "PROCESSING", label: "Aguardando Pagamento", i: 1 },
+                                    { key: "SENT_TO_HORUS", label: "Pago", i: 2 },
+                                    { key: "INVOICED", label: "Faturado", i: 3 },
+                                    { key: "COMPLETED", label: "Concluído", i: 4 }
                                 ].map((step) => {
-                                    const currentStatusIndex = ["NEW", "PROCESSING", "SENT_TO_HORUS", "DISPATCH", "INVOICED"].indexOf(order.status);
+                                    const currentStatusIndex = ["NEW", "PROCESSING", "SENT_TO_HORUS", "INVOICED", "COMPLETED"].indexOf(
+                                        ["DISPATCH"].includes(order.status) ? "INVOICED" : order.status
+                                    );
                                     const isCompleted = step.i <= currentStatusIndex;
                                     const isCurrent = step.key === order.status;
                                     

@@ -30,6 +30,23 @@ class CompanySettingsBase(BaseModel):
     efi_client_secret: Optional[str] = None
     efi_payee_code: Optional[str] = None
     efi_certificate_path: Optional[str] = None
+    
+    payment_gateway_active: Optional[str] = "EFI"
+    cielo_client_id: Optional[str] = None
+    cielo_client_secret: Optional[str] = None
+    cielo_merchant_id: Optional[str] = None
+    rede_pv: Optional[str] = None
+    rede_token: Optional[str] = None
+    vindi_api_key: Optional[str] = None
+    
+    freight_gateway_active: Optional[str] = None
+    origin_zip_code: Optional[str] = None
+    correios_user: Optional[str] = None
+    correios_password: Optional[str] = None
+    frenet_token: Optional[str] = None
+    jadlog_token: Optional[str] = None
+    tray_envios_token: Optional[str] = None
+
     smtp_host: Optional[str] = None
     smtp_port: Optional[int] = None
     smtp_username: Optional[str] = None

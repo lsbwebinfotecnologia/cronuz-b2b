@@ -78,3 +78,32 @@ class Interaction(Base):
     
     customer = relationship("Customer", back_populates="interactions")
     seller = relationship("User")
+
+class CustomerFavorite(Base):
+    __tablename__ = "crm_favorite"
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("crm_customer.id", ondelete="CASCADE"), nullable=False)
+    product_id = Column(Integer, ForeignKey("prd_product.id", ondelete="CASCADE"), nullable=True) # If local product
+    sku = Column(String(100), nullable=True) # If external horus product
+    name = Column(String(255), nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    customer = relationship("Customer")
+
+class CustomerNotify(Base):
+    __tablename__ = "crm_notify"
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("cmp_company.id", ondelete="CASCADE"), nullable=False)
+    customer_id = Column(Integer, ForeignKey("crm_customer.id", ondelete="SET NULL"), nullable=True)
+    
+    email = Column(String(255), nullable=False)
+    product_id = Column(Integer, ForeignKey("prd_product.id", ondelete="CASCADE"), nullable=True)
+    sku = Column(String(100), nullable=True)
+    name = Column(String(255), nullable=True)
+    
+    notified_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    company = relationship("Company")
+    customer = relationship("Customer")

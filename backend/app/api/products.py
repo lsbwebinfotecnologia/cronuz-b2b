@@ -125,7 +125,7 @@ def list_products(
             # Determine API Mode from company settings
             api_mode = getattr(settings, "horus_api_mode", "B2B") or "B2B"
             
-            if api_mode == "STANDARD":
+            if api_mode == "STANDARD" or source == "admin":
                 # Padrão: Não exige ID_GUID, usa o acervo da filial em vez de tabela do cliente
                 horus_response = asyncio.run(horus_client.busca_acervo_padrao(
                     id_doc=company.document or "",

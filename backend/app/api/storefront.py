@@ -103,6 +103,10 @@ def get_storefront_domain_info(
     if not company:
         raise HTTPException(status_code=404, detail="Domínio não encontrado")
         
+    from app.models.company_settings import CompanySettings
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
+    business_model = settings.business_model if settings else "B2B_CRONUZ"
+        
     return {
         "company_id": company.id,
         "name": company.name,
@@ -113,7 +117,8 @@ def get_storefront_domain_info(
         "tenant_id": company.tenant_id,
         "favicon_url": company.favicon_url,
         "seo_title": company.seo_title,
-        "seo_description": company.seo_description
+        "seo_description": company.seo_description,
+        "business_model": business_model
     }
 
 @router.get("/config")
@@ -1296,3 +1301,115 @@ async def get_navigation_tree(
         "brands": brands
     }
 
+class FavoriteCreate(BaseModel):
+    product_id: int = None
+    sku: str = None
+    name: str = None
+
+@router.post("/favorites")
+def add_favorite(
+    data: FavoriteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != "CUSTOMER":
+        raise HTTPException(status_code=403, detail="Apenas clientes podem favoritar protudos no portal")
+        
+    from app.models.customer import CustomerFavorite
+    
+    # Check if already exists
+    query = db.query(CustomerFavorite).filter(CustomerFavorite.customer_id == current_user.id)
+    if data.product_id:
+        query = query.filter(CustomerFavorite.product_id == data.product_id)
+    elif data.sku:
+        query = query.filter(CustomerFavorite.sku == data.sku)
+    else:
+        raise HTTPException(status_code=400, detail="Forneça product_id ou sku")
+        
+    existing = query.first()
+    if existing:
+        return {"message": "Já está nos favoritos", "id": existing.id}
+        
+    fav = CustomerFavorite(
+        customer_id=current_user.id,
+        product_id=data.product_id,
+        sku=data.sku,
+        name=data.name
+    )
+    db.add(fav)
+    db.commit()
+    db.refresh(fav)
+    return {"message": "Adicionado aos favoritos", "id": fav.id}
+
+@router.delete("/favorites/{fav_id}")
+def remove_favorite(
+    fav_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.customer import CustomerFavorite
+    fav = db.query(CustomerFavorite).filter(CustomerFavorite.id == fav_id, CustomerFavorite.customer_id == current_user.id).first()
+    if not fav:
+        raise HTTPException(status_code=404, detail="Favorito não encontrado")
+        
+    db.delete(fav)
+    db.commit()
+    return {"message": "Removido dos favoritos"}
+
+@router.get("/favorites")
+def get_favorites(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != "CUSTOMER":
+        raise HTTPException(status_code=403, detail="Apenas clientes possuem favoritos no portal")
+        
+    from app.models.customer import CustomerFavorite
+    favs = db.query(CustomerFavorite).filter(CustomerFavorite.customer_id == current_user.id).order_by(CustomerFavorite.created_at.desc()).all()
+    # Optional: fetch full product details or horus integration logic here in the future
+    return favs
+
+class NotifyCreate(BaseModel):
+    company_id: int
+    email: str
+    product_id: int = None
+    sku: str = None
+    name: str = None
+
+@router.post("/notify-me")
+def add_notify_me(
+    data: NotifyCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional)
+):
+    from app.models.customer import CustomerNotify
+    
+    # Check if a pending notification already exists for this email+product
+    query = db.query(CustomerNotify).filter(
+        CustomerNotify.company_id == data.company_id,
+        CustomerNotify.email == data.email,
+        CustomerNotify.notified_at == None
+    )
+    if data.product_id:
+        query = query.filter(CustomerNotify.product_id == data.product_id)
+    elif data.sku:
+        query = query.filter(CustomerNotify.sku == data.sku)
+    else:
+        raise HTTPException(status_code=400, detail="Forneça product_id ou sku")
+        
+    existing = query.first()
+    if existing:
+        return {"message": "Aviso já cadastrado", "id": existing.id}
+        
+    notify = CustomerNotify(
+        company_id=data.company_id,
+        customer_id=current_user.id if current_user and current_user.type == "CUSTOMER" else None,
+        email=data.email,
+        product_id=data.product_id,
+        sku=data.sku,
+        name=data.name
+    )
+    db.add(notify)
+    db.commit()
+    db.refresh(notify)
+    return {"message": "Você será avisado quando o item voltar ao estoque", "id": notify.id}

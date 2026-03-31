@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { Loader2, AlertCircle, ArrowRight, BookOpen } from 'lucide-react';
 import Link from 'next/link';
 import 'react-quill-new/dist/quill.snow.css';
+import CommerceStorefront from '../_components/CommerceStorefront';
 
 export default function DomainRouter() {
     const params = useParams();
@@ -78,6 +79,11 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                 </div>
             </div>
         );
+    }
+
+    // Condition to render modern e-commerce UI
+    if (domainInfo?.business_model === 'CRONUZ_COMMERCE') {
+        return <CommerceStorefront hostname={hostname} domainInfo={domainInfo} />;
     }
 
     const isMythos = domainInfo?.domain?.includes('mythos') || domainInfo?.custom_domain?.includes('mythos');

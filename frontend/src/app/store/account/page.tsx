@@ -336,10 +336,11 @@ export default function CustomerProfilePage() {
                               'bg-indigo-100 text-indigo-700'
                            }`}>
                              {order.status === "NEW" ? "Novo" : 
-                              order.status === "PROCESSING" ? "Processando" :
-                              order.status === "SENT_TO_HORUS" ? "Aprovado / ERP" :
+                              order.status === "PROCESSING" ? "Aguardando Pagamento" :
+                              order.status === "SENT_TO_HORUS" ? "Pago" :
                               order.status === "DISPATCH" ? "Em Separação" :
                               order.status === "INVOICED" ? "Faturado" :
+                              order.status === "COMPLETED" ? "Concluído" :
                               order.status === "CANCELLED" ? "Cancelado" : order.status}
                            </span>
                          </div>

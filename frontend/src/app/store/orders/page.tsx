@@ -24,10 +24,11 @@ const statusColorMap: Record<string, string> = {
 
 const statusLabelMap: Record<string, string> = {
     "NEW": "Novo",
-    "PROCESSING": "Processando",
-    "SENT_TO_HORUS": "Aprovado / ERP",
+    "PROCESSING": "Aguardando Pagamento",
+    "SENT_TO_HORUS": "Pago",
     "DISPATCH": "Em Separação",
     "INVOICED": "Faturado",
+    "COMPLETED": "Concluído",
     "CANCELLED": "Cancelado"
 };
 
