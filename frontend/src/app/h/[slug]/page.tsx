@@ -90,16 +90,16 @@ export default function HotsiteLandingPage() {
         switch(block.type) {
             case 'BANNER':
                 return (
-                    <div id={block.id} key={block.id} className="relative bg-zinc-950 text-white min-h-[60vh] md:min-h-[80vh] flex items-center overflow-hidden" style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
+                    <div id={block.id} key={block.id} className={`relative bg-zinc-950 text-white flex items-center justify-center overflow-hidden ${!block.imageUrl ? 'min-h-[60vh] md:min-h-[80vh]' : ''}`} style={block.backgroundColor ? { backgroundColor: block.backgroundColor } : undefined}>
                         
                         {block.imageUrl && (
-                            <div className="absolute inset-0 z-0">
-                                <img src={block.imageUrl} alt={block.title || "Banner"} className="w-full h-full object-cover" />
+                            <div className="w-full flex">
+                                <img src={block.imageUrl} alt={block.title || "Banner"} className="w-full h-auto object-cover" />
                             </div>
                         )}
                         
                         {(block.title || block.subtitle) && (
-                            <div className="max-w-7xl mx-auto px-6 relative z-10 w-full pt-32 pb-20 text-center">
+                            <div className="absolute inset-0 flex flex-col items-center justify-center max-w-7xl mx-auto px-6 z-10 w-full p-4 pointer-events-none">
                                 {block.title && (
                                     <h1 className="text-4xl md:text-6xl lg:text-8xl font-black tracking-tight leading-[1.1] text-white uppercase italic transform -skew-x-6 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)]">
                                         {block.title}
