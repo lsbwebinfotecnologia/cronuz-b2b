@@ -123,10 +123,10 @@ export default function HotsiteLandingPage() {
                         <div className="max-w-7xl mx-auto px-6 relative z-10">
                             <div className={`flex flex-col ${isLeft ? 'lg:flex-row' : 'lg:flex-row-reverse'} gap-16 items-center`}>
                                 {block.imageUrl && (
-                                    <div className="lg:w-1/2 w-full h-full">
-                                        <div className="relative rounded-2xl overflow-hidden shadow-2xl shadow-[var(--color-primary-base)]/20 border border-white/10 group aspect-[4/3] w-full">
+                                    <div className="lg:w-1/2 w-full flex justify-center items-center">
+                                        <div className="relative rounded-2xl overflow-hidden shadow-2xl shadow-[var(--color-primary-base)]/20 border border-white/10 group w-full">
                                             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent z-10 pointer-events-none"></div>
-                                            <img src={block.imageUrl} alt={block.title || "Imagem"} className="absolute inset-0 w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" />
+                                            <img src={block.imageUrl} alt={block.title || "Imagem"} className="w-full h-auto object-contain transform group-hover:scale-105 transition-transform duration-700 max-h-[70vh] mx-auto" />
                                         </div>
                                     </div>
                                 )}
@@ -380,7 +380,7 @@ export default function HotsiteLandingPage() {
             </div>
 
             {/* Footer */}
-            <footer className="bg-black py-12 border-t border-zinc-900 text-center">
+            <footer className="bg-black py-12 pb-28 md:pb-12 border-t border-zinc-900 text-center">
                 <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-6">
                     <p className="text-zinc-600 font-medium">
                         © {new Date().getFullYear()} {planData.company_name}. Todos os direitos reservados.
@@ -394,6 +394,19 @@ export default function HotsiteLandingPage() {
                     </div>
                 </div>
             </footer>
+
+            {/* MOBILE FIXED BUTTON */}
+            <div className="md:hidden fixed bottom-0 left-0 w-full p-4 bg-zinc-950/95 backdrop-blur-xl border-t border-white/10 z-[60] flex items-center justify-between shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
+                <div className="text-white font-black italic tracking-tighter uppercase whitespace-nowrap overflow-hidden text-ellipsis mr-4 text-sm">
+                    {planData.name}
+                </div>
+                <Link 
+                    href={`/h/${slug}/checkout`}
+                    className={`bg-[var(--color-primary-base)] text-white text-sm font-black uppercase px-6 py-3.5 rounded-lg shadow-[0_0_20px_var(--color-primary-base)] transform active:scale-95 transition-all text-center flex-shrink-0 ${isSoldOut ? 'opacity-50 cursor-not-allowed hidden' : ''}`}
+                >
+                    Assinar Agora
+                </Link>
+            </div>
         </div>
     );
 }

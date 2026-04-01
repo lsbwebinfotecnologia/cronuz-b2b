@@ -425,6 +425,7 @@ export default function CompanyProfilePage() {
                       <option value="B2B_CRONUZ">B2B Cronuz (Padrão)</option>
                       <option value="B2B_HORUS">B2B Horus Emissor (ERP)</option>
                       <option value="CRONUZ_COMMERCE">Cronuz Commerce (Virtual Store)</option>
+                      <option value="SUPORTE_HORUS">Suporte Horus</option>
                     </select>
                     <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
                   </div>
