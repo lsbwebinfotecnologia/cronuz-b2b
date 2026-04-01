@@ -790,6 +790,105 @@ def get_subscriber_detail(
     from app.models.customer import Customer
     customer = db.query(Customer).filter(Customer.id == sub.customer_id).first()
     
+    # --- EFI SYNC LOGIC ---
+    efi_sync_success = False
+    efi_sync_err = None
+    
+    if sub.efi_subscription_id:
+        from app.models.company_settings import CompanySettings
+        from app.integrators.efi_pay import EFIPayIntegration
+        
+        settings = db.query(CompanySettings).filter(CompanySettings.company_id == sub.company_id).first()
+        try:
+            efi_service = EFIPayIntegration(
+                client_id=settings.efi_client_id if settings else None,
+                client_secret=settings.efi_client_secret if settings else None,
+                sandbox=settings.efi_sandbox if settings else None,
+                certificate_path=settings.efi_certificate_path if settings else None,
+                pix_key=settings.efi_payee_code if settings else None
+            )
+            efi_data = efi_service.detail_subscription(int(sub.efi_subscription_id))
+            
+            if 'data' in efi_data:
+                # 1. Sync Subscription Status
+                efi_status = efi_data['data'].get("status", "").lower()
+                local_status = str(sub.status.value) if hasattr(sub.status, 'value') else str(sub.status)
+                
+                status_map = {
+                    "active": "ACTIVE",
+                    "canceled": "CANCELED",
+                    "expired": "CANCELED"
+                }
+                mapped_status = status_map.get(efi_status)
+                if mapped_status and mapped_status != local_status:
+                    sub.status = mapped_status
+                    db.commit()
+                
+                # 2. Sync history of charges (SubscriptionBilling)
+                efi_history = efi_data['data'].get("history", [])
+                
+                # Fetch all existing billings
+                local_billings = db.query(SubscriptionBilling).filter(SubscriptionBilling.subscription_id == sub.id).all()
+                local_charge_ids = [str(b.efi_charge_id) for b in local_billings if b.efi_charge_id]
+                
+                # Order by charge_id to maintain timeline of delivery numbers
+                try: efi_history = sorted(efi_history, key=lambda x: int(x.get('charge_id', 0)))
+                except: pass
+                
+                max_delivery_number = int(max([b.delivery_number for b in local_billings])) if local_billings else 0
+                has_changes = False
+                
+                for charge in efi_history:
+                    charge_id = str(charge.get('charge_id'))
+                    charge_status = str(charge.get('status', '')).lower()
+                    charge_value = float(charge.get('value', 0)) / 100.0 if charge.get('value') else 0.0
+                    
+                    c_status_map = {
+                        "paid": "PAID", "settled": "PAID", "active": "PAID", "approved": "PAID",
+                        "waiting": "PENDING", "unpaid": "PENDING",
+                        "canceled": "FAILED", "failed": "FAILED", "refused": "FAILED"
+                    }
+                    mapped_charge_status = c_status_map.get(charge_status, "PENDING")
+                    
+                    if charge_id not in local_charge_ids:
+                        # New recurrent charge created by EFI !
+                        max_delivery_number += 1
+                        new_bill = SubscriptionBilling(
+                            subscription_id=sub.id,
+                            delivery_number=max_delivery_number,
+                            amount=charge_value,
+                            status=mapped_charge_status,
+                            efi_charge_id=charge_id,
+                            due_date=get_current_br_time()
+                        )
+                        if mapped_charge_status == "PAID":
+                            new_bill.paid_at = get_current_br_time()
+                        db.add(new_bill)
+                        has_changes = True
+                    else:
+                        # Update existing charge if status changed
+                        existing_bill = next((b for b in local_billings if str(b.efi_charge_id) == charge_id), None)
+                        if existing_bill:
+                            current_c_status = str(existing_bill.status.value) if hasattr(existing_bill.status, 'value') else str(existing_bill.status)
+                            if current_c_status != mapped_charge_status:
+                                existing_bill.status = mapped_charge_status
+                                if mapped_charge_status == "PAID" and not existing_bill.paid_at:
+                                    existing_bill.paid_at = get_current_br_time()
+                                has_changes = True
+                                
+                if has_changes:
+                    sub.current_delivery_number = max_delivery_number
+                    db.commit()
+                    
+                efi_sync_success = True
+        except Exception as e:
+            db.rollback()
+            efi_sync_err = str(e)
+            print(f"[EFI API SYNC ERROR] {efi_sync_err}", flush=True)
+            
+    # --- END EFI SYNC LOGIC ---
+    
+    # Reload freshest billings from db
     billings = db.query(SubscriptionBilling).filter(
         SubscriptionBilling.subscription_id == sub.id
     ).order_by(SubscriptionBilling.delivery_number.desc()).all()

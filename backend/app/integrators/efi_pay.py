@@ -202,6 +202,29 @@ class EFIPayIntegration:
         
         res = gn.create_subscription(params=params, body=body)
         return res
+
+    def detail_subscription(self, subscription_id: int):
+        """
+        Retrieves the details of an active Subscription in EFI, including its history.
+        """
+        gn = self._get_charges_client()
+        
+        # MOCK for tests
+        if self.client_id == "dummy_client_id":
+             import uuid
+             return {
+                 "data": {
+                     "subscription_id": subscription_id,
+                     "status": "active",
+                     "history": [
+                         {"charge_id": 999999, "status": "paid", "created_at": "2024-01-01 10:00:00"}
+                     ]
+                 }
+             }
+             
+        params = {'id': subscription_id}
+        res = gn.detail_subscription(params=params)
+        return res
         
     def pay_subscription(self, subscription_id: int, payment_token: str, billing_address: dict, 
                          customer_name: str, customer_document: str, customer_email: str, customer_phone: str):
