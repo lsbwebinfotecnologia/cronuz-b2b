@@ -58,6 +58,7 @@ interface OrderDetail {
     invoice_xml_available: boolean;
     invoice_xml?: string;
     origin?: string;
+    external_id?: string;
     items: OrderItem[];
     customer?: Customer;
     logs: OrderLog[];
@@ -304,9 +305,16 @@ export default function OrderDetailPage() {
                          <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
                             Pedido Interno: #{order.id}
                         </h1>
-                        {order.horus_pedido_venda && (
-                            <p className="text-slate-500 font-mono text-sm mt-1">Integração Horus: {order.horus_pedido_venda}</p>
-                        )}
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-6 mt-1">
+                            {order.horus_pedido_venda && (
+                                <p className="text-slate-500 font-mono text-sm">Integração Horus: {order.horus_pedido_venda}</p>
+                            )}
+                            {order.external_id && (
+                                <p className="text-slate-500 font-mono text-sm">
+                                    Cód Parceiro ({order.origin || 'Externo'}): <span className="font-bold text-indigo-600 dark:text-indigo-400">{order.external_id}</span>
+                                </p>
+                            )}
+                        </div>
                     </div>
                 </div>
                 <div className="flex items-center gap-3">

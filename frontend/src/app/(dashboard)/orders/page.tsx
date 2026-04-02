@@ -28,7 +28,9 @@ interface Order {
     created_at: string;
     total: number;
     status: string;
+    origin?: string;
     horus_pedido_venda?: string;
+    external_id?: string;
     customer_id: number;
     invoice_xml_available?: boolean;
     customer?: Customer; // Will be hydrated partially if available
@@ -134,12 +136,13 @@ export default function OrdersPage() {
                         <thead>
                             <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
                                 <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cód. Interno</th>
-                                <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cód. Horus</th>
+                                <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cód. parceiro</th>
+                                <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cód. Horus</th>
                                 <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cliente</th>
                                 <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Data</th>
                                 <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
                                 <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider text-right">Total</th>
-                                <th className="py-3 px-6 text-right">Ações</th>
+                                <th className="py-3 px-4 text-right">Ações</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -161,7 +164,19 @@ export default function OrdersPage() {
                                         <td className="py-3 px-6">
                                             <span className="text-sm font-semibold text-slate-900 dark:text-white">#{order.id}</span>
                                         </td>
-                                        <td className="py-3 px-6">
+                                        <td className="py-3 px-4">
+                                            {order.external_id ? (
+                                                <div className="flex flex-col">
+                                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono">
+                                                       {order.external_id}
+                                                   </span>
+                                                   <span className="text-[10px] text-slate-400 uppercase mt-0.5 px-1">{order.origin}</span>
+                                                </div>
+                                            ) : (
+                                                <span className="text-xs text-slate-400 italic">-</span>
+                                            )}
+                                        </td>
+                                        <td className="py-3 px-4">
                                             {order.horus_pedido_venda ? (
                                                 <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-800 border border-slate-200 font-mono">
                                                     {order.horus_pedido_venda}
