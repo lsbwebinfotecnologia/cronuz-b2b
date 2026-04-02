@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect } from "react";
-import Cookies from "js-cookie";
 import { toast } from "sonner";
+import { removeToken } from "@/lib/auth";
 
 export function FetchInterceptor() {
   useEffect(() => {
@@ -16,7 +16,7 @@ export function FetchInterceptor() {
       if (response.status === 401) {
         // Prevent redirect loops if we are already on the login page
         if (!window.location.pathname.startsWith('/login') && !window.location.pathname.startsWith('/h/')) {
-          Cookies.remove("token");
+          removeToken();
           toast.error("Sessão expirada. Redirecionando para o login...");
           
           // Use setTimeout to allow the toast to appear before the hard navigation
