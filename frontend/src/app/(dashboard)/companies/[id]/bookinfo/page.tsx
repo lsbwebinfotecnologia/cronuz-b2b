@@ -165,7 +165,7 @@ export default function CompanyBookinfoPage() {
         const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/validate-horus-orders`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-            body: JSON.stringify({ mappings })
+            body: JSON.stringify({ company_id: company?.id, mappings })
         });
 
         if (res.ok) {
@@ -199,7 +199,7 @@ export default function CompanyBookinfoPage() {
         const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/import-horus-orders`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-            body: JSON.stringify({ mappings: previewData.mappings })
+            body: JSON.stringify({ company_id: company?.id, mappings: previewData.mappings })
         });
 
         if (res.ok) {

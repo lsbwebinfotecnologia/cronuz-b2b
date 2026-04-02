@@ -688,6 +688,7 @@ class ImportedOrderMapping(BaseModel):
     horus_id: str
 
 class ImportSpreadsheetRequest(BaseModel):
+    company_id: Optional[int] = None
     mappings: List[ImportedOrderMapping]
 
 @router.post("/validate-horus-orders")
@@ -710,8 +711,11 @@ async def validate_horus_orders(
         
     from sqlalchemy import func
 
+    # Definição do company_id alvo (MASTER pode escolher outra empresa, SELLER usa a sua própria)
+    target_company_id = payload.company_id if payload.company_id and current_user.type == "MASTER" else current_user.company_id
+
     orders = db.query(Order).filter(
-        Order.company_id == current_user.company_id,
+        Order.company_id == target_company_id,
         func.lower(Order.origin) == "bookinfo",
         func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
     ).all()
@@ -772,9 +776,11 @@ async def import_horus_orders(
         
     from sqlalchemy import func
 
+    target_company_id = payload.company_id if payload.company_id and current_user.type == "MASTER" else current_user.company_id
+
     # Batch query pra melhor performance
     orders = db.query(Order).filter(
-        Order.company_id == current_user.company_id,
+        Order.company_id == target_company_id,
         func.lower(Order.origin) == "bookinfo",
         func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
     ).all()
