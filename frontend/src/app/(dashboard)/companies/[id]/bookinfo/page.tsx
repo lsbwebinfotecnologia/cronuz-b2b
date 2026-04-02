@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Database, ShieldCheck, Play, Loader2, Save, BookOpen, FileUp, Download } from 'lucide-react';
+import { Database, ShieldCheck, Play, Loader2, Save, BookOpen, FileUp, Download, Check, X, CheckCircle2 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -11,6 +11,11 @@ export default function CompanyBookinfoPage() {
   const { company } = useCompany();
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [previewData, setPreviewData] = useState<{
+    metrics: { updated: number, not_found: number };
+    results: any[];
+    mappings: any[];
+  } | null>(null);
 
   const [integratorId, setIntegratorId] = useState<number | null>(null);
   const [formData, setFormData] = useState({
@@ -157,7 +162,7 @@ export default function CompanyBookinfoPage() {
         }
 
         const authToken = getToken();
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/import-horus-orders`, {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/validate-horus-orders`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
             body: JSON.stringify({ mappings })
@@ -165,23 +170,54 @@ export default function CompanyBookinfoPage() {
 
         if (res.ok) {
             const result = await res.json();
-            toast.success('Processamento Concluído!', {
-                description: `Lidos do CSV: ${mappings.length}\nAtualizados com sucesso: ${result.updated}\nNão encontrados no B2B: ${result.not_found}`,
-                duration: 10000
+            setPreviewData({
+                metrics: { updated: result.updated, not_found: result.not_found },
+                results: result.results,
+                mappings: mappings
             });
+            toast.info('Planilha carregada. Verifique os dados antes de confirmar.');
         } else {
             const erroData = await res.json();
-            toast.error(erroData.detail || 'Falha ao importar planilha.');
+            toast.error(erroData.detail || 'Falha ao validar planilha.');
         }
 
       } catch (err) {
-          toast.error('Falha ao processar o arquivo.');
+          toast.error('Falha ao ler ou processar o arquivo.');
       } finally {
           setImporting(false);
           e.target.value = '';
       }
     };
     reader.readAsText(file);
+  };
+
+  const handleConfirmImport = async () => {
+      if (!previewData || !previewData.mappings.length) return;
+      setImporting(true);
+      try {
+        const authToken = getToken();
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/import-horus-orders`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+            body: JSON.stringify({ mappings: previewData.mappings })
+        });
+
+        if (res.ok) {
+            const result = await res.json();
+            toast.success('Sincronização Concluída!', {
+                description: `Atualizados com sucesso: ${result.updated}\nNão encontrados no B2B: ${result.not_found}`,
+                duration: 10000
+            });
+            setPreviewData(null);
+        } else {
+            const erroData = await res.json();
+            toast.error(erroData.detail || 'Falha ao sincronizar planilha.');
+        }
+      } catch (err) {
+         toast.error('Falha na requisição final.');
+      } finally {
+         setImporting(false);
+      }
   };
 
   async function handleSaveSettings(e: React.FormEvent) {
@@ -376,14 +412,14 @@ export default function CompanyBookinfoPage() {
                   <Download className="w-4 h-4" /> Baixar Modelo
               </button>
 
-              <div className="relative w-full sm:w-auto">
+               <div className="relative w-full sm:w-auto">
                  <button 
                    disabled={importing}
                    type="button"
                    className="w-full sm:w-auto px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 transition flex items-center justify-center gap-2 disabled:opacity-70"
                  >
                      {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
-                     {importing ? 'Importando...' : 'Fazer Upload CSV'}
+                     {importing ? 'Processando CSV...' : 'Fazer Upload CSV'}
                  </button>
                  <input 
                    disabled={importing}
@@ -395,6 +431,79 @@ export default function CompanyBookinfoPage() {
                  />
               </div>
            </div>
+
+           {previewData && (
+             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-8">
+               <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
+                 <div className="p-4 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                   <div>
+                     <h4 className="font-semibold text-slate-900 dark:text-white">Pré-visualização da Importação</h4>
+                     <p className="text-xs text-slate-500 mt-1">
+                       <strong className="text-emerald-600 dark:text-emerald-400">{previewData.metrics.updated}</strong> encontrados e prontos • <strong className="text-rose-600 dark:text-rose-400">{previewData.metrics.not_found}</strong> não localizados no Cronuz.
+                     </p>
+                   </div>
+                   <div className="flex items-center gap-3">
+                     <button
+                       type="button"
+                       onClick={() => setPreviewData(null)}
+                       className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
+                     >
+                       Cancelar
+                     </button>
+                     <button
+                       type="button"
+                       disabled={importing}
+                       onClick={handleConfirmImport}
+                       className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 shadow-md shadow-emerald-500/20"
+                     >
+                       {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                       Processar no Banco
+                     </button>
+                   </div>
+                 </div>
+                 
+                 <div className="max-h-[400px] overflow-y-auto">
+                   <table className="w-full text-left border-collapse">
+                     <thead className="bg-slate-50/50 dark:bg-slate-900/50 sticky top-0 z-10 backdrop-blur-md">
+                       <tr>
+                         <th className="px-4 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">Status</th>
+                         <th className="px-4 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">ID Bookinfo</th>
+                         <th className="px-4 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">Pedido ERP</th>
+                         <th className="px-4 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800 hidden md:table-cell">Referência</th>
+                       </tr>
+                     </thead>
+                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                       {previewData.results.map((row, idx) => (
+                         <tr key={idx} className={!row.found ? 'bg-rose-50/30 dark:bg-rose-900/10' : 'hover:bg-slate-50 dark:hover:bg-slate-800/30'}>
+                           <td className="px-4 py-2.5">
+                             {row.found ? (
+                               <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
+                                 <Check className="w-3 h-3" /> Encontrado
+                               </span>
+                             ) : (
+                               <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400">
+                                 <X className="w-3 h-3" /> Não há no B2B
+                               </span>
+                             )}
+                           </td>
+                           <td className="px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                             {row.bookinfo_id}
+                           </td>
+                           <td className="px-4 py-2.5 text-sm text-slate-600 dark:text-slate-400">
+                             <span className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-xs">{row.horus_id}</span>
+                           </td>
+                           <td className="px-4 py-2.5 text-sm text-slate-500 dark:text-slate-500 hidden md:table-cell truncate max-w-[150px]">
+                             {row.reference || '-'}
+                           </td>
+                         </tr>
+                       ))}
+                     </tbody>
+                   </table>
+                 </div>
+                 
+               </div>
+             </motion.div>
+           )}
         </div>
 
       </div>

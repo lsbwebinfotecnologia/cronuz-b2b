@@ -690,6 +690,62 @@ class ImportedOrderMapping(BaseModel):
 class ImportSpreadsheetRequest(BaseModel):
     mappings: List[ImportedOrderMapping]
 
+@router.post("/validate-horus-orders")
+async def validate_horus_orders(
+    payload: ImportSpreadsheetRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Realiza validação (preview) dos mapeamentos do Bookinfo antes de importar.
+    Retorna a lista enriquecida com a flag 'found'.
+    """
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    bookinfo_ids = [str(m.bookinfo_id).strip() for m in payload.mappings if str(m.bookinfo_id).strip()]
+    
+    if not bookinfo_ids:
+        return {"updated": 0, "not_found": 0, "results": []}
+        
+    orders = db.query(Order).filter(
+        Order.company_id == current_user.company_id,
+        Order.origin == "bookinfo",
+        Order.external_id.in_(bookinfo_ids)
+    ).all()
+    
+    order_dict = {str(o.external_id).strip(): o for o in orders if o.external_id}
+    
+    results = []
+    found_count = 0
+    not_found_count = 0
+    
+    for mapping in payload.mappings:
+        b_id = str(mapping.bookinfo_id).strip()
+        h_id = str(mapping.horus_id).strip()
+        
+        if not b_id or not h_id:
+            continue
+            
+        found = b_id in order_dict
+        if found:
+            found_count += 1
+        else:
+            not_found_count += 1
+            
+        results.append({
+            "bookinfo_id": b_id,
+            "horus_id": h_id,
+            "reference": mapping.reference,
+            "found": found
+        })
+            
+    return {
+        "updated": found_count, 
+        "not_found": not_found_count, 
+        "results": results
+    }
+
 @router.post("/import-horus-orders")
 async def import_horus_orders(
     payload: ImportSpreadsheetRequest,
