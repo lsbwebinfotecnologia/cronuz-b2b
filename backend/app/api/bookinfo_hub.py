@@ -811,3 +811,188 @@ async def import_horus_orders(
         "not_found": not_found, 
         "message": f"{updated_count} pedidos identificados e atualizados."
     }
+
+# -----------------------------------------------------------------------------
+# QUEUE MANAGEMENT ENDPOINTS (MASTER ONLY)
+# -----------------------------------------------------------------------------
+
+@router.get("/queue")
+async def get_bookinfo_queue(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != UserRole.MASTER:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    from sqlalchemy.orm import joinedload
+    
+    orders = db.query(Order).options(joinedload(Order.customer)).filter(
+        Order.company_id == company_id,
+        Order.origin == "bookinfo"
+    ).order_by(Order.id.desc()).all()
+    
+    results = []
+    for o in orders:
+        results.append({
+            "id": o.id,
+            "tracking_code": o.tracking_code,
+            "external_id": o.external_id,
+            "horus_pedido_venda": o.horus_pedido_venda,
+            "partner_reference": getattr(o, 'partner_reference', None),
+            "status": o.status,
+            "total": float(o.total),
+            "created_at": o.created_at,
+            "customer_name": o.customer.name if o.customer else o.customer.corporate_name if o.customer else "Desconhecido",
+            "invoice_key": o.invoice_key,
+            "bookinfo_nfe_sent": o.bookinfo_nfe_sent
+        })
+        
+    return {"items": results}
+
+@router.delete("/queue/{order_id}")
+async def delete_bookinfo_queue_item(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != UserRole.MASTER:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    order = db.query(Order).filter(Order.id == order_id, Order.origin == "bookinfo").first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado ou não tem origem Bookinfo.")
+        
+    db.delete(order)
+    db.commit()
+    return {"status": "success", "message": "Pedido excluído da fila permanentemente."}
+
+@router.post("/queue/{order_id}/sync")
+async def sync_bookinfo_queue_item(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != UserRole.MASTER:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    from app.models.customer import Customer
+    from app.models.company_settings import CompanySettings
+    from app.models.company import Company
+    
+    order = db.query(Order).filter(Order.id == order_id, Order.origin == "bookinfo").first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+        
+    if not order.horus_pedido_venda:
+        raise HTTPException(status_code=400, detail="Pedido não tem o número do Horus vinculado. Atualize o pedido com CSV.")
+        
+    customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+    company = db.query(Company).filter(Company.id == order.company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
+    
+    if not settings or not getattr(settings, 'horus_enabled', False):
+        raise HTTPException(status_code=400, detail="Integração Horus desativada para a empresa do pedido.")
+        
+    # 1. Fetch from Horus
+    from app.integrators.horus_orders import HorusOrders
+    horus_client = HorusOrders(db, order.company_id)
+    
+    horus_data = None
+    try:
+        raw_horus_data = await horus_client.get_order(
+            id_doc=customer.document if customer else None,
+            id_guid=customer.id_guid if customer else None,
+            cnpj_destino=company.document if company else None,
+            cod_pedido_origem=None,
+            cod_ped_venda=order.horus_pedido_venda,
+            ignore_customer_context=True
+        )
+        if raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0:
+            horus_data = raw_horus_data[0]
+        else:
+            horus_data = raw_horus_data
+    except Exception as e:
+        await horus_client.close()
+        raise HTTPException(status_code=500, detail=f"Erro ao consultar Horus: {str(e)}")
+    finally:
+        await horus_client.close()
+        
+    if not horus_data:
+        raise HTTPException(status_code=404, detail=f"Pedido {order.horus_pedido_venda} não encontrado na API do Horus.")
+        
+    status_venda = horus_data.get("STATUS_PEDIDO_VENDA", "") if isinstance(horus_data, dict) else ""
+    if status_venda != "FAT":
+        return {"status": "pending", "message": f"Pedido ainda não está faturado no Horus. (Status atual: {status_venda})"}
+        
+    nf = horus_data.get("NOTA_FISCAL")
+    if not nf or not isinstance(nf, dict):
+        return {"status": "pending", "message": "Pedido está FAT, porém a tag NOTA_FISCAL não foi retornada pelo Horus."}
+        
+    xml_base64 = nf.get("XML_Base64")
+    nro_nf = nf.get("NRO_NOTA_FISCAL")
+    chave_nfe = nf.get("CHAVE_ACESSO_NFE")
+    
+    if not xml_base64:
+        raise HTTPException(status_code=400, detail="XML da NF não disponível no retorno do Horus.")
+        
+    # Update localized Cronuz record
+    order.invoice_xml = xml_base64
+    order.invoice_number = nro_nf
+    order.invoice_key = chave_nfe
+    order.status = "INVOICED"
+    db.commit()
+    db.refresh(order)
+    
+    # 2. Push to Bookinfo
+    import httpx, json
+    from app.models.integrator import Integrator
+    
+    config = db.query(Integrator).filter(
+        Integrator.company_id == order.company_id,
+        Integrator.platform == "BOOKINFO",
+        Integrator.active == True
+    ).first()
+    
+    if not config or not config.credentials:
+        # Mark as invoiced locally, but bookinfo push failed. Let user know so they can re-trigger.
+        return {"status": "partial", "message": "Faturado localmente, porém Bookinfo não configurado para essa empresa."}
+        
+    try:
+        creds = json.loads(config.credentials) if isinstance(config.credentials, str) else config.credentials
+    except Exception:
+        return {"status": "partial", "message": "Faturado localmente. Erro ao ler credenciais Bookinfo."}
+        
+    env = creds.get("Ambiente", "PROD")
+    token = creds.get("Token", "")
+    
+    if not token:
+        return {"status": "partial", "message": "Faturado localmente. Token da Bookinfo ausente."}
+        
+    base_url = "https://bookhub-api.bookinfo.com.br" if env == "PROD" else "https://bookhub-api-hml.bookinfo.com.br"
+    bookinfo_pedido_id = order.tracking_code or order.external_id
+    
+    payload = {
+        "base64": order.invoice_xml,
+        "tipo_arquivo": "application/xml",
+        "nome_arquivo": f"NFe_{order.invoice_number or 'Autorizada'}.xml"
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    endpoint = f"{base_url}/pedido/{bookinfo_pedido_id}/nota-fiscal/base64"
+    
+    try:
+        async with httpx.AsyncClient(verify=False) as client:
+            response = await client.post(endpoint, headers=headers, json=payload, timeout=20.0)
+            if response.status_code in [200, 201, 204]:
+                order.bookinfo_nfe_sent = True
+                db.commit()
+                return {"status": "success", "message": f"Faturado! NFe {nro_nf} enviada para Bookinfo com sucesso."}
+            else:
+                return {"status": "partial", "message": f"Faturado local. Erro ao enviar NF p/ Bookinfo: {response.text}"}
+    except Exception as e:
+        return {"status": "partial", "message": f"Faturado local. Erro de requisição para Bookinfo: {str(e)}"}

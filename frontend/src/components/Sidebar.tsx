@@ -13,7 +13,8 @@ import {
   Layers,
   MonitorSmartphone,
   Inbox,
-  Plug
+  Plug,
+  RefreshCw
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -41,6 +42,7 @@ type UserData = {
 
 const masterNavigation: NavItem[] = [
   { name: 'Empresas', href: '/companies', icon: Users },
+  { name: 'Hub Sync Bookinfo', href: '/settings/bookinfo-sync', icon: RefreshCw },
   { name: 'Integradores', href: '/system-integrators', icon: Layers },
   { name: 'Leads', href: '/leads', icon: Inbox },
 ];
