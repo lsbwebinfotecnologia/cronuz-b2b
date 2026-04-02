@@ -59,6 +59,7 @@ interface OrderDetail {
     invoice_xml?: string;
     origin?: string;
     external_id?: string;
+    partner_reference?: string;
     items: OrderItem[];
     customer?: Customer;
     logs: OrderLog[];
@@ -312,6 +313,9 @@ export default function OrderDetailPage() {
                             {order.external_id && (
                                 <p className="text-slate-500 font-mono text-sm">
                                     Cód Parceiro ({order.origin || 'Externo'}): <span className="font-bold text-indigo-600 dark:text-indigo-400">{order.external_id}</span>
+                                    {order.partner_reference && (
+                                        <span className="ml-2 font-medium text-slate-500 text-xs">Ref: {order.partner_reference}</span>
+                                    )}
                                 </p>
                             )}
                         </div>

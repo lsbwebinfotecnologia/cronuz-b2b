@@ -32,6 +32,7 @@ interface Order {
     horus_pedido_venda?: string;
     external_id?: string;
     customer_id: number;
+    partner_reference?: string;
     invoice_xml_available?: boolean;
     customer?: Customer; // Will be hydrated partially if available
 }
@@ -167,9 +168,12 @@ export default function OrdersPage() {
                                         <td className="py-3 px-4">
                                             {order.external_id ? (
                                                 <div className="flex flex-col">
-                                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono">
+                                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono" title="Cód parceiro (idOrderPartner)">
                                                        {order.external_id}
                                                    </span>
+                                                   {order.partner_reference && (
+                                                       <span className="text-[10px] text-slate-500 font-mono mt-0.5" title="Referência parceiro (idReference)">Ref: {order.partner_reference}</span>
+                                                   )}
                                                    <span className="text-[10px] text-slate-400 uppercase mt-0.5 px-1">{order.origin}</span>
                                                 </div>
                                             ) : (

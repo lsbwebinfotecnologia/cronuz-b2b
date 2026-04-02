@@ -58,6 +58,7 @@ class OrderBase(BaseModel):
     type_order: Optional[str] = "V"
     horus_pedido_venda: Optional[str] = None
     external_id: Optional[str] = None
+    partner_reference: Optional[str] = None
     tracking_code: Optional[str] = None
     invoice_xml_available: Optional[bool] = False
     subtotal: Optional[float] = 0.0

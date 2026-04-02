@@ -708,13 +708,15 @@ async def validate_horus_orders(
     if not bookinfo_ids:
         return {"updated": 0, "not_found": 0, "results": []}
         
+    from sqlalchemy import func
+
     orders = db.query(Order).filter(
         Order.company_id == current_user.company_id,
-        Order.origin == "bookinfo",
-        Order.external_id.in_(bookinfo_ids)
+        func.lower(Order.origin) == "bookinfo",
+        func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
     ).all()
     
-    order_dict = {str(o.external_id).strip(): o for o in orders if o.external_id}
+    order_dict = {str(o.external_id).strip().lower(): o for o in orders if o.external_id}
     
     results = []
     found_count = 0
@@ -727,11 +729,13 @@ async def validate_horus_orders(
         if not b_id or not h_id:
             continue
             
-        found = b_id in order_dict
+        found = b_id.lower() in order_dict
         if found:
             found_count += 1
         else:
             not_found_count += 1
+            # DEBUG log to see if it missed something obvious:
+            print(f"DEBUG: Not found in DB -> '{b_id}'")
             
         results.append({
             "bookinfo_id": b_id,
@@ -766,14 +770,16 @@ async def import_horus_orders(
     if not bookinfo_ids:
         return {"updated": 0, "not_found": 0, "message": "Nenhum ID Bookinfo fornecido na planilha."}
         
+    from sqlalchemy import func
+
     # Batch query pra melhor performance
     orders = db.query(Order).filter(
         Order.company_id == current_user.company_id,
-        Order.origin == "bookinfo",
-        Order.external_id.in_(bookinfo_ids)
+        func.lower(Order.origin) == "bookinfo",
+        func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
     ).all()
     
-    order_dict = {str(o.external_id).strip(): o for o in orders if o.external_id}
+    order_dict = {str(o.external_id).strip().lower(): o for o in orders if o.external_id}
     
     for mapping in payload.mappings:
         b_id = str(mapping.bookinfo_id).strip()
@@ -782,10 +788,11 @@ async def import_horus_orders(
         if not b_id or not h_id:
             continue
             
-        order = order_dict.get(b_id)
+        order = order_dict.get(b_id.lower())
         if order:
-            if order.horus_pedido_venda != h_id:
+            if order.horus_pedido_venda != h_id or order.partner_reference != mapping.reference:
                 order.horus_pedido_venda = h_id
+                order.partner_reference = mapping.reference
                 updated_count += 1
         else:
             not_found += 1
