@@ -1287,8 +1287,8 @@ export default function BookinfoSyncQueuePage() {
                                                                     <Check className="w-3 h-3" /> Já Importado
                                                                 </span>
                                                             ) : !order.customer_found_locally ? (
-                                                                 <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold bg-rose-500/10 text-rose-500" title="CNPJ do pedido não possui cadastro no Cronuz!">
-                                                                    <AlertCircle className="w-3 h-3" /> Bloqueado (Sem CNPJ)
+                                                                 <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold bg-blue-500/10 text-blue-400" title="Cliente será cadastrado automaticamente com CNPJ!">
+                                                                    <AlertCircle className="w-3 h-3" /> Auto-Cadastrar
                                                                  </span>
                                                             ) : (
                                                                 <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold bg-emerald-500/10 text-emerald-400">
@@ -1307,7 +1307,7 @@ export default function BookinfoSyncQueuePage() {
                         
                         <div className="p-6 bg-[#11121d] flex justify-between items-center border-t border-slate-800">
                             <span className="text-sm text-slate-400">
-                                Serão importados: <span className="text-white font-bold">{manualSyncPreviewData.filter(o => !o.already_imported && o.customer_found_locally).length}</span> pedidos.
+                                Serão importados: <span className="text-white font-bold">{manualSyncPreviewData.filter(o => !o.already_imported).length}</span> pedidos.
                             </span>
                             <div className="flex gap-3">
                                 <button
@@ -1318,7 +1318,7 @@ export default function BookinfoSyncQueuePage() {
                                 </button>
                                 <button
                                     onClick={handleImportManualSync}
-                                    disabled={manualSyncImporting || manualSyncPreviewData.filter(o => !o.already_imported && o.customer_found_locally).length === 0}
+                                    disabled={manualSyncImporting || manualSyncPreviewData.filter(o => !o.already_imported).length === 0}
                                     className="px-6 py-2.5 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg shadow-indigo-900/20"
                                 >
                                     {manualSyncImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}

@@ -612,9 +612,6 @@ async def job_sync_new_orders(
                         User.type == UserRole.CUSTOMER
                     ).first()
                     
-                    if not customer:
-                        continue # Skip silently, user will see it not enabled in panel
-                        
                     # 4. Prevent duplicate local mirroring
                     existing_order = db.query(Order).filter(
                         Order.company_id == company_id,
@@ -624,6 +621,38 @@ async def job_sync_new_orders(
                     
                     if existing_order:
                         continue
+                        
+                    if not customer:
+                        name = order.get("nomeComprador") or f"Cliente {cnpj_clean}"
+                        razao = name
+                        email = f"{cnpj_clean}@placeholder.com"
+                        
+                        customer_user = User(
+                            company_id=company_id,
+                            type=UserRole.CUSTOMER,
+                            name=name,
+                            document=cnpj_clean,
+                            email=email,
+                            password_hash=get_password_hash(cnpj_clean),
+                            active=True
+                        )
+                        db.add(customer_user)
+                        db.commit()
+                        db.refresh(customer_user)
+                        
+                        customer_profile = Customer(
+                            company_id=company_id,
+                            name=name,
+                            corporate_name=razao,
+                            document=cnpj_clean,
+                            email=email
+                        )
+                        db.add(customer_profile)
+                        db.commit()
+                        
+                        customer_id = customer_user.id
+                    else:
+                        customer_id = customer.id
                         
                     try:
                         detail_resp = await client.get(f"/pedido/{order_id}")
@@ -638,7 +667,7 @@ async def job_sync_new_orders(
                     # 5. Mirror locally as RECEIVED
                     new_order = Order(
                         company_id=company_id,
-                        customer_id=customer.id,
+                        customer_id=customer_id,
                         status="RECEBIDO",
                         type_order="C" if order.get("compraConsignacao") == "S" else "V",
                         origin="bookinfo",
@@ -1175,7 +1204,37 @@ async def run_manual_sync_import_bookinfo(
         ).first()
         
         if not customer:
-            continue
+            name = raw_order.get("nomeComprador") or f"Cliente {cnpj_clean}"
+            razao = name
+            email = f"{cnpj_clean}@placeholder.com"
+            
+            customer_user = UserModel(
+                company_id=req.company_id,
+                type=UserModelRole.CUSTOMER,
+                name=name,
+                document=cnpj_clean,
+                email=email,
+                password_hash=get_password_hash(cnpj_clean),
+                active=True
+            )
+            db.add(customer_user)
+            db.commit()
+            db.refresh(customer_user)
+            
+            from app.models.customer import Customer
+            customer_profile = Customer(
+                company_id=req.company_id,
+                name=name,
+                corporate_name=razao,
+                document=cnpj_clean,
+                email=email
+            )
+            db.add(customer_profile)
+            db.commit()
+            
+            customer_id = customer_user.id
+        else:
+            customer_id = customer.id
             
         existing_order = db.query(Order).filter(
             Order.company_id == req.company_id,
@@ -1190,7 +1249,7 @@ async def run_manual_sync_import_bookinfo(
         
         new_order = Order(
             company_id=req.company_id,
-            customer_id=customer.id,
+            customer_id=customer_id,
             status=req.target_status,
             type_order="C" if raw_order.get("compraConsignacao") == "S" else "V",
             total=total_price,
