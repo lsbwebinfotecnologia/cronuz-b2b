@@ -44,6 +44,7 @@ export default function BookinfoSyncQueuePage() {
     const [debugOrderId, setDebugOrderId] = useState<number | null>(null);
     const [debugSearchType, setDebugSearchType] = useState<'venda' | 'origem'>('venda');
     const [horusPreviewData, setHorusPreviewData] = useState<any>(null);
+    const [horusPreviewUrl, setHorusPreviewUrl] = useState('');
     const [horusPreviewLoading, setHorusPreviewLoading] = useState(false);
     const [horusSyncing, setHorusSyncing] = useState(false);
 
@@ -238,13 +239,24 @@ export default function BookinfoSyncQueuePage() {
         
         try {
             const token = getToken();
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/orders/${orderId}/horus-debug-preview?search_type=${searchType}`, {
+            const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/orders/${orderId}/horus-debug-preview?search_type=${searchType}`;
+            setHorusPreviewUrl(url);
+            
+            const res = await fetch(url, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
             });
-            const data = await res.json();
-            setHorusPreviewData(data);
+            const rawResponseText = await res.text();
+            try {
+                const data = JSON.parse(rawResponseText);
+                setHorusPreviewData(data);
+                if (!res.ok) {
+                    setHorusPreviewData({ error: data.detail || data.error || rawResponseText });
+                }
+            } catch (jsonErr) {
+                setHorusPreviewData({ error: rawResponseText || "Erro não parseável." });
+            }
         } catch (error: any) {
             console.error("Debug error:", error);
             setHorusPreviewData({ error: error.message });
@@ -1220,6 +1232,27 @@ export default function BookinfoSyncQueuePage() {
                                             </pre>
                                         </div>
                                     )}
+                                    
+                                    <div>
+                                        <h3 className="font-bold text-white mb-3 text-sm flex items-center gap-2">
+                                            <div className="w-2 h-2 rounded-full bg-purple-500"></div>
+                                            URL Requisição
+                                        </h3>
+                                        <div className="bg-[#11121d] text-purple-400 p-3 rounded-xl overflow-x-auto text-xs font-mono border border-slate-800/80 break-all">
+                                            GET {horusPreviewUrl}
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <h3 className="font-bold text-white mb-3 text-sm flex items-center gap-2">
+                                            <div className="w-2 h-2 rounded-full bg-[#f39c12]"></div>
+                                            Resposta RAW / Original
+                                        </h3>
+                                        <pre className="bg-[#11121d] text-[#f39c12] p-4 rounded-xl overflow-x-auto max-h-[300px] text-xs font-mono border border-slate-800/80">
+                                            {JSON.stringify(horusPreviewData, null, 2)}
+                                        </pre>
+                                    </div>
+
                                     <div>
                                         <h3 className="font-bold text-white mb-3 text-sm flex items-center gap-2">
                                             <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
