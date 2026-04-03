@@ -238,7 +238,7 @@ export default function BookinfoSyncQueuePage() {
         
         try {
             const token = getToken();
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/orders/${orderId}/horus-debug-preview?search_type=${searchType}`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/orders/${orderId}/horus-debug-preview?search_type=${searchType}`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -267,7 +267,7 @@ export default function BookinfoSyncQueuePage() {
         setHorusSyncing(true);
         try {
             const token = getToken();
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/orders/${debugOrderId}/sync-horus`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/orders/${debugOrderId}/sync-horus`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`
