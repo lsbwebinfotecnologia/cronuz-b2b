@@ -649,10 +649,29 @@ async def job_sync_new_orders(
                         )
                         db.add(customer_profile)
                         db.commit()
+                        db.refresh(customer_profile)
                         
-                        customer_id = customer_user.id
+                        customer_id = customer_profile.id
                     else:
-                        customer_id = customer.id
+                        existing_crm = db.query(Customer).filter(
+                            Customer.company_id == company_id,
+                            Customer.document == cnpj_clean
+                        ).first()
+                        
+                        if existing_crm:
+                            customer_id = existing_crm.id
+                        else:
+                            customer_profile = Customer(
+                                company_id=company_id,
+                                name=customer.name,
+                                corporate_name=customer.name,
+                                document=cnpj_clean,
+                                email=customer.email
+                            )
+                            db.add(customer_profile)
+                            db.commit()
+                            db.refresh(customer_profile)
+                            customer_id = customer_profile.id
                         
                     try:
                         detail_resp = await client.get(f"/pedido/{order_id}")
@@ -1231,10 +1250,29 @@ async def run_manual_sync_import_bookinfo(
             )
             db.add(customer_profile)
             db.commit()
+            db.refresh(customer_profile)
             
-            customer_id = customer_user.id
+            customer_id = customer_profile.id
         else:
-            customer_id = customer.id
+            from app.models.customer import Customer
+            existing_crm = db.query(Customer).filter(
+                Customer.company_id == req.company_id,
+                Customer.document == cnpj_clean
+            ).first()
+            if existing_crm:
+                customer_id = existing_crm.id
+            else:
+                customer_profile = Customer(
+                    company_id=req.company_id,
+                    name=customer.name,
+                    corporate_name=customer.name,
+                    document=cnpj_clean,
+                    email=customer.email
+                )
+                db.add(customer_profile)
+                db.commit()
+                db.refresh(customer_profile)
+                customer_id = customer_profile.id
             
         existing_order = db.query(Order).filter(
             Order.company_id == req.company_id,
