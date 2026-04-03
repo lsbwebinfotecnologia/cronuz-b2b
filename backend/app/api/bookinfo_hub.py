@@ -953,17 +953,21 @@ async def get_bookinfo_queue(
     
     query = db.query(Order).options(joinedload(Order.customer)).filter(
         Order.company_id == company_id,
-        func.lower(Order.origin) == "bookinfo",
-        Order.status != "CONCLUIDO",
-        Order.status != "CANCELLED"
+        func.lower(Order.origin) == "bookinfo"
     )
     
     if bookinfo_id:
         query = query.filter(Order.external_id.ilike(f"%{bookinfo_id}%"))
     if horus_id:
         query = query.filter(Order.horus_pedido_venda.ilike(f"%{horus_id}%"))
+        
     if status:
         query = query.filter(Order.status == status)
+    elif not bookinfo_id and not horus_id:
+        query = query.filter(
+            Order.status != "CONCLUIDO",
+            Order.status != "CANCELLED"
+        )
     
     total = query.count()
     orders = query.order_by(Order.id.desc()).offset(skip).limit(limit).all()
