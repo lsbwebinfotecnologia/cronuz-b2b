@@ -1252,11 +1252,10 @@ async def run_manual_sync_import_bookinfo(
             customer_id=customer_id,
             status=req.target_status,
             type_order="C" if raw_order.get("compraConsignacao") == "S" else "V",
-            total=total_price,
             origin="bookinfo",
-            tracking_code=order_id,
+            horus_pedido_venda=raw_order.get("numeroPedidoERP") or raw_order.get("nroPedido") or "",
             external_id=order_id,
-            payload=json.dumps(raw_order)
+            subtotal=total_price, discount=0, total=total_price
         )
         db.add(new_order)
         db.commit()
