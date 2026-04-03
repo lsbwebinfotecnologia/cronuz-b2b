@@ -640,12 +640,27 @@ async def job_sync_new_orders(
                         db.commit()
                         db.refresh(customer_user)
                         
+                        id_guid = ""
+                        try:
+                            from app.integrators.horus_customers import HorusClients
+                            from app.models.company import Company
+                            company = db.query(Company).filter(Company.id == company_id).first()
+                            if company:
+                                h_client = HorusClients(db, company_id)
+                                res = await h_client.get_client(cnpj_destino=company.document, cnpj_cliente=cnpj_clean)
+                                if not res.get("error"):
+                                    h_data = res.get("data", {})
+                                    id_guid = h_data.get("ID_GUID") or ""
+                        except Exception:
+                            pass
+                            
                         customer_profile = Customer(
                             company_id=company_id,
                             name=name,
                             corporate_name=razao,
                             document=cnpj_clean,
-                            email=email
+                            email=email,
+                            id_guid=id_guid
                         )
                         db.add(customer_profile)
                         db.commit()
@@ -661,12 +676,27 @@ async def job_sync_new_orders(
                         if existing_crm:
                             customer_id = existing_crm.id
                         else:
+                            id_guid = ""
+                            try:
+                                from app.integrators.horus_customers import HorusClients
+                                from app.models.company import Company
+                                company = db.query(Company).filter(Company.id == company_id).first()
+                                if company:
+                                    h_client = HorusClients(db, company_id)
+                                    res = await h_client.get_client(cnpj_destino=company.document, cnpj_cliente=cnpj_clean)
+                                    if not res.get("error"):
+                                        h_data = res.get("data", {})
+                                        id_guid = h_data.get("ID_GUID") or ""
+                            except Exception:
+                                pass
+                                
                             customer_profile = Customer(
                                 company_id=company_id,
                                 name=customer.name,
                                 corporate_name=customer.name,
                                 document=cnpj_clean,
-                                email=customer.email
+                                email=customer.email,
+                                id_guid=id_guid
                             )
                             db.add(customer_profile)
                             db.commit()
@@ -1240,13 +1270,28 @@ async def run_manual_sync_import_bookinfo(
             db.commit()
             db.refresh(customer_user)
             
+            id_guid = ""
+            try:
+                from app.integrators.horus_customers import HorusClients
+                from app.models.company import Company
+                company = db.query(Company).filter(Company.id == req.company_id).first()
+                if company:
+                    h_client = HorusClients(db, req.company_id)
+                    res = await h_client.get_client(cnpj_destino=company.document, cnpj_cliente=cnpj_clean)
+                    if not res.get("error"):
+                        h_data = res.get("data", {})
+                        id_guid = h_data.get("ID_GUID") or ""
+            except Exception:
+                pass
+                
             from app.models.customer import Customer
             customer_profile = Customer(
                 company_id=req.company_id,
                 name=name,
                 corporate_name=razao,
                 document=cnpj_clean,
-                email=email
+                email=email,
+                id_guid=id_guid
             )
             db.add(customer_profile)
             db.commit()
@@ -1262,12 +1307,27 @@ async def run_manual_sync_import_bookinfo(
             if existing_crm:
                 customer_id = existing_crm.id
             else:
+                id_guid = ""
+                try:
+                    from app.integrators.horus_customers import HorusClients
+                    from app.models.company import Company
+                    company = db.query(Company).filter(Company.id == req.company_id).first()
+                    if company:
+                        h_client = HorusClients(db, req.company_id)
+                        res = await h_client.get_client(cnpj_destino=company.document, cnpj_cliente=cnpj_clean)
+                        if not res.get("error"):
+                            h_data = res.get("data", {})
+                            id_guid = h_data.get("ID_GUID") or ""
+                except Exception:
+                    pass
+                    
                 customer_profile = Customer(
                     company_id=req.company_id,
                     name=customer.name,
                     corporate_name=customer.name,
                     document=cnpj_clean,
-                    email=customer.email
+                    email=customer.email,
+                    id_guid=id_guid
                 )
                 db.add(customer_profile)
                 db.commit()

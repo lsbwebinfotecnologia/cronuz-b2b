@@ -457,6 +457,7 @@ def mark_interaction_read(
 @router.get("/orders/{order_id}/horus-debug-preview", response_model=dict)
 async def get_horus_debug_preview(
     order_id: int,
+    search_type: str = Query("venda", description="Tipo de busca: 'venda' ou 'origem'"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -487,40 +488,37 @@ async def get_horus_debug_preview(
     horus_data = None
     horus_items_data = None
     
-    if company and customer and customer.id_guid:
+    if company and customer:
         from app.integrators.horus_orders import HorusOrders
         horus_client = HorusOrders(db, current_user.company_id)
         try:
             raw_horus_data = await horus_client.get_order(
-                id_doc=customer.document,
-                id_guid=customer.id_guid,
-                cnpj_destino=company.document,
-                cod_pedido_origem=None if order.origin == "bookinfo" else order.id,
-                cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None,
-                ignore_customer_context=(order.origin == "bookinfo")
+                id_doc=None,
+                id_guid="",
+                cnpj_destino=None,
+                cod_pedido_origem=order.partner_reference if search_type == "origem" else None,
+                cod_ped_venda=str(order.horus_pedido_venda) if search_type == "venda" else None,
+                ignore_customer_context=True
             )
             if raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0:
                 horus_data = raw_horus_data[0]
             else:
                 horus_data = raw_horus_data
                 
-            horus_items_data = await horus_client.get_order_items(order.horus_pedido_venda)
+            horus_items_data = await horus_client.get_order_items(order.horus_pedido_venda) if order.horus_pedido_venda else None
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Erro ao consultar Horus: {str(e)}")
         finally:
             await horus_client.close()
             
             request_params = {
-                "COD_PEDIDO_ORIGEM": None if order.origin == "bookinfo" else order.id,
-                "COD_PED_VENDA": order.horus_pedido_venda if order.origin == "bookinfo" else None
+                "COD_EMPRESA": horus_client._settings.horus_company,
+                "COD_FILIAL": horus_client._settings.horus_branch
             }
-            if order.origin != "bookinfo":
-                request_params["ID_DOC"] = customer.document
-                request_params["ID_GUID"] = customer.id_guid
-                request_params["CNPJ_DESTINO"] = company.document
-            if company:
-                request_params["COD_EMPRESA"] = horus_client._settings.horus_company
-                request_params["COD_FILIAL"] = horus_client._settings.horus_branch
+            if search_type == "venda":
+                request_params["COD_PED_VENDA"] = order.horus_pedido_venda
+            else:
+                request_params["COD_PEDIDO_ORIGEM"] = order.partner_reference
             
     return {
         "params_enviados": request_params,

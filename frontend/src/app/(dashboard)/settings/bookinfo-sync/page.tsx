@@ -42,6 +42,7 @@ export default function BookinfoSyncQueuePage() {
     // Debug Modal state
     const [isDebugModalOpen, setIsDebugModalOpen] = useState(false);
     const [debugOrderId, setDebugOrderId] = useState<number | null>(null);
+    const [debugSearchType, setDebugSearchType] = useState<'venda' | 'origem'>('venda');
     const [horusPreviewData, setHorusPreviewData] = useState<any>(null);
     const [horusPreviewLoading, setHorusPreviewLoading] = useState(false);
     const [horusSyncing, setHorusSyncing] = useState(false);
@@ -231,15 +232,13 @@ export default function BookinfoSyncQueuePage() {
         }
     };
 
-    const handleOpenDebugModal = async (orderId: number) => {
-        setDebugOrderId(orderId);
-        setIsDebugModalOpen(true);
+    const fetchDebugPreview = async (orderId: number, searchType: 'venda' | 'origem') => {
         setHorusPreviewLoading(true);
         setHorusPreviewData(null);
         
         try {
             const token = getToken();
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/bookinfo/orders/${orderId}/debug-horus`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/orders/${orderId}/horus-debug-preview?search_type=${searchType}`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -254,6 +253,13 @@ export default function BookinfoSyncQueuePage() {
         }
     };
 
+    const handleOpenDebugModal = async (orderId: number) => {
+        setDebugOrderId(orderId);
+        setDebugSearchType('venda');
+        setIsDebugModalOpen(true);
+        await fetchDebugPreview(orderId, 'venda');
+    };
+
     const handleSyncHorus = async () => {
         if (!debugOrderId) return;
         if (!confirm("Isso atualizará os itens do pedido no Cronuz com base nos dados que você está vendo agora retornados do ERP Horus. Deseja continuar?")) return;
@@ -261,7 +267,7 @@ export default function BookinfoSyncQueuePage() {
         setHorusSyncing(true);
         try {
             const token = getToken();
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/bookinfo/orders/${debugOrderId}/sync-horus`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/orders/${debugOrderId}/sync-horus`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`
@@ -1153,8 +1159,36 @@ export default function BookinfoSyncQueuePage() {
                                 <p className="text-sm text-slate-400 mt-1">
                                     Visualização dos dados retornados pela API do Horus antes de aplicar localmente.
                                 </p>
+                                <div className="mt-4 flex gap-2">
+                                    <button
+                                        onClick={() => {
+                                            setDebugSearchType('venda');
+                                            if (debugOrderId) fetchDebugPreview(debugOrderId, 'venda');
+                                        }}
+                                        className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+                                            debugSearchType === 'venda' 
+                                                ? 'bg-purple-600 text-white' 
+                                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                    >
+                                        Consulta por ERP (COD_PED_VENDA)
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setDebugSearchType('origem');
+                                            if (debugOrderId) fetchDebugPreview(debugOrderId, 'origem');
+                                        }}
+                                        className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+                                            debugSearchType === 'origem' 
+                                                ? 'bg-purple-600 text-white' 
+                                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                    >
+                                        Consulta pela Origem (COD_PED_ORIGEM)
+                                    </button>
+                                </div>
                             </div>
-                            <button onClick={() => setIsDebugModalOpen(false)} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400">
+                            <button onClick={() => setIsDebugModalOpen(false)} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 self-start">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
