@@ -536,6 +536,7 @@ async def get_horus_debug_preview(
 @router.post("/orders/{order_id}/sync-horus", response_model=dict)
 async def manual_sync_horus(
     order_id: int,
+    search_type: str = "venda",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -567,9 +568,14 @@ async def manual_sync_horus(
         from app.integrators.horus_orders import HorusOrders
         horus_client = HorusOrders(db, order.company_id)
         try:
-            # We try to use horus_pedido_venda if available. Otherwise, if origin is bookinfo, use partner_reference
-            search_venda = order.horus_pedido_venda if order.horus_pedido_venda else None
-            search_origem = order.partner_reference if order.origin == "bookinfo" and not search_venda else None
+            search_venda = None
+            search_origem = None
+            
+            if search_type == "origem":
+                search_origem = order.partner_reference
+            else:
+                search_venda = order.horus_pedido_venda if order.horus_pedido_venda else None
+                search_origem = order.partner_reference if order.origin == "bookinfo" and not search_venda else None
             
             raw_horus_data = await horus_client.get_order(
                 id_doc=None,
