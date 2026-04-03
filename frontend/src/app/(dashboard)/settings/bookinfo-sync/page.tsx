@@ -1184,7 +1184,7 @@ export default function BookinfoSyncQueuePage() {
                                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                         }`}
                                     >
-                                        Consulta pela Origem (COD_PED_ORIGEM)
+                                        Consulta pela Origem (COD_PEDIDO_ORIGEM)
                                     </button>
                                 </div>
                             </div>

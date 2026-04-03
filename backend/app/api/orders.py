@@ -475,18 +475,22 @@ async def get_horus_debug_preview(
         query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
     order = query.first()
     
-    if not order or not order.horus_pedido_venda:
-        raise HTTPException(status_code=404, detail="Pedido não possui vínculo com Horus.")
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+    
+    if search_type == "venda" and not order.horus_pedido_venda:
+        raise HTTPException(status_code=400, detail="Pedido não possui vínculo de venda com Horus (COD_PED_VENDA vazio).")
         
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
     if not settings or not settings.horus_enabled:
-        raise HTTPException(status_code=400, detail="Integração Horus desativada.")
+        raise HTTPException(status_code=400, detail="Integração Horus desativada para a empresa.")
         
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
     
     horus_data = None
     horus_items_data = None
+    request_params = {}
     
     if company and customer:
         from app.integrators.horus_orders import HorusOrders
@@ -505,15 +509,17 @@ async def get_horus_debug_preview(
             else:
                 horus_data = raw_horus_data
                 
-            horus_items_data = await horus_client.get_order_items(order.horus_pedido_venda) if order.horus_pedido_venda else None
+            if order.horus_pedido_venda:
+                # Optionally also fetch items if COD_PED_VENDA is available
+                horus_items_data = await horus_client.get_order_items(order.horus_pedido_venda)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Erro ao consultar Horus: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Erro retornado ao consultar Horus API: {str(e)}")
         finally:
             await horus_client.close()
             
             request_params = {
-                "COD_EMPRESA": horus_client._settings.horus_company,
-                "COD_FILIAL": horus_client._settings.horus_branch
+                "COD_EMPRESA": getattr(horus_client._settings, 'horus_company', None),
+                "COD_FILIAL": getattr(horus_client._settings, 'horus_branch', None)
             }
             if search_type == "venda":
                 request_params["COD_PED_VENDA"] = order.horus_pedido_venda
