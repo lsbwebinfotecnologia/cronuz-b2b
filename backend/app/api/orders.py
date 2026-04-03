@@ -553,32 +553,47 @@ async def manual_sync_horus(
         query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
     order = query.first()
     
-    if not order or not order.horus_pedido_venda:
-        raise HTTPException(status_code=404, detail="Pedido não possui vínculo com Horus.")
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
         
-    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
     if not settings or not getattr(settings, 'horus_enabled', False):
-        raise HTTPException(status_code=400, detail="Integração Horus desativada.")
+        raise HTTPException(status_code=400, detail="Integração Horus desativada para a empresa.")
         
-    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    company = db.query(Company).filter(Company.id == order.company_id).first()
     customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
     
-    if company and customer and customer.id_guid:
+    if company and customer:
         from app.integrators.horus_orders import HorusOrders
-        horus_client = HorusOrders(db, current_user.company_id)
+        horus_client = HorusOrders(db, order.company_id)
         try:
-            horus_data = await horus_client.get_order(
-                id_doc=customer.document,
-                id_guid=customer.id_guid,
-                cnpj_destino=company.document,
-                cod_pedido_origem=None if order.origin == "bookinfo" else order.id,
-                cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None,
-                ignore_customer_context=(order.origin == "bookinfo")
+            # We try to use horus_pedido_venda if available. Otherwise, if origin is bookinfo, use partner_reference
+            search_venda = order.horus_pedido_venda if order.horus_pedido_venda else None
+            search_origem = order.partner_reference if order.origin == "bookinfo" and not search_venda else None
+            
+            raw_horus_data = await horus_client.get_order(
+                id_doc=None,
+                id_guid="",
+                cnpj_destino=None,
+                cod_pedido_origem=search_origem,
+                cod_ped_venda=search_venda,
+                ignore_customer_context=True
             )
             
-            if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:
-                horus_data = horus_data[0]
+            horus_data = None
+            if raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0:
+                horus_data = raw_horus_data[0]
+            elif raw_horus_data and isinstance(raw_horus_data, dict):
+                horus_data = raw_horus_data
                 
+            changed = False
+            
+            if horus_data and isinstance(horus_data, dict):
+                new_horus_id = str(horus_data.get("COD_PED_VENDA", "")).strip()
+                if new_horus_id and new_horus_id != str(order.horus_pedido_venda).strip():
+                    order.horus_pedido_venda = new_horus_id
+                    changed = True
+                    
             if not horus_data:
                 new_status = "CANCELLED"
             elif isinstance(horus_data, dict) and horus_data.get("Falha"):
@@ -599,7 +614,6 @@ async def manual_sync_horus(
             else:
                 new_status = order.status
                 
-            changed = False
             if new_status != order.status:
                 from app.models.order_log import OrderLog
                 log_entry = OrderLog(order_id=order.id, old_status=order.status, new_status=new_status)
@@ -619,6 +633,9 @@ async def manual_sync_horus(
                 db.commit()
                 db.refresh(order)
                     
+            if not order.horus_pedido_venda:
+                raise Exception("Pedido não localizado no Horus mesmo consultando pela origem. Atualize o pedido com CSV.")
+                
             horus_items = await horus_client.get_order_items(order.horus_pedido_venda)
             if horus_items and isinstance(horus_items, list):
                 items_changed = False
