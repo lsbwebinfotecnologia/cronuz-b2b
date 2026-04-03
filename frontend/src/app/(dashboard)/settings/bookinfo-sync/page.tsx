@@ -16,6 +16,7 @@ export default function BookinfoSyncQueuePage() {
 
     const [activeTab, setActiveTab] = useState<'queue' | 'import'>('queue');
     const [importing, setImporting] = useState(false);
+    const [updateTarget, setUpdateTarget] = useState<'horus_id' | 'bookinfo_id'>('horus_id');
     const [previewData, setPreviewData] = useState<{
         metrics: { updated: number, not_found: number };
         results: any[];
@@ -227,7 +228,7 @@ export default function BookinfoSyncQueuePage() {
                 const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/validate-horus-orders`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-                    body: JSON.stringify({ company_id: Number(selectedCompanyId), mappings })
+                    body: JSON.stringify({ company_id: Number(selectedCompanyId), mappings, update_target: updateTarget })
                 });
 
                 if (res.ok) {
@@ -260,7 +261,7 @@ export default function BookinfoSyncQueuePage() {
             const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/import-horus-orders`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-                body: JSON.stringify({ company_id: Number(selectedCompanyId), mappings: previewData.mappings })
+                body: JSON.stringify({ company_id: Number(selectedCompanyId), mappings: previewData.mappings, update_target: updateTarget })
             });
 
             if (res.ok) {
@@ -500,6 +501,38 @@ export default function BookinfoSyncQueuePage() {
                                     Utilize esta ferramenta para importar uma planilha relacionando o "ID Reserva da Bookinfo" com o seu equivalente gerado no "Horus ERP". Isso serve para não deixar órfãos os pedidos importados no Cronuz antes do vínculo automático.
                                 </p>
 
+                                <div className="mb-6 p-4 rounded-xl border border-slate-700/50 bg-[#1a1b2d]/50">
+                                    <h4 className="text-sm font-medium text-slate-300 mb-3 block">Direção da Atualização:</h4>
+                                    <div className="flex flex-col sm:flex-row gap-4">
+                                        <label className="flex items-center gap-2 cursor-pointer group">
+                                            <input 
+                                                type="radio" 
+                                                name="updateTarget" 
+                                                value="horus_id"
+                                                checked={updateTarget === 'horus_id'}
+                                                onChange={() => setUpdateTarget('horus_id')}
+                                                className="w-4 h-4 text-indigo-600 bg-slate-800 border-slate-600 focus:ring-indigo-600 focus:ring-2"
+                                            />
+                                            <span className="text-sm text-slate-300 group-hover:text-white transition-colors">
+                                                Encontrar por Bookinfo ID <br/><span className="text-xs text-slate-500">➜ Atualizar Pedido Horus</span>
+                                            </span>
+                                        </label>
+                                        <label className="flex items-center gap-2 cursor-pointer group">
+                                            <input 
+                                                type="radio" 
+                                                name="updateTarget" 
+                                                value="bookinfo_id"
+                                                checked={updateTarget === 'bookinfo_id'}
+                                                onChange={() => setUpdateTarget('bookinfo_id')}
+                                                className="w-4 h-4 text-indigo-600 bg-slate-800 border-slate-600 focus:ring-indigo-600 focus:ring-2"
+                                            />
+                                            <span className="text-sm text-slate-300 group-hover:text-white transition-colors">
+                                                Encontrar por Pedido Horus <br/><span className="text-xs text-slate-500">➜ Atualizar Bookinfo ID</span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                </div>
+
                                 <div className="flex flex-col sm:flex-row gap-4 items-center">
                                     <button 
                                         onClick={handleDownloadTemplate}
@@ -565,8 +598,12 @@ export default function BookinfoSyncQueuePage() {
                                                 <thead className="bg-[#1a1b2d] sticky top-0 z-10 backdrop-blur-md">
                                                 <tr>
                                                     <th className="px-4 py-3 text-xs font-semibold text-slate-400 border-b border-slate-800">Status</th>
-                                                    <th className="px-4 py-3 text-xs font-semibold text-slate-400 border-b border-slate-800">ID Bookinfo</th>
-                                                    <th className="px-4 py-3 text-xs font-semibold text-slate-400 border-b border-slate-800">Pedido ERP</th>
+                                                    <th className="px-4 py-3 text-xs font-semibold text-slate-400 border-b border-slate-800">
+                                                        {updateTarget === 'horus_id' ? 'ID Bookinfo (Filtro)' : 'ID Bookinfo'}
+                                                    </th>
+                                                    <th className="px-4 py-3 text-xs font-semibold text-slate-400 border-b border-slate-800">
+                                                        {updateTarget === 'bookinfo_id' ? 'Pedido ERP (Filtro)' : 'Pedido ERP'}
+                                                    </th>
                                                     <th className="px-4 py-3 text-xs font-semibold text-slate-400 border-b border-slate-800 hidden md:table-cell">Referência</th>
                                                 </tr>
                                                 </thead>

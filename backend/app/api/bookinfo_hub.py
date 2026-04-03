@@ -690,6 +690,7 @@ class ImportedOrderMapping(BaseModel):
 class ImportSpreadsheetRequest(BaseModel):
     company_id: Optional[int] = None
     mappings: List[ImportedOrderMapping]
+    update_target: Optional[str] = "horus_id" # "horus_id" ou "bookinfo_id"
 
 @router.post("/validate-horus-orders")
 async def validate_horus_orders(
@@ -704,23 +705,33 @@ async def validate_horus_orders(
     if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
-    bookinfo_ids = [str(m.bookinfo_id).strip() for m in payload.mappings if str(m.bookinfo_id).strip()]
+    import_target = payload.update_target or "horus_id"
     
-    if not bookinfo_ids:
-        return {"updated": 0, "not_found": 0, "results": []}
+    if import_target == "horus_id":
+        bookinfo_ids = [str(m.bookinfo_id).strip() for m in payload.mappings if str(m.bookinfo_id).strip()]
+        if not bookinfo_ids:
+            return {"updated": 0, "not_found": 0, "results": []}
+            
+        orders = db.query(Order).filter(
+            Order.company_id == target_company_id,
+            func.lower(Order.origin) == "bookinfo",
+            func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
+        ).all()
         
-    from sqlalchemy import func
+        order_dict = {str(o.external_id).strip().lower(): o for o in orders if o.external_id}
+        
+    elif import_target == "bookinfo_id":
+        horus_ids = [str(m.horus_id).strip() for m in payload.mappings if str(m.horus_id).strip()]
+        if not horus_ids:
+            return {"updated": 0, "not_found": 0, "results": []}
 
-    # Definição do company_id alvo (MASTER pode escolher outra empresa, SELLER usa a sua própria)
-    target_company_id = payload.company_id if payload.company_id and current_user.type == "MASTER" else current_user.company_id
+        orders = db.query(Order).filter(
+            Order.company_id == target_company_id,
+            func.lower(Order.origin) == "bookinfo",
+            func.lower(Order.horus_pedido_venda).in_([hid.lower() for hid in horus_ids])
+        ).all()
 
-    orders = db.query(Order).filter(
-        Order.company_id == target_company_id,
-        func.lower(Order.origin) == "bookinfo",
-        func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
-    ).all()
-    
-    order_dict = {str(o.external_id).strip().lower(): o for o in orders if o.external_id}
+        order_dict = {str(o.horus_pedido_venda).strip().lower(): o for o in orders if o.horus_pedido_venda}
     
     results = []
     found_count = 0
@@ -733,13 +744,15 @@ async def validate_horus_orders(
         if not b_id or not h_id:
             continue
             
-        found = b_id.lower() in order_dict
+        if import_target == "horus_id":
+            found = b_id.lower() in order_dict
+        else:
+            found = h_id.lower() in order_dict
+            
         if found:
             found_count += 1
         else:
             not_found_count += 1
-            # DEBUG log to see if it missed something obvious:
-            print(f"DEBUG: Not found in DB -> '{b_id}'")
             
         results.append({
             "bookinfo_id": b_id,
@@ -769,23 +782,37 @@ async def import_horus_orders(
     updated_count = 0
     not_found = 0
     
-    bookinfo_ids = [str(m.bookinfo_id).strip() for m in payload.mappings if str(m.bookinfo_id).strip()]
-    
-    if not bookinfo_ids:
-        return {"updated": 0, "not_found": 0, "message": "Nenhum ID Bookinfo fornecido na planilha."}
-        
+    import_target = payload.update_target or "horus_id"
     from sqlalchemy import func
 
     target_company_id = payload.company_id if payload.company_id and current_user.type == "MASTER" else current_user.company_id
 
-    # Batch query pra melhor performance
-    orders = db.query(Order).filter(
-        Order.company_id == target_company_id,
-        func.lower(Order.origin) == "bookinfo",
-        func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
-    ).all()
+    if import_target == "horus_id":
+        bookinfo_ids = [str(m.bookinfo_id).strip() for m in payload.mappings if str(m.bookinfo_id).strip()]
+        if not bookinfo_ids:
+            return {"updated": 0, "not_found": 0, "message": "Nenhum ID Bookinfo fornecido na planilha."}
+            
+        # Batch query pra melhor performance
+        orders = db.query(Order).filter(
+            Order.company_id == target_company_id,
+            func.lower(Order.origin) == "bookinfo",
+            func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
+        ).all()
+        
+        order_dict = {str(o.external_id).strip().lower(): o for o in orders if o.external_id}
     
-    order_dict = {str(o.external_id).strip().lower(): o for o in orders if o.external_id}
+    elif import_target == "bookinfo_id":
+        horus_ids = [str(m.horus_id).strip() for m in payload.mappings if str(m.horus_id).strip()]
+        if not horus_ids:
+            return {"updated": 0, "not_found": 0, "message": "Nenhum ID Horus fornecido na planilha."}
+            
+        orders = db.query(Order).filter(
+            Order.company_id == target_company_id,
+            func.lower(Order.origin) == "bookinfo",
+            func.lower(Order.horus_pedido_venda).in_([hid.lower() for hid in horus_ids])
+        ).all()
+        
+        order_dict = {str(o.horus_pedido_venda).strip().lower(): o for o in orders if o.horus_pedido_venda}
     
     for mapping in payload.mappings:
         b_id = str(mapping.bookinfo_id).strip()
@@ -794,14 +821,24 @@ async def import_horus_orders(
         if not b_id or not h_id:
             continue
             
-        order = order_dict.get(b_id.lower())
-        if order:
-            if order.horus_pedido_venda != h_id or order.partner_reference != mapping.reference:
-                order.horus_pedido_venda = h_id
-                order.partner_reference = mapping.reference
-                updated_count += 1
-        else:
-            not_found += 1
+        if import_target == "horus_id":
+            order = order_dict.get(b_id.lower())
+            if order:
+                if order.horus_pedido_venda != h_id or order.partner_reference != mapping.reference:
+                    order.horus_pedido_venda = h_id
+                    order.partner_reference = mapping.reference
+                    updated_count += 1
+            else:
+                not_found += 1
+        elif import_target == "bookinfo_id":
+            order = order_dict.get(h_id.lower())
+            if order:
+                if order.external_id != b_id or order.partner_reference != mapping.reference:
+                    order.external_id = b_id
+                    order.partner_reference = mapping.reference
+                    updated_count += 1
+            else:
+                not_found += 1
             
     if updated_count > 0:
         db.commit()
