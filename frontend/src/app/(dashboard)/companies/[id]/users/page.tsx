@@ -23,21 +23,30 @@ export default function CompanyUsersPage() {
   const { company } = useCompany();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Pagination
+  const [page, setPage] = useState(1);
+  const [totalUsers, setTotalUsers] = useState(0);
+  const pageSize = 50;
 
   useEffect(() => {
     fetchUsers();
-  }, [companyId]);
+  }, [companyId, page]);
 
   async function fetchUsers() {
     setLoading(true);
     try {
       const token = getToken();
       if (!token) return;
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/users`, {
+      const skip = (page - 1) * pageSize;
+      // List only SELLER users as requested
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/users?role=SELLER&skip=${skip}&limit=${pageSize}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
-        setUsers(await res.json());
+        const data = await res.json();
+        setUsers(data.items || []);
+        setTotalUsers(data.total || 0);
       }
     } catch (error) {
        toast.error('Erro ao carregar usuários.');
@@ -192,6 +201,31 @@ export default function CompanyUsersPage() {
            </tbody>
          </table>
       </div>
+
+      {/* Pagination Controls */}
+      {totalUsers > pageSize && (
+        <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center">
+            <span className="text-sm text-slate-500">
+                Mostrando {(page - 1) * pageSize + 1} até {Math.min(page * pageSize, totalUsers)} de {totalUsers} vendedores
+            </span>
+            <div className="flex gap-2">
+                <button 
+                    disabled={page === 1}
+                    onClick={() => setPage(page - 1)}
+                    className="px-3 py-1.5 text-sm font-medium border border-slate-200 dark:border-slate-700 rounded-lg disabled:opacity-50 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+                >
+                    Anterior
+                </button>
+                <button 
+                    disabled={page * pageSize >= totalUsers}
+                    onClick={() => setPage(page + 1)}
+                    className="px-3 py-1.5 text-sm font-medium border border-slate-200 dark:border-slate-700 rounded-lg disabled:opacity-50 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+                >
+                    Próxima
+                </button>
+            </div>
+        </div>
+      )}
     </motion.div>
   );
 }

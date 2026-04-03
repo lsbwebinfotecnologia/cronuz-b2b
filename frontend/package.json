@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:prod": "NEXT_PUBLIC_API_URL=https://cronuzb2b.com.br/api NEXT_PUBLIC_APP_URL=https://cronuzb2b.com.br next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

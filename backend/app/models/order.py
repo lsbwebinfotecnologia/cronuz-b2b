@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Boolean, Date, CheckConstraint
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Boolean, Date, CheckConstraint, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
@@ -11,6 +11,10 @@ from app.models.product import Product
 
 class Order(Base):
     __tablename__ = "ord_order"
+    __table_args__ = (
+        UniqueConstraint('company_id', 'horus_pedido_venda', name='uix_ord_company_horus'),
+        UniqueConstraint('company_id', 'external_id', name='uix_ord_company_external'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=False, index=True)

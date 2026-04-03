@@ -449,14 +449,26 @@ def update_company_modules(
     db.refresh(company)
     return company
 
-@app.get("/companies/{company_id}/users", response_model=list[user_schemas.User])
+@app.get("/companies/{company_id}/users")
 def read_company_users(
     company_id: int,
+    skip: int = 0,
+    limit: int = 100,
+    role: str = None,
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user)
 ):
-    users = db.query(user_models.User).filter(user_models.User.company_id == company_id).all()
-    return users
+    query = db.query(user_models.User).filter(user_models.User.company_id == company_id)
+    if role:
+        query = query.filter(user_models.User.type == role)
+        
+    total = query.count()
+    users = query.offset(skip).limit(limit).all()
+    
+    # Manually serialize to avoid password hash leakage since we removed response_model
+    items = [user_schemas.User.model_validate(u).model_dump() for u in users]
+    
+    return {"items": items, "total": total}
 
 @app.get("/companies/{company_id}/agents", response_model=list[user_schemas.User])
 def read_company_agents(

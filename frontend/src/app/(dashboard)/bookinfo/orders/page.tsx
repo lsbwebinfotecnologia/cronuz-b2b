@@ -12,9 +12,6 @@ export default function BookinfoOrdersPage() {
   const [syncingCnpj, setSyncingCnpj] = useState<string | null>(null);
   const [ackingOrderId, setAckingOrderId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showLogs, setShowLogs] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
-  const [loadingLogs, setLoadingLogs] = useState(false);
 
   const formatCnpj = (cnpj: string) => {
     if (!cnpj) return '';
@@ -117,23 +114,6 @@ export default function BookinfoOrdersPage() {
     }
   };
 
-  const fetchLogs = async () => {
-    setLoadingLogs(true);
-    setShowLogs(true);
-    try {
-      const token = getToken();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/logs?limit=50`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      setLogs(data.logs || []);
-    } catch (err) {
-      setLogs(["Falha ao carregar logs."]);
-    } finally {
-      setLoadingLogs(false);
-    }
-  };
-
   const filteredOrders = orders.filter(order => {
     const matchesSearch = 
       order.pedidoCliente?.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -163,13 +143,7 @@ export default function BookinfoOrdersPage() {
             Gestão e Sincronização de Pedidos B2B
           </p>
         </div>
-        <button
-          onClick={fetchLogs}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 text-white dark:bg-slate-800 dark:text-slate-200 rounded-lg text-sm font-semibold hover:bg-slate-800 transition shadow-sm"
-        >
-          <Search className="w-4 h-4" />
-          Ver Logs (Background)
-        </button>
+
       </div>
 
       {/* Quick Dashboard */}
@@ -403,68 +377,6 @@ export default function BookinfoOrdersPage() {
                 )}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {/* Logs Modal */}
-      {showLogs && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200 cursor-auto">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-4xl flex flex-col max-h-[85vh] border border-slate-200 dark:border-slate-800">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/20">
-              <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                <Search className="w-5 h-5 text-indigo-500" />
-                Logs da Integração (Scheduler)
-              </h2>
-              <button 
-                onClick={() => setShowLogs(false)}
-                className="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full transition-colors"
-                type="button"
-              >
-                ✕
-              </button>
-            </div>
-            
-            <div className="p-6 flex-1 overflow-auto bg-slate-950 font-mono text-sm">
-              {loadingLogs ? (
-                <div className="flex items-center justify-center h-40 text-slate-400">
-                  <Loader2 className="w-6 h-6 animate-spin mr-2" />
-                  Carregando...
-                </div>
-              ) : logs.length === 0 ? (
-                <div className="text-slate-500 text-center py-10">Nenhum log encontrado.</div>
-              ) : (
-                <div className="flex flex-col gap-1 text-slate-300">
-                  {logs.map((log, i) => (
-                    <div key={i} className="whitespace-pre-wrap break-all">
-                      {log.includes('ERROR') ? (
-                        <span className="text-rose-400">{log}</span>
-                      ) : log.includes('INFO') ? (
-                        <span className="text-emerald-400">{log}</span>
-                      ) : (
-                        log
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex justify-end">
-              <button
-                onClick={fetchLogs}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 mr-2"
-                type="button"
-              >
-                Atualizar
-              </button>
-              <button
-                onClick={() => setShowLogs(false)}
-                className="px-4 py-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-semibold hover:bg-slate-300 dark:hover:bg-slate-700"
-                type="button"
-              >
-                Fechar
-              </button>
-            </div>
           </div>
         </div>
       )}

@@ -722,8 +722,6 @@ async def validate_horus_orders(
             func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
         ).all()
         
-        order_dict = {str(o.external_id).strip().lower(): o for o in orders if o.external_id}
-        
     elif import_target == "bookinfo_id":
         horus_ids = [str(m.horus_id).strip() for m in payload.mappings if str(m.horus_id).strip()]
         if not horus_ids:
@@ -734,24 +732,25 @@ async def validate_horus_orders(
             func.lower(Order.origin) == "bookinfo",
             func.lower(Order.horus_pedido_venda).in_([hid.lower() for hid in horus_ids])
         ).all()
-
-        order_dict = {str(o.horus_pedido_venda).strip().lower(): o for o in orders if o.horus_pedido_venda}
     
     results = []
     found_count = 0
     not_found_count = 0
     
     for mapping in payload.mappings:
-        b_id = str(mapping.bookinfo_id).strip()
-        h_id = str(mapping.horus_id).strip()
+        b_id = str(mapping.bookinfo_id).strip().lower()
+        h_id = str(mapping.horus_id).strip().lower()
         
         if not b_id or not h_id:
             continue
             
+        found = False
         if import_target == "horus_id":
-            found = b_id.lower() in order_dict
+            matching = [o for o in orders if str(o.external_id or "").strip().lower() == b_id]
+            found = len(matching) > 0
         else:
-            found = h_id.lower() in order_dict
+            matching = [o for o in orders if str(o.horus_pedido_venda or "").strip().lower() == h_id]
+            found = len(matching) > 0
             
         if found:
             found_count += 1
@@ -796,15 +795,12 @@ async def import_horus_orders(
         if not bookinfo_ids:
             return {"updated": 0, "not_found": 0, "message": "Nenhum ID Bookinfo fornecido na planilha."}
             
-        # Batch query pra melhor performance
         orders = db.query(Order).filter(
             Order.company_id == target_company_id,
             func.lower(Order.origin) == "bookinfo",
             func.lower(Order.external_id).in_([bid.lower() for bid in bookinfo_ids])
         ).all()
         
-        order_dict = {str(o.external_id).strip().lower(): o for o in orders if o.external_id}
-    
     elif import_target == "bookinfo_id":
         horus_ids = [str(m.horus_id).strip() for m in payload.mappings if str(m.horus_id).strip()]
         if not horus_ids:
@@ -816,8 +812,6 @@ async def import_horus_orders(
             func.lower(Order.horus_pedido_venda).in_([hid.lower() for hid in horus_ids])
         ).all()
         
-        order_dict = {str(o.horus_pedido_venda).strip().lower(): o for o in orders if o.horus_pedido_venda}
-    
     for mapping in payload.mappings:
         b_id = str(mapping.bookinfo_id).strip()
         h_id = str(mapping.horus_id).strip()
@@ -826,21 +820,23 @@ async def import_horus_orders(
             continue
             
         if import_target == "horus_id":
-            order = order_dict.get(b_id.lower())
-            if order:
-                if order.horus_pedido_venda != h_id or order.partner_reference != mapping.reference:
-                    order.horus_pedido_venda = h_id
-                    order.partner_reference = mapping.reference
-                    updated_count += 1
+            matching = [o for o in orders if str(o.external_id or "").strip().lower() == b_id.lower()]
+            if matching:
+                for order in matching:
+                    if order.horus_pedido_venda != h_id or order.partner_reference != mapping.reference:
+                        order.horus_pedido_venda = h_id
+                        order.partner_reference = mapping.reference
+                        updated_count += 1
             else:
                 not_found += 1
         elif import_target == "bookinfo_id":
-            order = order_dict.get(h_id.lower())
-            if order:
-                if order.external_id != b_id or order.partner_reference != mapping.reference:
-                    order.external_id = b_id
-                    order.partner_reference = mapping.reference
-                    updated_count += 1
+            matching = [o for o in orders if str(o.horus_pedido_venda or "").strip().lower() == h_id.lower()]
+            if matching:
+                for order in matching:
+                    if order.external_id != b_id or order.partner_reference != mapping.reference:
+                        order.external_id = b_id
+                        order.partner_reference = mapping.reference
+                        updated_count += 1
             else:
                 not_found += 1
             
@@ -860,6 +856,8 @@ async def import_horus_orders(
 @router.get("/queue")
 async def get_bookinfo_queue(
     company_id: int,
+    skip: int = 0,
+    limit: int = 50,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -869,10 +867,15 @@ async def get_bookinfo_queue(
     from sqlalchemy import func
     from sqlalchemy.orm import joinedload
     
-    orders = db.query(Order).options(joinedload(Order.customer)).filter(
+    query = db.query(Order).options(joinedload(Order.customer)).filter(
         Order.company_id == company_id,
-        func.lower(Order.origin) == "bookinfo"
-    ).order_by(Order.id.desc()).all()
+        func.lower(Order.origin) == "bookinfo",
+        Order.status != "CONCLUIDO",
+        Order.status != "CANCELLED"
+    )
+    
+    total = query.count()
+    orders = query.order_by(Order.id.desc()).offset(skip).limit(limit).all()
     
     results = []
     for o in orders:
@@ -890,7 +893,7 @@ async def get_bookinfo_queue(
             "bookinfo_nfe_sent": o.bookinfo_nfe_sent
         })
         
-    return {"items": results}
+    return {"items": results, "total": total}
 
 @router.delete("/queue/{order_id}")
 async def delete_bookinfo_queue_item(
@@ -1038,3 +1041,247 @@ async def sync_bookinfo_queue_item(
                 return {"status": "partial", "message": f"Faturado local. Erro ao enviar NF p/ Bookinfo: {response.text}"}
     except Exception as e:
         return {"status": "partial", "message": f"Faturado local. Erro de requisição para Bookinfo: {str(e)}"}
+
+class ManualSyncRequest(BaseModel):
+    company_id: int
+    status: str
+
+@router.post("/manual-sync")
+async def manual_sync_bookinfo_orders(
+    req: ManualSyncRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != UserRole.MASTER:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    import httpx, json
+    from app.models.integrator import Integrator
+    
+    config = db.query(Integrator).filter(
+        Integrator.company_id == req.company_id,
+        Integrator.platform == "BOOKINFO",
+        Integrator.active == True
+    ).first()
+    
+    if not config or not config.credentials:
+        raise HTTPException(status_code=400, detail="Integração Bookinfo não configurada para esta empresa.")
+        
+    try:
+        creds = json.loads(config.credentials) if isinstance(config.credentials, str) else config.credentials
+    except Exception:
+        raise HTTPException(status_code=400, detail="Credenciais inválidas.")
+        
+    env = creds.get("Ambiente", "PROD")
+    token = creds.get("Token", "")
+    
+    if not token:
+        raise HTTPException(status_code=400, detail="Sem token configurado.")
+        
+    base_url = "https://bookhub-api.bookinfo.com.br" if env == "PROD" else "https://bookhub-api-hml.bookinfo.com.br"
+    
+    async with httpx.AsyncClient(
+        base_url=base_url, 
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=20.0,
+        verify=False
+    ) as client:
+        try:
+            resp = await client.get(f"/pedido?status={req.status}&tamanho=50")
+            resp.raise_for_status()
+            data = resp.json()
+            new_orders = data.get("itens", [])
+            
+            processed_count = 0
+            for order in new_orders:
+                order_id = order.get("id")
+                cnpj = order.get("cnpjComprador")
+                
+                if not order_id or not cnpj:
+                    continue
+                    
+                cnpj_clean = "".join(filter(str.isdigit, str(cnpj)))
+                from app.models.user import User as UserModel, UserRole as UserModelRole
+                customer = db.query(UserModel).filter(
+                    UserModel.company_id == req.company_id,
+                    UserModel.document == cnpj_clean,
+                    UserModel.type == UserModelRole.CUSTOMER
+                ).first()
+                
+                if not customer:
+                    continue 
+                    
+                existing_order = db.query(Order).filter(
+                    Order.company_id == req.company_id,
+                    Order.external_id == order_id,
+                    Order.origin == "bookinfo"
+                ).first()
+                
+                if existing_order:
+                    # Se já existe, atualizamos status se necessário no futuro, mas aqui ignoramos pra não duplicar.
+                    continue
+                    
+                items_payload = order.get("itens", [])
+                total_price = 0.0
+                for dt_item in items_payload:
+                    qty = int(dt_item.get("quantidade", 1))
+                    unit = float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
+                    total_price += (qty * unit)
+
+                import uuid
+                new_order = Order(
+                    company_id=req.company_id,
+                    customer_id=customer.id,
+                    status=req.status,
+                    type_order="C" if order.get("compraConsignacao") == "S" else "V",
+                    total=total_price,
+                    origin="bookinfo",
+                    tracking_code=order_id,
+                    external_id=order_id,
+                    payload=json.dumps(order)
+                )
+                db.add(new_order)
+                
+                # Resumo Acknowledge (Opcional, pois a consulta é só manual, não mudamos para RECEBIDO)
+                
+                processed_count += 1
+                
+            db.commit()
+            return {"status": "success", "message": f"{processed_count} pedidos com status '{req.status}' importados."}
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502, detail=f"Falha de comunicação: {str(e)}")
+
+@router.post("/queue/{order_id}/complete")
+async def manual_complete_bookinfo_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != UserRole.MASTER:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    order = db.query(Order).filter(Order.id == order_id, Order.origin == "bookinfo").first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+    
+    # 1. Enviar Nota se possível
+    # We call our sync function but don't fail hard if it doesn't send (maybe already sent manually).
+    # Wait, instead of calling it, let's just make the PUT avaliacao request.
+    
+    import httpx, json
+    from app.models.integrator import Integrator
+    
+    config = db.query(Integrator).filter(
+        Integrator.company_id == order.company_id,
+        Integrator.platform == "BOOKINFO",
+        Integrator.active == True
+    ).first()
+    
+    if not config or not config.credentials:
+        raise HTTPException(status_code=400, detail="Bookinfo não configurada.")
+        
+    try:
+        creds = json.loads(config.credentials) if isinstance(config.credentials, str) else config.credentials
+    except Exception:
+        raise HTTPException(status_code=400, detail="Credenciais com erro.")
+        
+    env = creds.get("Ambiente", "PROD")
+    token = creds.get("Token", "")
+    base_url = "https://bookhub-api.bookinfo.com.br" if env == "PROD" else "https://bookhub-api-hml.bookinfo.com.br"
+    
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    bookinfo_pedido_id = order.external_id
+    
+    async with httpx.AsyncClient(verify=False) as client:
+        # 1. Validate if it's FATURADO on Bookinfo
+        get_resp = await client.get(f"{base_url}/pedido/{bookinfo_pedido_id}", headers=headers, timeout=15.0)
+        if get_resp.status_code == 200:
+            b_data = get_resp.json()
+            if b_data.get("status") not in ["FATURADO", "CONCLUIDO"]:
+                raise HTTPException(status_code=400, detail=f"O pedido precisa estar FATURADO na Bookinfo para ser concluído. Status atual lá: {b_data.get('status')}")
+                
+        # 2. Puxa PUT
+        resp = await client.put(f"{base_url}/pedido/{bookinfo_pedido_id}/avaliacao/CONCLUIDO", headers=headers, timeout=15.0)
+        
+        # We process response
+        if resp.status_code in [200, 201, 204]:
+            order.status = "CONCLUIDO"
+            db.commit()
+            return {"status": "success", "message": "Pedido foi marcado como CONCLUÍDO na Bookinfo!"}
+        else:
+            raise HTTPException(status_code=502, detail=f"Erro da Bookinfo: {resp.text}")
+
+@router.get("/queue/{order_id}/details")
+async def get_bookinfo_order_details(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != UserRole.MASTER:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    order = db.query(Order).filter(Order.id == order_id, Order.origin == "bookinfo").first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+    
+    # 1. Fetch Order Logs for Timeline
+    from app.models.order_log import OrderLog
+    logs_q = db.query(OrderLog).filter(OrderLog.order_id == order_id).order_by(OrderLog.created_at.asc()).all()
+    timeline = [
+        {
+            "id": l.id,
+            "old_status": l.old_status,
+            "new_status": l.new_status,
+            "created_at": l.created_at.isoformat() if l.created_at else None
+        }
+        for l in logs_q
+    ]
+    
+    # 2. Add an artificial initial log if empty (from order creation)
+    if not timeline:
+        timeline.insert(0, {
+            "id": 0,
+            "old_status": None,
+            "new_status": order.status,
+            "created_at": order.created_at.isoformat() if order.created_at else None
+        })
+
+    # 3. Connect to API
+    import httpx, json
+    from app.models.integrator import Integrator
+    config = db.query(Integrator).filter(
+        Integrator.company_id == order.company_id,
+        Integrator.platform == "BOOKINFO",
+        Integrator.active == True
+    ).first()
+    
+    bookinfo_data = None
+    if config and config.credentials:
+        try:
+            creds = json.loads(config.credentials) if isinstance(config.credentials, str) else config.credentials
+            env = creds.get("Ambiente", "PROD")
+            token = creds.get("Token", "")
+            base_url = "https://bookhub-api.bookinfo.com.br" if env == "PROD" else "https://bookhub-api-hml.bookinfo.com.br"
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            bookinfo_pedido_id = order.external_id
+            
+            async with httpx.AsyncClient(verify=False) as client:
+                resp = await client.get(f"{base_url}/pedido/{bookinfo_pedido_id}", headers=headers, timeout=15.0)
+                if resp.status_code == 200:
+                    bookinfo_data = resp.json()
+        except Exception as e:
+            bookinfo_data = {"error": str(e)}
+
+    return {
+        "order_internal": {
+            "id": order.id,
+            "status": order.status,
+            "tracking_code": order.tracking_code,
+            "horus_pedido_venda": order.horus_pedido_venda,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "bookinfo_nfe_sent": order.bookinfo_nfe_sent
+        },
+        "timeline": timeline,
+        "bookinfo_api": bookinfo_data,
+        "bookinfo_payload": None
+    }
