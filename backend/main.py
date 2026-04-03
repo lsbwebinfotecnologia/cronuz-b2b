@@ -181,6 +181,7 @@ def create_company(
 def read_companies(
     skip: int = 0, 
     limit: int = 100, 
+    uses_bookinfo: bool = False,
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user)
 ):
@@ -190,6 +191,13 @@ def read_companies(
         query = query.filter(company_models.Company.tenant_id == current_user.tenant_id)
     elif current_user.type != user_models.UserRole.MASTER:
         query = query.filter(company_models.Company.id == current_user.company_id)
+        
+    if uses_bookinfo:
+        from app.models.integrator import Integrator
+        query = query.join(Integrator, Integrator.company_id == company_models.Company.id).filter(
+            Integrator.platform == "BOOKINFO",
+            Integrator.active == True
+        )
         
     companies = query.offset(skip).limit(limit).all()
     return companies

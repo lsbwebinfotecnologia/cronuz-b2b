@@ -35,12 +35,12 @@ export default function BookinfoSyncQueuePage() {
 
     const fetchCompanies = async () => {
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies?limit=100`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies?limit=100&uses_bookinfo=true`, {
                 headers: { 'Authorization': `Bearer ${getToken()}` }
             });
             if (res.ok) {
                 const data = await res.json();
-                setCompanies(data.items || []);
+                setCompanies(Array.isArray(data) ? data : (data.items || []));
             }
         } catch (error) {
             console.error("Failed to load companies", error);
@@ -194,7 +194,7 @@ export default function BookinfoSyncQueuePage() {
                     >
                         <option value="">Selecione a Organização</option>
                         {companies.map(c => (
-                            <option key={c.id} value={c.id.toString()}>#{c.id} {c.corporate_name}</option>
+                            <option key={c.id} value={c.id.toString()}>#{c.id} {c.name}</option>
                         ))}
                     </select>
                 </div>
