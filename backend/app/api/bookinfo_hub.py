@@ -858,6 +858,9 @@ async def get_bookinfo_queue(
     company_id: int,
     skip: int = 0,
     limit: int = 50,
+    bookinfo_id: str = None,
+    horus_id: str = None,
+    status: str = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -873,6 +876,13 @@ async def get_bookinfo_queue(
         Order.status != "CONCLUIDO",
         Order.status != "CANCELLED"
     )
+    
+    if bookinfo_id:
+        query = query.filter(Order.external_id.ilike(f"%{bookinfo_id}%"))
+    if horus_id:
+        query = query.filter(Order.horus_pedido_venda.ilike(f"%{horus_id}%"))
+    if status:
+        query = query.filter(Order.status == status)
     
     total = query.count()
     orders = query.order_by(Order.id.desc()).offset(skip).limit(limit).all()
@@ -1042,13 +1052,10 @@ async def sync_bookinfo_queue_item(
     except Exception as e:
         return {"status": "partial", "message": f"Faturado local. Erro de requisição para Bookinfo: {str(e)}"}
 
-class ManualSyncRequest(BaseModel):
-    company_id: int
-    status: str
-
-@router.post("/manual-sync")
-async def manual_sync_bookinfo_orders(
-    req: ManualSyncRequest,
+@router.get("/manual-sync/preview")
+async def preview_manual_sync_bookinfo_orders(
+    company_id: int,
+    status: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1059,7 +1066,7 @@ async def manual_sync_bookinfo_orders(
     from app.models.integrator import Integrator
     
     config = db.query(Integrator).filter(
-        Integrator.company_id == req.company_id,
+        Integrator.company_id == company_id,
         Integrator.platform == "BOOKINFO",
         Integrator.active == True
     ).first()
@@ -1087,12 +1094,12 @@ async def manual_sync_bookinfo_orders(
         verify=False
     ) as client:
         try:
-            resp = await client.get(f"/pedido?status={req.status}&tamanho=50")
+            resp = await client.get(f"/pedido?status={status}&tamanho=50")
             resp.raise_for_status()
             data = resp.json()
             new_orders = data.get("itens", [])
             
-            processed_count = 0
+            preview_results = []
             for order in new_orders:
                 order_id = order.get("id")
                 cnpj = order.get("cnpjComprador")
@@ -1103,53 +1110,100 @@ async def manual_sync_bookinfo_orders(
                 cnpj_clean = "".join(filter(str.isdigit, str(cnpj)))
                 from app.models.user import User as UserModel, UserRole as UserModelRole
                 customer = db.query(UserModel).filter(
-                    UserModel.company_id == req.company_id,
+                    UserModel.company_id == company_id,
                     UserModel.document == cnpj_clean,
                     UserModel.type == UserModelRole.CUSTOMER
                 ).first()
                 
-                if not customer:
-                    continue 
-                    
                 existing_order = db.query(Order).filter(
-                    Order.company_id == req.company_id,
+                    Order.company_id == company_id,
                     Order.external_id == order_id,
                     Order.origin == "bookinfo"
                 ).first()
                 
-                if existing_order:
-                    # Se já existe, atualizamos status se necessário no futuro, mas aqui ignoramos pra não duplicar.
-                    continue
-                    
                 items_payload = order.get("itens", [])
-                total_price = 0.0
-                for dt_item in items_payload:
-                    qty = int(dt_item.get("quantidade", 1))
-                    unit = float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
-                    total_price += (qty * unit)
+                total_price = sum((int(dt_item.get("quantidade", 1)) * float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)) for dt_item in items_payload)
 
-                import uuid
-                new_order = Order(
-                    company_id=req.company_id,
-                    customer_id=customer.id,
-                    status=req.status,
-                    type_order="C" if order.get("compraConsignacao") == "S" else "V",
-                    total=total_price,
-                    origin="bookinfo",
-                    tracking_code=order_id,
-                    external_id=order_id,
-                    payload=json.dumps(order)
-                )
-                db.add(new_order)
+                preview_results.append({
+                    "id": order_id,
+                    "customer_name": order.get("nomeComprador", "Desconhecido"),
+                    "customer_cnpj": cnpj_clean,
+                    "customer_found_locally": customer is not None,
+                    "status_bookinfo": order.get("status"),
+                    "total": total_price,
+                    "already_imported": existing_order is not None,
+                    "raw_payload": order
+                })
                 
-                # Resumo Acknowledge (Opcional, pois a consulta é só manual, não mudamos para RECEBIDO)
-                
-                processed_count += 1
-                
-            db.commit()
-            return {"status": "success", "message": f"{processed_count} pedidos com status '{req.status}' importados."}
+            return {"status": "success", "results": preview_results}
         except httpx.HTTPError as e:
             raise HTTPException(status_code=502, detail=f"Falha de comunicação: {str(e)}")
+
+class ManualSyncImportRequest(BaseModel):
+    company_id: int
+    target_status: str
+    orders: List[Dict[str, Any]]
+
+@router.post("/manual-sync/import")
+async def run_manual_sync_import_bookinfo(
+    req: ManualSyncImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type != UserRole.MASTER:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    import json
+    from app.models.user import User as UserModel, UserRole as UserModelRole
+    
+    processed_count = 0
+    for order_data in req.orders:
+        raw_order = order_data.get("raw_payload", {})
+        order_id = raw_order.get("id")
+        cnpj = raw_order.get("cnpjComprador")
+        
+        if not order_id or not cnpj:
+            continue
+            
+        cnpj_clean = "".join(filter(str.isdigit, str(cnpj)))
+        customer = db.query(UserModel).filter(
+            UserModel.company_id == req.company_id,
+            UserModel.document == cnpj_clean,
+            UserModel.type == UserModelRole.CUSTOMER
+        ).first()
+        
+        if not customer:
+            continue
+            
+        existing_order = db.query(Order).filter(
+            Order.company_id == req.company_id,
+            Order.external_id == order_id,
+            Order.origin == "bookinfo"
+        ).first()
+        
+        if existing_order:
+            continue
+            
+        items_payload = raw_order.get("itens", [])
+        total_price = sum((int(dt_item.get("quantidade", 1)) * float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)) for dt_item in items_payload)
+        
+        new_order = Order(
+            company_id=req.company_id,
+            customer_id=customer.id,
+            status=req.target_status,
+            type_order="C" if raw_order.get("compraConsignacao") == "S" else "V",
+            total=total_price,
+            origin="bookinfo",
+            tracking_code=order_id,
+            external_id=order_id,
+            payload=json.dumps(raw_order)
+        )
+        db.add(new_order)
+        processed_count += 1
+        
+    db.commit()
+    return {"status": "success", "message": f"{processed_count} pedidos importados."}
+
 
 @router.post("/queue/{order_id}/complete")
 async def manual_complete_bookinfo_order(

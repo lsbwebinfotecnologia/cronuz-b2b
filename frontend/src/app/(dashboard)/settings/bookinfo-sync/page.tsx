@@ -25,6 +25,14 @@ export default function BookinfoSyncQueuePage() {
 
     const [syncStatusParam, setSyncStatusParam] = useState('NOVO');
     const [manualSyncLoading, setManualSyncLoading] = useState(false);
+    const [manualSyncPreviewModalOpen, setManualSyncPreviewModalOpen] = useState(false);
+    const [manualSyncPreviewData, setManualSyncPreviewData] = useState<any[] | null>(null);
+    const [manualSyncImporting, setManualSyncImporting] = useState(false);
+
+    // Queue Filters
+    const [searchBookinfoId, setSearchBookinfoId] = useState('');
+    const [searchHorusId, setSearchHorusId] = useState('');
+    const [searchStatus, setSearchStatus] = useState('');
 
     // Logs state
     const [showLogs, setShowLogs] = useState(false);
@@ -65,6 +73,9 @@ export default function BookinfoSyncQueuePage() {
             fetchQueue(1);
             // Reset preview data when changing company
             setPreviewData(null);
+            setSearchBookinfoId('');
+            setSearchHorusId('');
+            setSearchStatus('');
         } else {
             setOrders([]);
             setTotalPages(1);
@@ -90,7 +101,16 @@ export default function BookinfoSyncQueuePage() {
         setLoading(true);
         const skip = (pageNum - 1) * limit;
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/queue?company_id=${selectedCompanyId}&skip=${skip}&limit=${limit}`, {
+            const queryParams = new URLSearchParams({
+                company_id: selectedCompanyId,
+                skip: skip.toString(),
+                limit: limit.toString()
+            });
+            if (searchBookinfoId) queryParams.append('bookinfo_id', searchBookinfoId);
+            if (searchHorusId) queryParams.append('horus_id', searchHorusId);
+            if (searchStatus) queryParams.append('status', searchStatus);
+
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/queue?${queryParams.toString()}`, {
                 headers: { 'Authorization': `Bearer ${getToken()}` }
             });
             
@@ -112,21 +132,62 @@ export default function BookinfoSyncQueuePage() {
         if (!selectedCompanyId) return;
         setManualSyncLoading(true);
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/manual-sync?company_id=${selectedCompanyId}&status=${syncStatusParam}`, {
-                method: 'POST',
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/manual-sync/preview?company_id=${selectedCompanyId}&status=${syncStatusParam}`, {
+                method: 'GET',
                 headers: { 'Authorization': `Bearer ${getToken()}` }
             });
             if (res.ok) {
                 const data = await res.json();
-                toast.success(`Consulta manual finalizada. Processados: ${data.processed || 0}`);
-                fetchQueue();
+                setManualSyncPreviewData(data.results || []);
+                setManualSyncPreviewModalOpen(true);
             } else {
-                toast.error('Erro ao acionar sync na API.');
+                toast.error('Erro ao consultar a Bookinfo.');
             }
         } catch(e) {
             toast.error('Falha de rede.');
         } finally {
             setManualSyncLoading(false);
+        }
+    };
+
+    const handleImportManualSync = async () => {
+        if (!selectedCompanyId || !manualSyncPreviewData || manualSyncPreviewData.length === 0) return;
+        setManualSyncImporting(true);
+        try {
+            // Filter out items already imported to prevent redundant inserts if the API didn't block it initially
+            // Though the backend handles skip if existing_order
+            const pendingOrders = manualSyncPreviewData.filter(o => !o.already_imported);
+            
+            if (pendingOrders.length === 0) {
+                toast.info('Todos os pedidos encontrados já foram importados.');
+                setManualSyncPreviewModalOpen(false);
+                return;
+            }
+
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/manual-sync/import`, {
+                method: 'POST',
+                headers: { 
+                    'Authorization': `Bearer ${getToken()}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    company_id: Number(selectedCompanyId),
+                    target_status: syncStatusParam, // Save them as the status they were queried or RECEBIDO? Usually save as same status.
+                    orders: pendingOrders
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                toast.success(`Pedidos importados com sucesso!`);
+                setManualSyncPreviewModalOpen(false);
+                fetchQueue();
+            } else {
+                toast.error('Erro ao importar pedidos.');
+            }
+        } catch(e) {
+            toast.error('Falha de rede.');
+        } finally {
+            setManualSyncImporting(false);
         }
     };
 
@@ -565,6 +626,50 @@ export default function BookinfoSyncQueuePage() {
 
                     {activeTab === 'queue' && (
                         <div className="overflow-x-auto">
+                            {/* QUEUE FILTERS */}
+                            <div className="bg-[#1a1b2d]/50 p-4 border-b border-slate-800/60 flex flex-wrap gap-4 items-end">
+                                <div className="w-full sm:w-48">
+                                    <label className="text-xs text-slate-400 mb-1 block">Filtro ID Bookinfo</label>
+                                    <input 
+                                        type="text" 
+                                        placeholder="Ex: UUID..."
+                                        value={searchBookinfoId}
+                                        onChange={(e) => setSearchBookinfoId(e.target.value)}
+                                        className="w-full bg-[#0a0b10] border border-slate-700/50 rounded flex-1 px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-indigo-500 transition-colors"
+                                    />
+                                </div>
+                                <div className="w-full sm:w-48">
+                                    <label className="text-xs text-slate-400 mb-1 block">Filtro Pedido Horus</label>
+                                    <input 
+                                        type="text" 
+                                        placeholder="Ex: 345417"
+                                        value={searchHorusId}
+                                        onChange={(e) => setSearchHorusId(e.target.value)}
+                                        className="w-full bg-[#0a0b10] border border-slate-700/50 rounded flex-1 px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-indigo-500 transition-colors"
+                                    />
+                                </div>
+                                <div className="w-full sm:w-48">
+                                    <label className="text-xs text-slate-400 mb-1 block">Status B2B</label>
+                                    <select
+                                        value={searchStatus}
+                                        onChange={(e) => setSearchStatus(e.target.value)}
+                                        className="w-full bg-[#0a0b10] border border-slate-700/50 rounded flex-1 px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-indigo-500 transition-colors"
+                                    >
+                                        <option value="">Todos Pendentes</option>
+                                        <option value="AGUARDANDO">Aguardando</option>
+                                        <option value="PROCESSADO">Processado</option>
+                                        <option value="FATURADO">Faturado</option>
+                                        <option value="RECEBIDO">Recebido</option>
+                                    </select>
+                                </div>
+                                <button 
+                                    onClick={() => fetchQueue(1)}
+                                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-1.5 rounded text-sm transition-colors flex items-center gap-2 border border-slate-700"
+                                >
+                                    <Search className="w-4 h-4" /> Buscar
+                                </button>
+                            </div>
+
                             <table className="w-full text-left text-sm text-slate-300 whitespace-nowrap">
                                 <thead className="text-xs uppercase bg-[#1a1b2d]/50 text-slate-400 border-b border-slate-800">
                                     <tr>
@@ -1120,6 +1225,108 @@ export default function BookinfoSyncQueuePage() {
                             </button>
                         </div>
                     </div>
+                </div>
+            )}
+
+            {/* Manual Sync Preview Modal */}
+            {manualSyncPreviewModalOpen && manualSyncPreviewData && (
+                <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <motion.div 
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="bg-[#1a1b2d] rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-700/50"
+                    >
+                        <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-[#11121d]">
+                            <div>
+                                <h2 className="text-xl font-bold flex items-center gap-2 text-white">
+                                    <Database className="w-6 h-6 text-indigo-400" />
+                                    Preview de Importação Bookinfo
+                                </h2>
+                                <p className="text-sm text-slate-400 mt-1">
+                                    Foram encontrados {manualSyncPreviewData.length} pedidos em status {syncStatusParam}.
+                                </p>
+                            </div>
+                            <button onClick={() => setManualSyncPreviewModalOpen(false)} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-[#0a0b10]">
+                            {manualSyncPreviewData.length === 0 ? (
+                                <div className="text-center text-slate-400 py-10 italic">
+                                    Nenhum pedido encontrado na consulta para {syncStatusParam}.
+                                </div>
+                            ) : (
+                                <div className="rounded-xl border border-slate-700/50 overflow-hidden bg-[#1a1b2d]">
+                                    <div className="overflow-x-auto">
+                                        <table className="min-w-full text-left text-sm text-slate-300 whitespace-nowrap">
+                                            <thead className="text-xs uppercase bg-[#11121d]/80 text-slate-400 border-b border-slate-800">
+                                                <tr>
+                                                    <th className="px-4 py-3 font-medium">B2B Tracking</th>
+                                                    <th className="px-4 py-3 font-medium">Cliente Bookinfo</th>
+                                                    <th className="px-4 py-3 font-medium text-center">Status Vínculo</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-800/60">
+                                                {manualSyncPreviewData.map((order, idx) => (
+                                                    <tr key={idx} className={order.already_imported ? 'opacity-50 bg-[#11121d]' : 'hover:bg-slate-800/30'}>
+                                                        <td className="px-4 py-3 font-mono text-xs">
+                                                            {order.id}
+                                                        </td>
+                                                        <td className="px-4 py-3">
+                                                            <div className="font-medium text-slate-200 truncate max-w-[200px]" title={order.customer_name}>
+                                                                {order.customer_name}
+                                                            </div>
+                                                            <div className="text-[11px] text-slate-500">
+                                                                CNPJ: {order.customer_cnpj} {order.customer_found_locally ? <span className="text-emerald-400">(Registrado B2B)</span> : <span className="text-rose-400">(Sem Cadastro B2B)</span>}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3 text-center">
+                                                            {order.already_imported ? (
+                                                                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold bg-amber-500/10 text-amber-500">
+                                                                    <Check className="w-3 h-3" /> Já Importado
+                                                                </span>
+                                                            ) : !order.customer_found_locally ? (
+                                                                 <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold bg-rose-500/10 text-rose-500" title="CNPJ do pedido não possui cadastro no Cronuz!">
+                                                                    <AlertCircle className="w-3 h-3" /> Bloqueado (Sem CNPJ)
+                                                                 </span>
+                                                            ) : (
+                                                                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold bg-emerald-500/10 text-emerald-400">
+                                                                    Na Fila p/ Importar
+                                                                </span>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        
+                        <div className="p-6 bg-[#11121d] flex justify-between items-center border-t border-slate-800">
+                            <span className="text-sm text-slate-400">
+                                Serão importados: <span className="text-white font-bold">{manualSyncPreviewData.filter(o => !o.already_imported && o.customer_found_locally).length}</span> pedidos.
+                            </span>
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => setManualSyncPreviewModalOpen(false)}
+                                    className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 transition-colors"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleImportManualSync}
+                                    disabled={manualSyncImporting || manualSyncPreviewData.filter(o => !o.already_imported && o.customer_found_locally).length === 0}
+                                    className="px-6 py-2.5 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg shadow-indigo-900/20"
+                                >
+                                    {manualSyncImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                                    Importar para Cronuz
+                                </button>
+                            </div>
+                        </div>
+                    </motion.div>
                 </div>
             )}
         </>
