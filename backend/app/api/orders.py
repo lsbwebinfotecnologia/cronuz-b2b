@@ -481,11 +481,11 @@ async def get_horus_debug_preview(
     if search_type == "venda" and not order.horus_pedido_venda:
         raise HTTPException(status_code=400, detail="Pedido não possui vínculo de venda com Horus (COD_PED_VENDA vazio).")
         
-    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
     if not settings or not settings.horus_enabled:
         raise HTTPException(status_code=400, detail="Integração Horus desativada para a empresa.")
         
-    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    company = db.query(Company).filter(Company.id == order.company_id).first()
     customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
     
     horus_data = None
@@ -494,7 +494,7 @@ async def get_horus_debug_preview(
     
     if company and customer:
         from app.integrators.horus_orders import HorusOrders
-        horus_client = HorusOrders(db, current_user.company_id)
+        horus_client = HorusOrders(db, order.company_id)
         try:
             raw_horus_data = await horus_client.get_order(
                 id_doc=None,
