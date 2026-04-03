@@ -706,6 +706,10 @@ async def validate_horus_orders(
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
     import_target = payload.update_target or "horus_id"
+    from sqlalchemy import func
+
+    # Definição do company_id alvo (MASTER pode escolher outra empresa, SELLER usa a sua própria)
+    target_company_id = payload.company_id if payload.company_id and current_user.type == "MASTER" else current_user.company_id
     
     if import_target == "horus_id":
         bookinfo_ids = [str(m.bookinfo_id).strip() for m in payload.mappings if str(m.bookinfo_id).strip()]
