@@ -591,7 +591,7 @@ async def job_sync_new_orders(
         ) as client:
             try:
                 # 2. Fetch new orders
-                resp = await client.get("/pedido?status=NOVO&tamanho=50")
+                resp = await client.get("/pedido?status=NOVO&tamanho=50&pagina=0")
                 resp.raise_for_status()
                 data = resp.json()
                 new_orders = data.get("itens", [])
@@ -625,13 +625,16 @@ async def job_sync_new_orders(
                     if existing_order:
                         continue
                         
-                    items_payload = order.get("itens", [])
-                    total_price = 0.0
-                    for dt_item in items_payload:
-                        qty = int(dt_item.get("quantidade", 1))
-                        unit = float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
-                        total_price += (qty * unit)
-
+                    try:
+                        detail_resp = await client.get(f"/pedido/{order_id}")
+                        if detail_resp.status_code == 200:
+                            items_payload = detail_resp.json().get("itens", [])
+                        else:
+                            items_payload = []
+                    except Exception:
+                        items_payload = []
+                        
+                    total_price = float(order.get("valor") or 0.0)
                     # 5. Mirror locally as RECEIVED
                     new_order = Order(
                         company_id=company_id,
@@ -650,7 +653,7 @@ async def job_sync_new_orders(
                     # Persist physical Items
                     for dt_item in items_payload:
                         qty = int(dt_item.get("quantidade", 1))
-                        unit = float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
+                        unit = float(dt_item.get("precoEfetivo") or dt_item.get("precoCapa") or dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
                         isbn = str(dt_item.get("isbn13") or "")
                         t_name = dt_item.get("titulo") or dt_item.get("nome") or "Livro Genérico"
                         
@@ -1094,7 +1097,7 @@ async def preview_manual_sync_bookinfo_orders(
         verify=False
     ) as client:
         try:
-            resp = await client.get(f"/pedido?status={status}&tamanho=50")
+            resp = await client.get(f"/pedido?status={status}&tamanho=50&pagina=0")
             resp.raise_for_status()
             data = resp.json()
             new_orders = data.get("itens", [])
@@ -1121,8 +1124,7 @@ async def preview_manual_sync_bookinfo_orders(
                     Order.origin == "bookinfo"
                 ).first()
                 
-                items_payload = order.get("itens", [])
-                total_price = sum((int(dt_item.get("quantidade", 1)) * float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)) for dt_item in items_payload)
+                total_price = float(order.get("valor") or 0.0)
 
                 preview_results.append({
                     "id": order_id,
@@ -1184,8 +1186,7 @@ async def run_manual_sync_import_bookinfo(
         if existing_order:
             continue
             
-        items_payload = raw_order.get("itens", [])
-        total_price = sum((int(dt_item.get("quantidade", 1)) * float(dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)) for dt_item in items_payload)
+        total_price = float(raw_order.get("valor") or 0.0)
         
         new_order = Order(
             company_id=req.company_id,
@@ -1199,6 +1200,37 @@ async def run_manual_sync_import_bookinfo(
             payload=json.dumps(raw_order)
         )
         db.add(new_order)
+        db.commit()
+        db.refresh(new_order)
+        
+        try:
+            import httpx
+            with httpx.Client(base_url="https://bookhub-api.bookinfo.com.br", verify=False) as client:
+                detail_resp = client.get(f"/pedido/{order_id}", headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+                if detail_resp.status_code == 200:
+                    items_payload = detail_resp.json().get("itens", [])
+                else:
+                    items_payload = []
+        except Exception:
+            items_payload = []
+            
+        for dt_item in items_payload:
+            qty = int(dt_item.get("quantidade", 1))
+            unit = float(dt_item.get("precoEfetivo") or dt_item.get("precoCapa") or dt_item.get("precoVenda") or dt_item.get("valorOriginal") or 0.0)
+            isbn = str(dt_item.get("isbn13") or "")
+            t_name = dt_item.get("titulo") or dt_item.get("nome") or "Livro Genérico"
+            
+            oi = OrderItem(
+                order_id=new_order.id,
+                ean_isbn=isbn,
+                name=t_name,
+                quantity=qty,
+                quantity_requested=qty,
+                unit_price=unit,
+                total_price=(qty * unit)
+            )
+            db.add(oi)
+            
         processed_count += 1
         
     db.commit()
