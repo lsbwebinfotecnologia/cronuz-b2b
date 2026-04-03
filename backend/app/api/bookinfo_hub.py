@@ -825,11 +825,12 @@ async def get_bookinfo_queue(
     if current_user.type != UserRole.MASTER:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
+    from sqlalchemy import func
     from sqlalchemy.orm import joinedload
     
     orders = db.query(Order).options(joinedload(Order.customer)).filter(
         Order.company_id == company_id,
-        Order.origin == "bookinfo"
+        func.lower(Order.origin) == "bookinfo"
     ).order_by(Order.id.desc()).all()
     
     results = []
