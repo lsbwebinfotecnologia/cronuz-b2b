@@ -316,7 +316,7 @@ export default function BookinfoSyncQueuePage() {
         }
         
         setIsAutoRunning(true);
-        const limitToProcess = Math.min(10, orders.length);
+        const limitToProcess = Math.min(50, orders.length);
         const itemsToProcess = orders.slice(0, limitToProcess);
         setAutoRunProgress({ current: 0, total: limitToProcess });
         
@@ -773,7 +773,7 @@ export default function BookinfoSyncQueuePage() {
                                 
                                 <div className="ml-auto inline-flex items-center">
                                     <button
-                                        title="Processamento em Lote sequencial (até 10 itens por vez)"
+                                        title="Processamento em Lote sequencial (até 50 itens por vez)"
                                         onClick={runAutoSyncBatch}
                                         disabled={isAutoRunning || !orders || orders.length === 0}
                                         className={`px-4 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-2 border ${
@@ -790,7 +790,7 @@ export default function BookinfoSyncQueuePage() {
                                         ) : (
                                             <>
                                                 <Terminal className="w-4 h-4" />
-                                                Auto-Processar Lote (Máx. 10)
+                                                Auto-Processar Lote (Máx. 50)
                                             </>
                                         )}
                                     </button>
