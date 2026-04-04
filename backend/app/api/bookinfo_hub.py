@@ -1141,6 +1141,7 @@ async def sync_bookinfo_queue_item(
 async def preview_manual_sync_bookinfo_orders(
     company_id: int,
     status: str,
+    page: int = 0,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1179,7 +1180,7 @@ async def preview_manual_sync_bookinfo_orders(
         verify=False
     ) as client:
         try:
-            resp = await client.get(f"/pedido?status={status}&tamanho=50&pagina=0")
+            resp = await client.get(f"/pedido?status={status}&tamanho=50&pagina={page}")
             resp.raise_for_status()
             data = resp.json()
             new_orders = data.get("itens", [])

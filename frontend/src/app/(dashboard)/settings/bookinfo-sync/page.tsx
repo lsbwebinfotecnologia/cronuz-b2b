@@ -24,6 +24,7 @@ export default function BookinfoSyncQueuePage() {
     const limit = 50;
 
     const [syncStatusParam, setSyncStatusParam] = useState('NOVO');
+    const [syncPageParam, setSyncPageParam] = useState('1');
     const [manualSyncLoading, setManualSyncLoading] = useState(false);
     const [manualSyncPreviewModalOpen, setManualSyncPreviewModalOpen] = useState(false);
     const [manualSyncPreviewData, setManualSyncPreviewData] = useState<any[] | null>(null);
@@ -134,7 +135,8 @@ export default function BookinfoSyncQueuePage() {
         if (!selectedCompanyId) return;
         setManualSyncLoading(true);
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/manual-sync/preview?company_id=${selectedCompanyId}&status=${syncStatusParam}`, {
+            const pageOffset = Math.max(0, (parseInt(syncPageParam) || 1) - 1);
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/manual-sync/preview?company_id=${selectedCompanyId}&status=${syncStatusParam}&page=${pageOffset}`, {
                 method: 'GET',
                 headers: { 'Authorization': `Bearer ${getToken()}` }
             });
@@ -602,6 +604,15 @@ export default function BookinfoSyncQueuePage() {
                                     <option value="PROCESSADO">PROCESSADO</option>
                                     <option value="FATURADO">FATURADO</option>
                                 </select>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={syncPageParam}
+                                    onChange={(e) => setSyncPageParam(e.target.value)}
+                                    className="bg-transparent text-sm text-white px-3 py-1.5 focus:outline-none focus:ring-0 mr-2 border-r border-slate-800 w-20 appearance-none text-center"
+                                    title="Nº da Página (Ex: 1, 2, 3...)"
+                                    placeholder="Pág."
+                                />
                                 <button 
                                     onClick={handleManualSync}
                                     disabled={manualSyncLoading}
