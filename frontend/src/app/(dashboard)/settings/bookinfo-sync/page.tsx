@@ -49,6 +49,9 @@ export default function BookinfoSyncQueuePage() {
     const [horusPreviewLoading, setHorusPreviewLoading] = useState(false);
     const [horusSyncing, setHorusSyncing] = useState(false);
 
+    // Auto Run Lote
+    const [isAutoRunning, setIsAutoRunning] = useState(false);
+    const [autoRunProgress, setAutoRunProgress] = useState({ current: 0, total: 0 });
 
     const [activeTab, setActiveTab] = useState<'queue' | 'import'>('queue');
     const [importing, setImporting] = useState(false);
@@ -301,6 +304,76 @@ export default function BookinfoSyncQueuePage() {
             toast.error('Erro de conexão ao sincronizar.');
         } finally {
             setHorusSyncing(false);
+        }
+    };
+
+    const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+    const runAutoSyncBatch = async () => {
+        if (!orders || orders.length === 0) {
+            toast.info('Nenhum pedido na fila para processar.');
+            return;
+        }
+        
+        setIsAutoRunning(true);
+        const limitToProcess = Math.min(10, orders.length);
+        const itemsToProcess = orders.slice(0, limitToProcess);
+        setAutoRunProgress({ current: 0, total: limitToProcess });
+        
+        const token = getToken();
+        const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+        try {
+            for (let i = 0; i < itemsToProcess.length; i++) {
+                const order = itemsToProcess[i];
+                setAutoRunProgress({ current: i + 1, total: limitToProcess });
+                setActionLoading(order.id);
+                
+                try {
+                    let syncRes = await fetch(`${baseUrl}/orders/${order.id}/sync-horus?search_type=venda`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    
+                    if (!syncRes.ok) {
+                        await delay(2000);
+                        syncRes = await fetch(`${baseUrl}/orders/${order.id}/sync-horus?search_type=origem`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                    }
+
+                    await delay(2000);
+
+                    if (syncRes.ok) {
+                        const xmlRes = await fetch(`${baseUrl}/bookinfo/queue/${order.id}/sync`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        const xmlData = await xmlRes.json();
+                        
+                        if (xmlRes.ok && xmlData.status === 'success') {
+                            await delay(2000);
+                            await fetch(`${baseUrl}/bookinfo/queue/${order.id}/complete`, {
+                                method: 'POST',
+                                headers: { 'Authorization': `Bearer ${token}` }
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error("Erro processando auto-lote id:", order.id, e);
+                }
+
+                await delay(2000);
+                setActionLoading(null);
+            }
+            
+            toast.success(`Lote de ${limitToProcess} itens processado com sucesso!`);
+        } finally {
+            setIsAutoRunning(false);
+            setAutoRunProgress({ current: 0, total: 0 });
+            setActionLoading(null);
+            fetchQueue();
         }
     };
 
@@ -697,6 +770,31 @@ export default function BookinfoSyncQueuePage() {
                                 >
                                     <Search className="w-4 h-4" /> Buscar
                                 </button>
+                                
+                                <div className="ml-auto inline-flex items-center">
+                                    <button
+                                        title="Processamento em Lote sequencial (até 10 itens por vez)"
+                                        onClick={runAutoSyncBatch}
+                                        disabled={isAutoRunning || !orders || orders.length === 0}
+                                        className={`px-4 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-2 border ${
+                                            isAutoRunning 
+                                                ? 'bg-purple-600/20 text-purple-400 border-purple-500/30 cursor-not-allowed' 
+                                                : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white border-transparent shadow-[0_0_15px_rgba(124,58,237,0.3)]'
+                                        }`}
+                                    >
+                                        {isAutoRunning ? (
+                                            <>
+                                                <RefreshCw className="w-4 h-4 animate-spin text-purple-400" />
+                                                Processando ({autoRunProgress.current}/{autoRunProgress.total})...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Terminal className="w-4 h-4" />
+                                                Auto-Processar Lote (Máx. 10)
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
                             </div>
 
                             <table className="w-full text-left text-sm text-slate-300 whitespace-nowrap">
