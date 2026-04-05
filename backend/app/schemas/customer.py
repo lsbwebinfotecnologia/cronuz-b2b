@@ -50,6 +50,7 @@ class CustomerBase(BaseModel):
     open_debts: Optional[float] = 0.0
     id_guid: Optional[str] = None
     id_doc: Optional[str] = None
+    default_payment_method: Optional[str] = "ERP_STANDARD"
 
 class CustomerCreate(CustomerBase):
     addresses: Optional[list[AddressCreate]] = []
@@ -69,6 +70,7 @@ class CustomerUpdate(BaseModel):
     open_debts: Optional[float] = None
     id_guid: Optional[str] = None
     id_doc: Optional[str] = None
+    default_payment_method: Optional[str] = None
 
 class CustomerInDBBase(CustomerBase):
     id: int

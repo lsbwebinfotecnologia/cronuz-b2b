@@ -34,7 +34,8 @@ export default function CustomerDetailsPage() {
     email: '',
     phone: '',
     document: '',
-    state_registration: ''
+    state_registration: '',
+    default_payment_method: 'ERP_STANDARD'
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -105,7 +106,8 @@ export default function CustomerDetailsPage() {
           email: data.email || '',
           phone: data.phone || '',
           document: data.document || '',
-          state_registration: data.state_registration || ''
+          state_registration: data.state_registration || '',
+          default_payment_method: data.default_payment_method || 'ERP_STANDARD'
         });
 
         try {
@@ -591,7 +593,7 @@ export default function CustomerDetailsPage() {
                          </div>
                       )}
                     </div>
-                    <div className="grid grid-cols-2 gap-y-6 gap-x-4">
+                    <div className="grid grid-cols-2 gap-y-6 gap-x-4 mt-6">
                       <div>
                         <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold mb-1">E-mail Principal</p>
                         <p className="text-sm text-slate-900 dark:text-slate-300">{customer.email || 'Não informado'}</p>
@@ -607,6 +609,14 @@ export default function CustomerDetailsPage() {
                       <div>
                         <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold mb-1">Cadastrado Em</p>
                         <p className="text-sm text-slate-900 dark:text-slate-300">{new Date(customer.created_at).toLocaleDateString('pt-BR')}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold mb-1">Método de Pagamento B2B</p>
+                        <div className="inline-flex items-center mt-1 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-100 text-indigo-700 text-sm font-medium dark:bg-indigo-500/10 dark:border-indigo-500/20 dark:text-indigo-400">
+                          {customer.default_payment_method === 'EFI_PIX_CREDIT' ? 'Pix Automático / Cartão (EFI)' :
+                           customer.default_payment_method === 'PIX_MANUAL' ? 'Depósito / PIX Manual' :
+                           'Faturamento Padrão (Duplicata/ERP)'}
+                        </div>
                       </div>
                     </div>
                  </div>
@@ -846,6 +856,18 @@ export default function CustomerDetailsPage() {
                     <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Telefone</label>
                     <input type="text" value={editFormData.phone} onChange={e => setEditFormData({...editFormData, phone: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500" />
                  </div>
+               </div>
+               <div>
+                  <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Método de Pagamento B2B</label>
+                  <select 
+                    value={editFormData.default_payment_method} 
+                    onChange={e => setEditFormData({...editFormData, default_payment_method: e.target.value})}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500"
+                  >
+                    <option value="ERP_STANDARD">Faturamento Padrão (Duplicata/ERP)</option>
+                    <option value="EFI_PIX_CREDIT">Pix Automático / Cartão (EFI)</option>
+                    <option value="PIX_MANUAL">Depósito / PIX Manual</option>
+                  </select>
                </div>
                <div className="flex justify-end gap-3 pt-6 border-t border-slate-200 mt-6 dark:border-slate-800">
                  <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-4 py-2 text-slate-500 hover:text-slate-700 transition-colors dark:text-slate-400 dark:hover:text-white">Cancelar</button>

@@ -159,7 +159,7 @@ export default function DashboardPage() {
                          }`}>
                            {order.status === "NEW" ? "Novo" : 
                             order.status === "PROCESSING" ? "Processando" :
-                            order.status === "SENT_TO_HORUS" ? "Aprovado / ERP" :
+                            order.status === "SENT_TO_HORUS" ? "Aprovado (ERP)" :
                             order.status === "DISPATCH" ? "Em Separação" :
                             order.status === "INVOICED" ? "Faturado" :
                             order.status === "CANCELLED" ? "Cancelado" : order.status}

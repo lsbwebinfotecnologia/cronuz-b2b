@@ -337,7 +337,7 @@ export default function CustomerProfilePage() {
                            }`}>
                              {order.status === "NEW" ? "Novo" : 
                               order.status === "PROCESSING" ? "Aguardando Pagamento" :
-                              order.status === "SENT_TO_HORUS" ? "Pago" :
+                              order.status === "SENT_TO_HORUS" ? "Em Processamento" :
                               order.status === "DISPATCH" ? "Em Separação" :
                               order.status === "INVOICED" ? "Faturado" :
                               order.status === "COMPLETED" ? "Concluído" :

@@ -29,6 +29,7 @@ class Customer(Base):
     discount = Column(Float, default=0.0, nullable=False)
     open_debts = Column(Float, default=0.0, nullable=False)
     consignment_status = Column(String(50), default="INACTIVE", nullable=False) # e.g., ACTIVE, BLOCKED, INACTIVE
+    default_payment_method = Column(String(50), default="ERP_STANDARD", nullable=True) # ERP_STANDARD, EFI_PIX_CREDIT, PIX_MANUAL
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

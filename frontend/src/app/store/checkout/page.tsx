@@ -120,10 +120,20 @@ export default function CheckoutPage() {
                      <span className="text-slate-500">Nº do Pedido Interno</span>
                      <span className="font-bold text-slate-900 dark:text-white">#{orderComplete.order_id}</span>
                   </div>
-                  <div className="flex justify-between items-center">
+                  <div className="flex justify-between items-center mb-4 pb-4 border-b border-slate-200 dark:border-slate-700">
                      <span className="text-slate-500">Nº do Pedido (Horus ERP)</span>
                      <span className="font-bold text-[var(--color-primary-base)]">{orderComplete.horus_id !== 'N/A' ? `#${orderComplete.horus_id}` : 'Sem integração ERP'}</span>
                   </div>
+                  {customer?.default_payment_method === 'PIX_MANUAL' && (
+                     <div className="text-sm text-center text-indigo-700 dark:text-indigo-400 font-medium bg-indigo-50 dark:bg-indigo-500/10 p-3 rounded-lg">
+                       Lembrete: Sua forma de pagamento é <b>PIX Manual / Depósito</b>. Nossa equipe entrará em contato com a chave PIX, ou você pode requisitar o Financeiro via WhatsApp.
+                     </div>
+                  )}
+                  {(!customer?.default_payment_method || customer?.default_payment_method === 'ERP_STANDARD') && (
+                     <div className="text-sm text-center text-slate-600 dark:text-slate-400">
+                       As duplicatas / boletos serão emitidos automaticamente pelo nosso ERP no momento do faturamento físico.
+                     </div>
+                  )}
                </div>
                
                <Link href="/store" className="inline-block w-full text-center bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-bold py-4 rounded-xl transition-colors">
@@ -281,7 +291,11 @@ export default function CheckoutPage() {
                        </div>
                        <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
                            <span className="flex items-center gap-2"><CreditCard className="w-4 h-4"/> Faturamento</span>
-                           <span className="text-slate-700 dark:text-slate-300">Padrão do Cliente</span>
+                           <span className="text-slate-700 dark:text-slate-300 font-medium">
+                             {customer?.default_payment_method === 'EFI_PIX_CREDIT' ? 'Pix Automático / Cartão' :
+                              customer?.default_payment_method === 'PIX_MANUAL' ? 'Depósito / PIX Manual' :
+                              'Boleto a Prazo ERP'}
+                           </span>
                        </div>
                        <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
                            <span className="text-lg font-bold text-slate-900 dark:text-white">Total Geral</span>

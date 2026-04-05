@@ -64,7 +64,7 @@ const statusColorMap: Record<string, string> = {
 const statusLabelMap: Record<string, string> = {
     "NEW": "Novo",
     "PROCESSING": "Aguardando Pagamento",
-    "SENT_TO_HORUS": "Pago",
+    "SENT_TO_HORUS": "Em Processamento",
     "DISPATCH": "Em Separação",
     "INVOICED": "Faturado",
     "COMPLETED": "Concluído",
@@ -258,7 +258,7 @@ export default function StoreOrderDetailPage() {
                                 {[
                                     { key: "NEW", label: "Novo", i: 0 },
                                     { key: "PROCESSING", label: "Aguardando Pagamento", i: 1 },
-                                    { key: "SENT_TO_HORUS", label: "Pago", i: 2 },
+                                    { key: "SENT_TO_HORUS", label: "Em Processamento", i: 2 },
                                     { key: "INVOICED", label: "Faturado", i: 3 },
                                     { key: "COMPLETED", label: "Concluído", i: 4 }
                                 ].map((step) => {

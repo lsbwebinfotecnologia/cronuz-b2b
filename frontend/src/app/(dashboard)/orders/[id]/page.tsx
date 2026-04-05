@@ -79,7 +79,7 @@ const statusColorMap: Record<string, string> = {
 const statusLabelMap: Record<string, string> = {
     "NEW": "Novo",
     "PROCESSING": "Processando",
-    "SENT_TO_HORUS": "Aprovado / ERP",
+    "SENT_TO_HORUS": "Aprovado (ERP)",
     "DISPATCH": "Em Separação",
     "INVOICED": "Faturado",
     "CANCELLED": "Cancelado"
