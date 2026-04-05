@@ -353,13 +353,13 @@ export default function OrderDetailPage() {
                             
                             {[
                                 { key: "NEW", label: "Realizado", i: 0 },
-                                { key: "PROCESSING", label: "Processando", i: 1 },
-                                { key: "SENT_TO_HORUS", label: "Aprovado (ERP)", i: 2 },
-                                { key: "DISPATCH", label: "Em Separação", i: 3 },
-                                { key: "INVOICED", label: "Faturado", i: 4 },
-                                { key: "CONCLUIDO", label: "Concluído", i: 5 }
+                                { key: "SENT_TO_HORUS", label: "Aprovado (ERP)", i: 1 },
+                                { key: "INVOICED", label: "Faturado", i: 2 },
+                                { key: "CONCLUIDO", label: "Concluído", i: 3 }
                             ].map((step) => {
-                                const currentStatusIndex = ["NEW", "PROCESSING", "SENT_TO_HORUS", "DISPATCH", "INVOICED", "CONCLUIDO"].indexOf(order.status);
+                                const currentStatusIndex = ["NEW", "SENT_TO_HORUS", "INVOICED", "CONCLUIDO"].indexOf(
+                                    ["DISPATCH", "PROCESSING"].includes(order.status) ? "SENT_TO_HORUS" : order.status
+                                );
                                 const isCompleted = step.i <= currentStatusIndex;
                                 const isCurrent = step.key === order.status;
                                 

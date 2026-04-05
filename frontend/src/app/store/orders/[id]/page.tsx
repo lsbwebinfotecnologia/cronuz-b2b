@@ -257,13 +257,12 @@ export default function StoreOrderDetailPage() {
                                 
                                 {[
                                     { key: "NEW", label: "Novo", i: 0 },
-                                    { key: "PROCESSING", label: "Aguardando Pagamento", i: 1 },
-                                    { key: "SENT_TO_HORUS", label: "Em Processamento", i: 2 },
-                                    { key: "INVOICED", label: "Faturado", i: 3 },
-                                    { key: "COMPLETED", label: "Concluído", i: 4 }
+                                    { key: "SENT_TO_HORUS", label: "Em Processamento", i: 1 },
+                                    { key: "INVOICED", label: "Faturado", i: 2 },
+                                    { key: "COMPLETED", label: "Concluído", i: 3 }
                                 ].map((step) => {
-                                    const currentStatusIndex = ["NEW", "PROCESSING", "SENT_TO_HORUS", "INVOICED", "COMPLETED"].indexOf(
-                                        ["DISPATCH"].includes(order.status) ? "INVOICED" : order.status
+                                    const currentStatusIndex = ["NEW", "SENT_TO_HORUS", "INVOICED", "COMPLETED"].indexOf(
+                                        ["DISPATCH", "PROCESSING"].includes(order.status) ? "SENT_TO_HORUS" : order.status
                                     );
                                     const isCompleted = step.i <= currentStatusIndex;
                                     const isCurrent = step.key === order.status;
