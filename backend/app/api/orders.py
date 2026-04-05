@@ -117,6 +117,7 @@ def get_orders(
     skip: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
     search: Optional[str] = None,
+    customer_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -138,6 +139,9 @@ def get_orders(
         else:
             query = query.filter(Company.tenant_id == current_user.tenant_id)
             
+    if customer_id:
+        query = query.filter(Order.customer_id == customer_id)
+        
     query = query.filter(Order.status != "NEW")
     
     if search:

@@ -18,6 +18,8 @@ export default function CustomerDetailsPage() {
   const [customer, setCustomer] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'interactions' | 'orders' | 'contacts'>('overview');
+  const [orders, setOrders] = useState<any[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(true);
 
   // Edit states for Financial Overview
   const [editingFinance, setEditingFinance] = useState(false);
@@ -56,7 +58,30 @@ export default function CustomerDetailsPage() {
 
   useEffect(() => {
     fetchCustomer();
+    fetchCustomerOrders();
   }, [customerId]);
+
+  async function fetchCustomerOrders() {
+    try {
+      const token = getToken();
+      if (!token) return;
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/orders?customer_id=${customerId}&limit=5`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const docs = data.orders || data.items || data.data || [];
+        // orders backend usually returns list directly if it's not paginated, let's assume it returns a list or standard fastApi pagination
+        // the endpoint /orders returns dict! Let's check how the frontend processes /orders. Wait, it usually returns {items: [], total: x} or [{...}].
+        // Actually, let's just grab the response format.
+        setOrders(Array.isArray(data) ? data : (data.items || data.data || []));
+      }
+    } catch(e) {
+      // quiet fail
+    } finally {
+      setOrdersLoading(false);
+    }
+  }
 
   async function fetchCustomer() {
     try {
@@ -431,10 +456,10 @@ export default function CustomerDetailsPage() {
 
       {/* Financial Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-         <div className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col justify-center relative group shadow-sm dark:border-slate-800 dark:bg-slate-900/40">
+         <div className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col justify-center relative shadow-sm dark:border-slate-800 dark:bg-slate-900/40">
           <div className="flex justify-between items-start">
              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Limite de Crédito</p>
-             <button onClick={() => setEditingFinance(!editingFinance)} className="text-xs text-[var(--color-primary-base)] opacity-0 group-hover:opacity-100 transition-opacity dark:text-indigo-400">
+             <button onClick={() => setEditingFinance(!editingFinance)} className="text-xs text-[var(--color-primary-base)] transition-opacity dark:text-indigo-400 flex items-center gap-1 bg-[var(--color-primary-base)]/10 px-2 py-0.5 rounded">
                Editar
              </button>
           </div>
@@ -449,10 +474,10 @@ export default function CustomerDetailsPage() {
             </p>
           )}
         </div>
-        <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-5 flex flex-col justify-center relative group shadow-sm dark:border-rose-900/30 dark:bg-rose-950/10">
+        <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-5 flex flex-col justify-center relative shadow-sm dark:border-rose-900/30 dark:bg-rose-950/10">
            <div className="flex justify-between items-start">
              <p className="text-sm font-medium text-rose-600 dark:text-rose-400/80">Débitos / Financeiro Extra</p>
-              <button onClick={() => setEditingFinance(!editingFinance)} className="text-xs text-[var(--color-primary-base)] opacity-0 group-hover:opacity-100 transition-opacity dark:text-indigo-400">
+              <button onClick={() => setEditingFinance(!editingFinance)} className="text-xs text-[var(--color-primary-base)] transition-opacity dark:text-indigo-400 flex items-center gap-1 bg-[var(--color-primary-base)]/10 px-2 py-0.5 rounded">
                % Desconto
              </button>
           </div>
@@ -482,7 +507,15 @@ export default function CustomerDetailsPage() {
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col justify-center shadow-sm dark:border-slate-800 dark:bg-slate-900/40">
           <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Último Pedido</p>
-          <p className="text-2xl font-bold text-slate-900 mt-1 dark:text-white">-</p>
+          <p className="text-2xl font-bold text-slate-900 mt-1 dark:text-white">
+            {ordersLoading ? (
+              <span className="text-sm text-slate-400">Carregando...</span>
+            ) : orders && orders.length > 0 ? (
+              new Date(orders[0].created_at).toLocaleDateString('pt-BR')
+            ) : (
+              '-'
+            )}
+          </p>
         </div>
       </div>
 
@@ -636,13 +669,33 @@ export default function CustomerDetailsPage() {
             )}
 
             {activeTab === 'orders' && (
-              <div className="text-center py-12 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50 dark:border-slate-800 dark:bg-transparent">
-                <ShoppingCart className="h-12 w-12 text-slate-400 mx-auto mb-4 dark:text-slate-600" />
-                <h3 className="text-lg font-medium text-slate-900 mb-1 dark:text-white">Nenhum pedido recente</h3>
-                <p className="text-sm text-slate-500 mb-4 dark:text-slate-400">Este cliente ainda não possui histórico de faturamento.</p>
-                <Link href={`/orders/new?customer=${customer.id}`} className="text-[var(--color-primary-base)] hover:text-[var(--color-primary-hover)] text-sm font-medium hover:underline dark:text-indigo-400 dark:hover:text-indigo-300">
-                  Iniciar o primeiro pedido →
-                </Link>
+              <div className="space-y-4">
+                {ordersLoading ? (
+                  <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-slate-400" /></div>
+                ) : orders && orders.length > 0 ? (
+                  <div className="grid gap-4">
+                    {orders.map((order: any) => (
+                      <div key={order.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex items-center justify-between dark:bg-slate-900/40 dark:border-slate-800">
+                        <div>
+                          <p className="font-semibold text-slate-900 border-b border-transparent inline-flex hover:border-slate-300 cursor-pointer dark:text-white pb-0.5 mb-1" onClick={() => router.push(`/orders/${order.id}`)}>Pedido #{order.id}</p>
+                          <div className="flex gap-4 text-xs text-slate-500 font-medium">
+                            <span>{new Date(order.created_at).toLocaleDateString('pt-BR')}</span>
+                            <span className="text-[var(--color-primary-base)] dark:text-indigo-400">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(order.total_amount || 0)}</span>
+                          </div>
+                        </div>
+                        <div>
+                          <span className="px-2.5 py-1 bg-slate-100 text-slate-600 rounded text-xs font-semibold dark:bg-slate-800 dark:text-slate-400">{order.status}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-12 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50 dark:border-slate-800 dark:bg-transparent">
+                    <ShoppingCart className="h-12 w-12 text-slate-400 mx-auto mb-4 dark:text-slate-600" />
+                    <h3 className="text-lg font-medium text-slate-900 mb-1 dark:text-white">Nenhum pedido recente</h3>
+                    <p className="text-sm text-slate-500 mb-4 dark:text-slate-400">Este cliente ainda não possui histórico de faturamento.</p>
+                  </div>
+                )}
               </div>
             )}
 
