@@ -964,7 +964,9 @@ async def get_customer_order_detail(
                     horus_data = horus_data[0]
 
                 if not horus_data:
-                    new_status = "CANCELLED"
+                    # Se não encontrou o pedido (retornou False ou Vazio), mantemos o status atual.
+                    # Ele pode ter acabado de ser criado e ainda não integrado totalmente.
+                    new_status = order.status
                 elif isinstance(horus_data, dict) and horus_data.get("Falha"):
                     new_status = order.status
                 elif horus_data and isinstance(horus_data, dict):

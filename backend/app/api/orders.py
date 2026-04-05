@@ -224,7 +224,8 @@ async def get_order_detail(
                 print(f"DEBUG HORUS SYNC SELLER (order {order.id}): {horus_data}")
 
                 if not horus_data:
-                    new_status = "CANCELLED"
+                    # Se não encontrou o pedido (pode estar na fila do Horus ainda), mantemos o status.
+                    new_status = order.status
                 elif isinstance(horus_data, dict) and horus_data.get("Falha"):
                     new_status = order.status
                 elif horus_data and isinstance(horus_data, dict):
