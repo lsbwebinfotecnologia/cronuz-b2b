@@ -10,7 +10,9 @@ function SearchResults() {
   const searchParams = useSearchParams();
   const rawQuery = searchParams.get('q') || '';
   const query = decodeURIComponent(rawQuery);
-
+  const rawLabel = searchParams.get('label');
+  const displayTitle = rawLabel ? decodeURIComponent(rawLabel) : query;
+  
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -72,7 +74,7 @@ function SearchResults() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
            <h1 className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
              <SearchIcon className="w-6 h-6 text-[var(--color-primary-base)]" />
-             Resultados para "{query}"
+             Resultados para "{displayTitle}"
            </h1>
            <p className="text-slate-500 mt-2">
              {loading ? 'Buscando...' : `${products.length} produto(s) encontrado(s)`}
@@ -130,7 +132,7 @@ function SearchResults() {
              <PackageOpen className="w-16 h-16 text-slate-300 dark:text-slate-600 mb-4" />
              <h3 className="text-lg font-bold text-slate-700 dark:text-slate-300">Nenhum produto encontrado</h3>
              <p className="text-slate-500 dark:text-slate-500 max-w-md mt-2">
-               Não encontramos nenhum título com o termo "{query}". Tente buscar por outro nome de livro, autor, editora ou ISBN.
+               Não encontramos nenhum título com o termo "{displayTitle}". Tente buscar por outro nome de livro, autor, editora ou ISBN.
              </p>
           </div>
         )}

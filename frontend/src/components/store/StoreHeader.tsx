@@ -110,7 +110,7 @@ export function StoreHeader() {
                            <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Categorias</h5>
                            <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                               {categories.map((cat, idx) => (
-                                 <Link key={idx} href={`/store/search?q=${encodeURIComponent(cat.name)}&filter=default`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
+                                 <Link key={idx} href={`/store/search?q=${encodeURIComponent(cat.id || cat.name)}&filter=COD_GENERO&label=${encodeURIComponent(cat.name)}`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
                                     {cat.name}
                                  </Link>
                               ))}
@@ -123,7 +123,7 @@ export function StoreHeader() {
                            <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-3 px-3">Marcas / Editoras</h5>
                            <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                               {brands.map((brand, idx) => (
-                                 <Link key={idx} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
+                                 <Link key={idx} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA&label=${encodeURIComponent(brand.name)}`} className="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-light)]/10 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap">
                                     {brand.name}
                                  </Link>
                               ))}
@@ -319,12 +319,12 @@ export function StoreHeader() {
                      <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800">
                         <span className="font-bold text-slate-500 text-xs uppercase px-3 block mb-2">Departamentos</span>
                         {categories.map((cat, idx) => (
-                           <Link key={`cat-${idx}`} href={`/store/search?q=${encodeURIComponent(cat.name)}&filter=default`} onClick={() => setIsMobileMenuOpen(false)} className="block p-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
+                           <Link key={`cat-${idx}`} href={`/store/search?q=${encodeURIComponent(cat.id || cat.name)}&filter=COD_GENERO&label=${encodeURIComponent(cat.name)}`} onClick={() => setIsMobileMenuOpen(false)} className="block p-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
                               {cat.name}
                            </Link>
                         ))}
                         {brands.map((brand, idx) => (
-                           <Link key={`brand-${idx}`} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA`} onClick={() => setIsMobileMenuOpen(false)} className="block p-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
+                           <Link key={`brand-${idx}`} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA&label=${encodeURIComponent(brand.name)}`} onClick={() => setIsMobileMenuOpen(false)} className="block p-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
                               {brand.name}
                            </Link>
                         ))}
