@@ -673,7 +673,12 @@ async def manual_sync_horus(
                     if local_match:
                         identifier = h_isbn or h_sku
                         h_seen_identifiers.add(identifier)
-                        if local_match.quantity != h_qty_req or local_match.quantity_fulfilled != h_qty_f or abs(local_match.unit_price - h_unit_price) > 0.01:
+                        
+                        # Fix floating point comparison using precise rounding (2 decimal places)
+                        local_price_rnd = round(local_match.unit_price, 2)
+                        h_price_rnd = round(h_unit_price, 2)
+                        
+                        if local_match.quantity != h_qty_req or local_match.quantity_fulfilled != h_qty_f or local_price_rnd != h_price_rnd:
                             local_match.quantity = h_qty_req
                             local_match.quantity_requested = h_qty_req 
                             local_match.quantity_fulfilled = h_qty_f
