@@ -348,12 +348,15 @@ async def get_order_detail(
                         db.commit() # commit once so order.items is refreshed if we added/removed
                         db.refresh(order)
                         
+                        db.expire(order, ['items'])
+                        
                         new_subtotal = sum(i.total_price for i in order.items)
                         order.subtotal = new_subtotal
                         order.total = new_subtotal - (order.discount or 0)
                         
                         db.commit()
                         db.refresh(order)
+                        db.expire(order, ['items'])
             except Exception as e:
                 print(f"Error syncing order {order.id} with Horus: {e}")
             finally:
@@ -714,11 +717,15 @@ async def manual_sync_horus(
                     order.sync_status = "SYNCED"
                     db.commit()
                     db.refresh(order)
+                    
+                    db.expire(order, ['items'])
+                    
                     new_subtotal = sum(i.total_price for i in order.items)
                     order.subtotal = new_subtotal
                     order.total = new_subtotal - (order.discount or 0)
                     db.commit()
                     db.refresh(order)
+                    db.expire(order, ['items'])
                     
             return {"status": "success", "message": "Sincronizado com sucesso."}
         except Exception as e:
