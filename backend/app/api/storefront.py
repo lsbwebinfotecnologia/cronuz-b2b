@@ -69,7 +69,7 @@ def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dic
         "short_description": item.get("DESC_SINOPSE", ""),
         "long_description": item.get("DESC_SINOPSE", ""),
         "brand": item.get("NOM_EDITORA", ""),
-        "category": {"id": 0, "name": item.get("NOM_EDITORA", ""), "company_id": company_id, "active": True},
+        "category": {"id": 0, "name": item.get("GENERO_NIVEL_1", item.get("DSC_GENERO", "")), "company_id": company_id, "active": True},
         "weight_kg": None,
         "width_cm": None,
         "height_cm": None,
