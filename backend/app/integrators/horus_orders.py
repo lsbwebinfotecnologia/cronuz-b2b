@@ -97,7 +97,8 @@ class HorusOrders(HorusClient):
             "COD_PEDIDO_ORIGEM": cod_pedido_origem,
             "BARRAS_ISBN": isbn,
             "QTD_PEDIDA": qty,
-            "VLR_LIQUIDO": price,
+            # Horus expects Brazilian locale (comma for decimals), otherwise it strips dots and multiplies values
+            "VLR_LIQUIDO": f"{price:.2f}".replace(".", ","),
         }
         
         return await self.get("InsItensPedidoVenda", params=params)
