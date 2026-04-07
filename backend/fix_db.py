@@ -4,11 +4,11 @@ from app.db.session import SessionLocal
 
 def fix():
     db = SessionLocal()
-    # Recalculate item totals
+    # Recalculate item totals correctly using quantity_requested which is the truth from Horus or from the Store
     db.execute(text("""
         UPDATE ord_order_item 
-        SET total_price = unit_price * quantity 
-        WHERE total_price != unit_price * quantity;
+        SET quantity = quantity_requested,
+            total_price = unit_price * quantity_requested 
     """))
     db.commit()
 

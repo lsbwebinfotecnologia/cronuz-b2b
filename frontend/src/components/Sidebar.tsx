@@ -45,6 +45,7 @@ const masterNavigation: NavItem[] = [
   { name: 'Hub Sync Bookinfo', href: '/settings/bookinfo-sync', icon: RefreshCw },
   { name: 'Integradores', href: '/system-integrators', icon: Layers },
   { name: 'Leads', href: '/leads', icon: Inbox },
+  { name: 'Atualizações', href: '/changelog', icon: FileText },
 ];
 
 const sellerNavigation: NavItem[] = [
