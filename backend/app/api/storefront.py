@@ -42,8 +42,9 @@ def calculate_product_availability(stock_qty: int, situacao: str = None, is_pre_
     return allow_purchase, status_label
 
 def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dict:
-    vlr_capa = float(str(item.get("VLR_CAPA", "0")).replace(',', '.')) if "VLR_CAPA" in item else 0.0
-    vlr_liq = float(str(item.get("VLR_LIQ_CLI", item.get("VLR_LIQ_DESCONTO_PDV", "0"))).replace(',', '.'))
+    from app.core.utils import parse_horus_price
+    vlr_capa = parse_horus_price(item.get("VLR_CAPA", "0")) if "VLR_CAPA" in item else 0.0
+    vlr_liq = parse_horus_price(item.get("VLR_LIQ_CLI", item.get("VLR_LIQ_DESCONTO_PDV", "0")))
     
     stock_quantity = int(item.get("SALDO_DISPONIVEL", 0))
     situacao = item.get("SITUACAO_ITEM", "")
@@ -291,6 +292,8 @@ async def _fetch_from_horus_storefront(
                     search_option = "NOM_AUTOR"
                 elif search_filter == "NOM_EDITORA":
                     search_option = "NOM_EDITORA"
+                elif search_filter == "COD_GENERO":
+                    search_option = "COD_GENERO"
                 else:
                     search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
             else: # PRODUCT
@@ -1030,9 +1033,8 @@ async def get_customer_order_detail(
                             h_qty_req = int(float(h_item.get("QT_PEDIDA", 0)))
                             h_qty_f = int(float(h_item.get("QTD_ATENDIDA", 0)))
                             
-                            # Parse price, horus sends comma for decimals e.g "29,19"
-                            h_price_str = str(h_item.get("VLR_LIQUIDO", "0")).replace(".", "").replace(",", ".")
-                            h_unit_price = float(h_price_str)
+                            from app.core.utils import parse_horus_price
+                            h_unit_price = parse_horus_price(h_item.get("VLR_LIQUIDO", "0"))
                         except (ValueError, TypeError):
                             continue
                             

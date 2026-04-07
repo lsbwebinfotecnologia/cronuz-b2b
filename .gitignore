@@ -39,3 +39,5 @@ credentials*
 
 # Uploads / Dynamic Content
 frontend/public/uploads/
+.local_unreleased_changes.md
+.local_changelog.md

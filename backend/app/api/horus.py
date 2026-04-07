@@ -80,17 +80,11 @@ async def get_horus_customer(
         
         # Extract and normalize financial data
         data = result.get("data", {})
-        def parse_br_money(val) -> float:
-            if not val:
-                return 0.0
-            try:
-                return float(str(val).replace(".", "").replace(",", "."))
-            except ValueError:
-                return 0.0
+        from app.core.utils import parse_horus_price
                 
         result["financials"] = {
-            "credit_limit": parse_br_money(data.get("LIMITE", "0")),
-            "open_debts": parse_br_money(data.get("TOTAL_DEBITOS", "0")),
+            "credit_limit": parse_horus_price(data.get("LIMITE", "0")),
+            "open_debts": parse_horus_price(data.get("TOTAL_DEBITOS", "0")),
             "consignment_status": "ACTIVE" if data.get("B2B_ACEITA_PED_CONSIG", "N") == "S" else "INACTIVE"
         }
         

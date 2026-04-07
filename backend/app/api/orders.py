@@ -288,9 +288,8 @@ async def get_order_detail(
                             h_qty_req = int(float(h_item.get("QT_PEDIDA", 0)))
                             h_qty_f = int(float(h_item.get("QTD_ATENDIDA", 0)))
                             
-                            # Parse price, horus sends comma for decimals e.g "29,19"
-                            h_price_str = str(h_item.get("VLR_LIQUIDO", "0")).replace(".", "").replace(",", ".")
-                            h_unit_price = float(h_price_str)
+                            from app.core.utils import parse_horus_price
+                            h_unit_price = parse_horus_price(h_item.get("VLR_LIQUIDO", "0"))
                         except (ValueError, TypeError):
                             continue
                             
@@ -660,10 +659,8 @@ async def manual_sync_horus(
                         h_qty_req = int(float(h_item.get("QT_PEDIDA", 0)))
                         h_qty_f = int(float(h_item.get("QTD_ATENDIDA", 0)))
                         raw_price = h_item.get("VLR_LIQUIDO", 0)
-                        if isinstance(raw_price, str):
-                            h_unit_price = float(raw_price.replace(".", "").replace(",", "."))
-                        else:
-                            h_unit_price = float(raw_price)
+                        from app.core.utils import parse_horus_price
+                        h_unit_price = parse_horus_price(raw_price)
                     except (ValueError, TypeError):
                         continue
                         

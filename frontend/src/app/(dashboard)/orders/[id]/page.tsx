@@ -403,13 +403,13 @@ export default function OrderDetailPage() {
                                         <h3 className={`text-sm font-bold text-slate-900 dark:text-white truncate ${order.status === "CANCELLED" ? "line-through" : ""}`}>
                                             {item.name || "Produto não identificado"}
                                         </h3>
-                                        <div className="flex items-center gap-3 mt-1.5">
+                                        <div className="flex flex-wrap items-center gap-2 mt-1.5">
                                             <span className="text-xs text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded font-mono">
-                                                SKU: {item.sku}
+                                                {item.sku}
                                             </span>
                                             {item.ean_isbn && (
                                                 <span className="text-xs text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded font-mono">
-                                                    EAN/ISBN: {item.ean_isbn}
+                                                    {item.ean_isbn}
                                                 </span>
                                             )}
                                         </div>

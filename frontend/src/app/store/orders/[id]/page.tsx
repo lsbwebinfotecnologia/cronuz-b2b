@@ -363,20 +363,14 @@ export default function StoreOrderDetailPage() {
                             </div>
                         </div>
 
-                        {/* Integration Details */}
-                        {order.horus_pedido_venda && (
+                        {/* Logistics & Documents Details */}
+                        {(order.tracking_code || order.invoice_xml_available) && (
                             <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 border border-slate-200 dark:border-slate-700 shadow-sm">
                                 <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2 uppercase tracking-wider">
                                     <Truck className="w-4 h-4 text-slate-400" />
-                                    Integração ERP
+                                    Logística e Documentos
                                 </h2>
                                 <div className="space-y-4">
-                                    <div>
-                                        <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Cód. Rastreio Interno</p>
-                                        <p className="text-sm font-medium text-slate-900 dark:text-white font-mono bg-slate-50 dark:bg-slate-900 p-2 rounded border border-slate-100 dark:border-slate-800">
-                                            {order.horus_pedido_venda}
-                                        </p>
-                                    </div>
                                     
                                     {order.tracking_code && (
                                         <div>
@@ -388,7 +382,7 @@ export default function StoreOrderDetailPage() {
                                     )}
 
                                     {order.invoice_xml_available && (
-                                        <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
+                                        <div className={order.tracking_code ? "pt-4 border-t border-slate-100 dark:border-slate-700" : ""}>
                                             <button
                                                 onClick={handleDownloadInvoice}
                                                 className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50 rounded-xl transition-colors font-medium text-sm"

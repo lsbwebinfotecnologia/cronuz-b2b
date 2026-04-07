@@ -1,15 +1,32 @@
-import sys
-import os
-
-sys.path.append(os.getcwd())
-
-from app.db.session import engine
+import asyncio
 from sqlalchemy import text
+from app.db.session import SessionLocal
 
-try:
-    with engine.connect() as conn:
-        conn.execute(text('ALTER TABLE sub_customer ADD COLUMN efi_subscription_id INTEGER;'))
-        conn.commit()
-        print("Column efi_subscription_id added successfully!")
-except Exception as e:
-    print(f"Error alternating table: {e}")
+def fix():
+    db = SessionLocal()
+    # Recalculate item totals
+    db.execute(text("""
+        UPDATE ord_order_item 
+        SET total_price = unit_price * quantity 
+        WHERE total_price != unit_price * quantity;
+    """))
+    db.commit()
+
+    # Recalculate order subtotal
+    db.execute(text("""
+        UPDATE ord_order o 
+        SET subtotal = COALESCE((SELECT SUM(total_price) FROM ord_order_item i WHERE i.order_id = o.id), 0)
+    """))
+    db.commit()
+
+    # Recalculate order total
+    db.execute(text("""
+        UPDATE ord_order 
+        SET total = subtotal - COALESCE(discount, 0)
+    """))
+    db.commit()
+
+    print("ALL TOTALS RECALCULATED!")
+
+if __name__ == "__main__":
+    fix()

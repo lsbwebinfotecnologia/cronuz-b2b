@@ -137,8 +137,7 @@ export default function OrdersPage() {
                         <thead>
                             <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
                                 <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cód. Interno</th>
-                                <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cód. parceiro</th>
-                                <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cód. Horus</th>
+                                <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Integrações</th>
                                 <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cliente</th>
                                 <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Data</th>
                                 <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
@@ -166,28 +165,27 @@ export default function OrdersPage() {
                                             <span className="text-sm font-semibold text-slate-900 dark:text-white">#{order.id}</span>
                                         </td>
                                         <td className="py-3 px-4">
-                                            {order.external_id ? (
-                                                <div className="flex flex-col">
-                                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono" title="Cód parceiro (idOrderPartner)">
-                                                       {order.external_id}
-                                                   </span>
-                                                   {order.partner_reference && (
-                                                       <span className="text-[10px] text-slate-500 font-mono mt-0.5" title="Referência parceiro (idReference)">Ref: {order.partner_reference}</span>
-                                                   )}
-                                                   <span className="text-[10px] text-slate-400 uppercase mt-0.5 px-1">{order.origin}</span>
-                                                </div>
-                                            ) : (
-                                                <span className="text-xs text-slate-400 italic">-</span>
-                                            )}
-                                        </td>
-                                        <td className="py-3 px-4">
-                                            {order.horus_pedido_venda ? (
-                                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-800 border border-slate-200 font-mono">
-                                                    {order.horus_pedido_venda}
-                                                </span>
-                                            ) : (
-                                                <span className="text-xs text-slate-400 italic">Pendente</span>
-                                            )}
+                                            <div className="flex flex-col gap-1.5">
+                                                {order.external_id && (
+                                                    <div className="flex flex-col">
+                                                       <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 uppercase w-fit" title="Cód parceiro (idOrderPartner)">
+                                                           {order.external_id}
+                                                       </span>
+                                                       {order.partner_reference && (
+                                                           <span className="text-[10px] text-slate-500 font-mono mt-0.5" title="Referência parceiro (idReference)">Ref: {order.partner_reference}</span>
+                                                       )}
+                                                       <span className="text-[9px] text-slate-400 uppercase font-bold mt-0.5 px-0.5 tracking-wider">{order.origin}</span>
+                                                    </div>
+                                                )}
+                                                
+                                                {order.horus_pedido_venda ? (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 uppercase w-fit tracking-wider">
+                                                        HORUS #{order.horus_pedido_venda}
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-xs text-slate-400 italic">Horus Pendente</span>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="py-3 px-6">
                                             {order.customer ? (
