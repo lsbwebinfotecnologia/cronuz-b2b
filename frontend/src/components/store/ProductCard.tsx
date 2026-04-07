@@ -105,8 +105,13 @@ export function ProductCard({ product }: ProductProps) {
              </span>
           )}
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-1 uppercase tracking-tight font-medium">
-            {product.brand || (product.category ? product.category.name : 'Vários Autores')}
+            {product.brand || 'Vários Autores'}
           </p>
+          {product.category?.name && (
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 line-clamp-1 uppercase tracking-tight mt-0.5">
+              {product.category.name}
+            </p>
+          )}
           
            <div className="mt-4 flex flex-col mb-4">
               <div className="flex items-end gap-2">

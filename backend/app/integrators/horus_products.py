@@ -54,16 +54,12 @@ class HorusProducts(HorusClient):
         else:
             if term:
                 if search_option:
-                    # Some endpoints specifically need NOME instead of NOM_ITEM
-                    if search_option == "NOM_ITEM":
-                        params["NOME"] = term
-                    else:
-                        params[search_option] = term
+                    params[search_option] = term
                 else:
                     if term.isdigit():
                         params["BARRAS_ISBN"] = term
                     else:
-                        params["NOME"] = term
+                        params["NOM_ITEM"] = term
                         
         # Support for additional kwargs
         params.update(kwargs)
