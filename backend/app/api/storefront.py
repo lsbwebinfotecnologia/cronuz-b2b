@@ -57,6 +57,10 @@ def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dic
         allow_backorder=allow_backorder
     )
     
+    cat_id = item.get("COD_SECAO") or item.get("COD_GENERO") or item.get("ID_GENERO") or 0
+    if isinstance(cat_id, str) and cat_id.isdigit():
+        cat_id = int(cat_id)
+    
     return {
         "id": int(item.get("COD_ITEM", 0)),
         "company_id": company_id,
@@ -70,7 +74,7 @@ def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dic
         "short_description": item.get("DESC_SINOPSE", ""),
         "long_description": item.get("DESC_SINOPSE", ""),
         "brand": item.get("NOM_EDITORA", ""),
-        "category": {"id": 0, "name": item.get("GENERO_NIVEL_1", item.get("DSC_GENERO", "")), "company_id": company_id, "active": True},
+        "category": {"id": int(cat_id), "name": item.get("GENERO_NIVEL_1", item.get("DSC_GENERO", "")), "company_id": company_id, "active": True},
         "weight_kg": None,
         "width_cm": None,
         "height_cm": None,

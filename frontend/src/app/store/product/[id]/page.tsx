@@ -47,8 +47,22 @@ export default function ProductDetailsPage() {
             setProduct(data);
             
             // Tenta buscar produtos relacionados (Cross-Sell)
-            const searchBase = data?.brand?.name || data?.category?.name;
-            const searchFilter = data?.brand?.name ? 'NOM_EDITORA' : 'default';
+            const catId = data?.category?.id;
+            const brandStr = typeof data?.brand === 'string' ? data.brand : data?.brand?.name;
+            
+            let searchBase = '';
+            let searchFilter = '';
+            
+            if (catId && catId !== 0 && catId !== '0') {
+                 searchBase = catId.toString();
+                 searchFilter = 'COD_GENERO';
+            } else if (brandStr) {
+                 searchBase = brandStr;
+                 searchFilter = 'NOM_EDITORA';
+            } else if (data?.category?.name) {
+                 searchBase = data.category.name;
+                 searchFilter = 'default';
+            }
             
             if (searchBase) {
                try {

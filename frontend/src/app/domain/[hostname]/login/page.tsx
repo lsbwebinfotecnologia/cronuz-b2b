@@ -51,6 +51,10 @@ export default function StorefrontLoginPage() {
       // To support the global multi-tenant API token path, users log in using their email
       formData.append('username', email);
       formData.append('password', password);
+      
+      if (storeInfo?.company_id) {
+        formData.append('company_id', storeInfo.company_id.toString());
+      }
 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       const res = await fetch(`${apiUrl}/token`, {

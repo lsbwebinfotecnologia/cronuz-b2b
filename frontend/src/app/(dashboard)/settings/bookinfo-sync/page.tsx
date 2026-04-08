@@ -23,7 +23,7 @@ export default function BookinfoSyncQueuePage() {
     const [totalPages, setTotalPages] = useState(1);
     const limit = 50;
 
-    const [syncStatusParam, setSyncStatusParam] = useState('NOVO');
+    const [syncStatusParam, setSyncStatusParam] = useState('AGUARDANDO_PROCESSAMENTO');
     const [syncPageParam, setSyncPageParam] = useState('1');
     const [manualSyncLoading, setManualSyncLoading] = useState(false);
     const [manualSyncPreviewModalOpen, setManualSyncPreviewModalOpen] = useState(false);
@@ -672,10 +672,12 @@ export default function BookinfoSyncQueuePage() {
                                     onChange={(e) => setSyncStatusParam(e.target.value)}
                                     className="bg-transparent text-sm text-white px-3 py-1.5 focus:outline-none focus:ring-0 mr-2 border-r border-slate-800"
                                 >
-                                    <option value="NOVO">NOVO</option>
-                                    <option value="AGUARDANDO">AGUARDANDO</option>
+                                    <option value="AGUARDANDO_PROCESSAMENTO">AGUARDANDO PROCESSAMENTO</option>
+                                    <option value="RECEBIDO">RECEBIDO / SINCRONIZADO</option>
                                     <option value="PROCESSADO">PROCESSADO</option>
                                     <option value="FATURADO">FATURADO</option>
+                                    <option value="CONCLUIDO">CONCLUÍDO</option>
+                                    <option value="RECUSADO">RECUSADO</option>
                                 </select>
                                 <input
                                     type="number"

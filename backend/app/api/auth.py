@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
+import re
 from datetime import datetime, timedelta, timezone
 import uuid
 
@@ -18,11 +20,26 @@ router = APIRouter()
 @router.post("/token")
 def login_for_access_token(
     request: Request,
+    company_id: int = Form(None),
     db: Session = Depends(get_db), 
     form_data: OAuth2PasswordRequestForm = Depends()
 ):
+    # Prepare search inputs
+    username_input = form_data.username.strip()
+    username_clean = re.sub(r"\D", "", username_input)
+    
+    filters = [User.email == username_input]
+    if username_clean:
+         filters.append(User.document == username_clean)
+
     # Find user
-    user = db.query(User).filter(User.email == form_data.username).first()
+    query = db.query(User).filter(or_(*filters))
+    
+    # Isolate by tenant if accessing via storefront
+    if company_id:
+        query = query.filter(User.company_id == company_id)
+        
+    user = query.first()
     
     if not user:
         raise HTTPException(
