@@ -199,10 +199,11 @@ async def get_order_detail(
     if not order:
         raise HTTPException(status_code=404, detail="Pedido não encontrado.")
         
-    # Poll Horus API logic just like storefront but for Seller
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
     
-    if settings and settings.horus_enabled and order.horus_pedido_venda and order.origin != "bookinfo":
+    skip_sync = order.origin == "bookinfo" or order.status in ["INVOICED", "COMPLETED", "DELIVERED", "CANCELLED"]
+    
+    if settings and settings.horus_enabled and order.horus_pedido_venda and not skip_sync:
         company = db.query(Company).filter(Company.id == current_user.company_id).first()
         customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
         

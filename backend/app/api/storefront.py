@@ -1000,7 +1000,10 @@ async def get_customer_order_detail(
     # Sincronização em tempo real com o Horus, se ativado e se já enviado
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
     
-    if settings and settings.horus_enabled and order.horus_pedido_venda:
+    # Do not sync if order is from bookinfo or already completed/invoiced
+    skip_sync = order.origin == "bookinfo" or order.status in ["INVOICED", "COMPLETED", "DELIVERED", "CANCELLED"]
+    
+    if settings and settings.horus_enabled and order.horus_pedido_venda and not skip_sync:
         company = db.query(Company).filter(Company.id == current_user.company_id).first()
         customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
         
