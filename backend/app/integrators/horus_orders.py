@@ -97,9 +97,12 @@ class HorusOrders(HorusClient):
             "COD_PEDIDO_ORIGEM": cod_pedido_origem,
             "BARRAS_ISBN": isbn,
             "QTD_PEDIDA": qty,
-            # Horus expects Brazilian locale (comma for decimals), otherwise it strips dots and multiplies values
-            "VLR_LIQUIDO": f"{price:.2f}".replace(".", ","),
         }
+        
+        # O modelo B2B do Horus calcula seu proprio valor (legacy: typeDiscount == "HORUS")
+        if self._settings.business_model != "B2B_HORUS" and price is not None:
+            # Envia como raw float/numeric (SQL Server / ODBC prefere ponto flutuante padrão)
+            params["VLR_LIQUIDO"] = price
         
         return await self.get("InsItensPedidoVenda", params=params)
 
