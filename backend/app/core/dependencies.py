@@ -20,6 +20,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         jti: str = payload.get("jti")
+        company_id = payload.get("company_id")
         if email is None or jti is None:
             raise credentials_exception
             
@@ -31,7 +32,11 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     except JWTError:
         raise credentials_exception
         
-    user = db.query(User).filter(User.email == email).first()
+    query = db.query(User).filter(User.email == email)
+    if company_id is not None:
+        query = query.filter(User.company_id == company_id)
+        
+    user = query.first()
     if user is None:
         raise credentials_exception
     return user
@@ -43,6 +48,7 @@ def get_current_user_optional(token: str = Depends(OAuth2PasswordBearer(tokenUrl
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         jti: str = payload.get("jti")
+        company_id = payload.get("company_id")
         if email is None or jti is None:
             return None
             
@@ -54,7 +60,11 @@ def get_current_user_optional(token: str = Depends(OAuth2PasswordBearer(tokenUrl
     except JWTError:
         return None
         
-    user = db.query(User).filter(User.email == email).first()
+    query = db.query(User).filter(User.email == email)
+    if company_id is not None:
+        query = query.filter(User.company_id == company_id)
+        
+    user = query.first()
     return user
 
 def require_master_user(current_user: User = Depends(get_current_user)):
