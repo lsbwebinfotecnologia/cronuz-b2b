@@ -802,7 +802,6 @@ async def checkout_cart(
                 )
                 print(f"DEBUG CHECKOUT: stock_data = {stock_data}")
                 
-                out_of_stock_msgs = []
                 if stock_data and isinstance(stock_data, list):
                     # mapping isbn to stock
                     stock_map = {}
@@ -815,19 +814,62 @@ async def checkout_cart(
                             except (ValueError, TypeError):
                                 stock_map[isbn] = 0.0
 
-                    # Validate cart requirements
+                    # Validate cart requirements and auto-adjust
+                    allow_backorder = settings.allow_backorder if settings else False
+                    max_backorder_qty = settings.max_backorder_qty if settings else 0
+                    
+                    items_to_remove = []
                     for item in cart.items:
                         key = item.ean_isbn or item.sku
-                        if key in stock_map:
-                            available = stock_map[key]
+                        local_prod = None
+                        if item.product_id:
+                            from app.models.product import Product
+                            local_prod = db.query(Product).filter(Product.id == item.product_id).first()
+                        
+                        is_oop = local_prod.is_out_of_print if local_prod else False
+                        is_pre = local_prod.is_pre_sale if local_prod else False
+                        
+                        available = stock_map.get(key, 0.0)
+                        
+                        # Determine if adjustment is needed based on available
+                        allowed = True
+                        if is_oop:
                             if item.quantity > available:
-                                out_of_stock_msgs.append(f"[{item.name[:25]}...] Estoque insuficiente: você pediu {item.quantity}, saldo atual {int(available)}.")
-                        else:
-                            out_of_stock_msgs.append(f"[{item.name[:25]}...] Produto indisponível ou EAN não reconhecido no estoque atual.")
-                            
-                if out_of_stock_msgs:
-                    await horus_products_client.close()
-                    raise HTTPException(status_code=400, detail=" | ".join(out_of_stock_msgs))
+                                allowed = False
+                        elif not is_pre:
+                            if item.quantity > available:
+                                if allow_backorder:
+                                    backorder_needed = item.quantity - available
+                                    if max_backorder_qty > 0 and backorder_needed > max_backorder_qty:
+                                        allowed = False
+                                else:
+                                    allowed = False
+                                    
+                        if not allowed:
+                            if available > 0:
+                                # Adjust to remaining stock
+                                item.quantity = int(available)
+                                item.total_price = item.quantity * item.unit_price
+                            else:
+                                items_to_remove.append(item)
+                                
+                    if items_to_remove:
+                        for it in items_to_remove:
+                            db.delete(it)
+                    
+                    db.commit()
+                    db.refresh(cart)
+                    
+                    # Recalculate totals after adjustments
+                    subtotal = sum(i.total_price for i in cart.items)
+                    cart.subtotal = subtotal
+                    cart.total = subtotal - cart.discount
+                    db.commit()
+                    db.refresh(cart)
+                    
+                    if not cart.items:
+                        await horus_products_client.close()
+                        raise HTTPException(status_code=400, detail="Todos os itens do seu carrinho estavam sem estoque e não permitiam encomenda. O pedido foi esvaziado automaticamente.")
         except HTTPException:
             raise
         except Exception as e:

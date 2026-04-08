@@ -138,13 +138,28 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       }
   };
 
-  const removeItemFromDB = async (productId: number) => {
+  const removeItemFromDB = async (itemToRemove: CartItem) => {
       const token = getToken();
       if (!token) return;
       
       try {
-          // Note: In a real implementation we'd need the actual Cart Item ID mapped.
-          // For now, depending on DB schema, we sync via product ID or clean state
+          // Backend is configured to delete the item if quantity is <= 0
+          await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/cart/items`, {
+              method: 'POST',
+              headers: { 
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json' 
+              },
+              body: JSON.stringify({
+                  product_id: Number.isInteger(itemToRemove.id) ? itemToRemove.id : null,
+                  ean_isbn: String(itemToRemove.ean_gtin || ''),
+                  sku: String(itemToRemove.sku || ''),
+                  name: itemToRemove.name,
+                  brand: itemToRemove.brand,
+                  quantity: 0,
+                  unit_price: 0
+              })
+          });
       } catch (e) {
           console.error("Error removing item from DB", e);
       }
@@ -192,8 +207,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   };
 
   const removeFromCart = (productId: number) => {
+    const itemToRemove = items.find(item => item.id === productId);
     setItems(prev => prev.filter(item => item.id !== productId));
-    removeItemFromDB(productId);
+    if (itemToRemove) {
+      removeItemFromDB(itemToRemove);
+    }
   };
 
   const updateQuantity = (productId: number, quantity: number) => {

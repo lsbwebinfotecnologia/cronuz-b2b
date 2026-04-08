@@ -327,7 +327,7 @@ export default function CheckoutPage() {
 
                    <button
                        onClick={handlePlaceOrder}
-                       disabled={placingOrder || validatingStock || stockErrors.some(e => !e.allowed)}
+                       disabled={placingOrder || validatingStock}
                        className="w-full flex items-center justify-center gap-2 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white select-none rounded-xl h-16 font-bold text-lg transition-all active:scale-[0.98] disabled:opacity-70 disabled:active:scale-100 shadow-xl shadow-[var(--color-primary-base)]/20"
                    >
                        {placingOrder ? (
