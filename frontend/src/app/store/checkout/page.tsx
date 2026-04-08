@@ -241,11 +241,11 @@ export default function CheckoutPage() {
                                        
                                        const isError = !err.allowed;
                                        return (
-                                          <div className={`mt-2 text-xs p-2 rounded flex items-start gap-1.5 ${isError ? 'text-rose-600 bg-rose-50 dark:bg-rose-500/10' : 'text-blue-700 bg-blue-50 dark:text-blue-300 dark:bg-blue-500/10'}`}>
+                                          <div className={`mt-2 text-xs p-2 rounded flex items-start gap-1.5 ${isError ? 'text-amber-700 bg-amber-50 dark:bg-amber-500/10 dark:text-amber-300' : 'text-blue-700 bg-blue-50 dark:text-blue-300 dark:bg-blue-500/10'}`}>
                                              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                                              <div className="flex flex-col">
                                                 <span className="font-bold">{err.label}</span>
-                                                {err.message && <span>{err.message}</span>}
+                                                {err.message && <span>{isError ? 'Fique tranquilo, o sistema ajustará a quantidade dele automaticamente no fechamento do seu pedido conforme a disponibilidade atual da editora.' : err.message}</span>}
                                              </div>
                                            </div>
                                         );

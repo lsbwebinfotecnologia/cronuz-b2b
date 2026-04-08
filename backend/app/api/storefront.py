@@ -845,13 +845,19 @@ async def checkout_cart(
                                 else:
                                     allowed = False
                                     
+                        if item.unit_price is None or item.unit_price <= 0:
+                            if item not in items_to_remove:
+                                items_to_remove.append(item)
+                            continue
+                            
                         if not allowed:
                             if available > 0:
                                 # Adjust to remaining stock
                                 item.quantity = int(available)
                                 item.total_price = item.quantity * item.unit_price
                             else:
-                                items_to_remove.append(item)
+                                if item not in items_to_remove:
+                                    items_to_remove.append(item)
                                 
                     if items_to_remove:
                         for it in items_to_remove:
