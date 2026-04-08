@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import { Calendar, CheckCircle2, CircleDashed, Rocket, Server, Wrench, FileText } from 'lucide-react';
 import Link from 'next/link';
 import { Calendar, CheckCircle2, CircleDashed, Rocket, Server, Wrench, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 
