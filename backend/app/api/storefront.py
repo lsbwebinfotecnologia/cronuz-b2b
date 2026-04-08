@@ -555,9 +555,9 @@ def add_or_update_cart_item(
         elif item_data.product_id and item.product_id == item_data.product_id:
             existing_item = item
             break
-            
     if existing_item:
         existing_item.quantity = item_data.quantity
+        existing_item.quantity_requested = item_data.quantity
         existing_item.unit_price = item_data.unit_price
         existing_item.total_price = item_data.quantity * item_data.unit_price
     else:
@@ -577,6 +577,7 @@ def add_or_update_cart_item(
             name=item_data.name,
             brand=item_data.brand,
             quantity=item_data.quantity,
+            quantity_requested=item_data.quantity,
             unit_price=item_data.unit_price,
             total_price=item_data.quantity * item_data.unit_price
         )
@@ -854,6 +855,7 @@ async def checkout_cart(
                             if available > 0:
                                 # Adjust to remaining stock
                                 item.quantity = int(available)
+                                item.quantity_requested = int(available)
                                 item.total_price = item.quantity * item.unit_price
                             else:
                                 if item not in items_to_remove:
@@ -925,7 +927,7 @@ async def checkout_cart(
                         )
                         raise HTTPException(status_code=400, detail=f"Falha ao integrar itens no Horus: {msg}")
                 
-            cart.horus_pedido_venda = str(horus_ped_venda)
+            cart.horus_pedido_venda = str(horus_ped_venda).strip() if horus_ped_venda else None
             cart.status = "SENT_TO_HORUS"
             db.commit()
             
@@ -1007,7 +1009,7 @@ async def get_customer_order_detail(
             horus_client = HorusOrders(db, current_user.company_id)
             try:
                 # Poll Horus API logic
-                # cod_pedido_origem in Horus is our local order.id
+                # cod_pedido_origem in Horus is our local order.id for B2B
                 horus_data = await horus_client.get_order(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
@@ -1019,9 +1021,8 @@ async def get_customer_order_detail(
                     horus_data = horus_data[0]
 
                 if not horus_data:
-                    # Se não encontrou o pedido (retornou False ou Vazio), mantemos o status atual.
-                    # Ele pode ter acabado de ser criado e ainda não integrado totalmente.
-                    new_status = order.status
+                    # Se não encontrou o pedido (pode ter sido excluído no Horus), marca como cancelado.
+                    new_status = "CANCELLED"
                 elif isinstance(horus_data, dict) and horus_data.get("Falha"):
                     new_status = order.status
                 elif horus_data and isinstance(horus_data, dict):
@@ -1070,6 +1071,7 @@ async def get_customer_order_detail(
                         
                 # Sync Items strictly with Horus (Add, Update, Remove)
                 horus_items = await horus_client.get_order_items(order.horus_pedido_venda)
+                
                 if horus_items and isinstance(horus_items, list):
                     items_changed = False
                     
@@ -1081,8 +1083,9 @@ async def get_customer_order_detail(
                         h_sku = str(h_item.get("COD_ITEM", ""))
                         
                         try:
-                            # Horus numbers
-                            h_qty_req = int(float(h_item.get("QT_PEDIDA", 0)))
+                            # Horus numbers. Check QTD_PEDIDA mainly, fallback to QT_PEDIDA.
+                            h_qty_req_raw = h_item.get("QTD_PEDIDA") if h_item.get("QTD_PEDIDA") is not None else h_item.get("QT_PEDIDA", 0)
+                            h_qty_req = int(float(h_qty_req_raw))
                             h_qty_f = int(float(h_item.get("QTD_ATENDIDA", 0)))
                             
                             from app.core.utils import parse_horus_price
@@ -1102,9 +1105,14 @@ async def get_customer_order_detail(
                             h_seen_identifiers.add(identifier)
                             
                             # Update existing
+                            # Fix floating point comparison using precise rounding
+                            local_price_rnd = round(local_match.unit_price, 2)
+                            h_price_rnd = round(h_unit_price, 2)
+                            
                             if local_match.quantity != h_qty_req or \
+                               local_match.quantity_requested != h_qty_req or \
                                local_match.quantity_fulfilled != h_qty_f or \
-                               abs(local_match.unit_price - h_unit_price) > 0.01:
+                               local_price_rnd != h_price_rnd:
                                 
                                 local_match.quantity = h_qty_req
                                 local_match.quantity_requested = h_qty_req 

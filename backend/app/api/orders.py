@@ -101,7 +101,7 @@ async def create_pdv_order(
                             price=item.unit_price
                         )
                             
-                    order.horus_pedido_venda = str(horus_ped_venda)
+                    order.horus_pedido_venda = str(horus_ped_venda).strip() if horus_ped_venda else None
                     order.status = "SENT_TO_HORUS"
                     db.commit()
             except Exception as e:
@@ -214,8 +214,7 @@ async def get_order_detail(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
-                    cod_pedido_origem=order.id,
-                    cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None
+                    cod_pedido_origem=order.partner_reference if order.origin == "bookinfo" else order.id
                 )
                 
                 if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:
@@ -224,8 +223,9 @@ async def get_order_detail(
                 print(f"DEBUG HORUS SYNC SELLER (order {order.id}): {horus_data}")
 
                 if not horus_data:
-                    # Se não encontrou o pedido (pode estar na fila do Horus ainda), mantemos o status.
-                    new_status = order.status
+                    # Se não encontrou o pedido na Horus (pode ter sido excluído lá), marca como cancelado se for B2B.
+                    # Mantém o status original se for bookinfo para não dar falso positivo imediato.
+                    new_status = "CANCELLED" if order.origin != "bookinfo" else order.status
                 elif isinstance(horus_data, dict) and horus_data.get("Falha"):
                     new_status = order.status
                 elif horus_data and isinstance(horus_data, dict):
@@ -285,7 +285,8 @@ async def get_order_detail(
                         
                         try:
                             # Horus numbers
-                            h_qty_req = int(float(h_item.get("QT_PEDIDA", 0)))
+                            h_qty_req_raw = h_item.get("QTD_PEDIDA") if h_item.get("QTD_PEDIDA") is not None else h_item.get("QT_PEDIDA", 0)
+                            h_qty_req = int(float(h_qty_req_raw))
                             h_qty_f = int(float(h_item.get("QTD_ATENDIDA", 0)))
                             
                             from app.core.utils import parse_horus_price
@@ -306,6 +307,7 @@ async def get_order_detail(
                             
                             # Update existing
                             if local_match.quantity != h_qty_req or \
+                               local_match.quantity_requested != h_qty_req or \
                                local_match.quantity_fulfilled != h_qty_f or \
                                abs(local_match.unit_price - h_unit_price) > 0.01:
                                 
@@ -580,16 +582,16 @@ async def manual_sync_horus(
             
             if search_type == "origem":
                 search_origem = order.partner_reference
+                search_venda = None
             else:
-                search_venda = order.horus_pedido_venda if order.horus_pedido_venda else None
-                search_origem = order.partner_reference if order.origin == "bookinfo" and not search_venda else None
+                search_venda = str(order.horus_pedido_venda).strip() if order.horus_pedido_venda else None
+                search_origem = None
             
             raw_horus_data = await horus_client.get_order(
                 id_doc=None,
                 id_guid="",
                 cnpj_destino=None,
                 cod_pedido_origem=search_origem,
-                cod_ped_venda=search_venda,
                 ignore_customer_context=True
             )
             
@@ -659,7 +661,8 @@ async def manual_sync_horus(
                     h_sku = str(h_item.get("COD_ITEM", ""))
                     
                     try:
-                        h_qty_req = int(float(h_item.get("QT_PEDIDA", 0)))
+                        h_qty_req_raw = h_item.get("QTD_PEDIDA") if h_item.get("QTD_PEDIDA") is not None else h_item.get("QT_PEDIDA", 0)
+                        h_qty_req = int(float(h_qty_req_raw))
                         h_qty_f = int(float(h_item.get("QTD_ATENDIDA", 0)))
                         raw_price = h_item.get("VLR_LIQUIDO", 0)
                         from app.core.utils import parse_horus_price
@@ -681,7 +684,7 @@ async def manual_sync_horus(
                         local_price_rnd = round(local_match.unit_price, 2)
                         h_price_rnd = round(h_unit_price, 2)
                         
-                        if local_match.quantity != h_qty_req or local_match.quantity_fulfilled != h_qty_f or local_price_rnd != h_price_rnd:
+                        if local_match.quantity != h_qty_req or local_match.quantity_requested != h_qty_req or local_match.quantity_fulfilled != h_qty_f or local_price_rnd != h_price_rnd:
                             local_match.quantity = h_qty_req
                             local_match.quantity_requested = h_qty_req 
                             local_match.quantity_fulfilled = h_qty_f

@@ -17,18 +17,8 @@ class HorusOrders(HorusClient):
         if cod_pedido_origem is not None and cod_pedido_origem != "":
             params["COD_PEDIDO_ORIGEM"] = cod_pedido_origem
         
-        if getattr(self, '_settings', None):
-            if self._settings.horus_company:
-                params["COD_EMPRESA"] = self._settings.horus_company
-            if self._settings.horus_branch:
-                params["COD_FILIAL"] = self._settings.horus_branch
-                
         if cod_ped_venda:
             params["COD_PED_VENDA"] = cod_ped_venda
-        
-        if not getattr(self._settings, 'horus_legacy_pagination', False):
-            params["OFFSET"] = 0
-            params["LIMIT"] = limit if limit > 0 else 10000
             
         result = await self.get("Busca_PedidosVenda", params=params)
         
