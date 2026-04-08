@@ -32,7 +32,7 @@ class HorusProducts(HorusClient):
             params["LIMIT"] = limit if (limit is not None and limit > 0) else 10000
             
         # Company / Branch context from settings
-        if getattr(self._settings, 'horus_hide_zero_balance', False) and not isbns:
+        if getattr(self._settings, 'horus_hide_zero_balance', False):
             if self._settings.horus_company:
                 params["AC_COD_EMPRESA"] = self._settings.horus_company
             if self._settings.horus_branch:
@@ -66,8 +66,19 @@ class HorusProducts(HorusClient):
 
         if isbns:
             # When searching a specific list of ISBNs (equivalent to searchInList), it uses POST
-            # Format according to HsProducts: sending the array of ISBN objects as JSON body
-            # The 'isbns' list should be format [{"BARRAS_ISBN": "123"}, ...]
+            # To ensure the ERP applies the Company/Branch filter for each ISBN in the array,
+            # we inject the company parameters directly into every object in the JSON body.
+            for item in isbns:
+                if self._settings.horus_company:
+                    item["SD_COD_EMPRESA"] = self._settings.horus_company
+                    item["AC_COD_EMPRESA"] = self._settings.horus_company
+                if self._settings.horus_branch:
+                    item["SD_COD_FILIAL"] = self._settings.horus_branch
+                    item["AC_COD_FILIAL"] = self._settings.horus_branch
+                if getattr(self._settings, 'horus_stock_local', None):
+                    item["SD_LOCAL_ESTOQUE"] = self._settings.horus_stock_local
+                    item["AC_LOCAL_ESTOQUE"] = self._settings.horus_stock_local
+                    
             return await self.post("Busca_AcervoB2B", json_data=isbns, params=params)
         else:
             # Normal search (equivalent to searchProduct uses GET)
