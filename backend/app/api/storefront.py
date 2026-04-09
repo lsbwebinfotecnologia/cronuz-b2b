@@ -556,32 +556,36 @@ def add_or_update_cart_item(
             existing_item = item
             break
     if existing_item:
-        existing_item.quantity = item_data.quantity
-        existing_item.quantity_requested = item_data.quantity
-        existing_item.unit_price = item_data.unit_price
-        existing_item.total_price = item_data.quantity * item_data.unit_price
+        if item_data.quantity <= 0 or item_data.unit_price <= 0:
+            db.delete(existing_item)
+        else:
+            existing_item.quantity = item_data.quantity
+            existing_item.quantity_requested = item_data.quantity
+            existing_item.unit_price = item_data.unit_price
+            existing_item.total_price = item_data.quantity * item_data.unit_price
     else:
-        # Prevent Foreign Key constraint violations if product_id is an external Horus ID
-        from app.models.product import Product
-        actual_product_id = None
-        if item_data.product_id:
-             local_prod = db.query(Product).filter(Product.id == item_data.product_id).first()
-             if local_prod:
-                 actual_product_id = local_prod.id
+        if item_data.quantity > 0 and item_data.unit_price > 0:
+            # Prevent Foreign Key constraint violations if product_id is an external Horus ID
+            from app.models.product import Product
+            actual_product_id = None
+            if item_data.product_id:
+                 local_prod = db.query(Product).filter(Product.id == item_data.product_id).first()
+                 if local_prod:
+                     actual_product_id = local_prod.id
 
-        new_item = OrderItem(
-            order_id=cart.id,
-            product_id=actual_product_id,
-            ean_isbn=item_data.ean_isbn,
-            sku=item_data.sku,
-            name=item_data.name,
-            brand=item_data.brand,
-            quantity=item_data.quantity,
-            quantity_requested=item_data.quantity,
-            unit_price=item_data.unit_price,
-            total_price=item_data.quantity * item_data.unit_price
-        )
-        db.add(new_item)
+            new_item = OrderItem(
+                order_id=cart.id,
+                product_id=actual_product_id,
+                ean_isbn=item_data.ean_isbn,
+                sku=item_data.sku,
+                name=item_data.name,
+                brand=item_data.brand,
+                quantity=item_data.quantity,
+                quantity_requested=item_data.quantity,
+                unit_price=item_data.unit_price,
+                total_price=item_data.quantity * item_data.unit_price
+            )
+            db.add(new_item)
         
     db.commit()
     db.refresh(cart)
@@ -1023,11 +1027,9 @@ async def get_customer_order_detail(
                 if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:
                     horus_data = horus_data[0]
 
-                if not horus_data:
-                    # Se não encontrou o pedido (pode ter sido excluído no Horus), marca como cancelado.
+                if not horus_data or (isinstance(horus_data, dict) and horus_data.get("Falha")):
+                    # Se não encontrou o pedido (pode ter sido excluído no Horus) ou deu falha na busca, marca como cancelado.
                     new_status = "CANCELLED"
-                elif isinstance(horus_data, dict) and horus_data.get("Falha"):
-                    new_status = order.status
                 elif horus_data and isinstance(horus_data, dict):
                     status_api = horus_data.get("STATUS_PEDIDO_VENDA", "")
                     
