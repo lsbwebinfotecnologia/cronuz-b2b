@@ -66,9 +66,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     // First setup from local storage for fast UX
     if (saved) {
       try {
-        setItems(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setItems(parsed);
+        } else {
+          localStorage.removeItem('cronuz_store_cart');
+        }
       } catch (e) {
         console.error("Failed to parse local cart", e);
+        localStorage.removeItem('cronuz_store_cart');
       }
     }
     
