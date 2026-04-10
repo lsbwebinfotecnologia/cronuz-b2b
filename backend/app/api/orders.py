@@ -530,12 +530,19 @@ async def get_horus_debug_preview(
             
             request_params = {
                 "COD_EMPRESA": getattr(horus_client._settings, 'horus_company', None),
-                "COD_FILIAL": getattr(horus_client._settings, 'horus_branch', None)
+                "COD_FILIAL": getattr(horus_client._settings, 'horus_branch', None),
+                "API_URL": getattr(horus_client._settings, 'horus_url', None),
+                "API_USUARIO": getattr(horus_client._settings, 'horus_username', None),
+                "API_SENHA_MASCARADA": "***" if getattr(horus_client._settings, 'horus_password', None) else None,
+                "SELLER_COMPANY_ID": order.company_id,
+                "ID_DOC_CLIENTE": customer.document,
+                "ID_GUID_CLIENTE": customer.id_guid,
+                "CNPJ_DESTINO": company.document
             }
             if search_type == "venda":
                 request_params["COD_PED_VENDA"] = order.horus_pedido_venda
             else:
-                request_params["COD_PEDIDO_ORIGEM"] = order.partner_reference
+                request_params["COD_PEDIDO_ORIGEM"] = order.partner_reference if order.origin == "bookinfo" else order.id
             
     return {
         "params_enviados": request_params,
