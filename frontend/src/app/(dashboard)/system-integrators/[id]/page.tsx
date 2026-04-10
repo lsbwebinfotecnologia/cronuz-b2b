@@ -47,7 +47,6 @@ export default function SystemIntegratorEditorPage() {
     e.preventDefault();
     if (!newGroupName.trim()) return;
     try {
-      setSaving(true);
       const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/${id}/groups`, {
         method: 'POST',
@@ -65,7 +64,7 @@ export default function SystemIntegratorEditorPage() {
   const deleteGroup = async (groupId: number) => {
     if (!confirm('Excluir este grupo e todos os seus campos?')) return;
     try {
-      const token = localStorage.getItem('cronuz_b2b_token');
+      const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/groups/${groupId}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
@@ -79,7 +78,7 @@ export default function SystemIntegratorEditorPage() {
     if (!addingFieldToGroupId || !newFieldData.name.trim() || !newFieldData.label.trim()) return;
 
     try {
-      const token = localStorage.getItem('cronuz_b2b_token');
+      const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/groups/${addingFieldToGroupId}/fields`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -96,7 +95,7 @@ export default function SystemIntegratorEditorPage() {
   const deleteField = async (fieldId: number) => {
     if (!confirm('Remover campo?')) return;
     try {
-      const token = localStorage.getItem('cronuz_b2b_token');
+      const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/fields/${fieldId}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
