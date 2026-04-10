@@ -47,6 +47,7 @@ export default async function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
+        suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} bg-white text-slate-900 dark:bg-background dark:text-foreground antialiased max-w-[100vw] overflow-x-hidden transition-colors duration-200 ${tenant === 'horus' ? 'theme-horus' : ''}`}
       >
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>

@@ -215,7 +215,8 @@ async def get_order_detail(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
-                    cod_pedido_origem=order.partner_reference if order.origin == "bookinfo" else order.id
+                    cod_pedido_origem=order.partner_reference if order.origin == "bookinfo" else order.id,
+                    cod_ped_venda=str(order.horus_pedido_venda).strip() if order.horus_pedido_venda else None
                 )
                 
                 if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:
@@ -593,6 +594,7 @@ async def manual_sync_horus(
                 id_guid="",
                 cnpj_destino=None,
                 cod_pedido_origem=search_origem,
+                cod_ped_venda=search_venda,
                 ignore_customer_context=True
             )
             

@@ -68,7 +68,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          setItems(parsed);
+          // Filtra imediatamente itens zerados do cache local para não haver mismatch com o back-end
+          const validItems = parsed.filter(i => i.quantity > 0 && (i.base_price > 0 || i.promotional_price > 0));
+          if (validItems.length !== parsed.length) {
+            localStorage.setItem('cronuz_store_cart', JSON.stringify(validItems));
+          }
+          setItems(validItems);
         } else {
           localStorage.removeItem('cronuz_store_cart');
         }
