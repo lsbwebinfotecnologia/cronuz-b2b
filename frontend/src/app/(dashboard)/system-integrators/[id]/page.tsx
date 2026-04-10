@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Plus, Trash2, ArrowLeft, Loader2, Save, LayoutTemplate, Layers } from 'lucide-react';
 import Link from 'next/link';
+import { getToken } from '@/lib/auth';
 
 export default function SystemIntegratorEditorPage() {
   const params = useParams();
@@ -26,9 +27,8 @@ export default function SystemIntegratorEditorPage() {
   }, [id]);
 
   const fetchIntegrator = async () => {
-    setLoading(true);
     try {
-      const token = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+      const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -47,7 +47,8 @@ export default function SystemIntegratorEditorPage() {
     e.preventDefault();
     if (!newGroupName.trim()) return;
     try {
-      const token = localStorage.getItem('cronuz_b2b_token');
+      setSaving(true);
+      const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/${id}/groups`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },

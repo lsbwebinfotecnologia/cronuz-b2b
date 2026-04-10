@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Layers, Plus, Edit2, Trash2, X, Plug, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
+import { getToken } from '@/lib/auth';
 
 type Integrator = {
   id: number;
@@ -24,7 +25,7 @@ export default function SystemIntegratorsPage() {
 
   const fetchIntegrators = async () => {
     try {
-      const token = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+      const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -66,7 +67,7 @@ export default function SystemIntegratorsPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const token = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+    const token = getToken();
     const url = editingId 
       ? `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/${editingId}`
       : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/`;
@@ -95,7 +96,7 @@ export default function SystemIntegratorsPage() {
 
   const handleDelete = async (id: number) => {
     if (!confirm('Tem certeza que deseja remover este integrador?')) return;
-    const token = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+    const token = getToken();
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/${id}`, {
         method: 'DELETE',

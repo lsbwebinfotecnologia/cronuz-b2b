@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowUpRight, TrendingUp, Users, Package, ShoppingCart, RefreshCw, Clock } from 'lucide-react';
 import Link from 'next/link';
+import { getToken } from '@/lib/auth';
 
 const defaultStats = [
   { id: 'revenue', name: 'Faturamento Total', value: 'R$ 0,00', change: '+0%', icon: TrendingUp },
@@ -21,7 +22,7 @@ export default function DashboardPage() {
 
   const fetchRecentOrders = async () => {
     try {
-      const token = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+      const token = getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/orders`, {
          headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -40,7 +41,7 @@ export default function DashboardPage() {
   const fetchMetrics = async () => {
     setLoadingMetrics(true);
     try {
-      const token = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+      const token = getToken();
       if (!token) return; // Prevent fetch if no token
       
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics`, {

@@ -18,8 +18,10 @@ export function StoreHeader() {
   const [user, setUser] = useState<any>(null);
   const [categories, setCategories] = useState<any[]>([]);
   const [brands, setBrands] = useState<any[]>([]);
+  const [isMounted, setIsMounted] = useState(false);
 
   React.useEffect(() => {
+    setIsMounted(true);
     const currentUser = getUser();
     setUser(currentUser);
     
@@ -53,7 +55,7 @@ export function StoreHeader() {
 
   const handleLogout = async () => {
     try {
-      const tokenStr = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+      const tokenStr = getToken();
       if (tokenStr) {
         await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/logout`, {
           method: 'POST',
@@ -174,7 +176,7 @@ export function StoreHeader() {
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             <div className="hidden sm:block"><ThemeToggle /></div>
 
-            {isCustomer && (
+            {isMounted && isCustomer && (
               <Link href="/store/orders" className="hidden lg:flex items-center gap-2 p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
                 <ShoppingBag className="h-5 w-5" />
                 <span className="text-sm font-bold">Pedidos</span>
@@ -184,14 +186,14 @@ export function StoreHeader() {
             <Link href="/store/account" className="hidden sm:flex items-center gap-2 p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
               <User className="h-5 w-5" />
               <div className="flex flex-col items-start leading-none">
-                <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[80px]">Olá, {user?.name?.split(' ')[0] || 'Visitante'}</span>
+                <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[80px]">Olá, {isMounted ? (user?.name?.split(' ')[0] || 'Visitante') : 'Visitante'}</span>
                 <span className="text-sm font-bold">Minha Conta</span>
               </div>
             </Link>
 
             <button onClick={openCart} className="relative p-2 md:p-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 transition-colors dark:bg-slate-900 dark:hover:bg-slate-800 dark:text-slate-300 group">
               <ShoppingCart className="h-5 w-5 group-hover:scale-110 transition-transform" />
-              {cartItemsCount > 0 && (
+              {isMounted && cartItemsCount > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full text-[10px] font-bold shadow-sm shadow-rose-500/30">
                   {cartItemsCount}
                 </span>

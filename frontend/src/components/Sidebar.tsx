@@ -20,7 +20,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import { removeToken, getUser } from '@/lib/auth';
+import { removeToken, getUser, getToken } from '@/lib/auth';
 import { useEffect, useState } from 'react';
 
 type NavItem = {
@@ -122,7 +122,7 @@ export function Sidebar() {
        
        const fetchSettings = async () => {
          try {
-           const tokenStr = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+           const tokenStr = getToken();
            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics`, {
               headers: { 'Authorization': `Bearer ${tokenStr}` }
            });
@@ -143,7 +143,7 @@ export function Sidebar() {
     } else if (currentUser?.type === 'MASTER') {
        const fetchLeadsSummary = async () => {
          try {
-           const tokenStr = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+           const tokenStr = getToken();
            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/leads/summary`, {
               headers: { 'Authorization': `Bearer ${tokenStr}` }
            });
@@ -208,7 +208,7 @@ export function Sidebar() {
 
   const handleLogout = async () => {
     try {
-      const tokenStr = localStorage.getItem('cronuz_b2b_token') || document.cookie.split('cronuz_b2b_token=')[1]?.split(';')[0];
+      const tokenStr = getToken();
       if (tokenStr) {
         await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/logout`, {
           method: 'POST',

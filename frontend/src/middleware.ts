@@ -59,8 +59,9 @@ export function middleware(request: NextRequest) {
   }
 
   // D. B2B System Application (Auth Protected)
-  const token = request.cookies.get('cronuz_b2b_token');
-  const userCookie = request.cookies.get('cronuz_b2b_user');
+  const hostKey = hostname.split(':')[0];
+  const token = request.cookies.get(`cronuz_b2b_token_${hostKey}`) || request.cookies.get('cronuz_b2b_token');
+  const userCookie = request.cookies.get(`cronuz_b2b_user_${hostKey}`) || request.cookies.get('cronuz_b2b_user');
   const isLoginPage = url.pathname === '/login';
   const isUploads = url.pathname.startsWith('/uploads');
   const isPublicPage = url.pathname.startsWith('/h/') || url.pathname.startsWith('/marketing');

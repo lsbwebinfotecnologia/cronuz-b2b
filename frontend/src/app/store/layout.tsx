@@ -1,5 +1,5 @@
 import React from 'react';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { StoreHeader } from '@/components/store/StoreHeader';
 import { StoreProvider } from '@/components/store/StoreContext';
 import { CartProvider } from '@/components/store/CartContext';
@@ -41,7 +41,11 @@ export default async function StoreLayout({ children }: { children: React.ReactN
   // Infer tenant dynamic logic or default to 1
   let companyId = 1;
   const cookieStore = await cookies();
-  const token = cookieStore.get('cronuz_b2b_token')?.value;
+  const headersList = await headers();
+  const hostname = headersList.get('host') || '';
+  const hostKey = hostname.split(':')[0];
+  const tokenRecord = cookieStore.get(`cronuz_b2b_token_${hostKey}`) || cookieStore.get('cronuz_b2b_token');
+  const token = tokenRecord?.value;
   if (token) {
     const decoded = decodeJWTPayload(token);
     if (decoded && decoded.company_id) {
