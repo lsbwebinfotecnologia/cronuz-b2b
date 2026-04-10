@@ -20,6 +20,9 @@ class HorusOrders(HorusClient):
         if cod_ped_venda:
             params["COD_PED_VENDA"] = cod_ped_venda
             
+        params["LIMIT"] = limit if limit > 0 else 50
+        params["OFFSET"] = 0
+            
         result = await self.get("Busca_PedidosVenda", params=params)
         
         # If successfully found the order, optionally fetch the invoice (nota fiscal)
@@ -121,8 +124,7 @@ class HorusOrders(HorusClient):
         if self._settings.horus_branch:
             params["COD_FILIAL"] = self._settings.horus_branch
             
-        if not getattr(self._settings, 'horus_legacy_pagination', False):
-            params["OFFSET"] = 0
-            params["LIMIT"] = limit if limit > 0 else 10000
+        params["OFFSET"] = 0
+        params["LIMIT"] = limit if limit > 0 else 10000
             
         return await self.get("Busca_ItensPedidosVenda", params=params)
