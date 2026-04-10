@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Search, ShoppingCart, User, Menu, X, BookOpen, ShoppingBag, Receipt, LogOut, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { getUser, removeToken } from '@/lib/auth';
+import { getToken, getUser, removeToken } from '@/lib/auth';
 import { useStoreConfig } from '@/components/store/StoreContext';
 import { useCart } from '@/components/store/CartContext';
 
