@@ -15,16 +15,25 @@ export const setToken = (token: string, user: any) => {
   const hostTokenKey = getHostKey(TOKEN_KEY);
   const hostUserKey = getHostKey(USER_KEY);
 
-  // Remove potential global / legacy cookies
-  Cookies.remove(TOKEN_KEY);
-  Cookies.remove(USER_KEY);
-  Cookies.remove(TOKEN_KEY, { domain: '.horusb2b.com.br' });
-  Cookies.remove(USER_KEY, { domain: '.horusb2b.com.br' });
-  Cookies.remove(TOKEN_KEY, { domain: '.cronuzb2b.com.br' });
-  Cookies.remove(USER_KEY, { domain: '.cronuzb2b.com.br' });
+  // Remove potential global / legacy cookies with absolute certainty
+  const domainsToClear = [
+     undefined,
+     '.horusb2b.com.br',
+     'horusb2b.com.br',
+     '.cronuzb2b.com.br',
+     'cronuzb2b.com.br',
+     window.location.hostname
+  ];
 
-  Cookies.set(hostTokenKey, token, { expires: 7 }); 
-  Cookies.set(hostUserKey, JSON.stringify(user), { expires: 7 });
+  domainsToClear.forEach(d => {
+    Cookies.remove(TOKEN_KEY, { domain: d, path: '/' });
+    Cookies.remove(USER_KEY, { domain: d, path: '/' });
+    Cookies.remove(TOKEN_KEY, { domain: d });
+    Cookies.remove(USER_KEY, { domain: d });
+  });
+
+  Cookies.set(hostTokenKey, token, { expires: 7, path: '/' }); 
+  Cookies.set(hostUserKey, JSON.stringify(user), { expires: 7, path: '/' });
   
   if (typeof window !== 'undefined') {
     localStorage.setItem(TOKEN_KEY, token);
@@ -57,14 +66,24 @@ export const removeToken = () => {
   const hostTokenKey = getHostKey(TOKEN_KEY);
   const hostUserKey = getHostKey(USER_KEY);
 
-  Cookies.remove(hostTokenKey);
-  Cookies.remove(hostUserKey);
-  Cookies.remove(TOKEN_KEY);
-  Cookies.remove(USER_KEY);
-  Cookies.remove(TOKEN_KEY, { domain: '.horusb2b.com.br' });
-  Cookies.remove(USER_KEY, { domain: '.horusb2b.com.br' });
-  Cookies.remove(TOKEN_KEY, { domain: '.cronuzb2b.com.br' });
-  Cookies.remove(USER_KEY, { domain: '.cronuzb2b.com.br' });
+  const domainsToClear = [
+     undefined,
+     '.horusb2b.com.br',
+     'horusb2b.com.br',
+     '.cronuzb2b.com.br',
+     'cronuzb2b.com.br',
+     window.location.hostname
+  ];
+
+  Cookies.remove(hostTokenKey, { path: '/' });
+  Cookies.remove(hostUserKey, { path: '/' });
+
+  domainsToClear.forEach(d => {
+    Cookies.remove(TOKEN_KEY, { domain: d, path: '/' });
+    Cookies.remove(USER_KEY, { domain: d, path: '/' });
+    Cookies.remove(TOKEN_KEY, { domain: d });
+    Cookies.remove(USER_KEY, { domain: d });
+  });
 
   if (typeof window !== 'undefined') {
     localStorage.removeItem(TOKEN_KEY);

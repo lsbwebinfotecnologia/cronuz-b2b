@@ -68,8 +68,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          // Filtra imediatamente itens zerados do cache local para não haver mismatch com o back-end
-          const validItems = parsed.filter(i => i.quantity > 0 && (i.base_price > 0 || i.promotional_price > 0));
+          // Filtra imediatamente itens corrompidos ou zerados para evitar erros de renderização e matematica
+          const validItems = parsed.filter(i => {
+             const hasValidQty = typeof i.quantity === 'number' && !isNaN(i.quantity) && i.quantity > 0;
+             const hasValidPrice = (typeof i.base_price === 'number' && !isNaN(i.base_price) && i.base_price > 0) || 
+                                   (typeof i.promotional_price === 'number' && !isNaN(i.promotional_price) && i.promotional_price > 0);
+             return hasValidQty && hasValidPrice && i.id;
+          });
+          
           if (validItems.length !== parsed.length) {
             localStorage.setItem('cronuz_store_cart', JSON.stringify(validItems));
           }
