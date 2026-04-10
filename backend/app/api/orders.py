@@ -216,7 +216,7 @@ async def get_order_detail(
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
                     cod_pedido_origem=order.partner_reference if order.origin == "bookinfo" else order.id,
-                    cod_ped_venda=str(order.horus_pedido_venda).strip() if order.horus_pedido_venda else None
+                    cod_ped_venda=None
                 )
                 
                 if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:
@@ -508,12 +508,12 @@ async def get_horus_debug_preview(
         horus_client = HorusOrders(db, order.company_id)
         try:
             raw_horus_data = await horus_client.get_order(
-                id_doc=None,
-                id_guid="",
-                cnpj_destino=None,
-                cod_pedido_origem=order.partner_reference if search_type == "origem" else None,
-                cod_ped_venda=str(order.horus_pedido_venda) if search_type == "venda" else None,
-                ignore_customer_context=True
+                id_doc=customer.document,
+                id_guid=customer.id_guid,
+                cnpj_destino=company.document,
+                cod_pedido_origem=order.partner_reference if order.origin == "bookinfo" else order.id,
+                cod_ped_venda=None,
+                ignore_customer_context=False
             )
             if raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0:
                 horus_data = raw_horus_data[0]
@@ -537,12 +537,9 @@ async def get_horus_debug_preview(
                 "SELLER_COMPANY_ID": order.company_id,
                 "ID_DOC": customer.document,
                 "ID_GUID": customer.id_guid,
-                "CNPJ_DESTINO": company.document
+                "CNPJ_DESTINO": company.document,
+                "COD_PEDIDO_ORIGEM": order.partner_reference if order.origin == "bookinfo" else order.id
             }
-            if search_type == "venda":
-                request_params["COD_PED_VENDA"] = order.horus_pedido_venda
-            else:
-                request_params["COD_PEDIDO_ORIGEM"] = order.partner_reference if order.origin == "bookinfo" else order.id
             
     return {
         "params_enviados": request_params,
@@ -586,23 +583,15 @@ async def manual_sync_horus(
         from app.integrators.horus_orders import HorusOrders
         horus_client = HorusOrders(db, order.company_id)
         try:
-            search_venda = None
-            search_origem = None
-            
-            if search_type == "origem":
-                search_origem = order.partner_reference
-                search_venda = None
-            else:
-                search_venda = str(order.horus_pedido_venda).strip() if order.horus_pedido_venda else None
-                search_origem = None
+            search_origem = order.partner_reference if order.origin == "bookinfo" else order.id
             
             raw_horus_data = await horus_client.get_order(
-                id_doc=None,
-                id_guid="",
-                cnpj_destino=None,
+                id_doc=customer.document,
+                id_guid=customer.id_guid,
+                cnpj_destino=company.document,
                 cod_pedido_origem=search_origem,
-                cod_ped_venda=search_venda,
-                ignore_customer_context=True
+                cod_ped_venda=None,
+                ignore_customer_context=False
             )
             
             horus_data = None
