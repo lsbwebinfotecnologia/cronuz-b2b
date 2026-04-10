@@ -305,6 +305,9 @@ export default function OrderDetailPage() {
                     <div>
                          <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
                             Pedido Interno: #{order.id}
+                            <button onClick={handleOpenDebugModal} className="text-slate-200 dark:text-slate-800 hover:text-indigo-500 transition-colors p-1" title="Debug Horus">
+                                <Terminal className="w-4 h-4" />
+                            </button>
                         </h1>
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-6 mt-1">
                             {order.horus_pedido_venda && (
@@ -617,6 +620,44 @@ export default function OrderDetailPage() {
             </div>
 
         </div>
+            
+            {/* Debug Modal */}
+            {isDebugModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800">
+                        <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+                            <h2 className="text-lg font-bold flex items-center gap-2 text-slate-900 dark:text-white">
+                                <Terminal className="w-5 h-5 text-indigo-500" />
+                                Debug Integração Horus ERP
+                            </h2>
+                            <button onClick={() => setIsDebugModalOpen(false)} className="text-slate-500 hover:text-slate-800 dark:hover:text-white">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-6 overflow-y-auto flex-1 font-mono text-sm bg-slate-950 text-green-400">
+                            {horusPreviewLoading ? (
+                                <div className="flex items-center justify-center h-40">
+                                    <RefreshCw className="w-8 h-8 animate-spin text-slate-500" />
+                                </div>
+                            ) : (
+                                <pre className="whitespace-pre-wrap break-all">
+                                    {JSON.stringify(horusPreviewData, null, 2)}
+                                </pre>
+                            )}
+                        </div>
+                        <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex justify-end">
+                            <button 
+                                onClick={handleSyncHorus}
+                                disabled={horusSyncing}
+                                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors disabled:opacity-50"
+                            >
+                                {horusSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                Sincronizar Forçadamente
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 }
