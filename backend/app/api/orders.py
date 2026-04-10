@@ -535,8 +535,8 @@ async def get_horus_debug_preview(
                 "API_USUARIO": getattr(horus_client._settings, 'horus_username', None),
                 "API_SENHA_MASCARADA": "***" if getattr(horus_client._settings, 'horus_password', None) else None,
                 "SELLER_COMPANY_ID": order.company_id,
-                "ID_DOC_CLIENTE": customer.document,
-                "ID_GUID_CLIENTE": customer.id_guid,
+                "ID_DOC": customer.document,
+                "ID_GUID": customer.id_guid,
                 "CNPJ_DESTINO": company.document
             }
             if search_type == "venda":
