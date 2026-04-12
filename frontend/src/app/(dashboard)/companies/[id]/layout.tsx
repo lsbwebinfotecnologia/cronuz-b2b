@@ -37,6 +37,7 @@ interface Company {
   module_subscriptions: boolean;
   module_pdv: boolean;
   module_agents: boolean;
+  module_financial: boolean;
   active: boolean;
 }
 
