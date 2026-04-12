@@ -86,6 +86,7 @@ export default function CustomerDetailsPage() {
   const [interactions, setInteractions] = useState<any[]>([]);
   const [syncingHorus, setSyncingHorus] = useState(false);
   const [usesHorus, setUsesHorus] = useState(false);
+  const [moduleFinancial, setModuleFinancial] = useState(false);
 
   useEffect(() => {
     fetchCustomer();
@@ -94,7 +95,7 @@ export default function CustomerDetailsPage() {
   }, [customerId]);
 
   useEffect(() => {
-    if (!usesHorus) {
+    if (!usesHorus || moduleFinancial) {
       const fetchPolicies = async () => {
         try {
           const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/commercial-policies`, {
@@ -131,6 +132,16 @@ export default function CustomerDetailsPage() {
       if (res.ok) {
         const data = await res.json();
         setUsesHorus(!!data.uses_horus);
+      }
+      const token = getToken();
+      if (token) {
+        const compRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (compRes.ok) {
+          const compData = await compRes.json();
+          setModuleFinancial(!!compData.module_financial);
+        }
       }
     } catch(e) {}
   }
@@ -691,7 +702,7 @@ export default function CustomerDetailsPage() {
               { id: 'orders', label: 'Pedidos Recentes', icon: ShoppingCart },
               { id: 'financial', label: 'Financeiro', icon: DollarSign },
               { id: 'contacts', label: 'Contatos & Locais', icon: Users }
-            ].filter(tab => tab.id !== 'financial' || !usesHorus)).map(tab => (
+            ].filter(tab => tab.id !== 'financial' || moduleFinancial || !usesHorus)).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
