@@ -32,6 +32,8 @@ interface Product {
     ean_gtin?: string;
     brand?: string;
     price: number;
+    base_price?: number;
+    promotional_price?: number;
     stock: number;
 }
 
