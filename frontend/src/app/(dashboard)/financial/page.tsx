@@ -32,7 +32,8 @@ export default function FinancialPage() {
         description: '', category_id: '', type: 'PAYABLE', transaction_status: 'CONFIRMADO', is_fixed: false,
         total_amount: '', issue_date: new Date().toISOString().split('T')[0], first_due_date: new Date().toISOString().split('T')[0], 
         installments_count: '1', customer_id: '', account_id: '', order_id: '',
-        recurrence_end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0]
+        recurrence_end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0],
+        customer_search_text: ''
     });
     const [preview, setPreview] = useState<any[]>([]);
     const [customerOrders, setCustomerOrders] = useState<any[]>([]);
