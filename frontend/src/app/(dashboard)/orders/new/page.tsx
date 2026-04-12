@@ -12,8 +12,6 @@ interface Customer {
     corporate_name: string;
     document: string;
     credit_limit: number;
-    document: string;
-    credit_limit: number;
     open_debts: number;
     discount?: number;
     id_guid?: string;
