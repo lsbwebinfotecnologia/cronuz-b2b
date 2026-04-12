@@ -6,6 +6,9 @@ from sqlalchemy import text
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app.db.session import engine, Base
+from app.models.company import Company
+from app.models.customer import Customer
+from app.models.order import Order
 from app.models.financial import FinancialCategory, FinancialTransaction, FinancialInstallment, FinancialAccount, FinancialCashFlowLog
 
 def run_migration():
