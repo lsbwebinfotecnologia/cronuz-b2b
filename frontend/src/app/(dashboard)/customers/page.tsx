@@ -14,7 +14,17 @@ interface Customer {
   credit_limit: number;
   consignment_status: string;
   open_debts: number;
+  last_purchase?: string;
 }
+
+const formatCNPJ = (cnpj: string) => {
+  if (!cnpj) return '';
+  const digits = cnpj.replace(/\D/g, '');
+  if (digits.length === 14) {
+    return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+  }
+  return cnpj; // return original if not exactly 14 digits (might be CPF or invalid)
+};
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -98,10 +108,10 @@ export default function CustomersPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
             <Users className="h-6 w-6 text-[var(--color-primary-base)]" />
-            Meus Clientes B2B
+            Minhas Empresas B2B
           </h1>
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-            Gestão de clientes, limites de crédito e consignação da sua empresa.
+            Gestão de empresas, limites de crédito e consignação.
           </p>
         </div>
         
@@ -110,7 +120,7 @@ export default function CustomersPage() {
           className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2.5 px-4 rounded-xl flex items-center gap-2 transition-all shadow-lg shadow-[var(--color-primary-base)]/20 hover:scale-[1.02] active:scale-[0.98]"
         >
           <Plus className="h-4 w-4" />
-          Novo Cliente
+          Nova Empresa
         </Link>
       </div>
 
@@ -119,7 +129,7 @@ export default function CustomersPage() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
         <input
           type="text"
-          placeholder="Buscar clientes por nome ou CNPJ..."
+          placeholder="Buscar empresas por nome ou CNPJ..."
           className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all shadow-sm dark:bg-slate-800/50 dark:border-slate-700 dark:text-white"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -133,7 +143,7 @@ export default function CustomersPage() {
             <Building className="h-6 w-6 text-slate-500 dark:text-slate-300" />
           </div>
           <div>
-            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Total de Clientes</p>
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Total de Empresas</p>
             <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">{stats.total_customers}</h3>
           </div>
         </div>
@@ -155,7 +165,7 @@ export default function CustomersPage() {
             <Wallet className="h-6 w-6 text-rose-600 dark:text-rose-400" />
           </div>
           <div>
-            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Débitos B2B (Múltiplos Clientes)</p>
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Débitos B2B (Múltiplas Empresas)</p>
             <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">
               {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(stats.total_debts)}
             </h3>
@@ -174,25 +184,24 @@ export default function CustomersPage() {
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-slate-50 text-slate-500 font-medium dark:bg-slate-950/50 dark:text-slate-400">
               <tr>
-                <th className="px-6 py-4">Cliente</th>
-                <th className="px-6 py-4">CNPJ</th>
-                <th className="px-6 py-4 text-right">Limite de Crédito</th>
-                <th className="px-6 py-4 text-right">Débitos Abertos</th>
+                <th className="px-6 py-4">Empresa</th>
+                <th className="px-6 py-4">Última Compra</th>
+                <th className="px-6 py-4 text-right">Créditos / Débitos</th>
                 <th className="px-6 py-4">Consignação</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60">
               {loading ? (
                  <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto text-slate-400 mb-2" />
-                    Buscando clientes...
+                    Buscando empresas...
                   </td>
                  </tr>
               ) : customers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
-                    {debouncedSearch ? 'Nenhum cliente encontrado para sua pesquisa.' : 'Nenhum cliente na sua carteira ainda.'}
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500">
+                    {debouncedSearch ? 'Nenhuma empresa encontrada para sua pesquisa.' : 'Nenhuma empresa na sua carteira ainda.'}
                   </td>
                 </tr>
               ) : (
@@ -205,20 +214,25 @@ export default function CustomersPage() {
                     className="hover:bg-slate-50 dark:hover:bg-slate-800/20 transition-colors"
                   >
                     <td className="px-6 py-4">
-                      <Link href={`/customers/${customer.id}`} className="font-medium text-slate-900 dark:text-slate-200 hover:text-[var(--color-primary-base)] dark:hover:text-[var(--color-primary-base)] hover:underline transition-colors block">
-                        {customer.name}
+                      <Link href={`/customers/${customer.id}`} className="block group w-max">
+                        <div className="font-medium text-slate-900 dark:text-slate-200 group-hover:text-[var(--color-primary-base)] transition-colors">
+                          {customer.name}
+                        </div>
+                        <div className="text-slate-500 dark:text-slate-400 font-mono text-xs mt-0.5">
+                          {formatCNPJ(customer.document)}
+                        </div>
                       </Link>
                     </td>
-                    <td className="px-6 py-4 text-slate-500 dark:text-slate-400 font-mono text-xs">
-                      <Link href={`/customers/${customer.id}`} className="hover:text-[var(--color-primary-base)] dark:hover:text-[var(--color-primary-base)] transition-colors block">
-                        {customer.document}
-                      </Link>
+                    <td className="px-6 py-4 text-slate-500 dark:text-slate-400 text-sm">
+                      {customer.last_purchase ? new Date(customer.last_purchase).toLocaleDateString('pt-BR') : <span className="text-slate-300 dark:text-slate-600 italic">Sem registro</span>}
                     </td>
-                    <td className="px-6 py-4 text-right text-emerald-600 dark:text-emerald-400 font-mono">
-                      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(customer.credit_limit)}
-                    </td>
-                    <td className="px-6 py-4 text-right text-rose-600 dark:text-rose-400 font-mono">
-                      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(customer.open_debts)}
+                    <td className="px-6 py-4 text-right">
+                      <div className="text-emerald-600 dark:text-emerald-400 font-mono text-sm font-medium">
+                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(customer.credit_limit)}
+                      </div>
+                      <div className={`font-mono text-xs mt-0.5 ${customer.open_debts > 0 ? 'text-rose-600 dark:text-rose-400 font-medium' : 'text-slate-400'}`}>
+                        Déb: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(customer.open_debts)}
+                      </div>
                     </td>
                     <td className="px-6 py-4">
                       {customer.consignment_status === 'ACTIVE' ? (

@@ -16,6 +16,7 @@ from app.models import subscription as subscription_models
 from app.models import lead as lead_models
 from app.models import system_integrator as system_integrator_models
 from app.models import order as order_models
+from app.models import commercial_policy as commercial_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -30,6 +31,8 @@ from app.api import marketing_navigation
 from app.api import storefront
 from app.api import upload
 from app.api import dashboard
+from app.api import commercial_policies
+from app.api import financial
 from app.api import orders
 from app.api import subscriptions
 from app.api import leads
@@ -117,6 +120,8 @@ app.include_router(integrators.router, prefix="/integrators", tags=["integrators
 app.include_router(system_integrators.router, prefix="/system-integrators", tags=["system-integrators"])
 app.include_router(bookinfo_hub.router, tags=["bookinfo"])
 app.include_router(bookinfo_purchases.router, tags=["bookinfo_purchases"])
+app.include_router(commercial_policies.router, tags=["commercial-policies"])
+app.include_router(financial.router, tags=["financial"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -275,6 +280,7 @@ class ModuleUpdate(BaseModel):
     module_subscriptions: bool
     module_pdv: bool
     module_agents: bool
+    module_financial: bool
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(
@@ -446,6 +452,7 @@ def update_company_modules(
     company.module_subscriptions = module_update.module_subscriptions
     company.module_pdv = module_update.module_pdv
     company.module_agents = module_update.module_agents
+    company.module_financial = module_update.module_financial
     
     db.commit()
     db.refresh(company)

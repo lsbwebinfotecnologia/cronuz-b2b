@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { 
-  Package, Search, Plus, Filter, MoreVertical, Building2, User, Eye, Download, CheckCircle2, XCircle
+  Package, Search, Plus, Filter, MoreVertical, Building2, User, Eye, Download, CheckCircle2, XCircle, Users, Star, Trash2
 } from 'lucide-react';
 import Link from 'next/link';
 import { getToken } from '@/lib/auth';
@@ -61,6 +61,35 @@ export default function OrdersPage() {
     const [searchTerm, setSearchTerm] = useState('');
     const [page, setPage] = useState(0);
     const [total, setTotal] = useState(0);
+    const [viewMode, setViewMode] = useState<'ALL' | 'NEW'>('ALL');
+
+    // Dashboard metrics state
+    const [metrics, setMetrics] = useState<any>(null);
+    const [metricsLoading, setMetricsLoading] = useState(true);
+    const [metricsDays, setMetricsDays] = useState(7);
+
+    const fetchMetrics = async () => {
+        setMetricsLoading(true);
+        try {
+            const token = getToken();
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const response = await fetch(`${apiUrl}/metrics?days=${metricsDays}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setMetrics(data);
+            }
+        } catch(e) {
+            console.error("Failed to fetch metrics", e);
+        } finally {
+            setMetricsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchMetrics();
+    }, [metricsDays]);
 
     const fetchOrders = async () => {
         setLoading(true);
@@ -73,6 +102,9 @@ export default function OrdersPage() {
             });
             if (searchTerm) {
                 params.append('search', searchTerm);
+            }
+            if (viewMode === 'NEW') {
+                params.append('status', 'NEW');
             }
             
             const token = getToken();
@@ -98,7 +130,26 @@ export default function OrdersPage() {
             fetchOrders();
         }, 500);
         return () => clearTimeout(timeoutId);
-    }, [searchTerm, page]);
+    }, [searchTerm, page, viewMode]);
+
+    const handleDeleteCart = async (orderId: number) => {
+        if (!confirm('Deseja excluir este carrinho e seus itens permanentemente?')) return;
+        try {
+            const token = getToken();
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const res = await fetch(`${apiUrl}/orders/${orderId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                setOrders(orders.filter(o => o.id !== orderId));
+            } else {
+                alert('Erro ao excluir carrinho');
+            }
+        } catch (e) {
+             console.error(e);
+        }
+    };
 
     return (
         <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
@@ -113,10 +164,134 @@ export default function OrdersPage() {
                         Acompanhe os pedidos recebidos via B2B e seus status no Horus.
                     </p>
                 </div>
+                <div className="flex flex-col sm:flex-row items-center gap-4">
+                    <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl items-center shadow-sm">
+                        {[7, 15, 30].map(d => (
+                            <button
+                                key={d}
+                                onClick={() => setMetricsDays(d)}
+                                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${metricsDays === d ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                            >
+                                {d} dias
+                            </button>
+                        ))}
+                    </div>
+                    <Link
+                        href="/orders/new"
+                        className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white px-5 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-sm w-full sm:w-auto justify-center"
+                    >
+                        <Plus className="w-5 h-5" />
+                        Novo Pedido
+                    </Link>
+                </div>
+            </div>
+
+            {/* Dashboard Topo */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Total Faturado & Status */}
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                    <div>
+                        <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-1">Faturamento ({metricsDays} dias)</h3>
+                        {metricsLoading ? (
+                            <div className="h-10 bg-slate-100 dark:bg-slate-800 rounded animate-pulse w-3/4"></div>
+                        ) : (
+                            <div className="text-4xl font-black text-slate-900 dark:text-white tracking-tight">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics?.total_revenue || 0)}
+                            </div>
+                        )}
+                    </div>
+                    
+                    <div className="mt-6 flex flex-wrap gap-2">
+                        {metricsLoading ? (
+                            <div className="flex gap-2 w-full"><div className="h-6 w-1/3 bg-slate-100 dark:bg-slate-800 rounded animate-pulse"></div></div>
+                        ) : metrics?.status_counts && Object.keys(metrics.status_counts).length > 0 ? (
+                            Object.entries(metrics.status_counts).map(([st, count]) => (
+                                <span key={st} className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold ${statusColorMap[st] || "bg-slate-100 text-slate-800"}`}>
+                                    {count as number} {statusLabelMap[st] || st}
+                                </span>
+                            ))
+                        ) : (
+                            <span className="text-xs text-slate-400">Nenhum pedido no período</span>
+                        )}
+                    </div>
+                </div>
+
+                {/* Rank 5 Clientes */}
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                    <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
+                        <Users className="w-4 h-4 text-emerald-500" />
+                        Top 5 Clientes
+                    </h3>
+                    <div className="space-y-3">
+                        {metricsLoading ? (
+                            Array(3).fill(0).map((_, i) => <div key={i} className="h-8 bg-slate-50 dark:bg-slate-800 rounded animate-pulse"></div>)
+                        ) : metrics?.top_clients?.length > 0 ? (
+                            metrics.top_clients.map((c: any, i: number) => (
+                                <div key={c.id} className="flex justify-between items-center text-sm">
+                                    <div className="flex items-center gap-2 overflow-hidden">
+                                        <span className="text-slate-400 font-mono text-xs w-4">{i + 1}</span>
+                                        <span className="truncate font-medium text-slate-700 dark:text-slate-300">{c.fantasy_name || c.corporate_name}</span>
+                                    </div>
+                                    <span className="font-bold text-slate-900 dark:text-white shrink-0 ml-2">
+                                        R$ {(c.total_spent || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                    </span>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="text-sm text-slate-400 italic">Sem vendas no período.</div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Rank 5 Itens */}
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                    <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
+                        <Star className="w-4 h-4 text-amber-500" />
+                        Top 5 Itens Vendidos
+                    </h3>
+                    <div className="space-y-3">
+                        {metricsLoading ? (
+                            Array(3).fill(0).map((_, i) => <div key={i} className="h-8 bg-slate-50 dark:bg-slate-800 rounded animate-pulse"></div>)
+                        ) : metrics?.top_items?.length > 0 ? (
+                            metrics.top_items.map((it: any, i: number) => (
+                                <div key={i} className="flex justify-between items-center text-sm">
+                                    <div className="flex items-center gap-2 overflow-hidden">
+                                        <div className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600 shrink-0"></div>
+                                        <span className="truncate text-slate-600 dark:text-slate-300" title={it.name}>{it.name}</span>
+                                    </div>
+                                    <span className="font-bold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-xs shrink-0 ml-2">
+                                        {it.qty_sold} un.
+                                    </span>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="text-sm text-slate-400 italic">Sem vendas no período.</div>
+                        )}
+                    </div>
+                </div>
             </div>
 
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row gap-4 justify-between bg-slate-50/50 dark:bg-slate-900/50">
+                <div className="flex gap-2 border-b border-slate-200 overflow-x-auto px-4 pt-4 bg-slate-50/50 dark:bg-slate-900/50 dark:border-slate-800">
+                    <button
+                        onClick={() => { setViewMode('ALL'); setPage(0); }}
+                        className={`pb-3 px-4 font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
+                            viewMode === 'ALL' ? 'border-[var(--color-primary-base)] text-slate-900 dark:text-white' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                        }`}
+                    >
+                        Todos os Pedidos
+                    </button>
+                    <button
+                        onClick={() => { setViewMode('NEW'); setPage(0); }}
+                        className={`pb-3 px-4 font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
+                            viewMode === 'NEW' ? 'border-[var(--color-primary-base)] text-slate-900 dark:text-white' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                        }`}
+                    >
+                        Carrinhos e Rascunhos ({viewMode === 'NEW' ? total : ''})
+                    </button>
+                </div>
+                
+                <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row gap-4 justify-between bg-white dark:bg-slate-900">
                     <div className="relative flex-1 max-w-md">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
                         <input
@@ -189,14 +364,14 @@ export default function OrdersPage() {
                                         </td>
                                         <td className="py-3 px-6">
                                             {order.customer ? (
-                                                <div className="flex flex-col">
-                                                    <span className="text-sm font-medium text-slate-900 dark:text-white truncate max-w-[200px]" title={order.customer.corporate_name}>
+                                                <Link href={`/customers/${order.customer.id}`} className="flex flex-col group hover:opacity-80 transition-opacity">
+                                                    <span className="text-sm font-medium text-[var(--color-primary-base)] group-hover:underline truncate max-w-[200px]" title={order.customer.corporate_name}>
                                                         {order.customer.corporate_name}
                                                     </span>
                                                     <span className="text-xs text-slate-500 font-mono mt-0.5">
                                                         {order.customer.document}
                                                     </span>
-                                                </div>
+                                                </Link>
                                             ) : (
                                                 <span className="text-xs text-slate-400 italic">Desconhecido</span>
                                             )}
@@ -213,13 +388,24 @@ export default function OrdersPage() {
                                             R$ {order.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                         </td>
                                         <td className="py-3 px-6 text-right">
-                                            <Link 
-                                                href={`/orders/${order.id}`}
-                                                className="inline-flex items-center p-2 text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-base)]/10 rounded-lg transition-colors"
-                                                title="Visualizar Pedido"
-                                            >
-                                                <Eye className="w-5 h-5" />
-                                            </Link>
+                                            {order.status === 'NEW' ? (
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <Link href={`/orders/new?order_id=${order.id}`} className="text-xs bg-[var(--color-primary-base)] text-white px-3 py-1.5 rounded-lg hover:bg-[var(--color-primary-hover)] transition-colors inline-block whitespace-nowrap font-medium">
+                                                        Continuar Checkout
+                                                    </Link>
+                                                    <button onClick={() => handleDeleteCart(order.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors" title="Excluir carrinho">
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <Link 
+                                                    href={`/orders/${order.id}`}
+                                                    className="inline-flex items-center p-2 text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-base)]/10 rounded-lg transition-colors"
+                                                    title="Visualizar Pedido"
+                                                >
+                                                    <Eye className="w-5 h-5" />
+                                                </Link>
+                                            )}
                                         </td>
                                     </tr>
                                 ))

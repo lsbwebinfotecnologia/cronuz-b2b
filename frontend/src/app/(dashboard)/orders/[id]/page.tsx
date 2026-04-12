@@ -462,7 +462,10 @@ export default function OrderDetailPage() {
                             <div className="space-y-3">
                                 <div>
                                     <p className="text-xs text-slate-500 dark:text-slate-400">Razão Social</p>
-                                    <p className="text-sm font-bold text-slate-900 dark:text-white">{order.customer.corporate_name}</p>
+                                    <Link href={`/customers/${order.customer_id}`} className="text-sm font-bold text-slate-900 dark:text-white hover:text-[var(--color-primary-base)] transition-colors flex items-center gap-1 group">
+                                        {order.customer.corporate_name}
+                                        <ArrowLeft className="w-3 h-3 opacity-0 group-hover:opacity-100 rotate-135 transition-opacity" style={{ transform: 'rotate(135deg)' }} />
+                                    </Link>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
                                      <div>
@@ -595,7 +598,7 @@ export default function OrderDetailPage() {
                 
                 <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm h-[500px] overflow-y-auto">
                     <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2 opacity-80">
-                         Histórico de Status do Horus
+                         Histórico de Status do Pedido
                     </h2>
                     
                     <div className="space-y-4 relative before:absolute before:inset-0 before:ml-2 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 dark:before:via-slate-700 before:to-transparent">

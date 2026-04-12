@@ -14,7 +14,21 @@ import {
   MonitorSmartphone,
   Inbox,
   Plug,
-  RefreshCw
+  RefreshCw,
+  Shield,
+  DollarSign,
+  Wallet,
+  Landmark,
+  BarChart3,
+  LayoutGrid,
+  Tag,
+  FolderTree,
+  SlidersHorizontal,
+  Ticket,
+  Store,
+  Menu,
+  ListTodo,
+  UserCheck
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -26,8 +40,8 @@ import { useEffect, useState } from 'react';
 type NavItem = {
   name: string;
   href: string;
-  icon: React.ElementType;
-  subItems?: { name: string; href: string }[];
+  icon: any;
+  subItems?: { name: string; href: string; icon?: any; }[];
   badge?: number;
 };
 
@@ -41,7 +55,7 @@ type UserData = {
 };
 
 const masterNavigation: NavItem[] = [
-  { name: 'Empresas', href: '/companies', icon: Users },
+  { name: 'Parceiros', href: '/companies', icon: Users },
   { name: 'Hub Sync Bookinfo', href: '/settings/bookinfo-sync', icon: RefreshCw },
   { name: 'Integradores', href: '/system-integrators', icon: Layers },
   { name: 'Leads', href: '/leads', icon: Inbox },
@@ -54,22 +68,22 @@ const sellerNavigation: NavItem[] = [
     href: '/products', 
     icon: Package,
     subItems: [
-      { name: 'Catálogo', href: '/products' },
-      { name: 'Marcas', href: '/products/brands' },
-      { name: 'Categorias', href: '/products/categories' },
-      { name: 'Características', href: '/products/characteristics' }
+      { name: 'Catálogo', href: '/products', icon: LayoutGrid },
+      { name: 'Marcas', href: '/products/brands', icon: Tag },
+      { name: 'Categorias', href: '/products/categories', icon: FolderTree },
+      { name: 'Características', href: '/products/characteristics', icon: SlidersHorizontal }
     ]
   },
   { name: 'Pedidos', href: '/orders', icon: ShoppingBag },
-  { name: 'Clientes', href: '/customers', icon: Users },
+  { name: 'Empresas', href: '/customers', icon: Users },
   { 
     name: 'Marketing', 
     href: '/promotions', 
     icon: Megaphone,
     subItems: [
-       { name: 'Promoções', href: '/promotions' },
-       { name: 'Vitrines da Loja', href: '/marketing/showcases' },
-       { name: 'Menu de Navegação', href: '/marketing/navigation' }
+       { name: 'Promoções', href: '/promotions', icon: Ticket },
+       { name: 'Vitrines da Loja', href: '/marketing/showcases', icon: Store },
+       { name: 'Menu de Navegação', href: '/marketing/navigation', icon: Menu }
     ]
   },
   {
@@ -87,7 +101,7 @@ const sellerNavigation: NavItem[] = [
 
 const agentNavigation: NavItem[] = [
   { name: 'Ponto de Venda (PDV)', href: '/pdv', icon: MonitorSmartphone },
-  { name: 'Clientes', href: '/customers', icon: Users },
+  { name: 'Empresas', href: '/customers', icon: Users },
   { name: 'Pedidos', href: '/orders', icon: ShoppingBag },
 ];
 
@@ -104,6 +118,7 @@ export function Sidebar() {
   const [moduleSubscriptions, setModuleSubscriptions] = useState(false);
   const [modulePdv, setModulePdv] = useState(false);
   const [moduleAgents, setModuleAgents] = useState(false);
+  const [moduleFinancial, setModuleFinancial] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
@@ -118,6 +133,8 @@ export function Sidebar() {
                initialOpen[item.name] = true;
            }
        });
+       if (pathname.startsWith('/financial')) initialOpen['Financeiro'] = true;
+       if (pathname.startsWith('/subscriptions') || pathname.startsWith('/subscribers')) initialOpen['Assinaturas'] = true;
        setOpenMenus(initialOpen);
        
        const fetchSettings = async () => {
@@ -136,6 +153,7 @@ export function Sidebar() {
                setModuleSubscriptions(data.module_subscriptions || false);
                setModulePdv(data.module_pdv || false);
                setModuleAgents(data.module_agents || false);
+               setModuleFinancial(data.module_financial || false);
             }
          } catch (e) {}
        };
@@ -165,7 +183,7 @@ export function Sidebar() {
 
   const filteredSellerNavigation = [...sellerNavigation.filter(nav => {
     if (!moduleProducts && nav.name === 'Produtos') return false;
-    if (!moduleCustomers && nav.name === 'Clientes') return false;
+    if (!moduleCustomers && nav.name === 'Empresas') return false;
     if (!moduleMarketing && nav.name === 'Marketing') return false;
     if (!usesBookinfo && nav.name === 'Bookinfo') return false;
     if (!moduleAgents && nav.href === '/agents') return false;
@@ -180,6 +198,31 @@ export function Sidebar() {
     return nav;
   });
   
+  if (!usesHorus) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, { 
+       name: 'Políticas e Preços', 
+       href: '/commercial-policies', 
+       icon: Shield
+    });
+  }
+
+  if (moduleFinancial) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, { 
+       name: 'Financeiro', 
+       href: '/financial', 
+       icon: DollarSign,
+       subItems: [
+         { name: 'Lançamentos', href: '/financial', icon: Wallet },
+         { name: 'Conciliação', href: '/financial/reconciliation', icon: Landmark },
+         { name: 'DRE', href: '/financial/reports', icon: BarChart3 }
+       ]
+    });
+  }
+  
   if (moduleSubscriptions) {
     // Insert Assinaturas before Configurações
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
@@ -189,8 +232,8 @@ export function Sidebar() {
        href: '/subscriptions', 
        icon: Layers,
        subItems: [
-         { name: 'Planos e Landpages', href: '/subscriptions' },
-         { name: 'Gestão de Assinaturas', href: '/subscribers' }
+         { name: 'Planos e Landpages', href: '/subscriptions', icon: ListTodo },
+         { name: 'Gestão de Assinaturas', href: '/subscribers', icon: UserCheck }
        ]
     });
   }
@@ -225,7 +268,7 @@ export function Sidebar() {
   return (
     <div className="flex h-screen flex-col justify-between border-r border-slate-200 bg-white/50 dark:border-slate-800 dark:bg-slate-950/50 backdrop-blur-xl w-64 p-4 transition-colors overflow-y-auto no-scrollbar">
       <div>
-        <div className="flex items-center gap-3 px-2 py-4 mb-6">
+        <Link href="/" className="flex items-center gap-3 px-2 py-4 mb-6 hover:opacity-80 transition-opacity">
           <div className="relative h-10 w-28 flex-shrink-0">
             <img 
               src="/images/cronuz-logo.png" 
@@ -238,7 +281,7 @@ export function Sidebar() {
               className="object-contain w-full h-full hidden horus-logo"
             />
           </div>
-        </div>
+        </Link>
 
         <nav className="space-y-1">
           {dynamicNavigation.map((item) => {
@@ -321,7 +364,10 @@ export function Sidebar() {
                                      : 'text-slate-500 hover:text-[var(--color-primary-base)] hover:bg-slate-50 dark:text-slate-400 dark:hover:text-[var(--color-primary-base)] dark:hover:bg-slate-800/50'
                                  )}
                                >
-                                 {sub.name}
+                                 <div className="flex items-center gap-2">
+                                     {sub.icon && <sub.icon className="w-4 h-4" />}
+                                     {sub.name}
+                                 </div>
                                </Link>
                              )
                           })}

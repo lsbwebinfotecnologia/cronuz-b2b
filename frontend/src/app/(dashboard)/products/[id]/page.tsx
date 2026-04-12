@@ -185,8 +185,8 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
         },
         body: JSON.stringify({
           ...product,
-          promotional_price: product.promotional_price || undefined,
-          cost_price: product.cost_price || undefined,
+          promotional_price: product.promotional_price ?? 0,
+          cost_price: product.cost_price ?? 0,
           category_id: product.category_id || undefined,
           brand_id: product.brand_id || undefined,
           cover_url: product.cover_url || undefined,
@@ -422,19 +422,19 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Peso (kg)</label>
-                      <input type="number" step="0.01" name="weight_kg" value={product.weight_kg || 0} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                      <CurrencyInput maxDecimals={3} value={product.weight_kg || 0} onChangeValue={(val) => setProduct(p => ({...p, weight_kg: val}))} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Largura (cm)</label>
-                      <input type="number" step="0.1" name="width_cm" value={product.width_cm || 0} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                      <CurrencyInput maxDecimals={2} value={product.width_cm || 0} onChangeValue={(val) => setProduct(p => ({...p, width_cm: val}))} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
                     </div>
                      <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Altura (cm)</label>
-                      <input type="number" step="0.1" name="height_cm" value={product.height_cm || 0} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                      <CurrencyInput maxDecimals={2} value={product.height_cm || 0} onChangeValue={(val) => setProduct(p => ({...p, height_cm: val}))} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
                     </div>
                      <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Comp. (cm)</label>
-                      <input type="number" step="0.1" name="length_cm" value={product.length_cm || 0} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                      <CurrencyInput maxDecimals={2} value={product.length_cm || 0} onChangeValue={(val) => setProduct(p => ({...p, length_cm: val}))} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
                     </div>
                   </div>
                 </div>
@@ -641,7 +641,7 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Preço Promocional Fixo (Override)</label>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Preço Promocional Fixo</label>
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">R$</span>
                   <CurrencyInput value={product.promotional_price || 0} onChangeValue={(val) => setProduct(p => ({...p, promotional_price: val}))} className="w-full pl-9 pr-3 py-3 bg-slate-50 border border-emerald-200 text-emerald-900 text-sm rounded-xl focus:ring-2 focus:ring-emerald-500/20 dark:bg-emerald-950/20 dark:border-emerald-500/30 dark:text-emerald-400" />

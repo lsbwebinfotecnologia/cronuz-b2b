@@ -64,6 +64,7 @@ class OrderBase(BaseModel):
     subtotal: Optional[float] = 0.0
     discount: Optional[float] = 0.0
     total: Optional[float] = 0.0
+    payment_condition: Optional[str] = None
     agent_id: Optional[int] = None
 
 class OrderCreate(OrderBase):
@@ -86,7 +87,10 @@ class CheckoutRequest(BaseModel):
     type_order: str = "V"
 
 class PDVOrderItem(BaseModel):
-    product_id: int
+    product_id: Optional[int] = None
+    ean_isbn: Optional[str] = None
+    sku: Optional[str] = None
+    name: Optional[str] = None
     quantity: int
     unit_price: float
 
@@ -94,8 +98,11 @@ class PDVOrderCreate(BaseModel):
     customer_id: int
     items: List[PDVOrderItem]
     total_amount: float
+    payment_condition: Optional[str] = None
     payment_method: str
     discount_amount: float
     status: str
     source: str
+    type_order: str = "V"
+    installments: int = 1
 

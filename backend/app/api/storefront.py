@@ -780,13 +780,13 @@ async def checkout_cart(
         
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    from app.models.customer import Customer
+    customer = db.query(Customer).filter(Customer.id == cart.customer_id).first()
     
     # Send to Horus Flow
     if settings and settings.horus_enabled:
         from app.integrators.horus_orders import HorusOrders
-        from app.models.customer import Customer
         
-        customer = db.query(Customer).filter(Customer.id == cart.customer_id).first()
         if not customer or not customer.id_guid:
             raise HTTPException(status_code=400, detail="Cliente não sincronizado com o Horus.")
             
@@ -935,6 +935,16 @@ async def checkout_cart(
             cart.status = "SENT_TO_HORUS"
             db.commit()
             
+            # Generate Financial Transactions
+            from app.core.financial_service import generate_financial_for_order
+            generate_financial_for_order(
+                db=db, 
+                company_id=current_user.company_id, 
+                customer=customer, 
+                order=cart, 
+                provided_payment_condition=None
+            )
+            
             return {"status": "success", "message": "Pedido enviado para o Horus", "order_id": cart.id, "horus_id": cart.horus_pedido_venda}
             
         except HTTPException as he:
@@ -949,6 +959,16 @@ async def checkout_cart(
     cart.type_order = payload.type_order
     cart.status = "PROCESSING"
     db.commit()
+    
+    # Generate Financial Transactions
+    from app.core.financial_service import generate_financial_for_order
+    generate_financial_for_order(
+        db=db, 
+        company_id=current_user.company_id, 
+        customer=customer, 
+        order=cart, 
+        provided_payment_condition=None # Customer will use their default linked condition
+    )
     
     return {"status": "success", "message": "Pedido local finalizado com sucesso", "order_id": cart.id}
 

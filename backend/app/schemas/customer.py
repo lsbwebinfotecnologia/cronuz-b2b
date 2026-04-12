@@ -2,6 +2,17 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
+class CustomerCommercialPolicy(BaseModel):
+    id: int
+    name: str
+    discount_sale_percent: float
+    discount_consignment_percent: float
+    max_installments: int
+    min_installment_value: float
+
+    class Config:
+        from_attributes = True
+
 class AddressBase(BaseModel):
     street: str
     number: str
@@ -36,6 +47,29 @@ class Contact(ContactBase):
     class Config:
         from_attributes = True
 
+class InteractionBase(BaseModel):
+    type: str # CALL, EMAIL, MEETING, NOTE, TASK
+    content: str
+    due_date: Optional[datetime] = None
+    status: str = "COMPLETED"
+
+class InteractionCreate(InteractionBase):
+    pass
+
+class InteractionUpdate(BaseModel):
+    status: Optional[str] = None
+    type: Optional[str] = None
+    content: Optional[str] = None
+    due_date: Optional[datetime] = None
+
+class Interaction(InteractionBase):
+    id: int
+    customer_id: int
+    seller_id: int
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
 class CustomerBase(BaseModel):
     name: str # Nome Fantasia
     corporate_name: Optional[str] = None # Razão Social
@@ -51,6 +85,9 @@ class CustomerBase(BaseModel):
     id_guid: Optional[str] = None
     id_doc: Optional[str] = None
     default_payment_method: Optional[str] = "ERP_STANDARD"
+    payment_condition: Optional[str] = None
+    commercial_policy_id: Optional[int] = None
+    crm_status: Optional[str] = "ACTIVE"
 
 class CustomerCreate(CustomerBase):
     addresses: Optional[list[AddressCreate]] = []
@@ -71,12 +108,16 @@ class CustomerUpdate(BaseModel):
     id_guid: Optional[str] = None
     id_doc: Optional[str] = None
     default_payment_method: Optional[str] = None
+    payment_condition: Optional[str] = None
+    commercial_policy_id: Optional[int] = None
+    crm_status: Optional[str] = None
 
 class CustomerInDBBase(CustomerBase):
     id: int
     company_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+    last_purchase: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -84,3 +125,5 @@ class CustomerInDBBase(CustomerBase):
 class Customer(CustomerInDBBase):
     addresses: list[Address] = []
     contacts: list[Contact] = []
+    interactions: list[Interaction] = []
+    commercial_policy: Optional[CustomerCommercialPolicy] = None

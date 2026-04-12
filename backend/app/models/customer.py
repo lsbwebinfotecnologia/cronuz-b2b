@@ -30,12 +30,16 @@ class Customer(Base):
     open_debts = Column(Float, default=0.0, nullable=False)
     consignment_status = Column(String(50), default="INACTIVE", nullable=False) # e.g., ACTIVE, BLOCKED, INACTIVE
     default_payment_method = Column(String(50), default="ERP_STANDARD", nullable=True) # ERP_STANDARD, EFI_PIX_CREDIT, PIX_MANUAL
+    payment_condition = Column(String(50), nullable=True) # e.g. "30/60/90"
+    commercial_policy_id = Column(Integer, ForeignKey("crm_commercial_policy.id", ondelete="SET NULL"), nullable=True)
+    crm_status = Column(String(50), default="ACTIVE", nullable=False) # LEAD, NEGOTIATION, ACTIVE, BLOCKED, CHURN_ALERT
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
     company = relationship("Company")
+    commercial_policy = relationship("CommercialPolicy", back_populates="customers")
     addresses = relationship("Address", back_populates="customer", cascade="all, delete-orphan")
     contacts = relationship("Contact", back_populates="customer", cascade="all, delete-orphan")
     interactions = relationship("Interaction", back_populates="customer", cascade="all, delete-orphan")
@@ -72,9 +76,12 @@ class Interaction(Base):
     customer_id = Column(Integer, ForeignKey("crm_customer.id"), nullable=False)
     seller_id = Column(Integer, ForeignKey("usr_user.id"), nullable=False) # Which seller logged this
     
-    type = Column(String(50), nullable=False) # CALL, EMAIL, MEETING, NOTE
+    type = Column(String(50), nullable=False) # CALL, EMAIL, MEETING, NOTE, TASK
     content = Column(Text, nullable=False)
     
+    due_date = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(50), default="COMPLETED", nullable=False) # PENDING, COMPLETED, CANCELLED
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     customer = relationship("Customer", back_populates="interactions")

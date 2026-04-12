@@ -23,6 +23,7 @@ async def create_pdv_order(
     from app.models.customer import Customer
     from app.models.product import Product
     from app.models.order import OrderItem
+    from app.models.order_log import OrderLog
     
     if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
         raise HTTPException(status_code=403, detail="Acesso não autorizado")
@@ -33,6 +34,9 @@ async def create_pdv_order(
     
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
+        
+    if customer.crm_status == 'BLOCKED':
+        raise HTTPException(status_code=403, detail="Cliente encontra-se pendente/bloqueado em nosso CRM. Criação de pedido negada.")
 
     # Local Order Creation
     order = Order(
@@ -41,7 +45,7 @@ async def create_pdv_order(
         agent_id=current_user.id,
         status="PROCESSING",
         origin=payload.source,
-        type_order="V",
+        type_order=payload.type_order or "V",
         subtotal=sum([i.quantity * i.unit_price for i in payload.items]),
         discount=payload.discount_amount,
         total=payload.total_amount
@@ -50,16 +54,39 @@ async def create_pdv_order(
     db.commit()
     db.refresh(order)
 
+    # Initial Log
+    log_new = OrderLog(order_id=order.id, old_status=None, new_status="NEW")
+    db.add(log_new)
+    db.commit()
+
+    # Generate Financial Transactions for ALL orders
+    from app.core.financial_service import generate_financial_for_order
+    generate_financial_for_order(
+        db=db, 
+        company_id=current_user.company_id, 
+        customer=customer, 
+        order=order, 
+        provided_payment_condition=payload.payment_condition
+    )
+
     # Add Items
     for item in payload.items:
-        prod_ref = db.query(Product).filter(Product.id == item.product_id).first()
+        prod_ref = None
+        if item.product_id:
+            prod_ref = db.query(Product).filter(Product.id == item.product_id).first()
+            
+        ean_isbn = item.ean_isbn or (prod_ref.ean_gtin if prod_ref else None)
+        sku = item.sku or (prod_ref.sku if prod_ref else None)
+        name = item.name or (prod_ref.name if prod_ref else f"Produto Horus" if item.ean_isbn else f"Produto Desconhecido")
+        brand = prod_ref.brand if prod_ref else None
+
         new_item = OrderItem(
             order_id=order.id,
             product_id=item.product_id,
-            ean_isbn=prod_ref.ean_gtin if prod_ref else None,
-            sku=prod_ref.sku if prod_ref else None,
-            name=prod_ref.name if prod_ref else f"Produto {item.product_id}",
-            brand=prod_ref.brand if prod_ref else None,
+            ean_isbn=ean_isbn,
+            sku=sku,
+            name=name,
+            brand=brand,
             quantity=item.quantity,
             quantity_requested=item.quantity,
             unit_price=item.unit_price,
@@ -88,8 +115,11 @@ async def create_pdv_order(
                     horus_ped_venda = order_res.get("COD_PED_VENDA")
                     
                     for item in payload.items:
-                        prod_ref = db.query(Product).filter(Product.id == item.product_id).first()
-                        isbn_or_sku = prod_ref.ean_gtin if prod_ref and prod_ref.ean_gtin else (prod_ref.sku if prod_ref else str(item.product_id))
+                        prod_ref = None
+                        if item.product_id:
+                            prod_ref = db.query(Product).filter(Product.id == item.product_id).first()
+                        
+                        isbn_or_sku = item.ean_isbn or item.sku or (prod_ref.ean_gtin if prod_ref and prod_ref.ean_gtin else (prod_ref.sku if prod_ref else None))
                         
                         await horus_client.send_order_item(
                             id_doc=customer.document,
@@ -103,6 +133,8 @@ async def create_pdv_order(
                             
                     order.horus_pedido_venda = str(horus_ped_venda).strip() if horus_ped_venda else None
                     order.status = "SENT_TO_HORUS"
+                    log_horus = OrderLog(order_id=order.id, old_status="NEW", new_status="SENT_TO_HORUS")
+                    db.add(log_horus)
                     db.commit()
             except Exception as e:
                 print(f"Error syncing PDV order to Horus: {e}")
@@ -118,6 +150,7 @@ def get_orders(
     limit: int = Query(25, ge=1, le=100),
     search: Optional[str] = None,
     customer_id: Optional[int] = None,
+    status: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -142,7 +175,14 @@ def get_orders(
     if customer_id:
         query = query.filter(Order.customer_id == customer_id)
         
-    query = query.filter(Order.status != "NEW")
+    if status:
+        status_list = [s.strip() for s in status.split(',')]
+        if len(status_list) > 1:
+            query = query.filter(Order.status.in_(status_list))
+        else:
+            query = query.filter(Order.status == status)
+    else:
+        query = query.filter(Order.status != "NEW")
     
     if search:
         search_filter = f"%{search}%"
@@ -174,6 +214,32 @@ def get_orders(
         "page": (skip // limit) + 1,
         "pages": (total + limit - 1) // limit
     }
+
+@router.delete("/orders/{order_id}")
+def delete_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+        
+    query = db.query(Order).filter(Order.id == order_id)
+    if current_user.type == "SELLER":
+        query = query.filter(Order.company_id == current_user.company_id)
+    elif current_user.type == "AGENT":
+        query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
+    
+    order = query.first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+    
+    if order.status != "NEW":
+        raise HTTPException(status_code=400, detail="Somente pedidos novos (carrinhos) podem ser excluídos diretamente.")
+        
+    db.delete(order)
+    db.commit()
+    return {"status": "success", "message": "Carrinho removido com sucesso"}
 
 @router.get("/orders/{order_id}", response_model=dict)
 async def get_order_detail(
@@ -736,3 +802,97 @@ async def manual_sync_horus(
             await horus_client.close()
 
     raise HTTPException(status_code=400, detail="Configurações Horus ou dados do cliente/empresa inválidos.")
+
+@router.get("/metrics")
+def get_orders_metrics(
+    days: int = Query(7, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from sqlalchemy import func
+    from datetime import datetime, timedelta
+    from app.models.order import Order, OrderItem
+    from app.models.customer import Customer
+    from app.models.product import Product
+
+    if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+    query = db.query(Order).filter(Order.created_at >= cutoff_date)
+    
+    if current_user.type == "SELLER":
+        query = query.filter(Order.company_id == current_user.company_id)
+    elif current_user.type == "AGENT":
+        query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
+
+    # Filter out completely cancelled or cart (NEW) to avoid polluting revenue
+    query = query.filter(Order.status.notin_(["NEW", "CANCELLED"]))
+
+    orders_in_period = query.all()
+
+    total_revenue = sum(o.total for o in orders_in_period)
+    
+    # Extract order IDs for aggregations
+    order_ids = [o.id for o in orders_in_period]
+    
+    # 1. Top 5 Clients
+    top_clients = []
+    if order_ids:
+        clients_agg = db.query(
+            Order.customer_id,
+            Customer.corporate_name,
+            Customer.name,
+            func.sum(Order.total).label('total_spent')
+        ).join(Customer, Order.customer_id == Customer.id)\
+         .filter(Order.id.in_(order_ids))\
+         .group_by(Order.customer_id, Customer.corporate_name, Customer.name)\
+         .order_by(func.sum(Order.total).desc())\
+         .limit(5).all()
+
+        top_clients = [{
+            "id": c.customer_id,
+            "corporate_name": c.corporate_name,
+            "fantasy_name": c.name,
+            "total_spent": float(c.total_spent or 0)
+        } for c in clients_agg]
+
+    # 2. Top 5 Items
+    top_items = []
+    if order_ids:
+        items_agg = db.query(
+            OrderItem.name,
+            func.sum(OrderItem.quantity).label('qty_sold'),
+            func.sum(OrderItem.total_price).label('revenue generated')
+        ).filter(OrderItem.order_id.in_(order_ids))\
+         .group_by(OrderItem.name)\
+         .order_by(func.sum(OrderItem.quantity).desc())\
+         .limit(5).all()
+
+        top_items = [{
+            "name": i.name,
+            "qty_sold": int(i.qty_sold or 0)
+        } for i in items_agg]
+
+    # 3. Status Grouping
+    status_counts = {}
+    
+    status_query = db.query(Order.status, func.count(Order.id).label('count')).filter(Order.created_at >= cutoff_date)
+    
+    if current_user.type == "SELLER":
+        status_query = status_query.filter(Order.company_id == current_user.company_id)
+    elif current_user.type == "AGENT":
+        status_query = status_query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
+        
+    status_agg = status_query.group_by(Order.status).all()
+    for st, count in status_agg:
+        status_counts[st] = count
+            
+    return {
+        "period_days": days,
+        "total_revenue": total_revenue,
+        "top_clients": top_clients,
+        "top_items": top_items,
+        "status_counts": status_counts
+    }

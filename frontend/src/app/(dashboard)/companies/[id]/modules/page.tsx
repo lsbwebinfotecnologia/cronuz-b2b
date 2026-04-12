@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -28,6 +28,7 @@ export default function CompanyModulesPage() {
       module_subscriptions: company.module_subscriptions,
       module_pdv: company.module_pdv,
       module_agents: company.module_agents,
+      module_financial: company.module_financial,
       [moduleName]: !currentValue
     };
 
@@ -266,6 +267,27 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_subscriptions', company.module_subscriptions)} 
                     disabled={togglingModule !== null}
                     colorClass="bg-rose-500"
+                  />
+                </div>
+              </div>
+
+              {/* Financeiro */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_financial ? 'bg-amber-500/10 border-amber-500/20 text-amber-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <DollarSign className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Gestão Financeira</p>
+                    <p className="text-xs text-slate-500">Contas a pagar/receber, conciliação e DRE.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch 
+                    active={company.module_financial} 
+                    onClick={() => handleToggleModule('module_financial', company.module_financial)} 
+                    disabled={togglingModule !== null}
+                    colorClass="bg-amber-500"
                   />
                 </div>
               </div>

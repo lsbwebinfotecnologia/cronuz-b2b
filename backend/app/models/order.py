@@ -37,6 +37,7 @@ class Order(Base):
     subtotal = Column(Float, nullable=False, default=0.0)
     discount = Column(Float, nullable=False, default=0.0)
     total = Column(Float, nullable=False, default=0.0)
+    payment_condition = Column(String(50), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

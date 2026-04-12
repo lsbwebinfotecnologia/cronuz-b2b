@@ -120,10 +120,12 @@ export default function CheckoutPage() {
                      <span className="text-slate-500">Nº do Pedido Interno</span>
                      <span className="font-bold text-slate-900 dark:text-white">#{orderComplete.order_id}</span>
                   </div>
-                  <div className="flex justify-between items-center mb-4 pb-4 border-b border-slate-200 dark:border-slate-700">
-                     <span className="text-slate-500">Nº do Pedido (Horus ERP)</span>
-                     <span className="font-bold text-[var(--color-primary-base)]">{orderComplete.horus_id !== 'N/A' ? `#${orderComplete.horus_id}` : 'Sem integração ERP'}</span>
-                  </div>
+                  {orderComplete.horus_id && orderComplete.horus_id !== 'N/A' && (
+                      <div className="flex justify-between items-center mb-4 pb-4 border-b border-slate-200 dark:border-slate-700">
+                         <span className="text-slate-500">Nº do Pedido (Horus ERP)</span>
+                         <span className="font-bold text-[var(--color-primary-base)]">#{orderComplete.horus_id}</span>
+                      </div>
+                  )}
                   {customer?.default_payment_method === 'PIX_MANUAL' && (
                      <div className="text-sm text-center text-indigo-700 dark:text-indigo-400 font-medium bg-indigo-50 dark:bg-indigo-500/10 p-3 rounded-lg">
                        Lembrete: Sua forma de pagamento é <b>PIX Manual / Depósito</b>. Nossa equipe entrará em contato com a chave PIX, ou você pode requisitar o Financeiro via WhatsApp.
@@ -325,9 +327,15 @@ export default function CheckoutPage() {
                        </div>
                    )}
 
+                   {customer?.crm_status === 'BLOCKED' && (
+                       <div className="mb-4 text-sm text-rose-600 dark:text-rose-400 font-bold px-3 py-2 bg-rose-50 dark:bg-rose-500/10 rounded-xl w-full text-center border border-rose-200 dark:border-rose-500/30">
+                           Seu cadastro encontra-se temporariamente bloqueado para novas compras. Entre em contato com nosso setor comercial.
+                       </div>
+                   )}
+
                    <button
                        onClick={handlePlaceOrder}
-                       disabled={placingOrder || validatingStock}
+                       disabled={placingOrder || validatingStock || customer?.crm_status === 'BLOCKED'}
                        className="w-full flex items-center justify-center gap-2 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white select-none rounded-xl h-16 font-bold text-lg transition-all active:scale-[0.98] disabled:opacity-70 disabled:active:scale-100 shadow-xl shadow-[var(--color-primary-base)]/20"
                    >
                        {placingOrder ? (
@@ -338,6 +346,8 @@ export default function CheckoutPage() {
                            <>
                              <Loader2 className="w-6 h-6 animate-spin" /> Validando Estoque...
                            </>
+                       ) : customer?.crm_status === 'BLOCKED' ? (
+                           'Compra Bloqueada'
                        ) : (
                            'Confirmar e Finalizar'
                        )}

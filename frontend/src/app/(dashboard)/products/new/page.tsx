@@ -461,19 +461,19 @@ export default function NewProductPage() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Peso (kg)</label>
-                      <input type="number" step="0.01" name="weight_kg" value={product.weight_kg} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                      <CurrencyInput maxDecimals={3} value={product.weight_kg || 0} onChangeValue={(val) => setProduct(p => ({...p, weight_kg: val}))} className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Largura (cm)</label>
-                      <input type="number" step="0.1" name="width_cm" value={product.width_cm} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                      <CurrencyInput maxDecimals={2} value={product.width_cm || 0} onChangeValue={(val) => setProduct(p => ({...p, width_cm: val}))} className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
                     </div>
                      <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Altura (cm)</label>
-                      <input type="number" step="0.1" name="height_cm" value={product.height_cm} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                      <CurrencyInput maxDecimals={2} value={product.height_cm || 0} onChangeValue={(val) => setProduct(p => ({...p, height_cm: val}))} className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
                     </div>
                      <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Comp. (cm)</label>
-                      <input type="number" step="0.1" name="length_cm" value={product.length_cm} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                      <CurrencyInput maxDecimals={2} value={product.length_cm || 0} onChangeValue={(val) => setProduct(p => ({...p, length_cm: val}))} className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
                     </div>
                   </div>
                   <div className="mt-4 p-4 bg-amber-50 rounded-xl border border-amber-200 flex gap-3 text-amber-800 dark:bg-amber-500/10 dark:border-amber-500/20 dark:text-amber-400">

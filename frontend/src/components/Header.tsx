@@ -7,14 +7,10 @@ export function Header() {
   return (
     <header className="sticky top-0 z-40 flex h-16 w-full items-center justify-between border-b border-slate-200 bg-white/80 dark:border-slate-800 dark:bg-slate-950/80 px-6 backdrop-blur-xl transition-colors">
       <div className="flex flex-1 items-center gap-4">
-        <form className="w-full max-w-md relative group">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-[var(--color-primary-base)] dark:text-slate-500 transition-colors" />
-          <input
-            type="search"
-            placeholder="Pesquisar pedidos, livros, clientes..."
-            className="w-full rounded-full border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[var(--color-primary-base)]/50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-[var(--color-primary-base)]/50 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:bg-slate-900 transition-all shadow-sm"
-          />
-        </form>
+        <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-50 dark:bg-slate-900 rounded-full border border-slate-200 dark:border-slate-800">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Ambiente Administrativo</span>
+        </div>
       </div>
 
       <div className="flex items-center gap-4">

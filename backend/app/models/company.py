@@ -43,6 +43,7 @@ class Company(Base):
     module_subscriptions = Column(Boolean, default=False, nullable=False)
     module_pdv = Column(Boolean, default=False, nullable=False)
     module_agents = Column(Boolean, default=False, nullable=False)
+    module_financial = Column(Boolean, default=False, nullable=False)
     
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

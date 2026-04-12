@@ -193,9 +193,10 @@ def list_products(
     query = db.query(Product).filter(Product.company_id == target_company_id)
     
     if search:
+        from sqlalchemy import func
         search_filter = f"%{search}%"
         query = query.filter(
-            (Product.name.ilike(search_filter)) |
+            (func.unaccent(Product.name).ilike(func.unaccent(search_filter))) |
             (Product.sku.ilike(search_filter))
         )
         

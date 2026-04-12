@@ -61,7 +61,7 @@ export default function CompaniesPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
             <Building2 className="h-6 w-6 text-[var(--color-primary-base)]" />
-            Empresas B2B
+            Parceiros B2B
           </h1>
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
             Gerencie todas as organizações cadastradas no portal Cronuz.
@@ -73,7 +73,7 @@ export default function CompaniesPage() {
           className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2.5 px-4 rounded-xl flex items-center gap-2 transition-all shadow-lg shadow-[var(--color-primary-base)]/20 hover:scale-[1.02] active:scale-[0.98]"
         >
           <Plus className="h-4 w-4" />
-          Nova Empresa
+          Novo Parceiro
         </Link>
       </div>
 
@@ -84,7 +84,7 @@ export default function CompaniesPage() {
             <Building className="h-6 w-6 text-slate-500 dark:text-slate-300" />
           </div>
           <div>
-            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Total de Empresas</p>
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Total de Parceiros</p>
             <h3 className="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">{companies.length}</h3>
           </div>
         </div>
@@ -105,7 +105,7 @@ export default function CompaniesPage() {
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-slate-50 text-slate-500 font-medium dark:bg-slate-950/50 dark:text-slate-400">
               <tr>
-                <th className="px-6 py-4">Empresa</th>
+                <th className="px-6 py-4">Parceiro</th>
                 <th className="px-6 py-4">CNPJ</th>
                 <th className="px-6 py-4">Domínio</th>
                 <th className="px-6 py-4">Status</th>
@@ -116,7 +116,7 @@ export default function CompaniesPage() {
               {companies.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
-                    Nenhuma empresa encontrada debaixo do seu cadastro.
+                    Nenhum parceiro encontrado debaixo do seu cadastro.
                   </td>
                 </tr>
               ) : (

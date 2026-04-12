@@ -97,6 +97,7 @@ def get_dashboard_metrics(
     module_subscriptions = company.module_subscriptions if company else False
     module_pdv = company.module_pdv if company else False
     module_agents = company.module_agents if company else False
+    module_financial = company.module_financial if company else False
 
     # Uses horus is now strongly derived from the company flag
     if current_user and current_user.type == "MASTER" and current_user.tenant_id == "horus":
@@ -121,5 +122,48 @@ def get_dashboard_metrics(
         "module_marketing": module_marketing,
         "module_subscriptions": module_subscriptions,
         "module_pdv": module_pdv,
-        "module_agents": module_agents
+        "module_agents": module_agents,
+        "module_financial": module_financial
     }
+
+@router.get("/crm-tasks")
+def get_dashboard_crm_tasks(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional)
+):
+    if not current_user:
+        return []
+        
+    company_id = None
+    if getattr(current_user, "type", None) == "SELLER":
+         company_id = current_user.company_id
+    elif getattr(current_user, "type", None) == "MASTER":
+         company_id = None
+    else:
+         company_id = 1
+         
+    from app.models.customer import Interaction, Customer
+    
+    query = db.query(Interaction, Customer.name, Customer.corporate_name).join(Customer, Customer.id == Interaction.customer_id).filter(
+        Interaction.status == "PENDING"
+    )
+    
+    if company_id:
+        query = query.filter(Customer.company_id == company_id)
+    
+    # Sort by due_date ascending, limit to top 15 incoming tasks
+    results = query.order_by(Interaction.due_date.asc()).limit(15).all()
+    
+    output = []
+    for inter, cust_name, cust_corp_name in results:
+         output.append({
+             "id": inter.id,
+             "customer_id": inter.customer_id,
+             "customer_name": cust_name or cust_corp_name,
+             "type": inter.type,
+             "content": inter.content,
+             "due_date": inter.due_date,
+             "status": inter.status
+         })
+         
+    return output
