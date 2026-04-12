@@ -462,7 +462,7 @@ export default function OrderDetailPage() {
                             <div className="space-y-3">
                                 <div>
                                     <p className="text-xs text-slate-500 dark:text-slate-400">Razão Social</p>
-                                    <Link href={`/customers/${order.customer_id}`} className="text-sm font-bold text-slate-900 dark:text-white hover:text-[var(--color-primary-base)] transition-colors flex items-center gap-1 group">
+                                    <Link href={`/customers/${order.customer.id}`} className="text-sm font-bold text-slate-900 dark:text-white hover:text-[var(--color-primary-base)] transition-colors flex items-center gap-1 group">
                                         {order.customer.corporate_name}
                                         <ArrowLeft className="w-3 h-3 opacity-0 group-hover:opacity-100 rotate-135 transition-opacity" style={{ transform: 'rotate(135deg)' }} />
                                     </Link>
