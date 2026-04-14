@@ -232,6 +232,7 @@ export default function SettingsPage() {
           nfse_enabled: filterData.nfse_enabled || false,
           nfse_environment: filterData.nfse_environment || 'HOMOLOGACAO',
           nfse_next_number: filterData.nfse_next_number || 1,
+          nfse_default_print_point_id: filterData.nfse_default_print_point_id || '',
           nfse_async_mode: filterData.nfse_async_mode ?? true,
           razao_social: filterData.razao_social || '',
           inscricao_municipal: filterData.inscricao_municipal || '',
