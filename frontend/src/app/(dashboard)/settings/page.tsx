@@ -101,7 +101,8 @@ export default function SettingsPage() {
           regime_tributario: filterData.regime_tributario || '',
           optante_simples_nacional: filterData.optante_simples_nacional || false,
           nfse_sit_simples_nacional: filterData.nfse_sit_simples_nacional || '3',
-          cert_path: filterData.cert_path || ''
+          cert_path: filterData.cert_path || '',
+          cert_password: filterData.cert_password || ''
         });
       }
 
