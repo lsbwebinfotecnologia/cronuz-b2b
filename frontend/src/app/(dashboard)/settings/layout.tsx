@@ -19,20 +19,6 @@ interface Company {
   module_pdv: boolean;
   module_agents: boolean;
   active: boolean;
-  neighborhood?: string;
-  city?: string;
-  state?: string;
-  codigo_municipio_ibge?: string;
-  logo?: string;
-  login_background_url?: string;
-  favicon_url?: string;
-  seo_title?: string;
-  seo_description?: string;
-  operation_start_date?: string;
-  trial_days?: number;
-  is_contract_signed?: boolean;
-  monthly_fee?: string;
-  business_model?: string;
 }
 
 interface CompanyContextType {

@@ -29,6 +29,7 @@ export default function SettingsPage() {
     codigo_municipio_ibge: '',
     regime_tributario: '',
     optante_simples_nacional: false,
+    nfse_sit_simples_nacional: '3',
     cert_path: ''
   });
 

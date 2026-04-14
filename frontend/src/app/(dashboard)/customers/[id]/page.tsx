@@ -59,15 +59,14 @@ export default function CustomerDetailsPage() {
     document: '',
     state_registration: '',
     default_payment_method: 'ERP_STANDARD',
-    payment_condition: '',
-    nfse_notes: ''
+    payment_condition: ''
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Address States
   const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
   const [editingAddressId, setEditingAddressId] = useState<number | null>(null);
-  const [newAddress, setNewAddress] = useState({ street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', type: 'MAIN', ibge_code: '' });
+  const [newAddress, setNewAddress] = useState({ street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', type: 'MAIN' });
   const [savingAddress, setSavingAddress] = useState(false);
 
   // Contacts States
@@ -194,8 +193,7 @@ export default function CustomerDetailsPage() {
           document: data.document || '',
           state_registration: data.state_registration || '',
           default_payment_method: data.default_payment_method || 'ERP_STANDARD',
-          payment_condition: data.payment_condition || '',
-          nfse_notes: data.nfse_notes || ''
+          payment_condition: data.payment_condition || ''
         });
 
         try {

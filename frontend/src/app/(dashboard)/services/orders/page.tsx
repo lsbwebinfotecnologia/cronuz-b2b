@@ -47,7 +47,6 @@ export default function ServiceOrdersPage() {
         first_due_date: string;
         account_id: string;
         print_point_id: string;
-        is_grouped?: boolean;
     }>({
         order_id: 0,
         installments_count: '1',
@@ -66,7 +65,6 @@ export default function ServiceOrdersPage() {
     const [isCancelNfseOpen, setIsCancelNfseOpen] = useState(false);
     const [cancelNfseData, setCancelNfseData] = useState({
         order_id: null as number | null,
-        codigo_cancelamento: '1',
         motivo: ''
     });
     const [isConsultModalOpen, setIsConsultModalOpen] = useState(false);
