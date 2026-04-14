@@ -29,6 +29,7 @@ interface Company {
   neighborhood?: string | null;
   city?: string | null;
   state?: string | null;
+  codigo_municipio_ibge?: string | null;
   module_b2b_native: boolean;
   module_horus_erp: boolean;
   module_products: boolean;
