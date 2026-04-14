@@ -35,7 +35,8 @@ export default function NewCustomerPage() {
     consignment_status: 'INACTIVE',
     discount: 0,
     id_guid: '',
-    id_doc: ''
+    id_doc: '',
+    nfse_notes: ''
   });
 
   const [searchingHorus, setSearchingHorus] = useState(false);
