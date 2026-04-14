@@ -66,7 +66,7 @@ export default function CustomerDetailsPage() {
   // Address States
   const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
   const [editingAddressId, setEditingAddressId] = useState<number | null>(null);
-  const [newAddress, setNewAddress] = useState({ street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', type: 'MAIN' });
+  const [newAddress, setNewAddress] = useState({ street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', type: 'MAIN', ibge_code: '' });
   const [savingAddress, setSavingAddress] = useState(false);
 
   // Contacts States
