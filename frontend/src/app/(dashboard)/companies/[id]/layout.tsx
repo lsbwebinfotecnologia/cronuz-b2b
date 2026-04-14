@@ -23,6 +23,7 @@ interface Company {
   is_contract_signed?: boolean | null;
   monthly_fee?: string | null;
   zip_code?: string | null;
+  codigo_municipio_ibge?: string | null;
   street?: string | null;
   number?: string | null;
   complement?: string | null;
