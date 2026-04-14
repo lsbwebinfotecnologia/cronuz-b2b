@@ -571,45 +571,47 @@ export default function ServiceOrdersPage() {
             </div>
 
             {/* Nova Action Bar de Filtros e Resumo */}
-            <div className="flex flex-col md:flex-row gap-4 items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
-                <div className="flex items-center gap-3 w-full md:w-auto">
-                    <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">Filtrar Competência:</label>
-                    <input 
-                        type="month" 
-                        value={monthFilter}
-                        onChange={(e) => setMonthFilter(e.target.value)}
-                        className="px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
-                    />
+            <div className="flex flex-wrap lg:flex-nowrap gap-4 items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full lg:w-auto">
+                    <div className="flex items-center gap-3 w-full md:w-auto">
+                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">Filtrar Competência:</label>
+                        <input 
+                            type="month" 
+                            value={monthFilter}
+                            onChange={(e) => setMonthFilter(e.target.value)}
+                            className="px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white w-full md:w-auto"
+                        />
+                    </div>
+                    <div className="flex items-center gap-3 w-full md:w-auto">
+                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">Status:</label>
+                        <select 
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                            className="px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white w-full md:w-auto"
+                        >
+                            <option value="Ativas">Ativas (sem Canceladas)</option>
+                            <option value="Todas">Todas</option>
+                            <option value="Pendente">Pendente</option>
+                            <option value="Em Execucao">Em Execução</option>
+                            <option value="Concluido">Concluído</option>
+                            <option value="Cancelado">Cancelado</option>
+                        </select>
+                    </div>
                 </div>
-                <div className="flex items-center gap-3 w-full md:w-auto">
-                    <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">Status:</label>
-                    <select 
-                        value={statusFilter}
-                        onChange={(e) => setStatusFilter(e.target.value)}
-                        className="px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
-                    >
-                        <option value="Ativas">Ativas (sem Canceladas)</option>
-                        <option value="Todas">Todas</option>
-                        <option value="Pendente">Pendente</option>
-                        <option value="Em Execucao">Em Execução</option>
-                        <option value="Concluido">Concluído</option>
-                        <option value="Cancelado">Cancelado</option>
-                    </select>
-                </div>
-                <div className="flex items-center gap-3 ml-auto w-full md:w-auto justify-end overflow-x-auto pb-2 md:pb-0">
-                    <div className="bg-indigo-50 dark:bg-indigo-900/30 px-4 py-2 rounded-xl border border-indigo-100 dark:border-indigo-800 flex flex-col items-end min-w-fit">
+                <div className="flex flex-wrap md:flex-nowrap items-center gap-3 w-full lg:w-auto justify-start lg:justify-end">
+                    <div className="bg-indigo-50 dark:bg-indigo-900/30 px-3 py-2 rounded-xl border border-indigo-100 dark:border-indigo-800 flex flex-col items-end min-w-fit flex-1 md:flex-none">
                         <span className="text-[9px] uppercase font-black text-indigo-500">Pendentes (Previstos)</span>
                         <span className="text-sm font-bold text-indigo-700 dark:text-indigo-400 leading-tight">
                             {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalExpected)}
                         </span>
                     </div>
-                    <div className="bg-emerald-50 dark:bg-emerald-900/30 px-4 py-2 rounded-xl border border-emerald-100 dark:border-emerald-800 flex flex-col items-end min-w-fit">
+                    <div className="bg-emerald-50 dark:bg-emerald-900/30 px-3 py-2 rounded-xl border border-emerald-100 dark:border-emerald-800 flex flex-col items-end min-w-fit flex-1 md:flex-none">
                         <span className="text-[9px] uppercase font-black text-emerald-500">Concluídas (Realizado)</span>
                         <span className="text-sm font-bold text-emerald-700 dark:text-emerald-400 leading-tight">
                             {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalCompleted)}
                         </span>
                     </div>
-                    <div className="bg-rose-50 dark:bg-rose-900/30 px-4 py-2 rounded-xl border border-rose-100 dark:border-rose-800 flex flex-col items-end min-w-fit">
+                    <div className="bg-rose-50 dark:bg-rose-900/30 px-3 py-2 rounded-xl border border-rose-100 dark:border-rose-800 flex flex-col items-end min-w-fit flex-1 md:flex-none">
                         <span className="text-[9px] uppercase font-black text-rose-500">Canceladas (Estorno)</span>
                         <span className="text-sm font-bold text-rose-700 dark:text-rose-400 leading-tight">
                             {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalCancelled)}
