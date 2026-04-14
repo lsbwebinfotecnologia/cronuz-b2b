@@ -124,6 +124,7 @@ export function Sidebar() {
   const [usesHorus, setUsesHorus] = useState(false);
   const [usesBookinfo, setUsesBookinfo] = useState(false);
   const [moduleProducts, setModuleProducts] = useState(true);
+  const [moduleOrders, setModuleOrders] = useState(true);
   const [moduleCustomers, setModuleCustomers] = useState(true);
   const [moduleMarketing, setModuleMarketing] = useState(false);
   const [moduleSubscriptions, setModuleSubscriptions] = useState(false);
@@ -161,6 +162,7 @@ export function Sidebar() {
                setUsesHorus(data.uses_horus || false);
                setUsesBookinfo(data.uses_bookinfo || false);
                setModuleProducts(data.module_products ?? true);
+               setModuleOrders(data.module_orders ?? true);
                setModuleCustomers(data.module_customers ?? true);
                setModuleMarketing(data.module_marketing || false);
                setModuleSubscriptions(data.module_subscriptions || false);
@@ -198,6 +200,7 @@ export function Sidebar() {
 
   const filteredSellerNavigation = [...sellerNavigation.filter(nav => {
     if (!moduleProducts && nav.name === 'Produtos') return false;
+    if (!moduleOrders && nav.name === 'Pedidos') return false;
     if (!moduleCustomers && nav.name === 'Empresas') return false;
     if (!moduleMarketing && nav.name === 'Marketing') return false;
     if (!usesBookinfo && nav.name === 'Bookinfo') return false;

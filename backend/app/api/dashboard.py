@@ -92,6 +92,7 @@ def get_dashboard_metrics(
     module_b2b_native = company.module_b2b_native if company else False
     module_horus_erp = company.module_horus_erp if company else False
     module_products = company.module_products if company else False
+    module_orders = company.module_orders if company else False
     module_customers = company.module_customers if company else False
     module_marketing = company.module_marketing if company else False
     module_subscriptions = company.module_subscriptions if company else False
@@ -120,11 +121,13 @@ def get_dashboard_metrics(
         "module_b2b_native": module_b2b_native,
         "module_horus_erp": module_horus_erp,
         "module_products": module_products,
+        "module_orders": module_orders,
         "module_customers": module_customers,
         "module_marketing": module_marketing,
         "module_subscriptions": module_subscriptions,
         "module_pdv": module_pdv,
         "module_agents": module_agents,
+        "module_financial": module_financial,
         "module_services": module_services,
         "module_commercial": module_commercial
     }

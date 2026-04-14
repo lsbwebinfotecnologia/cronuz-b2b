@@ -34,6 +34,7 @@ interface Company {
   module_horus_erp: boolean;
   module_products: boolean;
   module_customers: boolean;
+  module_orders: boolean;
   module_marketing: boolean;
   module_subscriptions: boolean;
   module_pdv: boolean;

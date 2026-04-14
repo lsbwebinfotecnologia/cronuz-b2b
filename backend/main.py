@@ -284,6 +284,7 @@ class ModuleUpdate(BaseModel):
     module_b2b_native: bool
     module_horus_erp: bool
     module_products: bool
+    module_orders: bool
     module_customers: bool
     module_marketing: bool
     module_subscriptions: bool
@@ -466,6 +467,7 @@ def update_company_modules(
     company.module_b2b_native = module_update.module_b2b_native
     company.module_horus_erp = module_update.module_horus_erp
     company.module_products = module_update.module_products
+    company.module_orders = module_update.module_orders
     company.module_customers = module_update.module_customers
     company.module_marketing = module_update.module_marketing
     company.module_subscriptions = module_update.module_subscriptions

@@ -126,6 +126,7 @@ def get_service_orders(
     limit: int = Query(50, ge=1, le=100),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    search: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -135,6 +136,9 @@ def get_service_orders(
         query = query.filter(ServiceOrder.execution_date >= start_date)
     if end_date:
         query = query.filter(ServiceOrder.execution_date <= end_date)
+    if search:
+        if search.isdigit():
+            query = query.filter(ServiceOrder.id == int(search))
         
     total = query.count()
     
@@ -150,6 +154,8 @@ def get_service_orders(
         stats_query = stats_query.filter(ServiceOrder.execution_date >= start_date)
     if end_date:
         stats_query = stats_query.filter(ServiceOrder.execution_date <= end_date)
+    if search and search.isdigit():
+        stats_query = stats_query.filter(ServiceOrder.id == int(search))
         
     stats_res = stats_query.first()
     total_pending = float(stats_res.total_pending or 0.0)

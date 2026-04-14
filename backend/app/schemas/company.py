@@ -44,6 +44,7 @@ class CompanyBase(BaseModel):
     module_b2b_native: bool = True
     module_horus_erp: bool = False
     module_products: bool = True
+    module_orders: bool = True
     module_customers: bool = True
     module_marketing: bool = False
     module_subscriptions: bool = False
@@ -104,6 +105,7 @@ class CompanyUpdate(BaseModel):
     module_b2b_native: Optional[bool] = None
     module_horus_erp: Optional[bool] = None
     module_products: Optional[bool] = None
+    module_orders: Optional[bool] = None
     module_customers: Optional[bool] = None
     module_marketing: Optional[bool] = None
     module_subscriptions: Optional[bool] = None

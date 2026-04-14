@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -23,6 +23,7 @@ export default function CompanyModulesPage() {
       module_b2b_native: company.module_b2b_native,
       module_horus_erp: company.module_horus_erp,
       module_products: company.module_products,
+      module_orders: company.module_orders,
       module_customers: company.module_customers,
       module_marketing: company.module_marketing,
       module_subscriptions: company.module_subscriptions,
@@ -164,6 +165,26 @@ export default function CompanyModulesPage() {
                     active={company.module_products} 
                     onClick={() => handleToggleModule('module_products', company.module_products)} 
                     disabled={togglingModule !== null || company.module_horus_erp}
+                  />
+                </div>
+              </div>
+              {/* Orders */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_orders ? 'bg-orange-500/10 border-orange-500/20 text-orange-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <ShoppingBag className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Pedidos B2B</p>
+                    <p className="text-xs text-slate-500">Fluxo de captação de pedidos (Carrinho / Orçamentos).</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch 
+                    active={company.module_orders} 
+                    onClick={() => handleToggleModule('module_orders', company.module_orders)} 
+                    disabled={togglingModule !== null}
+                    colorClass="bg-orange-500"
                   />
                 </div>
               </div>

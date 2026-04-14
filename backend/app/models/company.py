@@ -43,6 +43,7 @@ class Company(Base):
     module_b2b_native = Column(Boolean, default=True, nullable=False)
     module_horus_erp = Column(Boolean, default=False, nullable=False)
     module_products = Column(Boolean, default=True, nullable=False)
+    module_orders = Column(Boolean, default=True, nullable=False)
     module_customers = Column(Boolean, default=True, nullable=False)
     module_marketing = Column(Boolean, default=False, nullable=False)
     module_subscriptions = Column(Boolean, default=False, nullable=False)

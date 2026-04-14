@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Building2, ArrowLeft, Save, MapPin, Users, Building, Plus, X, Loader2, Search } from 'lucide-react';
 import Link from 'next/link';
@@ -40,6 +40,23 @@ export default function NewCustomerPage() {
   });
 
   const [searchingHorus, setSearchingHorus] = useState(false);
+  const [usesHorus, setUsesHorus] = useState(false);
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const tokenStr = getToken();
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics`, {
+          headers: { 'Authorization': `Bearer ${tokenStr}` }
+        });
+        if (res.ok) {
+           const data = await res.json();
+           setUsesHorus(data.uses_horus || false);
+        }
+      } catch (e) {}
+    };
+    fetchSettings();
+  }, []);
 
   // Masking Utilities
   const maskCEP = (val: string) => {
@@ -353,7 +370,7 @@ export default function NewCustomerPage() {
                         onChange={e => handleDocumentChange(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all font-mono dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
                       />
-                      {fiscalData.customer_type === 'PJ' && (
+                      {fiscalData.customer_type === 'PJ' && usesHorus && (
                         <button
                           type="button"
                           onClick={handleHorusSearch}
