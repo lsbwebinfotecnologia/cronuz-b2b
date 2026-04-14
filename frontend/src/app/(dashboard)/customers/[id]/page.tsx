@@ -194,7 +194,8 @@ export default function CustomerDetailsPage() {
           document: data.document || '',
           state_registration: data.state_registration || '',
           default_payment_method: data.default_payment_method || 'ERP_STANDARD',
-          payment_condition: data.payment_condition || ''
+          payment_condition: data.payment_condition || '',
+          nfse_notes: data.nfse_notes || ''
         });
 
         try {
