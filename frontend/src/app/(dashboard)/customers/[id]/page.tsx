@@ -59,7 +59,8 @@ export default function CustomerDetailsPage() {
     document: '',
     state_registration: '',
     default_payment_method: 'ERP_STANDARD',
-    payment_condition: ''
+    payment_condition: '',
+    nfse_notes: ''
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
