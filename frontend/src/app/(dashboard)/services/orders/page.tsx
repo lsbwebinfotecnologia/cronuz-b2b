@@ -64,8 +64,13 @@ export default function ServiceOrdersPage() {
 
     // Cancel NFSe Modal
     const [isCancelNfseOpen, setIsCancelNfseOpen] = useState(false);
-    const [cancelNfseData, setCancelNfseData] = useState({
-        order_id: null as number | null,
+    const [cancelNfseData, setCancelNfseData] = useState<{
+        order_id: number | null;
+        codigo_cancelamento: string;
+        motivo: string;
+    }>({
+        order_id: null,
+        codigo_cancelamento: '2',
         motivo: ''
     });
     const [isConsultModalOpen, setIsConsultModalOpen] = useState(false);
