@@ -66,7 +66,7 @@ export default function NewCustomerPage() {
   const [contacts, setContacts] = useState<any[]>([]);
 
   // Helpers to add temporary forms
-  const addAddress = () => setAddresses([...addresses, { street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', type: 'MAIN' }]);
+  const addAddress = () => setAddresses([...addresses, { street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', ibge_code: '', type: 'MAIN' }]);
   const removeAddress = (index: number) => setAddresses(addresses.filter((_, i) => i !== index));
 
   const handleDocumentChange = async (value: string) => {
@@ -97,6 +97,7 @@ export default function NewCustomerPage() {
                    city: data.municipio || '',
                    state: data.uf || '',
                    zip_code: maskCEP(data.cep.toString()),
+                   ibge_code: data.codigo_municipio ? data.codigo_municipio.toString() : '',
                    type: 'MAIN'
                  }]);
               }
@@ -188,7 +189,8 @@ export default function NewCustomerPage() {
             neighborhood: data.bairro || '',
             city: data.localidade || '',
             state: data.uf || '',
-            zip_code: value // keep formatted or user typed
+            zip_code: value,
+            ibge_code: data.ibge || ''
           };
           setAddresses(newAddresses);
           toast.success("Endereço preenchido automaticamente!");
@@ -440,9 +442,19 @@ export default function NewCustomerPage() {
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-[var(--color-primary-base)] font-semibold focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800"
                     />
                   </div>
+                  <div className="space-y-1.5 md:col-span-2 mt-4">
+                    <label className="text-sm font-bold text-indigo-600 dark:text-indigo-400">Observações Padrão para NFS-e (Opcional)</label>
+                    <textarea
+                      placeholder="Texto fixo que sempre sairá anexado à descrição do serviço nas NFS-e deste cliente."
+                      value={fiscalData.nfse_notes || ''}
+                      onChange={e => setFiscalData({ ...fiscalData, nfse_notes: e.target.value })}
+                      rows={3}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
+                    />
+                  </div>
                 </div>
                 
-                <div className="flex justify-end pt-4 border-t border-slate-200 dark:border-slate-800/60">
+                <div className="flex justify-end pt-4 border-t border-slate-200 dark:border-slate-800/60 mt-4">
                    <button
                     onClick={() => setCurrentStep(1)}
                     className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2.5 px-6 rounded-xl transition-all"
@@ -533,6 +545,10 @@ export default function NewCustomerPage() {
                                <input type="text" value={addr.city} onChange={e => updateAddress(idx, 'city', e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="Sampa"/>
                                <input type="text" value={addr.state} onChange={e => updateAddress(idx, 'state', e.target.value)} className="w-16 bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900 dark:border-slate-700 dark:text-white" placeholder="SP" maxLength={2}/>
                              </div>
+                          </div>
+                          <div className="space-y-1">
+                             <label className="text-xs font-semibold text-slate-500 uppercase dark:text-slate-400">Código IBGE</label>
+                             <input type="text" value={addr.ibge_code || ''} onChange={e => updateAddress(idx, 'ibge_code', e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" placeholder="3504107"/>
                           </div>
                         </div>
                       </div>

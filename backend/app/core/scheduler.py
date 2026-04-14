@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+from app.tasks.nfse_worker import process_nfse_queue_jobs
 
 logger = logging.getLogger("background_jobs")
 logger.setLevel(logging.INFO)
@@ -200,5 +201,8 @@ def start_scheduler():
     # Send NFE back to Bookinfo every 15 minutes (offset by 2 minutes) 
     scheduler.add_job(send_nfe_to_bookinfo, IntervalTrigger(minutes=17), id="job_send_nfe_bookinfo")
     
+    # NFSe Queue every 5 minutes
+    scheduler.add_job(process_nfse_queue_jobs, IntervalTrigger(minutes=5), id="job_nfse_queue")
+    
     scheduler.start()
-    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync & Bookinfo NFe Return")
+    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue")

@@ -29,6 +29,7 @@ export default function CompanyProfilePage() {
     neighborhood: '',
     city: '',
     state: '',
+    codigo_municipio_ibge: '',
     logo: '',
     login_background_url: '',
     favicon_url: '',
@@ -93,6 +94,7 @@ export default function CompanyProfilePage() {
         neighborhood: company.neighborhood || '',
         city: company.city || '',
         state: company.state || '',
+        codigo_municipio_ibge: company.codigo_municipio_ibge || '',
         logo: company.logo || '',
         login_background_url: company.login_background_url || '',
         favicon_url: company.favicon_url || '',
@@ -246,9 +248,6 @@ export default function CompanyProfilePage() {
           toast.error('Erro na integração com a API da Receita.', { id: 'cnpj-search' });
         }
       }
-    } else if (name === 'zip_code') {
-      const maskedCep = value.replace(/\D/g, '').replace(/^(\d{5})(\d)/, '$1-$2').slice(0, 9);
-      setFormData(prev => ({ ...prev, [name]: maskedCep }));
     } else if (name === 'is_contract_signed') {
       setFormData(prev => ({ ...prev, [name]: e.target.checked }));
     } else if (name === 'monthly_fee') {
@@ -260,6 +259,35 @@ export default function CompanyProfilePage() {
       setFormData(prev => ({ ...prev, [name]: v }));
     } else {
       setFormData(prev => ({ ...prev, [name]: value }));
+    }
+  };
+
+  const handleCepChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    let val = e.target.value;
+    let cleanVal = val.replace(/\D/g, '');
+    let formatted = cleanVal;
+    if (cleanVal.length > 5) {
+      formatted = `${cleanVal.slice(0, 5)}-${cleanVal.slice(5, 8)}`;
+    }
+    setFormData(prev => ({ ...prev, zip_code: formatted }));
+
+    if (cleanVal.length === 8) {
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${cleanVal}/json/`);
+        if (res.ok) {
+          const data = await res.json();
+          if (!data.erro) {
+            setFormData(prev => ({
+              ...prev,
+              street: data.logradouro || prev.street,
+              neighborhood: data.bairro || prev.neighborhood,
+              city: data.localidade || prev.city,
+              state: data.uf || prev.state,
+              codigo_municipio_ibge: data.ibge || prev.codigo_municipio_ibge
+            }));
+          }
+        }
+      } catch (err) {}
     }
   };
 
@@ -446,7 +474,7 @@ export default function CompanyProfilePage() {
                   type="text"
                   name="zip_code"
                   value={formData.zip_code}
-                  onChange={handleInputChange}
+                  onChange={handleCepChange}
                   className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
                 />
               </div>
@@ -512,7 +540,16 @@ export default function CompanyProfilePage() {
                   className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200 uppercase"
                 />
               </div>
-
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Cód. IBGE</label>
+                <input
+                  type="text"
+                  name="codigo_municipio_ibge"
+                  value={formData.codigo_municipio_ibge}
+                  onChange={handleInputChange}
+                  className="w-full rounded-xl border border-slate-200 bg-white py-3 px-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent font-mono dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                />
+              </div>
            </div>
         </section>
 

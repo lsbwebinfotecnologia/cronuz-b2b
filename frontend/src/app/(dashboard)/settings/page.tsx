@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2, CreditCard, Truck, ChevronRight } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2, CreditCard, Truck, ChevronRight, FileText } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
+import { PrintPointsTab } from './PrintPointsTab';
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -15,6 +16,23 @@ export default function SettingsPage() {
   const companyId = currentUser?.company_id;
 
   const [activeTab, setActiveTab] = useState('geral');
+
+  const [fiscalCep, setFiscalCep] = useState('');
+  const [fiscalSettings, setFiscalSettings] = useState({
+    nfse_enabled: false,
+    nfse_environment: 'HOMOLOGACAO',
+    nfse_next_number: 1,
+    nfse_default_print_point_id: '',
+    nfse_async_mode: true,
+    razao_social: '',
+    inscricao_municipal: '',
+    codigo_municipio_ibge: '',
+    regime_tributario: '',
+    optante_simples_nacional: false,
+    cert_path: ''
+  });
+
+  const [printPoints, setPrintPoints] = useState<any[]>([]);
 
   const [settings, setSettings] = useState({
     pdv_type: 'NON_FISCAL',
@@ -64,6 +82,27 @@ export default function SettingsPage() {
     setLoading(true);
     try {
       const token = getToken();
+      const filterRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${cid}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (filterRes.ok) {
+        const filterData = await filterRes.json();
+        setFiscalSettings({
+          nfse_enabled: filterData.nfse_enabled || false,
+          nfse_environment: filterData.nfse_environment || 'HOMOLOGACAO',
+          nfse_next_number: filterData.nfse_next_number || 1,
+          nfse_default_print_point_id: filterData.nfse_default_print_point_id || '',
+          nfse_async_mode: filterData.nfse_async_mode ?? true,
+          razao_social: filterData.razao_social || '',
+          inscricao_municipal: filterData.inscricao_municipal || '',
+          codigo_municipio_ibge: filterData.codigo_municipio_ibge || '',
+          regime_tributario: filterData.regime_tributario || '',
+          optante_simples_nacional: filterData.optante_simples_nacional || false,
+          nfse_sit_simples_nacional: filterData.nfse_sit_simples_nacional || '3',
+          cert_path: filterData.cert_path || ''
+        });
+      }
+
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${cid}/settings`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -102,10 +141,33 @@ export default function SettingsPage() {
         jadlog_token: data.jadlog_token || '',
         tray_envios_token: data.tray_envios_token || '',
       }));
+      const resPoints = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/print-points`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (resPoints.ok) {
+        const points = await resPoints.json();
+        setPrintPoints(points.filter((p: any) => p.is_active));
+      }
     } catch (error) {
       toast.error('Erro ao carregar as configurações.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleViaCep(cep: string) {
+    const cleanCep = cep.replace(/\D/g, '');
+    if (cleanCep.length === 8) {
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+        const data = await res.json();
+        if (!data.erro && data.ibge) {
+          setFiscalSettings(prev => ({ ...prev, codigo_municipio_ibge: data.ibge }));
+          toast.success(`IBGE do município ${data.localidade} preenchido.`);
+        }
+      } catch (e) {
+        console.error('Erro ao buscar CEP', e);
+      }
     }
   }
 
@@ -115,6 +177,22 @@ export default function SettingsPage() {
     setSaving(true);
     try {
       const token = getToken();
+
+
+      const fiscalPayload = {
+        ...fiscalSettings,
+        nfse_default_print_point_id: fiscalSettings.nfse_default_print_point_id ? parseInt(fiscalSettings.nfse_default_print_point_id as any) : null
+      };
+      
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(fiscalPayload)
+      });
+
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, {
         method: 'PUT',
         headers: {
@@ -144,6 +222,26 @@ export default function SettingsPage() {
       formData.append('company_id', companyId.toString());
       
       const token = getToken();
+      const filterRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (filterRes.ok) {
+        const filterData = await filterRes.json();
+        setFiscalSettings({
+          nfse_enabled: filterData.nfse_enabled || false,
+          nfse_environment: filterData.nfse_environment || 'HOMOLOGACAO',
+          nfse_next_number: filterData.nfse_next_number || 1,
+          nfse_async_mode: filterData.nfse_async_mode ?? true,
+          razao_social: filterData.razao_social || '',
+          inscricao_municipal: filterData.inscricao_municipal || '',
+          codigo_municipio_ibge: filterData.codigo_municipio_ibge || '',
+          regime_tributario: filterData.regime_tributario || '',
+          optante_simples_nacional: filterData.optante_simples_nacional || false,
+          nfse_sit_simples_nacional: filterData.nfse_sit_simples_nacional || '3',
+          cert_path: filterData.cert_path || ''
+        });
+      }
+
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/certificate`, {
         method: 'POST',
         headers: {
@@ -168,6 +266,41 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleNfseCertificateUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !companyId) return;
+    
+    setUploadingCert(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('company_id', companyId.toString());
+      
+      const token = getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/nfse-certificate`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+      
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Falha ao enviar certificado.');
+      }
+      
+      const data = await res.json();
+      setFiscalSettings(prev => ({ ...prev, cert_path: data.path }));
+      toast.success(data.message);
+    } catch (error: any) {
+      toast.error(error.message);
+    } finally {
+      setUploadingCert(false);
+      if (e.target) e.target.value = '';
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -178,6 +311,8 @@ export default function SettingsPage() {
 
   const tabs = [
     { id: 'geral', label: 'Dados Gerais', icon: Settings2 },
+    { id: 'fiscal', label: 'Fiscal (NFS-e)', icon: Building2 },
+    { id: 'print_points', label: 'Séries e Pontos', icon: FileText },
     { id: 'pdv', label: 'Frente de Caixa (PDV)', icon: Store },
     { id: 'pagamentos', label: 'Pagamentos', icon: CreditCard },
     { id: 'frete', label: 'Frete e Logística', icon: Truck },
@@ -230,6 +365,164 @@ export default function SettingsPage() {
           <form onSubmit={handleSaveSettings}>
             <div className="p-6 md:p-8 space-y-8">
               
+
+              {/* Tab: FISCAL */}
+              {activeTab === 'fiscal' && (
+                <div className="space-y-8 animate-in fade-in" id="fiscal-content">
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">
+                      <div className="p-2 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-lg">
+                        <Building2 className="h-5 w-5" />
+                      </div>
+                      <div className="flex-1">
+                        <h2 className="text-lg font-semibold text-slate-900 dark:text-white flex items-center justify-between">
+                          NFS-e Padrão Nacional
+                          <label className="relative flex items-center cursor-pointer shrink-0">
+                            <span className="mr-3 text-sm font-medium text-slate-700 dark:text-slate-300">Ativar Emissão</span>
+                            <div className="relative">
+                              <input type="checkbox" className="sr-only peer" checked={fiscalSettings.nfse_enabled} onChange={e => setFiscalSettings({ ...fiscalSettings, nfse_enabled: e.target.checked })} />
+                              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                            </div>
+                          </label>
+                        </h2>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Configuração de emissão direta com a Receita Federal (mTLS).</p>
+                      </div>
+                    </div>
+
+                    {fiscalSettings.nfse_enabled && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-2">
+                        <div className="space-y-1.5 md:col-span-2">
+                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Ambiente</label>
+                          <select
+                            value={fiscalSettings.nfse_environment}
+                            onChange={e => setFiscalSettings({ ...fiscalSettings, nfse_environment: e.target.value })}
+                            className={`w-full border rounded-xl px-4 py-2.5 outline-none font-medium text-sm transition-all ${fiscalSettings.nfse_environment === 'PRODUCAO' ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400' : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400'}`}
+                          >
+                            <option value="HOMOLOGACAO">HOMOLOGAÇÃO (Sandbox Nacional)</option>
+                            <option value="PRODUCAO">PRODUÇÃO (Real com Valor Fiscal)</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-1.5 md:col-span-2 flex items-center justify-between p-4 border border-slate-200 rounded-xl bg-white dark:bg-slate-900/50 dark:border-slate-800">
+                          <div>
+                             <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 block">Modo de Emissão</label>
+                             <span className="text-xs text-slate-500">Filas garantem que a tela não trave caso o governo demore a responder. Emissão Direta enviará instantaneamente e aguardará resposta (Timeout maior).</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                              <span className={`text-xs font-bold ${!fiscalSettings.nfse_async_mode ? 'text-[var(--color-primary-base)]' : 'text-slate-400'}`}>Direta Síncrona</span>
+                              <button 
+                                type="button"
+                                onClick={() => setFiscalSettings({...fiscalSettings, nfse_async_mode: !fiscalSettings.nfse_async_mode})}
+                                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none ${fiscalSettings.nfse_async_mode ? 'bg-[var(--color-primary-base)]' : 'bg-slate-300 dark:bg-slate-700'}`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${fiscalSettings.nfse_async_mode ? 'translate-x-6' : 'translate-x-1'}`} />
+                              </button>
+                              <span className={`text-xs font-bold ${fiscalSettings.nfse_async_mode ? 'text-[var(--color-primary-base)]' : 'text-slate-400'}`}>Fila Assíncrona</span>
+                          </div>
+                        </div>
+                        
+                        <div className="space-y-1.5 md:col-span-2">
+                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Razão Social</label>
+                          <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={fiscalSettings.razao_social} onChange={e => setFiscalSettings({...fiscalSettings, razao_social: e.target.value})} />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Inscrição Municipal (IM)</label>
+                          <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={fiscalSettings.inscricao_municipal} onChange={e => setFiscalSettings({...fiscalSettings, inscricao_municipal: e.target.value})} />
+                        </div>
+                        
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">CEP (Busca Automática do IBGE)</label>
+                          <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={fiscalCep} onChange={e => setFiscalCep(e.target.value)} onBlur={() => handleViaCep(fiscalCep)} placeholder="00000-000" />
+                        </div>
+                        
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Código IBGE do Município</label>
+                          <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={fiscalSettings.codigo_municipio_ibge} onChange={e => setFiscalSettings({...fiscalSettings, codigo_municipio_ibge: e.target.value})} placeholder="Ex: 3504107" />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Regime Tributário</label>
+                          <select className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={fiscalSettings.regime_tributario} onChange={e => setFiscalSettings({...fiscalSettings, regime_tributario: e.target.value})}>
+                            <option value="">Selecione...</option>
+                            <option value="1">1 - Simples Nacional</option>
+                            <option value="2">2 - Simples Nacional (Excesso de Sublimite)</option>
+                            <option value="3">3 - Regime Normal (Lucro Presumido/Real)</option>
+                            <option value="4">4 - Solidário</option>
+                            <option value="5">5 - Microempreendedor Individual (MEI)</option>
+                            <option value="6">6 - Microempresário e Empresa de Pequeno Porte (ME EPP)</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-1.5 pt-7">
+                          <label className="relative flex items-center cursor-pointer shrink-0">
+                            <span className="mr-3 text-sm font-medium text-slate-700 dark:text-slate-300">Optante Simples Nacional</span>
+                            <div className="relative">
+                              <input type="checkbox" className="sr-only peer" checked={fiscalSettings.optante_simples_nacional} onChange={e => setFiscalSettings({ ...fiscalSettings, optante_simples_nacional: e.target.checked })} />
+                              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                            </div>
+                          </label>
+                        </div>
+                        
+                        {fiscalSettings.optante_simples_nacional && (
+                          <div className="space-y-1.5 md:col-span-2 pt-2 animate-in fade-in">
+                            <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Situação no Simples Nacional (RFB)</label>
+                            <select className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={fiscalSettings.nfse_sit_simples_nacional || "3"} onChange={e => setFiscalSettings({...fiscalSettings, nfse_sit_simples_nacional: e.target.value})}>
+                              <option value="3">3 - Optante - ME (Microempresa) ou EPP</option>
+                              <option value="2">2 - Optante - Microempreendedor Individual (MEI)</option>
+                            </select>
+                            <p className="text-xs text-slate-500 mt-1 max-w-xl">
+                              Obrigatório para o Sefin Nacional. Selecione o exato perfil registrado na Receita Federal.
+                            </p>
+                          </div>
+                        )}
+                        
+                        <div className="space-y-1.5 md:col-span-2 border-t border-slate-100 dark:border-slate-800/60 pt-4 mt-2">
+                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
+                            
+                        <div className="space-y-1.5 md:col-span-2 mt-4 pt-4 border-t border-slate-100 dark:border-slate-800/60">
+                          <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Ponto de Impressão Padrão</h3>
+                          <p className="text-xs text-slate-500 mb-3">Defina qual Série de Impressão será utilizada automaticamente nas rotinas do sistema.</p>
+                          <div className="w-full md:w-1/2">
+                            <select 
+                              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-medium dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" 
+                              value={fiscalSettings.nfse_default_print_point_id} 
+                              onChange={e => setFiscalSettings({...fiscalSettings, nfse_default_print_point_id: e.target.value})}
+                            >
+                              <option value="">Nenhum Ponto Padrão (Selecionar na Emissão)</option>
+                              {printPoints.map(point => (
+                                <option key={point.id} value={point.id}>
+                                  {point.name} (Próx N° {point.current_number})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                          </label>
+                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block mt-4">
+                            Certificado Digital A1 (.pfx)
+                          </label>
+                          <div className="flex items-center gap-3 w-full">
+                            <input
+                              type="file"
+                              accept=".pfx"
+                              onChange={handleNfseCertificateUpload}
+                              className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100 dark:file:bg-purple-900/30 dark:file:text-purple-400"
+                            />
+                            <div className="w-48">
+                              <input type="password" placeholder="Senha do Certificado" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={fiscalSettings.cert_password || ''} onChange={e => setFiscalSettings({...fiscalSettings, cert_password: e.target.value})} />
+                            </div>
+                          </div>
+                          {fiscalSettings.cert_path && (
+                            <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">✔ Certificado físico atual hospedado.</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Tab: GERAL */}
               {activeTab === 'geral' && (
                 <div className="space-y-4 animate-in fade-in">
@@ -611,6 +904,10 @@ export default function SettingsPage() {
               )}
 
               {/* Tab: EMAIL */}
+              {activeTab === 'print_points' && (
+                  <PrintPointsTab />
+              )}
+
               {activeTab === 'email' && (
                 <div className="space-y-4 animate-in fade-in">
                   <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">

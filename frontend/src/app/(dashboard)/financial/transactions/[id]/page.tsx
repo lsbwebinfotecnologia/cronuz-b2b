@@ -124,16 +124,18 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                 <h1 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white">
                                     {trans.description}
                                 </h1>
-                                <button onClick={()=>{
-                                    setEditTransData({
-                                        description: trans.description,
-                                        category_id: trans.category_id || '',
-                                        customer_id: trans.customer_id || ''
-                                    }); 
-                                    setEditTransOpen(true);
-                                }} className="p-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 rounded-lg transition" title="Editar Escopo do Lançamento">
-                                    <Pencil className="w-4 h-4"/>
-                                </button>
+                                {!trans.installments.some((i: any) => i.status === 'CANCELLED') && (
+                                    <button onClick={()=>{
+                                        setEditTransData({
+                                            description: trans.description,
+                                            category_id: trans.category_id || '',
+                                            customer_id: trans.customer_id || ''
+                                        }); 
+                                        setEditTransOpen(true);
+                                    }} className="p-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 rounded-lg transition" title="Editar Escopo do Lançamento">
+                                        <Pencil className="w-4 h-4"/>
+                                    </button>
+                                )}
                             </div>
                             <p className="text-slate-500 dark:text-slate-400 font-medium flex items-center gap-2">
                                 <Tag className="w-4 h-4"/> {trans.category_name}
@@ -200,12 +202,16 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                         <div className="px-4 py-2 bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-400 font-bold text-sm rounded-xl w-full md:w-auto text-center border border-rose-200 dark:border-rose-900">
                                             Atrasado
                                         </div>
+                                    ) : inst.status === 'CANCELLED' ? (
+                                        <div className="px-4 py-2 bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400 font-bold text-sm rounded-xl w-full md:w-auto text-center border border-slate-300 dark:border-slate-700">
+                                            Cancelado
+                                        </div>
                                     ) : (
                                         <div className="px-4 py-2 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-400 font-bold text-sm rounded-xl w-full md:w-auto text-center border border-amber-200 dark:border-amber-900">
                                             Aberto / Pendente
                                         </div>
                                     )}
-                                    {inst.status !== 'PAID' && (
+                                    {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && (
                                         <button onClick={()=>{setInstData({due_date: new Date(inst.due_date).toISOString().split('T')[0], amount: inst.amount}); setEditingInst(inst);}} className="p-2 ml-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 rounded-lg transition shrink-0" title="Editar Valores da Parcela">
                                             <Pencil className="w-4 h-4"/>
                                         </button>

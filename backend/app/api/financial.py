@@ -142,7 +142,8 @@ def create_category(category: FinancialCategoryCreate, db: Session = Depends(get
         type=category.type, 
         active=category.active, 
         dre_group=category.dre_group,
-        is_system=False
+        is_system=False,
+        parent_id=category.parent_id
     )
     db.add(db_cat)
     db.commit()
@@ -157,6 +158,9 @@ def update_category(cat_id: int, category_update: FinancialCategoryUpdate, db: S
     if category_update.name is not None: db_cat.name = category_update.name
     if category_update.active is not None: db_cat.active = category_update.active
     if category_update.dre_group is not None: db_cat.dre_group = category_update.dre_group
+    if hasattr(category_update, 'parent_id') and category_update.parent_id is not None:
+        db_cat.parent_id = category_update.parent_id if category_update.parent_id > 0 else None
+    
     db.commit()
     return {"message": "Atualizada."}
 
@@ -231,6 +235,8 @@ def list_generic_installments(
     transaction_id: Optional[int] = None,
     type: Optional[str] = None,
     account_id: Optional[int] = None,
+    order_id: Optional[int] = None,
+    search: Optional[str] = None,
     page: int = 1,
     page_size: int = 50
 ):
@@ -252,7 +258,8 @@ def list_generic_installments(
         else:
             query = query.filter(FinancialInstallment.status == status)
     elif not status:
-        query = query.filter(FinancialInstallment.status != 'PAID')
+        if not (search or order_id or installment_id or transaction_id):
+            query = query.filter(FinancialInstallment.status.notin_(['PAID', 'CANCELLED']))
         
     if customer_id: query = query.filter(FinancialTransaction.customer_id == customer_id)
     if start_due_date: query = query.filter(FinancialInstallment.due_date >= start_due_date)
@@ -263,6 +270,8 @@ def list_generic_installments(
     if transaction_id: query = query.filter(FinancialTransaction.id == transaction_id)
     if type: query = query.filter(FinancialTransaction.type == type)
     if account_id: query = query.filter(FinancialInstallment.account_id == account_id)
+    if order_id: query = query.filter(FinancialTransaction.order_id == order_id)
+    if search: query = query.filter(FinancialTransaction.description.ilike(f"%{search}%"))
         
     from sqlalchemy import func
     total = query.count()

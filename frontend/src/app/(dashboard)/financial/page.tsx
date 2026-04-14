@@ -20,12 +20,14 @@ export default function FinancialPage() {
     const [pageSize] = useState(50);
     const [statusFilter, setStatusFilter] = useState('');
     const [customerFilter, setCustomerFilter] = useState('');
+    const [orderIdFilter, setOrderIdFilter] = useState('');
+    const [searchFilter, setSearchFilter] = useState('');
     const [types, setTypes] = useState({ receivable: true, payable: true });
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [dateType, setDateType] = useState<'due' | 'payment'>('due');
     const [activeTab, setActiveTab] = useState<'LIST' | 'CASHFLOW'>('LIST');
-    
+
     // Create Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [formData, setFormData] = useState({
@@ -181,6 +183,9 @@ export default function FinancialPage() {
             const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/generic_installments`);
             if (statusFilter) url.searchParams.append('status', statusFilter);
             if (customerFilter) url.searchParams.append('customer_id', customerFilter);
+            if (orderIdFilter) url.searchParams.append('order_id', orderIdFilter);
+            if (searchFilter) url.searchParams.append('search', searchFilter);
+            
             if (!types.receivable && !types.payable) url.searchParams.append('type', 'NONE');
             else if (types.receivable && !types.payable) url.searchParams.append('type', 'RECEIVABLE');
             else if (!types.receivable && types.payable) url.searchParams.append('type', 'PAYABLE');
@@ -355,7 +360,13 @@ export default function FinancialPage() {
                             <form onSubmit={(e) => { e.preventDefault(); handleSearch(); }} className="flex flex-wrap items-center gap-3 w-full">
                                 <div className="flex items-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 h-11 shadow-sm shrink-0">
                                     <Hash className="w-4 h-4 text-slate-400 mr-2"/>
-                                    <input type="text" placeholder="ID" value={installmentIdFilter} onChange={e=>setInstallmentIdFilter(e.target.value)} className="bg-transparent text-sm outline-none w-16 font-medium placeholder-slate-400 text-slate-700 dark:text-slate-300" />
+                                    <input type="text" placeholder="ID Fatura" value={installmentIdFilter} onChange={e=>setInstallmentIdFilter(e.target.value)} className="bg-transparent text-sm outline-none w-20 font-medium placeholder-slate-400 text-slate-700 dark:text-slate-300" />
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                    <input type="text" placeholder="Ordem de Serviço (Ex: OS #39)" value={searchFilter} onChange={e=>setSearchFilter(e.target.value)} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 h-11 shadow-sm text-sm outline-none font-medium placeholder-slate-400 text-slate-700 dark:text-slate-300 w-52" />
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                    <input type="text" placeholder="Nº Pedido" value={orderIdFilter} onChange={e=>setOrderIdFilter(e.target.value)} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 h-11 shadow-sm text-sm outline-none font-medium placeholder-slate-400 text-slate-700 dark:text-slate-300 w-28" />
                                 </div>
                                 
                                 <div className="flex items-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 h-11 shadow-sm shrink-0">
@@ -364,11 +375,12 @@ export default function FinancialPage() {
                                     <span className="text-slate-400 mx-2">-</span>
                                     <input type="date" title="Data Final" value={endDate} onChange={e=>setEndDate(e.target.value)} className="bg-transparent text-sm font-medium outline-none w-[115px] text-slate-700 dark:text-slate-300" />
                                 </div>
-
+                                
                                 <select value={statusFilter} onChange={(e)=>setStatusFilter(e.target.value)} className="w-full sm:w-auto min-w-[120px] px-3 h-11 border border-blue-200 dark:border-blue-900/50 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 font-bold rounded-xl text-sm outline-none shrink-0 shadow-sm">
                                     <option value="">Todas</option>
                                     <option value="PENDING">A vencer</option>
                                     <option value="OVERDUE">Vencidas</option>
+                                    <option value="CANCELLED">Canceladas</option>
                                 </select>
                                 
                                 <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-sm shrink-0 w-full sm:w-auto overflow-x-auto gap-1">
@@ -459,8 +471,8 @@ export default function FinancialPage() {
                                                 <td className="px-6 py-4 text-right font-bold text-slate-900 dark:text-white">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL'}).format(inst.amount)}</td>
                                                 <td className="px-6 py-4 text-center">
                                                     <div className="flex flex-col items-center justify-center gap-1">
-                                                        <span className={`px-2 py-1 text-[10px] uppercase font-black rounded ${inst.status === 'PAID' ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : inst.status === 'OVERDUE' ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-amber-100 text-amber-700 border border-amber-200'}`}>
-                                                            {inst.status === 'PAID' ? 'PAGO' : inst.status === 'OVERDUE' ? 'ATRASO' : 'PENDENTE'}
+                                                        <span className={`px-2 py-1 text-[10px] uppercase font-black rounded ${inst.status === 'PAID' ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : inst.status === 'OVERDUE' ? 'bg-rose-100 text-rose-700 border border-rose-200' : inst.status === 'CANCELLED' ? 'bg-slate-200 text-slate-500 border border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700' : 'bg-amber-100 text-amber-700 border border-amber-200'}`}>
+                                                            {inst.status === 'PAID' ? 'PAGO' : inst.status === 'OVERDUE' ? 'ATRASO' : inst.status === 'CANCELLED' ? 'CANCELADO' : 'PENDENTE'}
                                                         </span>
                                                         {inst.total_installments > 1 ? (
                                                             <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 rounded">
@@ -475,7 +487,7 @@ export default function FinancialPage() {
                                                 </td>
                                                 <td className="px-6 py-4 text-right">
                                                     <div className="flex items-center justify-end gap-2">
-                                                        {inst.status !== 'PAID' && (
+                                                        {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && (
                                                             <button onClick={()=>{
                                                                 setPayData({inst_id: inst.id, account_id: '', amount: inst.amount, editMode: false, payment_date: new Date().toISOString().split('T')[0], category_id: inst.category_id || ''});
                                                                 setIsPayModalOpen(true);
@@ -498,7 +510,7 @@ export default function FinancialPage() {
                                                                 <Pencil className="w-4 h-4" />
                                                             </button>
                                                         )}
-                                                        {inst.status !== 'PAID' && (
+                                                        {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && (
                                                             <button onClick={()=>{
                                                                 setDeleteData({ inst_id: inst.id, isRecurring: inst.total_installments > 1 || inst.is_fixed, deleteFuture: false });
                                                                 setIsDeleteModalOpen(true);

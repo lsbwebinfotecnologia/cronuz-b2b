@@ -27,6 +27,20 @@ class CompanyBase(BaseModel):
     city: Optional[str] = None
     state: Optional[str] = None
 
+    nfse_enabled: bool = False
+    nfse_environment: str = "HOMOLOGACAO"
+    nfse_next_number: int = 1
+    nfse_default_print_point_id: Optional[int] = None
+    nfse_async_mode: bool = True
+    razao_social: Optional[str] = None
+    inscricao_municipal: Optional[str] = None
+    codigo_municipio_ibge: Optional[str] = None
+    regime_tributario: Optional[str] = None
+    optante_simples_nacional: bool = False
+    nfse_sit_simples_nacional: Optional[str] = "1"
+    cert_path: Optional[str] = None
+    cert_password: Optional[str] = None
+
     module_b2b_native: bool = True
     module_horus_erp: bool = False
     module_products: bool = True
@@ -71,6 +85,20 @@ class CompanyUpdate(BaseModel):
     neighborhood: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    
+    nfse_enabled: Optional[bool] = None
+    nfse_environment: Optional[str] = None
+    nfse_next_number: Optional[int] = None
+    nfse_default_print_point_id: Optional[int] = None
+    nfse_async_mode: Optional[bool] = None
+    razao_social: Optional[str] = None
+    inscricao_municipal: Optional[str] = None
+    codigo_municipio_ibge: Optional[str] = None
+    regime_tributario: Optional[str] = None
+    optante_simples_nacional: Optional[bool] = None
+    nfse_sit_simples_nacional: Optional[str] = None
+    cert_path: Optional[str] = None
+    cert_password: Optional[str] = None
     module_b2b_native: Optional[bool] = None
     module_horus_erp: Optional[bool] = None
     module_products: Optional[bool] = None

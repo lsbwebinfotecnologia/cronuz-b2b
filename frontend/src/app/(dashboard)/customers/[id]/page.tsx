@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Target, Loader2, Building2, MapPin, Users, ShoppingCart, MessageSquare, StickyNote, Mail, Phone, ExternalLink, Plus, X, RefreshCw, CheckCircle, DollarSign, Pencil } from 'lucide-react';
+import { ArrowLeft, Target, Loader2, Building2, MapPin, Users, ShoppingCart, MessageSquare, StickyNote, Mail, Phone, ExternalLink, Plus, X, RefreshCw, CheckCircle, DollarSign, Pencil, Edit2 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -65,6 +65,7 @@ export default function CustomerDetailsPage() {
 
   // Address States
   const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
+  const [editingAddressId, setEditingAddressId] = useState<number | null>(null);
   const [newAddress, setNewAddress] = useState({ street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', type: 'MAIN' });
   const [savingAddress, setSavingAddress] = useState(false);
 
@@ -373,7 +374,8 @@ export default function CustomerDetailsPage() {
               street: data.logradouro || prev.street,
               neighborhood: data.bairro || prev.neighborhood,
               city: data.localidade || prev.city,
-              state: data.uf || prev.state
+              state: data.uf || prev.state,
+              ibge_code: data.ibge || prev.ibge_code
             }));
           }
         }
@@ -385,20 +387,47 @@ export default function CustomerDetailsPage() {
     e.preventDefault();
     setSavingAddress(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/addresses`, {
-        method: 'POST',
+      const url = editingAddressId 
+        ? `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/addresses/${editingAddressId}`
+        : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/addresses`;
+        
+      const res = await fetch(url, {
+        method: editingAddressId ? 'PATCH' : 'POST',
         headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(newAddress)
       });
       if (res.ok) {
-        toast.success("Endereço adicionado!");
+        toast.success(editingAddressId ? "Endereço atualizado!" : "Endereço adicionado!");
         const added = await res.json();
-        setCustomer({ ...customer, addresses: [...(customer.addresses || []), added] });
+        
+        if (editingAddressId) {
+          setCustomer({ ...customer, addresses: customer.addresses.map((a:any) => a.id === editingAddressId ? added : a) });
+        } else {
+          setCustomer({ ...customer, addresses: [...(customer.addresses || []), added] });
+        }
+        
         setIsAddressModalOpen(false);
-        setNewAddress({ street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', type: 'MAIN' });
-      } else toast.error("Erro ao adicionar endereço.");
+        setEditingAddressId(null);
+        setNewAddress({ street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', type: 'MAIN', ibge_code: '' });
+      } else toast.error("Erro ao salvar endereço.");
     } catch(e) { toast.error("Erro de sistema."); }
     finally { setSavingAddress(false); }
+  }
+
+  function handleEditAddressClick(addr: any) {
+    setEditingAddressId(addr.id);
+    setNewAddress({
+      street: addr.street || '',
+      number: addr.number || '',
+      complement: addr.complement || '',
+      neighborhood: addr.neighborhood || '',
+      city: addr.city || '',
+      state: addr.state || '',
+      zip_code: addr.zip_code || '',
+      type: addr.type || 'MAIN',
+      ibge_code: addr.ibge_code || ''
+    });
+    setIsAddressModalOpen(true);
   }
 
   async function handleDeleteAddress(addressId: number) {
@@ -929,16 +958,25 @@ export default function CustomerDetailsPage() {
 
                 <div className="flex items-center justify-between mt-8 pt-6 border-t border-slate-200 dark:border-slate-800 mb-4">
                   <h3 className="text-sm font-medium text-slate-500 uppercase tracking-widest dark:text-slate-400">Endereços ({customer.addresses?.length || 0})</h3>
-                  <button onClick={() => setIsAddressModalOpen(true)} className="text-xs flex items-center gap-1 bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] hover:bg-[var(--color-primary-base)]/20 px-3 py-1.5 rounded-lg transition-colors border border-[var(--color-primary-base)]/20 dark:bg-indigo-500/10 dark:text-indigo-400 dark:hover:bg-indigo-500/20 dark:border-indigo-500/20">
+                  <button onClick={() => {
+                    setEditingAddressId(null);
+                    setNewAddress({ street: '', number: '', complement: '', neighborhood: '', city: '', state: '', zip_code: '', type: 'MAIN', ibge_code: '' });
+                    setIsAddressModalOpen(true);
+                  }} className="text-xs flex items-center gap-1 bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] hover:bg-[var(--color-primary-base)]/20 px-3 py-1.5 rounded-lg transition-colors border border-[var(--color-primary-base)]/20 dark:bg-indigo-500/10 dark:text-indigo-400 dark:hover:bg-indigo-500/20 dark:border-indigo-500/20">
                     <Plus className="h-3.5 w-3.5" /> Adicionar Endereço
                   </button>
                 </div>
                 <div className="space-y-3">
                   {customer.addresses?.map((addr: any, idx: number) => (
                      <div key={idx} className="p-4 border border-slate-200 bg-white rounded-xl flex items-start gap-3 relative shadow-sm dark:border-slate-800 dark:bg-slate-900/40 dark:shadow-none group">
-                        <button onClick={() => handleDeleteAddress(addr.id)} className="absolute top-3 right-3 text-slate-400 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all bg-slate-50 p-1.5 rounded-md dark:text-slate-500 dark:hover:text-rose-400 dark:bg-slate-950/50" title="Excluir Endereço">
-                          <X className="h-4 w-4" />
-                        </button>
+                        <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                          <button onClick={() => handleEditAddressClick(addr)} className="text-slate-400 hover:text-indigo-500 bg-slate-50 p-1.5 rounded-md dark:text-slate-500 dark:hover:text-indigo-400 dark:bg-slate-950/50" title="Editar Endereço">
+                            <Edit2 className="h-4 w-4" />
+                          </button>
+                          <button onClick={() => handleDeleteAddress(addr.id)} className="text-slate-400 hover:text-rose-500 bg-slate-50 p-1.5 rounded-md dark:text-slate-500 dark:hover:text-rose-400 dark:bg-slate-950/50" title="Excluir Endereço">
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
                         <MapPin className="h-5 w-5 text-slate-400 shrink-0 mt-0.5 dark:text-slate-500" />
                         <div>
                           <p className="text-xs font-bold text-slate-700 uppercase mb-1 flex items-center gap-2 dark:text-slate-300">
@@ -946,6 +984,7 @@ export default function CustomerDetailsPage() {
                           </p>
                           <p className="text-sm text-slate-600 dark:text-slate-400">{addr.street}, {addr.number} {addr.complement ? `- ${addr.complement}` : ''}</p>
                           <p className="text-sm text-slate-600 dark:text-slate-400">{addr.neighborhood} - {addr.city}/{addr.state} - CEP: {addr.zip_code}</p>
+                          {addr.ibge_code && <p className="text-xs text-indigo-600 font-mono mt-1 dark:text-indigo-400">cMun (IBGE): {addr.ibge_code}</p>}
                         </div>
                      </div>
                   ))}
@@ -1054,6 +1093,10 @@ export default function CustomerDetailsPage() {
                <div>
                   <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Condição de Pgt (Ex: 30/60/90)</label>
                   <input type="text" value={editFormData.payment_condition} onChange={e => setEditFormData({...editFormData, payment_condition: e.target.value})} placeholder="Deixe em branco para À Vista" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] font-mono dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500" />
+               </div>
+               <div>
+                  <label className="text-xs font-medium text-slate-500 uppercase mb-1 block font-bold text-indigo-600 dark:text-indigo-400">Observações Padrão para NFS-e</label>
+                  <textarea value={editFormData.nfse_notes || ''} onChange={e => setEditFormData({...editFormData, nfse_notes: e.target.value})} rows={3} placeholder="Texto fixo que sempre sairá na descrição do serviço da NFS-e para este cliente." className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-indigo-500 text-sm dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
                </div>
                <div className="flex justify-end gap-3 pt-6 border-t border-slate-200 mt-6 dark:border-slate-800">
                  <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-4 py-2 text-slate-500 hover:text-slate-700 transition-colors dark:text-slate-400 dark:hover:text-white">Cancelar</button>
@@ -1192,7 +1235,7 @@ export default function CustomerDetailsPage() {
                     <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Bairro</label>
                     <input type="text" value={newAddress.neighborhood} onChange={e => setNewAddress({...newAddress, neighborhood: e.target.value})} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500" />
                  </div>
-                 <div className="col-span-3">
+                 <div className="col-span-2">
                     <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Cidade</label>
                     <input type="text" value={newAddress.city} onChange={e => setNewAddress({...newAddress, city: e.target.value})} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500" />
                  </div>
@@ -1200,11 +1243,15 @@ export default function CustomerDetailsPage() {
                     <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">UF</label>
                     <input type="text" value={newAddress.state} onChange={e => setNewAddress({...newAddress, state: e.target.value})} maxLength={2} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] uppercase dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500" />
                  </div>
+                 <div className="col-span-1">
+                    <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400" title="Código IBGE">IBGE</label>
+                    <input type="text" value={newAddress.ibge_code || ''} onChange={e => setNewAddress({...newAddress, ibge_code: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] font-mono text-center dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500" />
+                 </div>
                </div>
                <div className="flex justify-end gap-3 pt-6 border-t border-slate-200 mt-6 dark:border-slate-800">
                  <button type="button" onClick={() => setIsAddressModalOpen(false)} className="px-4 py-2 text-slate-500 hover:text-slate-700 transition-colors text-sm dark:text-slate-400 dark:hover:text-white">Cancelar</button>
                  <button type="submit" disabled={savingAddress} className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white px-6 py-2 rounded-xl transition-colors disabled:opacity-50 text-sm font-medium">
-                    {savingAddress ? 'Salvando...' : 'Adicionar'}
+                    {savingAddress ? 'Salvando...' : editingAddressId ? 'Salvar Endereço' : 'Adicionar'}
                  </button>
                </div>
             </form>

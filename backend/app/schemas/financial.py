@@ -34,6 +34,7 @@ class FinancialCategoryBase(BaseModel):
     type: str # RECEIVABLE, PAYABLE
     active: bool = True
     dre_group: Optional[str] = None
+    parent_id: Optional[int] = None
 
 class FinancialCategoryCreate(FinancialCategoryBase):
     pass
@@ -42,6 +43,7 @@ class FinancialCategoryUpdate(BaseModel):
     name: Optional[str] = None
     active: Optional[bool] = None
     dre_group: Optional[str] = None
+    parent_id: Optional[int] = None
 
 class FinancialCategory(FinancialCategoryBase):
     id: int

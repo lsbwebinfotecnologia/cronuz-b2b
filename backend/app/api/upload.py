@@ -147,3 +147,48 @@ async def upload_certificate(
         
     return {"message": "Certificado enviado e configurado com sucesso.", "path": settings.efi_certificate_path}
 
+@router.post("/nfse-certificate")
+async def upload_nfse_certificate(
+    file: UploadFile = File(...),
+    company_id: int = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Endpoint para envio do certificado A1 (.pfx) da NFS-e Nacional.
+    Salva isolado na pasta de certificados da aplicação backend.
+    """
+    from app.models.user import UserRole
+    if current_user.type != UserRole.MASTER and current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    if not file.filename.lower().endswith(".pfx") and not file.filename.lower().endswith(".p12"):
+        raise HTTPException(status_code=400, detail="O certificado digital deve ser no formato .pfx arquivado.")
+
+    certs_dir = Path(__file__).parent.parent.parent.parent / "certs" / "nfse" / str(company_id)
+    certs_dir.mkdir(parents=True, exist_ok=True)
+    
+    unique_filename = f"nfse_cert_{uuid.uuid4().hex}{Path(file.filename).suffix}"
+    file_path = certs_dir / unique_filename
+    
+    try:
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar o certificado: {str(e)}")
+        
+    from app.models.company import Company
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa não localizada.")
+    
+    company.cert_path = str(file_path.absolute())
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Erro ao salvar no banco.")
+        
+    return {"message": "Certificado digital enviado e atrelado com sucesso ao emissor.", "path": company.cert_path}
+

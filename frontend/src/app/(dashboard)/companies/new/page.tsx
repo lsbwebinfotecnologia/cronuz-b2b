@@ -31,7 +31,15 @@ function NewCompanyForm() {
     logo: '',
     tenant_id: 'cronuz',
     business_model: 'B2B_CRONUZ',
-    operation_start_date: new Date().toISOString().split('T')[0]
+    operation_start_date: new Date().toISOString().split('T')[0],
+    zip_code: '',
+    street: '',
+    number: '',
+    complement: '',
+    neighborhood: '',
+    city: '',
+    state: '',
+    codigo_municipio_ibge: ''
   });
   const [user, setUser] = useState<any>(null);
 
@@ -76,6 +84,34 @@ function NewCompanyForm() {
       handleDocumentChange(initialDocument);
     }
   }, [initialDocument]);
+
+  const handleCepChange = async (val: string) => {
+    let cleanVal = val.replace(/\D/g, '');
+    let formatted = cleanVal;
+    if (cleanVal.length > 5) {
+      formatted = `${cleanVal.slice(0, 5)}-${cleanVal.slice(5, 8)}`;
+    }
+    setFormData(prev => ({ ...prev, zip_code: formatted }));
+
+    if (cleanVal.length === 8) {
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${cleanVal}/json/`);
+        if (res.ok) {
+          const data = await res.json();
+          if (!data.erro) {
+            setFormData(prev => ({
+              ...prev,
+              street: data.logradouro || prev.street,
+              neighborhood: data.bairro || prev.neighborhood,
+              city: data.localidade || prev.city,
+              state: data.uf || prev.state,
+              codigo_municipio_ibge: data.ibge || prev.codigo_municipio_ibge
+            }));
+          }
+        }
+      } catch (err) {}
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -246,6 +282,45 @@ function NewCompanyForm() {
                 </div>
               </div>
             )}
+            
+            {/* Address Information Section */}
+            <div className="md:col-span-2 pt-4 border-t border-slate-200 dark:border-slate-800">
+               <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Endereço Sede/Matriz</h3>
+               <div className="grid grid-cols-6 gap-4">
+                 <div className="col-span-6 md:col-span-2">
+                    <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">CEP</label>
+                    <input type="text" value={formData.zip_code} onChange={e => handleCepChange(e.target.value)} maxLength={9} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] font-mono dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                 </div>
+                 <div className="col-span-6 md:col-span-4">
+                    <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Rua / Logradouro</label>
+                    <input type="text" value={formData.street} onChange={e => setFormData({...formData, street: e.target.value})} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                 </div>
+                 <div className="col-span-3 md:col-span-2">
+                    <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Número</label>
+                    <input type="text" value={formData.number} onChange={e => setFormData({...formData, number: e.target.value})} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                 </div>
+                 <div className="col-span-3 md:col-span-4">
+                    <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Complemento (Opcional)</label>
+                    <input type="text" value={formData.complement} onChange={e => setFormData({...formData, complement: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                 </div>
+                 <div className="col-span-6 md:col-span-2">
+                    <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Bairro</label>
+                    <input type="text" value={formData.neighborhood} onChange={e => setFormData({...formData, neighborhood: e.target.value})} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                 </div>
+                 <div className="col-span-6 md:col-span-2">
+                    <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">Cidade</label>
+                    <input type="text" value={formData.city} onChange={e => setFormData({...formData, city: e.target.value})} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                 </div>
+                 <div className="col-span-3 md:col-span-1">
+                    <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">UF</label>
+                    <input type="text" value={formData.state} onChange={e => setFormData({...formData, state: e.target.value})} maxLength={2} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] uppercase dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                 </div>
+                 <div className="col-span-3 md:col-span-1">
+                    <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400" title="Código IBGE Obrigatório">IBGE (Req.)</label>
+                    <input type="text" value={formData.codigo_municipio_ibge} onChange={e => setFormData({...formData, codigo_municipio_ibge: e.target.value})} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] font-mono text-center dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                 </div>
+               </div>
+            </div>
           </div>
 
           <div className="flex justify-end pt-4 border-t border-slate-200 dark:border-slate-800/60">

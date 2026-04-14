@@ -24,6 +24,8 @@ class Customer(Base):
     id_guid = Column(String(255), nullable=True)
     id_doc = Column(String(255), nullable=True)
     
+    nfse_notes = Column(Text, nullable=True)
+    
     # B2B Financial Data
     credit_limit = Column(Float, default=0.0, nullable=False)
     discount = Column(Float, default=0.0, nullable=False)
@@ -55,6 +57,7 @@ class Address(Base):
     city = Column(String(100), nullable=False)
     state = Column(String(2), nullable=False)
     zip_code = Column(String(20), nullable=False)
+    ibge_code = Column(String(20), nullable=True)
     type = Column(String(50), default="MAIN") # MAIN, BILLING, SHIPPING
     
     customer = relationship("Customer", back_populates="addresses")
@@ -115,3 +118,5 @@ class CustomerNotify(Base):
     
     company = relationship("Company")
     customer = relationship("Customer")
+
+import app.models.commercial_policy

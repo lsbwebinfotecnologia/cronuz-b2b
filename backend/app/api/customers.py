@@ -357,6 +357,34 @@ def create_address(
     db.refresh(db_address)
     return db_address
 
+@router.patch("/customers/{customer_id}/addresses/{address_id}", response_model=AddressSchema)
+def update_address(
+    customer_id: int,
+    address_id: int,
+    address_in: AddressCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
+        raise HTTPException(status_code=403, detail="Não autorizado a gerenciar endereços.")
+        
+    address = db.query(Address).filter(
+        Address.id == address_id,
+        Address.customer_id == customer_id
+    ).first()
+    
+    if not address:
+        raise HTTPException(status_code=404, detail="Endereço não encontrado.")
+
+    update_data = address_in.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(address, field, value)
+        
+    db.add(address)
+    db.commit()
+    db.refresh(address)
+    return address
+
 @router.delete("/customers/{customer_id}/addresses/{address_id}")
 def delete_address(
     customer_id: int,

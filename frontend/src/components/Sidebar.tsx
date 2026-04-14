@@ -28,7 +28,9 @@ import {
   Store,
   Menu,
   ListTodo,
-  UserCheck
+  UserCheck,
+  Briefcase,
+  ClipboardList
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -72,6 +74,15 @@ const sellerNavigation: NavItem[] = [
       { name: 'Marcas', href: '/products/brands', icon: Tag },
       { name: 'Categorias', href: '/products/categories', icon: FolderTree },
       { name: 'Características', href: '/products/characteristics', icon: SlidersHorizontal }
+    ]
+  },
+  {
+    name: 'Serviços',
+    href: '/services',
+    icon: Briefcase,
+    subItems: [
+      { name: 'Catálogo de Serviços', href: '/services', icon: LayoutGrid },
+      { name: 'Ordens de Serviço', href: '/services/orders', icon: ClipboardList }
     ]
   },
   { name: 'Pedidos', href: '/orders', icon: ShoppingBag },

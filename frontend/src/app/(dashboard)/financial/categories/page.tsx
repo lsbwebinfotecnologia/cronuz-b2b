@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, Fragment } from 'react';
 import { Tag, Plus, CheckCircle, Trash2, Edit3, X, ArrowUpCircle, ArrowDownCircle, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
@@ -11,7 +11,7 @@ export default function CashflowCategoriesPage() {
     const [loading, setLoading] = useState(true);
     
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-    const [formData, setFormData] = useState({ id: 0, name: '', type: 'PAYABLE', dre_group: '', active: true, is_system: false });
+    const [formData, setFormData] = useState({ id: 0, name: '', type: 'PAYABLE', dre_group: '', active: true, is_system: false, parent_id: 0 as number | null });
 
     useEffect(() => {
         fetchCategories();
@@ -39,13 +39,13 @@ export default function CashflowCategoriesPage() {
                 res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/categories/${formData.id}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
-                    body: JSON.stringify({ name: formData.name, active: formData.active, dre_group: formData.dre_group || null })
+                    body: JSON.stringify({ name: formData.name, active: formData.active, dre_group: formData.dre_group || null, parent_id: formData.parent_id || null })
                 });
             } else {
                 res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/categories`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
-                    body: JSON.stringify({ name: formData.name, type: formData.type, active: formData.active, dre_group: formData.dre_group || null })
+                    body: JSON.stringify({ name: formData.name, type: formData.type, active: formData.active, dre_group: formData.dre_group || null, parent_id: formData.parent_id || null })
                 });
             }
             
@@ -64,9 +64,9 @@ export default function CashflowCategoriesPage() {
 
     const openEdit = (cat?: any) => {
         if (cat) {
-            setFormData({ id: cat.id, name: cat.name, type: cat.type, dre_group: cat.dre_group || '', active: cat.active, is_system: cat.is_system });
+            setFormData({ id: cat.id, name: cat.name, type: cat.type, dre_group: cat.dre_group || '', active: cat.active, is_system: cat.is_system, parent_id: cat.parent_id || 0 });
         } else {
-            setFormData({ id: 0, name: '', type: 'PAYABLE', dre_group: '', active: true, is_system: false });
+            setFormData({ id: 0, name: '', type: 'PAYABLE', dre_group: '', active: true, is_system: false, parent_id: 0 });
         }
         setIsEditModalOpen(true);
     };
@@ -126,43 +126,69 @@ export default function CashflowCategoriesPage() {
                             ) : categories.length === 0 ? (
                                 <tr><td colSpan={4} className="text-center py-12 text-slate-500">Nenhuma categoria criada no plano de contas.</td></tr>
                             ) : (
-                                categories.map(cat => (
-                                    <tr key={cat.id} className="border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800/30">
-                                        <td className="px-6 py-4">
-                                            {cat.type === 'RECEIVABLE' ? 
-                                                <div className="flex items-center gap-2 text-emerald-600 font-bold bg-emerald-50 px-2 py-1 rounded w-fit text-xs dark:bg-emerald-950/30">
-                                                    <ArrowUpCircle className="w-4 h-4" /> Receita
-                                                </div> : 
-                                                <div className="flex items-center gap-2 text-rose-600 font-bold bg-rose-50 px-2 py-1 rounded w-fit text-xs dark:bg-rose-950/30">
-                                                    <ArrowDownCircle className="w-4 h-4" /> Despesa
+                                categories.filter(c => !c.parent_id).map(rootCat => (
+                                    <Fragment key={rootCat.id}>
+                                        <tr className="border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                                            <td className="px-6 py-4">
+                                                {rootCat.type === 'RECEIVABLE' ? 
+                                                    <div className="flex items-center gap-2 text-emerald-600 font-bold bg-emerald-50 px-2 py-1 rounded w-fit text-xs dark:bg-emerald-950/30">
+                                                        <ArrowUpCircle className="w-4 h-4" /> Receita
+                                                    </div> : 
+                                                    <div className="flex items-center gap-2 text-rose-600 font-bold bg-rose-50 px-2 py-1 rounded w-fit text-xs dark:bg-rose-950/30">
+                                                        <ArrowDownCircle className="w-4 h-4" /> Despesa
+                                                    </div>
+                                                }
+                                            </td>
+                                            <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">
+                                                {rootCat.name}
+                                                {rootCat.is_system && <span className="ml-3 text-[10px] uppercase font-black px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full dark:bg-slate-800">Sistema</span>}
+                                                <div className="text-[10px] text-slate-400 font-mono mt-1 w-fit bg-slate-50 dark:bg-slate-800/50 px-1.5 py-0.5 rounded font-normal">
+                                                    DRE: {rootCat.dre_group ? rootCat.dre_group : 'Não Classificado'}
                                                 </div>
-                                            }
-                                        </td>
-                                        <td className="px-6 py-4 font-medium text-slate-900 dark:text-white">
-                                            {cat.name}
-                                            {cat.is_system && <span className="ml-3 text-[10px] uppercase font-black px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full dark:bg-slate-800">Sistema</span>}
-                                            <div className="text-[10px] text-slate-400 font-mono mt-1 w-fit bg-slate-50 dark:bg-slate-800/50 px-1.5 py-0.5 rounded">
-                                                DRE: {cat.dre_group ? cat.dre_group : 'Não Classificado'}
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-center">
-                                            {cat.active ? (
-                                                <span className="px-2.5 py-1 text-xs font-bold rounded bg-emerald-100 text-emerald-700">Ativo</span>
-                                            ) : (
-                                                <span className="px-2.5 py-1 text-xs font-bold rounded bg-slate-200 text-slate-500">Inativo</span>
-                                            )}
-                                        </td>
-                                        <td className="px-6 py-4 text-right flex justify-end gap-2">
-                                            <button onClick={()=>openEdit(cat)} className="text-slate-400 hover:text-[var(--color-primary-base)] p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition">
-                                                <Edit3 className="w-5 h-5"/>
-                                            </button>
-                                            {!cat.is_system && (
-                                                <button onClick={()=>handleDelete(cat.id)} className="text-slate-400 hover:text-rose-500 p-2 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-900/30 transition">
-                                                    <Trash2 className="w-5 h-5"/>
+                                            </td>
+                                            <td className="px-6 py-4 text-center">
+                                                {rootCat.active ? (
+                                                    <span className="px-2.5 py-1 text-xs font-bold rounded bg-emerald-100 text-emerald-700">Ativo</span>
+                                                ) : (
+                                                    <span className="px-2.5 py-1 text-xs font-bold rounded bg-slate-200 text-slate-500">Inativo</span>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4 text-right flex justify-end gap-2">
+                                                <button onClick={()=>openEdit(rootCat)} className="text-slate-400 hover:text-[var(--color-primary-base)] p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+                                                    <Edit3 className="w-5 h-5"/>
                                                 </button>
-                                            )}
-                                        </td>
-                                    </tr>
+                                                {!rootCat.is_system && (
+                                                    <button onClick={()=>handleDelete(rootCat.id)} className="text-slate-400 hover:text-rose-500 p-2 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-900/30 transition">
+                                                        <Trash2 className="w-5 h-5"/>
+                                                    </button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                        {categories.filter(sub => sub.parent_id === rootCat.id).map(subCat => (
+                                            <tr key={subCat.id} className="border-b border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-800/10 hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                                                <td className="px-6 py-3"></td>
+                                                <td className="px-6 py-3 font-medium text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                                                    <div className="w-4 h-4 border-l-2 border-b-2 border-slate-300 dark:border-slate-600 rounded-bl-lg -mt-3 ml-2"></div>
+                                                    {subCat.name}
+                                                </td>
+                                                <td className="px-6 py-3 text-center">
+                                                    {subCat.active ? (
+                                                        <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-700">Ativo</span>
+                                                    ) : (
+                                                        <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-200 text-slate-500">Inativo</span>
+                                                    )}
+                                                </td>
+                                                <td className="px-6 py-3 text-right flex justify-end gap-1">
+                                                    <button onClick={()=>openEdit(subCat)} className="text-slate-400 hover:text-[var(--color-primary-base)] p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition scale-90">
+                                                        <Edit3 className="w-4 h-4"/>
+                                                    </button>
+                                                    <button onClick={()=>handleDelete(subCat.id)} className="text-slate-400 hover:text-rose-500 p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-900/30 transition scale-90">
+                                                        <Trash2 className="w-4 h-4"/>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </Fragment>
                                 ))
                             )}
                         </tbody>
@@ -196,12 +222,22 @@ export default function CashflowCategoriesPage() {
                                 {!formData.id && (
                                     <div>
                                         <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Natureza da Conta</label>
-                                        <select required value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value})} className="w-full px-4 py-2 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm font-medium">
+                                        <select required value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, parent_id: 0})} className="w-full px-4 py-2 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm font-medium">
                                             <option value="PAYABLE">Contas A Pagar (Despesa)</option>
                                             <option value="RECEIVABLE">Contas A Receber (Receita)</option>
                                         </select>
                                     </div>
                                 )}
+                                <div>
+                                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Pertence à qual Categoria Principal?</label>
+                                    <select value={formData.parent_id || 0} onChange={(e)=>setFormData({...formData, parent_id: Number(e.target.value) || null})} className="w-full px-4 py-2 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm font-medium">
+                                        <option value={0}>Nenhuma (Esta é uma Categoria Macro)</option>
+                                        {categories.filter(c => c.type === formData.type && !c.parent_id && c.id !== formData.id).map(c => (
+                                            <option key={c.id} value={c.id}>{c.name}</option>
+                                        ))}
+                                    </select>
+                                    <p className="text-[10px] text-slate-400 mt-1">Ao selecionar uma categoria, ela vira uma subcategoria.</p>
+                                </div>
                                 <div>
                                     <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Grupo do DRE</label>
                                     <select value={formData.dre_group} onChange={(e)=>setFormData({...formData, dre_group: e.target.value})} className="w-full px-4 py-2 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm font-medium text-slate-500">

@@ -17,6 +17,7 @@ from app.models import lead as lead_models
 from app.models import system_integrator as system_integrator_models
 from app.models import order as order_models
 from app.models import commercial_policy as commercial_models
+from app.models import print_point as print_point_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -43,6 +44,8 @@ from app.api import customer_portal
 from app.api import system_integrators
 from app.api import bookinfo_hub
 from app.api import bookinfo_purchases
+from app.api import services
+from app.api import print_points
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -59,6 +62,7 @@ catalog_models.Base.metadata.create_all(bind=engine)
 marketing_models.Base.metadata.create_all(bind=engine)
 subscription_models.Base.metadata.create_all(bind=engine)
 lead_models.Base.metadata.create_all(bind=engine)
+print_point_models.Base.metadata.create_all(bind=engine)
 system_integrator_models.Base.metadata.create_all(bind=engine)
 marketing_nav_models.Base.metadata.create_all(bind=engine)
 order_models.Base.metadata.create_all(bind=engine)
@@ -120,6 +124,8 @@ app.include_router(integrators.router, prefix="/integrators", tags=["integrators
 app.include_router(system_integrators.router, prefix="/system-integrators", tags=["system-integrators"])
 app.include_router(bookinfo_hub.router, tags=["bookinfo"])
 app.include_router(bookinfo_purchases.router, tags=["bookinfo_purchases"])
+app.include_router(services.router, tags=["services"])
+app.include_router(print_points.router, prefix="/print-points", tags=["print-points"])
 app.include_router(commercial_policies.router, tags=["commercial-policies"])
 app.include_router(financial.router, tags=["financial"])
 
@@ -129,6 +135,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+os.makedirs("storage", exist_ok=True)
+app.mount("/storage", StaticFiles(directory="storage"), name="storage")
 
 @app.on_event("startup")
 def seed_master_user():
@@ -409,6 +418,14 @@ def update_company(
     for key, value in update_data.items():
         setattr(company, key, value)
         
+    # Validations Phase 3
+    if getattr(company, "nfse_enabled", False):
+        if not getattr(company, "codigo_municipio_ibge", None):
+            raise HTTPException(
+                status_code=400, 
+                detail="A emissão de NFS-e não pode ser ativada sem o preenchimento do 'Código IBGE do Município'. Por favor, verifique as Configurações Fiscais."
+            )
+            
     db.commit()
     db.refresh(company)
     return company

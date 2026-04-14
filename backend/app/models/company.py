@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
 
@@ -10,6 +11,10 @@ class Company(Base):
     name = Column(String(255), nullable=False)
     document = Column(String(50), unique=True, index=True, nullable=False) # CNPJ or other
     
+    # Relationships
+    users = relationship("User", back_populates="company")
+    print_points = relationship("PrintPoint", back_populates="company", foreign_keys="PrintPoint.company_id")
+
     # B2B Configs
     domain = Column(String(255), unique=True, index=True, nullable=False)
     custom_domain = Column(String(255), unique=True, index=True, nullable=True)
@@ -44,6 +49,22 @@ class Company(Base):
     module_pdv = Column(Boolean, default=False, nullable=False)
     module_agents = Column(Boolean, default=False, nullable=False)
     module_financial = Column(Boolean, default=False, nullable=False)
+    
+    # Fiscal Configs (NFS-e Padrão Nacional)
+    nfse_enabled = Column(Boolean, default=False, nullable=False)
+    nfse_environment = Column(String(50), default="HOMOLOGACAO", nullable=False)
+    nfse_next_number = Column(Integer, default=1, nullable=False)
+    nfse_async_mode = Column(Boolean, default=True)
+    nfse_default_print_point_id = Column(Integer, ForeignKey("cmp_print_point.id"), nullable=True)
+
+    razao_social = Column(String(255), nullable=True)
+    inscricao_municipal = Column(String(50), nullable=True)
+    codigo_municipio_ibge = Column(String(20), nullable=True)
+    regime_tributario = Column(String(50), nullable=True)
+    optante_simples_nacional = Column(Boolean, default=False)
+    nfse_sit_simples_nacional = Column(String(5), nullable=True, default="1") # 1=Não Optante, 2=MEI, 3=ME/EPP
+    cert_path = Column(String(500), nullable=True)
+    cert_password = Column(String(255), nullable=True)
     
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -48,3 +48,5 @@ class User(Base):
         UniqueConstraint('email', 'type', 'company_id', name='uq_usr_email_type_company'),
         UniqueConstraint('document', 'type', 'company_id', name='uq_usr_document_type_company'),
     )
+
+import app.models.company

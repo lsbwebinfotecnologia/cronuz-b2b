@@ -14,9 +14,12 @@ class FinancialCategory(Base):
     active = Column(Boolean, default=True, nullable=False)
     is_system = Column(Boolean, default=False, nullable=False) # To prevent deleting base categories
     dre_group = Column(String(50), nullable=True) # 1_Receita_Bruta, 2_Deducoes_Tributos, etc.
+    parent_id = Column(Integer, ForeignKey("fin_category.id", ondelete="SET NULL"), nullable=True, index=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    subcategories = relationship("FinancialCategory", backref="parent", remote_side=[id])
 
 class FinancialTransaction(Base):
     __tablename__ = "fin_transaction"
