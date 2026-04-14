@@ -47,6 +47,7 @@ export default function ServiceOrdersPage() {
         first_due_date: string;
         account_id: string;
         print_point_id: string;
+        is_grouped?: boolean;
     }>({
         order_id: 0,
         installments_count: '1',
