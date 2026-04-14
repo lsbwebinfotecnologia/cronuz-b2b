@@ -1,0 +1,13 @@
+-- Additional fields for cmp_company
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS codigo_municipio_ibge VARCHAR(20);
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS regime_tributario VARCHAR(50);
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS optante_simples_nacional BOOLEAN DEFAULT FALSE;
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS nfse_sit_simples_nacional VARCHAR(5) DEFAULT '1';
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS cert_path VARCHAR(500);
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS cert_password VARCHAR(255);
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS razao_social VARCHAR(255);
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS inscricao_municipal VARCHAR(50);
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS nfse_enabled BOOLEAN DEFAULT FALSE;
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS nfse_environment VARCHAR(50) DEFAULT 'HOMOLOGACAO';
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS nfse_next_number INTEGER DEFAULT 1;
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS nfse_async_mode BOOLEAN DEFAULT TRUE;

@@ -130,6 +130,7 @@ export function Sidebar() {
   const [modulePdv, setModulePdv] = useState(false);
   const [moduleAgents, setModuleAgents] = useState(false);
   const [moduleFinancial, setModuleFinancial] = useState(false);
+  const [moduleServices, setModuleServices] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
@@ -165,6 +166,7 @@ export function Sidebar() {
                setModulePdv(data.module_pdv || false);
                setModuleAgents(data.module_agents || false);
                setModuleFinancial(data.module_financial || false);
+               setModuleServices(data.module_services || false);
             }
          } catch (e) {}
        };
@@ -198,6 +200,7 @@ export function Sidebar() {
     if (!moduleMarketing && nav.name === 'Marketing') return false;
     if (!usesBookinfo && nav.name === 'Bookinfo') return false;
     if (!moduleAgents && nav.href === '/agents') return false;
+    if (!moduleServices && nav.name === 'Serviços') return false;
     return true;
   })].map(nav => {
     if (nav.name === 'Marketing' && usesHorus) {

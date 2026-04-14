@@ -49,6 +49,7 @@ class Company(Base):
     module_pdv = Column(Boolean, default=False, nullable=False)
     module_agents = Column(Boolean, default=False, nullable=False)
     module_financial = Column(Boolean, default=False, nullable=False)
+    module_services = Column(Boolean, default=False, nullable=False)
     
     # Fiscal Configs (NFS-e Padrão Nacional)
     nfse_enabled = Column(Boolean, default=False, nullable=False)

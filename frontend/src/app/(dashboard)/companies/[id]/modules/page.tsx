@@ -29,6 +29,7 @@ export default function CompanyModulesPage() {
       module_pdv: company.module_pdv,
       module_agents: company.module_agents,
       module_financial: company.module_financial,
+      module_services: company.module_services,
       [moduleName]: !currentValue
     };
 
@@ -288,6 +289,27 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_financial', company.module_financial)} 
                     disabled={togglingModule !== null}
                     colorClass="bg-amber-500"
+                  />
+                </div>
+              </div>
+
+              {/* Serviços */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_services ? 'bg-blue-500/10 border-blue-500/20 text-blue-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <Globe className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Gestão de Serviços (OS)</p>
+                    <p className="text-xs text-slate-500">Ordens de serviço, OS e faturamento de contratos.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch 
+                    active={company.module_services} 
+                    onClick={() => handleToggleModule('module_services', company.module_services)} 
+                    disabled={togglingModule !== null}
+                    colorClass="bg-blue-500"
                   />
                 </div>
               </div>

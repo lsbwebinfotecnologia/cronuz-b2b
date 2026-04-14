@@ -50,6 +50,7 @@ class CompanyBase(BaseModel):
     module_pdv: bool = False
     module_agents: bool = False
     module_financial: bool = False
+    module_services: bool = False
     active: bool = True
 
 class CompanyCreate(CompanyBase):
@@ -108,6 +109,7 @@ class CompanyUpdate(BaseModel):
     module_pdv: Optional[bool] = None
     module_agents: Optional[bool] = None
     module_financial: Optional[bool] = None
+    module_services: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):
