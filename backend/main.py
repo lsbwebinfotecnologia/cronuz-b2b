@@ -290,6 +290,7 @@ class ModuleUpdate(BaseModel):
     module_pdv: bool
     module_agents: bool
     module_financial: bool
+    module_services: bool
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(
@@ -470,6 +471,7 @@ def update_company_modules(
     company.module_pdv = module_update.module_pdv
     company.module_agents = module_update.module_agents
     company.module_financial = module_update.module_financial
+    company.module_services = module_update.module_services
     
     db.commit()
     db.refresh(company)
