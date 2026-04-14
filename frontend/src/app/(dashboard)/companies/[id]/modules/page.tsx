@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -30,6 +30,7 @@ export default function CompanyModulesPage() {
       module_agents: company.module_agents,
       module_financial: company.module_financial,
       module_services: company.module_services,
+      module_commercial: company.module_commercial,
       [moduleName]: !currentValue
     };
 
@@ -310,6 +311,27 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_services', company.module_services)} 
                     disabled={togglingModule !== null}
                     colorClass="bg-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Políticas Comerciais */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_commercial ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <Tags className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Políticas e Preços</p>
+                    <p className="text-xs text-slate-500">Regras comerciais, tabelas de preço e descontos segmentados.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch 
+                    active={company.module_commercial} 
+                    onClick={() => handleToggleModule('module_commercial', company.module_commercial)} 
+                    disabled={togglingModule !== null}
+                    colorClass="bg-indigo-500"
                   />
                 </div>
               </div>

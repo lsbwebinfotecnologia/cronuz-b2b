@@ -40,6 +40,7 @@ interface Company {
   module_agents: boolean;
   module_financial: boolean;
   module_services: boolean;
+  module_commercial: boolean;
   active: boolean;
 }
 

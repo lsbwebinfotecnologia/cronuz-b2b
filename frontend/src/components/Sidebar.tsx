@@ -131,6 +131,7 @@ export function Sidebar() {
   const [moduleAgents, setModuleAgents] = useState(false);
   const [moduleFinancial, setModuleFinancial] = useState(false);
   const [moduleServices, setModuleServices] = useState(false);
+  const [moduleCommercial, setModuleCommercial] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
@@ -167,6 +168,7 @@ export function Sidebar() {
                setModuleAgents(data.module_agents || false);
                setModuleFinancial(data.module_financial || false);
                setModuleServices(data.module_services || false);
+               setModuleCommercial(data.module_commercial || false);
             }
          } catch (e) {}
        };
@@ -212,7 +214,7 @@ export function Sidebar() {
     return nav;
   });
   
-  if (!usesHorus) {
+  if (moduleCommercial) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
     filteredSellerNavigation.splice(targetIndex, 0, { 
