@@ -52,12 +52,17 @@ export const getToken = () => {
 };
 
 export const getUser = () => {
-  const hostUserKey = getHostKey(USER_KEY);
-  const userStr = Cookies.get(hostUserKey) || Cookies.get(USER_KEY);
-  if (userStr) return JSON.parse(userStr);
-  if (typeof window !== 'undefined') {
-    const localUser = localStorage.getItem(USER_KEY);
-    return localUser ? JSON.parse(localUser) : null;
+  try {
+    const hostUserKey = getHostKey(USER_KEY);
+    const userStr = Cookies.get(hostUserKey) || Cookies.get(USER_KEY);
+    if (userStr && userStr !== 'undefined') return JSON.parse(userStr);
+    if (typeof window !== 'undefined') {
+      const localUser = localStorage.getItem(USER_KEY);
+      return (localUser && localUser !== 'undefined') ? JSON.parse(localUser) : null;
+    }
+  } catch (e) {
+    console.warn("Error parsing user from storage:", e);
+    removeToken(); // Invalid state, force login
   }
   return null;
 };

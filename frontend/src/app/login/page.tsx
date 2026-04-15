@@ -54,7 +54,8 @@ export default function LoginPage() {
         throw new Error('Código de 2 fatores inválido');
       }
 
-      if (data.user && data.user.role === 'CUSTOMER') {
+      const isMasterDomain = window.location.hostname.includes('app.cronuzb2b.com.br') || window.location.hostname.includes('app.horusb2b.com.br') || window.location.hostname.includes('app.fmz.com.br');
+      if (data.user && data.user.type === 'CUSTOMER' && isMasterDomain) {
         throw new Error('Acesso restrito. Clientes devem acessar a loja b2b pelo portal exclusivo da distribuidora.');
       }
 
