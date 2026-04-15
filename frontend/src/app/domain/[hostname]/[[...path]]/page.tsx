@@ -229,7 +229,7 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                                                         <span className="text-3xl font-black text-slate-900 leading-none">
                                                             {plan.price_per_issue?.toFixed(2).replace('.', ',')}
                                                         </span>
-                                                        <span className="text-sm text-slate-500 font-medium ml-1">/{plan.payment_frequency === 'MONTHLY' ? 'mês' : 'ciclo'}</span>
+                                                        <span className="text-sm text-slate-500 font-medium ml-1">/{plan.payment_frequency === 'MONTHLY' ? 'coleção' : 'ciclo'}</span>
                                                     </div>
                                                 </div>
                                                 
