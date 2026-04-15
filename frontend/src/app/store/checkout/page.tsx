@@ -10,7 +10,7 @@ import Link from 'next/link';
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const { items, subtotal, clearCart, updateQuantity, removeFromCart } = useCart();
+  const { items, subtotal, clearCart, updateQuantity, removeFromCart, isMounted } = useCart();
   const [placingOrder, setPlacingOrder] = useState(false);
   const [orderComplete, setOrderComplete] = useState<{order_id: string, horus_id: string} | null>(null);
   const [customer, setCustomer] = useState<any>(null);
@@ -146,6 +146,10 @@ export default function CheckoutPage() {
      );
   }
 
+  if (!isMounted) {
+     return null; // Resolve Hydration mismatch do Next.js
+  }
+
   if (items.length === 0) {
     return (
        <div className="flex-1 w-full bg-slate-50 dark:bg-[#0a0f1c] min-h-[calc(100vh-80px)] flex flex-col items-center justify-center p-6">
@@ -183,7 +187,7 @@ export default function CheckoutPage() {
                         <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl p-6">
                             <p className="font-bold text-slate-900 dark:text-white text-lg mb-2">{customer?.trade_name || customer?.company_name}</p>
                             <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-                                {mainAddress.street}, {mainAddress.number} {mainAddress.complement && `- ${mainAddress.complement}`} <br/>
+                                {mainAddress.street}, {mainAddress.number} {mainAddress.complement ? `- ${mainAddress.complement}` : ''} <br/>
                                 {mainAddress.neighborhood} - {mainAddress.city}/{mainAddress.state} <br/>
                                 CEP: {mainAddress.zip_code}
                             </p>
@@ -218,7 +222,7 @@ export default function CheckoutPage() {
                                     <h4 className="font-bold text-slate-900 dark:text-white line-clamp-1 mb-1">{item.name}</h4>
                                     <div className="text-xs text-slate-500 mb-2 flex flex-wrap gap-2">
                                         <span>{item.brand || (item.category ? item.category.name : 'Vários Autores')}</span>
-                                        {item.ean_gtin && <span className="text-slate-400">ISBN: {item.ean_gtin}</span>}
+                                        {item.ean_gtin ? <span className="text-slate-400">ISBN: {item.ean_gtin}</span> : null}
                                     </div>
                                     <div className="flex items-center justify-between text-sm">
                                        <div className="flex flex-col">

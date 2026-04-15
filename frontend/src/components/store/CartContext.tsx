@@ -30,6 +30,7 @@ interface CartContextType {
   isCartOpen: boolean;
   openCart: () => void;
   closeCart: () => void;
+  isMounted: boolean;
 }
 
 const CartContext = createContext<CartContextType>({
@@ -44,6 +45,7 @@ const CartContext = createContext<CartContextType>({
   isCartOpen: false,
   openCart: () => {},
   closeCart: () => {},
+  isMounted: false,
 });
 
 export const useCart = () => useContext(CartContext);
@@ -274,7 +276,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       totalWeight,
       isCartOpen,
       openCart,
-      closeCart
+      closeCart,
+      isMounted
     }}>
       {children}
     </CartContext.Provider>

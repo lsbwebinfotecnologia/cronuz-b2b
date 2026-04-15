@@ -54,6 +54,10 @@ export default function LoginPage() {
         throw new Error('Código de 2 fatores inválido');
       }
 
+      if (data.user && data.user.role === 'CUSTOMER') {
+        throw new Error('Acesso restrito. Clientes devem acessar a loja b2b pelo portal exclusivo da distribuidora.');
+      }
+
       setToken(data.access_token, data.user);
       toast.success('Login aprovado. Redirecionando...');
       router.push('/');
