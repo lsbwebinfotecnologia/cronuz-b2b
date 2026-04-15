@@ -45,7 +45,7 @@ export default async function RootLayout({
   const tenant = headersList.get("x-tenant-id") || "cronuz";
 
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="pt-BR" translate="no" suppressHydrationWarning>
       <body
         suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} bg-white text-slate-900 dark:bg-background dark:text-foreground antialiased max-w-[100vw] overflow-x-hidden transition-colors duration-200 ${tenant === 'horus' ? 'theme-horus' : ''}`}
