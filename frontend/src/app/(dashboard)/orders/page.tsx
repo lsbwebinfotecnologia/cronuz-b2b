@@ -62,7 +62,7 @@ export default function OrdersPage() {
     const [searchTerm, setSearchTerm] = useState('');
     const [page, setPage] = useState(0);
     const [total, setTotal] = useState(0);
-    const [viewMode, setViewMode] = useState<'ALL' | 'NEW'>('ALL');
+    const [viewMode, setViewMode] = useState<'ALL' | 'PENDING' | 'COMPLETED' | 'NEW'>('ALL');
 
     // Dashboard metrics state
     const [metrics, setMetrics] = useState<any>(null);
@@ -106,8 +106,11 @@ export default function OrdersPage() {
             }
             if (viewMode === 'NEW') {
                 params.append('status', 'NEW');
+            } else if (viewMode === 'PENDING') {
+                params.append('status', 'PROCESSING,SENT_TO_HORUS,DISPATCH');
+            } else if (viewMode === 'COMPLETED') {
+                params.append('status', 'INVOICED');
             }
-            
             const token = getToken();
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
             const response = await fetch(`${apiUrl}/orders?${params.toString()}`, {
@@ -217,30 +220,18 @@ export default function OrdersPage() {
                     </div>
                 </div>
 
-                {/* Rank 5 Clientes */}
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
-                    <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
-                        <Users className="w-4 h-4 text-emerald-500" />
-                        Top 5 Clientes
-                    </h3>
-                    <div className="space-y-3">
-                        {metricsLoading ? (
-                            Array(3).fill(0).map((_, i) => <div key={i} className="h-8 bg-slate-50 dark:bg-slate-800 rounded animate-pulse"></div>)
-                        ) : metrics?.top_clients?.length > 0 ? (
-                            metrics.top_clients.map((c: any, i: number) => (
-                                <div key={c.id} className="flex justify-between items-center text-sm">
-                                    <div className="flex items-center gap-2 overflow-hidden">
-                                        <span className="text-slate-400 font-mono text-xs w-4">{i + 1}</span>
-                                        <span className="truncate font-medium text-slate-700 dark:text-slate-300">{c.fantasy_name || c.corporate_name}</span>
-                                    </div>
-                                    <span className="font-bold text-slate-900 dark:text-white shrink-0 ml-2">
-                                        R$ {(c.total_spent || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                    </span>
-                                </div>
-                            ))
-                        ) : (
-                            <div className="text-sm text-slate-400 italic">Sem vendas no período.</div>
-                        )}
+                {/* Pedidos Pendentes e Rascunhos (Substituindo o antigo bloco de 5 Clientes se desejado, mas o usuário pediu para consertar o Top 5 para Faturado. Como eu já consertei no backend, eu mostrarei os Pendentes aqui e deixo o Top Itens na 3ª coluna. Wait! Vou juntar Top Clientes e Itens em um layout melhor ou usar essa 2ª caixa para os Pendentes) */}
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-center">
+                    <div className="flex items-center gap-4">
+                        <div className="bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 p-4 rounded-full">
+                            <Clock className="w-8 h-8" />
+                        </div>
+                        <div>
+                            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Aguardando Faturamento</h3>
+                            <div className="text-3xl font-black text-slate-900 dark:text-white">
+                                {metricsLoading ? '...' : (metrics?.pending_count || 0)} pedidos
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -248,7 +239,7 @@ export default function OrdersPage() {
                 <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
                     <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
                         <Star className="w-4 h-4 text-amber-500" />
-                        Top 5 Itens Vendidos
+                        Top 5 Itens Vendidos (Faturados)
                     </h3>
                     <div className="space-y-3">
                         {metricsLoading ? (
@@ -283,12 +274,28 @@ export default function OrdersPage() {
                         Todos os Pedidos
                     </button>
                     <button
+                        onClick={() => { setViewMode('PENDING'); setPage(0); }}
+                        className={`pb-3 px-4 font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
+                            viewMode === 'PENDING' ? 'border-[var(--color-primary-base)] text-slate-900 dark:text-white' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                        }`}
+                    >
+                        Aguardando {metrics?.pending_count > 0 && <span className="bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded text-xs ml-1">{metrics.pending_count}</span>}
+                    </button>
+                    <button
+                        onClick={() => { setViewMode('COMPLETED'); setPage(0); }}
+                        className={`pb-3 px-4 font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
+                            viewMode === 'COMPLETED' ? 'border-[var(--color-primary-base)] text-slate-900 dark:text-white' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                        }`}
+                    >
+                        Concluídos e Faturados
+                    </button>
+                    <button
                         onClick={() => { setViewMode('NEW'); setPage(0); }}
                         className={`pb-3 px-4 font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
                             viewMode === 'NEW' ? 'border-[var(--color-primary-base)] text-slate-900 dark:text-white' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                         }`}
                     >
-                        Carrinhos e Rascunhos ({viewMode === 'NEW' ? total : ''})
+                        Rascunhos {metrics?.draft_count > 0 && <span className="bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded text-xs ml-1">{metrics.draft_count}</span>}
                     </button>
                 </div>
                 

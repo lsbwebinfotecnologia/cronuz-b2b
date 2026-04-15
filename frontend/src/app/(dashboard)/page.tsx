@@ -20,6 +20,10 @@ export default function DashboardPage() {
   const [crmTasks, setCrmTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMetrics, setLoadingMetrics] = useState(true);
+  const [filterMonth, setFilterMonth] = useState(() => {
+     const d = new Date();
+     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   const fetchRecentOrders = async () => {
     try {
@@ -45,8 +49,13 @@ export default function DashboardPage() {
       const token = getToken();
       if (!token) return; // Prevent fetch if no token
       
+      const [year, month] = filterMonth.split('-');
+      const lastDay = new Date(Number(year), Number(month), 0).getDate();
+      const startDate = `${filterMonth}-01`;
+      const endDate = `${filterMonth}-${lastDay}`;
+      
       const [resMetrics, resTasks] = await Promise.all([
-         fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics`, { headers: { 'Authorization': `Bearer ${token}` } }),
+         fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics?start_date=${startDate}&end_date=${endDate}`, { headers: { 'Authorization': `Bearer ${token}` } }),
          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/crm-tasks`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
       
@@ -66,60 +75,118 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchMetrics();
     fetchRecentOrders();
-  }, []);
+  }, [filterMonth]);
 
-  const displayStats = defaultStats.filter(stat => {
-     if (metrics?.uses_horus && stat.id === 'products') return false;
-     return true;
-  }).map(stat => {
-     if (!metrics) return stat;
-     
-     if (stat.id === 'products') return { ...stat, value: metrics.active_products.toString() };
-     if (stat.id === 'customers') return { ...stat, value: metrics.total_customers.toString() };
-     if (stat.id === 'orders') return { ...stat, value: metrics.active_orders.toString() };
-     if (stat.id === 'revenue') return { ...stat, value: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.total_revenue) };
-     
-     return stat;
-  });
+  const displayStats = [
+     // Always show Customers
+     { id: 'customers', name: 'Empresas Clientes', value: metrics?.total_customers?.toString() || '0', change: '', icon: Users, color: 'text-indigo-600' }
+  ];
+
+  if (metrics) {
+      if (metrics.module_orders) {
+          displayStats.push({ 
+              id: 'revenue', name: 'Total Faturado', 
+              value: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.total_revenue || 0), 
+              change: 'Pedidos', icon: TrendingUp, color: 'text-emerald-600' 
+          });
+          displayStats.push({ 
+              id: 'orders', name: 'Pedidos Pendentes (Mês)', 
+              value: metrics.active_orders?.toString() || '0', 
+              change: 'Aguard.', icon: ShoppingCart, color: 'text-amber-500' 
+          });
+      }
+      if (metrics.module_services) {
+          displayStats.push({ 
+              id: 'services', name: 'Serviços Faturados', 
+              value: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.service_metrics?.total_value || 0), 
+              change: 'O.S.', icon: Target, color: 'text-blue-500' 
+          });
+          displayStats.push({ 
+              id: 'services_pending', name: 'Serviços Pendentes', 
+              value: metrics.service_metrics?.pending?.toString() || '0', 
+              change: 'O.S.', icon: Clock, color: 'text-slate-500' 
+          });
+      }
+      if (metrics.module_financial) {
+          const rec = metrics.financial_metrics?.receivable || 0;
+          const pay = metrics.financial_metrics?.payable || 0;
+          const bal = rec - pay;
+          displayStats.push({ 
+              id: 'fin_balance', name: 'Balanço Financeiro (Mês)', 
+              value: '', 
+              change: 'Prev.', icon: ArrowUpRight, color: bal >= 0 ? 'text-green-600' : 'text-red-500',
+              customRender: () => (
+                 <div className="mt-2 space-y-1 w-full">
+                    <div className="flex justify-between items-center text-xs">
+                       <span className="text-slate-500">A Receber:</span>
+                       <span className="font-semibold text-green-600">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(rec)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                       <span className="text-slate-500">A Pagar:</span>
+                       <span className="font-semibold text-red-500">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(pay)}</span>
+                    </div>
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center mt-2">
+                       <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Saldo:</span>
+                       <span className={`font-bold text-base ${bal >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                           {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(bal)}
+                       </span>
+                    </div>
+                 </div>
+              )
+          } as any);
+      }
+  }
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white mb-2">Visão Geral</h1>
-        <p className="text-slate-500 dark:text-slate-400">Bem-vindo ao Cronuz. Acompanhe os indicadores da sua multi-empresa.</p>
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white mb-2">Visão Geral</h1>
+          <p className="text-slate-500 dark:text-slate-400">
+             {metrics?.uses_horus ? 'Bem-vindo ao B2B Horus. ' : 'Bem-vindo ao Cronuz. '}
+             Acompanhe os indicadores da sua multi-empresa.
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Período de Análise</label>
+          <input 
+            type="month" 
+            value={filterMonth}
+            onChange={(e) => setFilterMonth(e.target.value)}
+            className="border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+          />
+        </div>
       </div>
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         {displayStats.map((stat, i) => (
           <motion.div
-            key={stat.id}
+            key={`${stat.id}-${i}`}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1, duration: 0.4 }}
             className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 hover:bg-slate-50 shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900/40 dark:hover:bg-slate-900/60"
           >
             <div className="flex items-center justify-between mb-4">
-              <stat.icon className="h-5 w-5 text-[var(--color-primary-base)]" />
-              <span className="flex items-center text-xs font-medium text-[var(--color-secondary-base)] bg-[var(--color-secondary-base)]/10 px-2 py-1 rounded-full opacity-50">
+              <stat.icon className={`h-5 w-5 ${stat.color || 'text-[var(--color-primary-base)]'}`} />
+              <span className="flex items-center text-xs font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-full">
                 {stat.change}
-                <ArrowUpRight className="ml-1 h-3 w-3" />
               </span>
             </div>
             <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">{stat.name}</h3>
             {loadingMetrics ? (
                 <div className="h-8 w-24 bg-slate-200 dark:bg-slate-800 rounded animate-pulse mt-1"></div>
+            ) : stat.customRender ? (
+                stat.customRender()
             ) : (
                 <p className="text-2xl font-bold text-slate-900 dark:text-white">{stat.value}</p>
             )}
-            
-            <div className="absolute -right-4 -bottom-4 opacity-5 group-hover:opacity-10 transition-opacity">
-              <stat.icon className="h-24 w-24 text-[var(--color-primary-base)]" />
-            </div>
           </motion.div>
         ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className={`grid gap-6 ${(!metrics || metrics.module_orders) ? 'lg:grid-cols-2' : 'lg:grid-cols-1'}`}>
+        {(!metrics || metrics.module_orders) && (
         <motion.div 
            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-[300px]"
@@ -178,6 +245,7 @@ export default function DashboardPage() {
               )}
            </div>
         </motion.div>
+        )}
 
         <motion.div 
            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}

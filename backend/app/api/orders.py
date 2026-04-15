@@ -806,7 +806,9 @@ async def manual_sync_horus(
 
 @router.get("/metrics")
 def get_orders_metrics(
-    days: int = Query(7, ge=1, le=365),
+    days: int = Query(30, ge=1, le=365),
+    start_date: str = Query(None, description="ISO YYYY-MM-DD"),
+    end_date: str = Query(None, description="ISO YYYY-MM-DD"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -814,24 +816,32 @@ def get_orders_metrics(
     from datetime import datetime, timedelta
     from app.models.order import Order, OrderItem
     from app.models.customer import Customer
-    from app.models.product import Product
 
     if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
         raise HTTPException(status_code=403, detail="Acesso não autorizado")
 
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    if start_date and end_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            # add one day to end_date to make it inclusive
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            date_filter = Order.created_at.between(start_dt, end_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Datas inválidas")
+    else:
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        date_filter = Order.created_at >= cutoff_date
 
-    query = db.query(Order).filter(Order.created_at >= cutoff_date)
+    query = db.query(Order).filter(date_filter)
     
     if current_user.type == "SELLER":
         query = query.filter(Order.company_id == current_user.company_id)
     elif current_user.type == "AGENT":
         query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
 
-    # Filter out completely cancelled or cart (NEW) to avoid polluting revenue
-    query = query.filter(Order.status.notin_(["NEW", "CANCELLED"]))
-
-    orders_in_period = query.all()
+    # 1. Total Revenue and Top Items/Clients ONLY for INVOICED orders
+    invoiced_query = query.filter(Order.status == "INVOICED")
+    orders_in_period = invoiced_query.all()
 
     total_revenue = sum(o.total for o in orders_in_period)
     
@@ -879,7 +889,7 @@ def get_orders_metrics(
     # 3. Status Grouping
     status_counts = {}
     
-    status_query = db.query(Order.status, func.count(Order.id).label('count')).filter(Order.created_at >= cutoff_date)
+    status_query = db.query(Order.status, func.count(Order.id).label('count')).filter(date_filter)
     
     if current_user.type == "SELLER":
         status_query = status_query.filter(Order.company_id == current_user.company_id)
@@ -890,10 +900,15 @@ def get_orders_metrics(
     for st, count in status_agg:
         status_counts[st] = count
             
+    pending_count = sum(status_counts.get(st, 0) for st in ["PROCESSING", "SENT_TO_HORUS", "DISPATCH"])
+    draft_count = status_counts.get("NEW", 0)
+
     return {
         "period_days": days,
         "total_revenue": total_revenue,
         "top_clients": top_clients,
         "top_items": top_items,
-        "status_counts": status_counts
+        "status_counts": status_counts,
+        "pending_count": pending_count,
+        "draft_count": draft_count
     }

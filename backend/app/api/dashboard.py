@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+from datetime import datetime, timedelta
 from app.db.session import get_db
 from app.core.dependencies import get_current_user_optional
 from app.models.user import User
@@ -13,6 +15,8 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 @router.get("/metrics")
 def get_dashboard_metrics(
+    start_date: str = Query(None, description="ISO YYYY-MM-DD"),
+    end_date: str = Query(None, description="ISO YYYY-MM-DD"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_optional)
 ):
@@ -58,18 +62,44 @@ def get_dashboard_metrics(
             cust_query = cust_query.filter(Company.tenant_id == current_user.tenant_id)
     total_customers = cust_query.count()
 
-    # 3. Active orders
+    # Setup Date Filter for dynamically calculated metrics (Orders, Financial, Services)
+    if start_date and end_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Datas inválidas")
+    else:
+        # Default current month
+        now = datetime.now()
+        start_dt = datetime(now.year, now.month, 1)
+        if now.month == 12:
+            end_dt = datetime(now.year + 1, 1, 1)
+        else:
+            end_dt = datetime(now.year, now.month + 1, 1)
+
+    # 3. Orders By Status
     from app.models.order import Order
-    order_query = db.query(Order).filter(Order.status.in_(["NEW", "PROCESSING", "SENT_TO_HORUS"]))
+    order_query = db.query(Order.status, func.count(Order.id).label('count')).filter(Order.created_at >= start_dt, Order.created_at < end_dt)
+    
     if company_id:
         order_query = order_query.filter(Order.company_id == company_id)
     elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
-        order_query = order_query.join(Company, Order.company_id == Company.id)
-        if False:
-            order_query = order_query.filter(Company.module_horus_erp == True)
-        else:
-            order_query = order_query.filter(Company.tenant_id == current_user.tenant_id)
-    active_orders = order_query.count()
+        order_query = order_query.join(Company, Order.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+        
+    orders_grouped = order_query.group_by(Order.status).all()
+    orders_by_status = {st: count for st, count in orders_grouped}
+    
+    active_orders = sum(orders_by_status.get(st, 0) for st in ["NEW", "PROCESSING", "SENT_TO_HORUS", "DISPATCH"])
+    
+    invoiced_revenue = 0.0
+    revenue_query = db.query(func.sum(Order.total).label('rev')).filter(
+        Order.created_at >= start_dt, Order.created_at < end_dt, Order.status == "INVOICED"
+    )
+    if company_id:
+        revenue_query = revenue_query.filter(Order.company_id == company_id)
+    if revenue_result := revenue_query.scalar():
+        invoiced_revenue = float(revenue_result)
     
     # Check Integrations
     integrations = []
@@ -108,14 +138,50 @@ def get_dashboard_metrics(
     else:
         uses_horus = module_horus_erp
 
-    # 4. Total revenue (Mocked for now since payment/invoicing is not fully done)
-    total_revenue = 0.0
+    # 4. Financial Metrics (if module enabled)
+    financial_metrics = {"payable": 0.0, "receivable": 0.0}
+    if module_financial:
+        from app.models.financial import FinancialInstallment, FinancialTransaction
+        fin_query = db.query(FinancialTransaction.type, func.sum(FinancialInstallment.amount).label('total'))\
+            .join(FinancialInstallment, FinancialInstallment.transaction_id == FinancialTransaction.id)\
+            .filter(FinancialInstallment.due_date >= start_dt.date(), FinancialInstallment.due_date < end_dt.date(), FinancialInstallment.status != "CANCELLED")
+        
+        if company_id:
+            fin_query = fin_query.filter(FinancialTransaction.company_id == company_id)
+            
+        fin_agg = fin_query.group_by(FinancialTransaction.type).all()
+        for t_type, t_sum in fin_agg:
+            if t_type == "PAYABLE":
+                financial_metrics["payable"] = float(t_sum or 0)
+            elif t_type == "RECEIVABLE":
+                financial_metrics["receivable"] = float(t_sum or 0)
+
+    # 5. Service Metrics (if module enabled)
+    service_metrics = {"pending": 0, "completed": 0, "total_value": 0.0}
+    if module_services:
+        from app.models.service import ServiceOrder
+        svc_query = db.query(ServiceOrder.status, func.count(ServiceOrder.id).label('count'), func.sum(ServiceOrder.negotiated_value).label('val'))\
+            .filter(ServiceOrder.execution_date >= start_dt.date(), ServiceOrder.execution_date < end_dt.date())
+            
+        if company_id:
+            svc_query = svc_query.filter(ServiceOrder.company_id == company_id)
+            
+        svc_agg = svc_query.group_by(ServiceOrder.status).all()
+        for s_status, cnt, val in svc_agg:
+            if s_status == "Concluido":
+                service_metrics["completed"] += cnt
+                service_metrics["total_value"] += float(val or 0)
+            elif s_status in ["Pendente", "Em Execucao"]:
+                service_metrics["pending"] += cnt
 
     return {
         "active_products": active_products,
         "total_customers": total_customers,
         "active_orders": active_orders,
-        "total_revenue": total_revenue,
+        "orders_by_status": orders_by_status,
+        "total_revenue": invoiced_revenue,
+        "financial_metrics": financial_metrics,
+        "service_metrics": service_metrics,
         "uses_horus": uses_horus,
         "uses_bookinfo": uses_bookinfo,
         "module_b2b_native": module_b2b_native,
