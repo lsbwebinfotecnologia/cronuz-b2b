@@ -77,7 +77,7 @@ export default function DashboardPage() {
     fetchRecentOrders();
   }, [filterMonth]);
 
-  const displayStats = [
+  const displayStats: any[] = [
      // Always show Customers
      { id: 'customers', name: 'Empresas Clientes', value: metrics?.total_customers?.toString() || '0', change: '', icon: Users, color: 'text-indigo-600' }
   ];
