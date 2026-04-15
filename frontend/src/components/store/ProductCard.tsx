@@ -82,16 +82,16 @@ export function ProductCard({ product }: ProductProps) {
           />
           
           {/* Badges */}
-          {discountPercent > 0 && !isOutOfStock && (
+          {discountPercent > 0 && !isOutOfStock ? (
              <span className="absolute top-2 left-2 bg-rose-500 text-white text-[10px] font-bold px-2 py-1 rounded-lg">
                -{discountPercent}% OFF
              </span>
-          )}
-          {statusLabel !== 'DISPONÍVEL' && (
+          ) : null}
+          {statusLabel !== 'DISPONÍVEL' ? (
              <span className={`absolute ${!allowPurchase ? 'inset-0 bg-white/60 dark:bg-slate-950/60 flex items-center justify-center text-slate-800 dark:text-slate-200 backdrop-blur-[2px]' : 'bottom-2 right-2 bg-blue-500 text-white rounded-lg px-2 py-1 text-[10px]'} font-bold z-10`}>
                {statusLabel}
              </span>
-          )}
+          ) : null}
         </div>
 
         {/* Info */}
@@ -99,30 +99,30 @@ export function ProductCard({ product }: ProductProps) {
           <h4 className="font-bold text-sm text-slate-900 dark:text-white line-clamp-2 leading-tight group-hover:text-[var(--color-primary-base)] transition-colors">
             {product.name}
           </h4>
-          {product.ean_gtin && (
+          {product.ean_gtin ? (
              <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono mt-0.5">
                ISBN: {product.ean_gtin}
              </span>
-          )}
+          ) : null}
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-1 uppercase tracking-tight font-medium">
             {product.brand || 'Vários Autores'}
           </p>
-          {product.category?.name && (
+          {product.category?.name ? (
             <p className="text-[10px] text-slate-400 dark:text-slate-500 line-clamp-1 uppercase tracking-tight mt-0.5">
               {product.category.name}
             </p>
-          )}
+          ) : null}
           
            <div className="mt-4 flex flex-col mb-4">
               <div className="flex items-end gap-2">
                 <span className={`text-lg font-black ${isOutOfStock ? 'text-slate-400' : 'text-[var(--color-primary-base)] dark:text-indigo-400'}`}>
                   {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)}
                 </span>
-                {product.promotional_price > 0 && !isOutOfStock && (
+                {product.promotional_price > 0 && !isOutOfStock ? (
                   <span className="text-xs text-slate-400 line-through mb-1">
                     {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(product.base_price)}
                   </span>
-                )}
+                ) : null}
               </div>
               
               <span className={`text-xs font-semibold mt-1 ${isOutOfStock ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>

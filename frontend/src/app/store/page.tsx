@@ -138,11 +138,11 @@ export default function StoreHome() {
                               alt={banner.caption || `Banner ${idx + 1}`} 
                               className="w-full h-auto block object-cover" 
                            />
-                           {banner.link && (
+                           {banner.link ? (
                               <a href={banner.link} className="absolute inset-0 z-10">
                                  <span className="sr-only">Ver mais detalhes</span>
                               </a>
-                           )}
+                           ) : null}
                            <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent pointer-events-none"></div>
                         </div>
                      </SwiperSlide>
@@ -166,11 +166,11 @@ export default function StoreHome() {
                )}
                
                <div className="relative z-10 max-w-lg p-8 md:p-12">
-                 {(config.featured?.title || featuredProduct) && (
+                 {(config.featured?.title || featuredProduct) ? (
                      <span className="inline-block px-3 py-1 mb-4 text-xs font-bold uppercase tracking-wider bg-black/40 backdrop-blur-md rounded-full border border-white/10 text-white/90 shadow-xl">
                        {config.featured?.title || "Destaque Exclusivo"}
                      </span>
-                 )}
+                 ) : null}
                  
                  {featuredProduct ? (
                      <>

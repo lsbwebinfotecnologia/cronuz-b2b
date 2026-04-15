@@ -247,13 +247,16 @@ export function StoreHeader() {
       {/* Mobile Menu Overlay */}
       <AnimatePresence>
         {isMobileMenuOpen && (
-          <>
             <motion.div 
+              key="mobile-backdrop"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-40 md:hidden"
               onClick={() => setIsMobileMenuOpen(false)}
             />
+        )}
+        {isMobileMenuOpen && (
             <motion.div 
+              key="mobile-menu"
               initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="fixed inset-y-0 left-0 w-[280px] h-full h-[100dvh] min-h-[100dvh] max-h-[100dvh] bg-white shadow-2xl z-50 flex flex-col dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 md:hidden"
             >
@@ -340,7 +343,6 @@ export function StoreHeader() {
                 <ThemeToggle />
               </div>
             </motion.div>
-          </>
         )}
       </AnimatePresence>
     </header>

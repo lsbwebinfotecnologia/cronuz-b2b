@@ -58,34 +58,36 @@ export function CartDrawer() {
   return (
     <AnimatePresence>
       {isCartOpen && (
-        <>
-          {/* Backdrop */}
-          <motion.div 
-            initial={{ opacity: 0 }} 
-            animate={{ opacity: 1 }} 
-            exit={{ opacity: 0 }}
-            onClick={closeCart}
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 transition-opacity"
-          />
+        <motion.div 
+          key="backdrop"
+          initial={{ opacity: 0 }} 
+          animate={{ opacity: 1 }} 
+          exit={{ opacity: 0 }}
+          onClick={closeCart}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 transition-opacity"
+        />
+      )}
 
-          {/* Drawer Panel */}
-          <motion.div 
-            initial={{ x: '100%' }} 
-            animate={{ x: 0 }} 
-            exit={{ x: '100%' }}
-            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed inset-y-0 right-0 w-full md:w-[480px] bg-white dark:bg-slate-950 shadow-2xl z-50 flex flex-col border-l border-slate-200 dark:border-slate-800"
-          >
+      {/* Drawer Panel */}
+      {isCartOpen && (
+        <motion.div 
+          key="panel"
+          initial={{ x: '100%' }} 
+          animate={{ x: 0 }} 
+          exit={{ x: '100%' }}
+          transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+          className="fixed inset-y-0 right-0 w-full md:w-[480px] bg-white dark:bg-slate-950 shadow-2xl z-50 flex flex-col border-l border-slate-200 dark:border-slate-800"
+        >
             {/* Header */}
             <div className="flex items-center justify-between p-4 md:p-6 border-b border-slate-200 dark:border-slate-800 shrink-0 bg-slate-50/50 dark:bg-slate-900/50">
               <h2 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-3">
                 <ShoppingCart className="w-6 h-6 text-[var(--color-primary-base)]" /> 
                 Meu Carrinho
-                {totalItems > 0 && !orderComplete && (
+                {totalItems > 0 && !orderComplete ? (
                    <span className="bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-sm py-1 px-3 rounded-full">
                      {totalItems} itens
                    </span>
-                )}
+                ) : null}
               </h2>
               <button 
                 onClick={closeCart} 
@@ -158,7 +160,7 @@ export function CartDrawer() {
                               </h4>
                               <div className="text-[10px] text-slate-500 mb-2 flex items-center gap-2 flex-wrap leading-tight">
                                 <span>{item.brand || (item.category ? item.category.name : 'Vários Autores')}</span>
-                                {item.ean_gtin && <span className="text-slate-400">ISBN: {item.ean_gtin}</span>}
+                                {item.ean_gtin ? <span className="text-slate-400">ISBN: {item.ean_gtin}</span> : null}
                               </div>
                               <div className="text-xs text-slate-500 mb-3 flex items-center justify-between">
                                  {item.promotional_price && item.promotional_price > 0 && item.promotional_price < item.base_price ? (
@@ -233,7 +235,6 @@ export function CartDrawer() {
               )}
             </div>
           </motion.div>
-        </>
       )}
     </AnimatePresence>
   );
