@@ -93,13 +93,22 @@ def get_dashboard_metrics(
     active_orders = sum(orders_by_status.get(st, 0) for st in ["NEW", "PROCESSING", "SENT_TO_HORUS", "DISPATCH"])
     
     invoiced_revenue = 0.0
-    revenue_query = db.query(func.sum(Order.total).label('rev')).filter(
-        Order.created_at >= start_dt, Order.created_at < end_dt, Order.status == "INVOICED"
+    pending_revenue = 0.0
+    
+    revenue_query = db.query(Order.status, func.sum(Order.total).label('rev')).filter(
+        Order.created_at >= start_dt, Order.created_at < end_dt
     )
     if company_id:
         revenue_query = revenue_query.filter(Order.company_id == company_id)
-    if revenue_result := revenue_query.scalar():
-        invoiced_revenue = float(revenue_result)
+    elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
+        revenue_query = revenue_query.join(Company, Order.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+        
+    revenue_grouped = revenue_query.group_by(Order.status).all()
+    for st, rev in revenue_grouped:
+        if st == "INVOICED":
+            invoiced_revenue = float(rev or 0)
+        elif st in ["NEW", "PROCESSING", "SENT_TO_HORUS", "DISPATCH"]:
+            pending_revenue += float(rev or 0)
     
     # Check Integrations
     integrations = []
@@ -139,25 +148,38 @@ def get_dashboard_metrics(
         uses_horus = module_horus_erp
 
     # 4. Financial Metrics (if module enabled)
-    financial_metrics = {"payable": 0.0, "receivable": 0.0}
+    financial_metrics = {
+        "payable": {"paid": 0.0, "pending": 0.0},
+        "receivable": {"paid": 0.0, "pending": 0.0}
+    }
     if module_financial:
         from app.models.financial import FinancialInstallment, FinancialTransaction
-        fin_query = db.query(FinancialTransaction.type, func.sum(FinancialInstallment.amount).label('total'))\
+        fin_query = db.query(FinancialTransaction.type, FinancialInstallment.status, func.sum(FinancialInstallment.amount).label('total'))\
             .join(FinancialInstallment, FinancialInstallment.transaction_id == FinancialTransaction.id)\
             .filter(FinancialInstallment.due_date >= start_dt.date(), FinancialInstallment.due_date < end_dt.date(), FinancialInstallment.status != "CANCELLED")
         
         if company_id:
             fin_query = fin_query.filter(FinancialTransaction.company_id == company_id)
             
-        fin_agg = fin_query.group_by(FinancialTransaction.type).all()
-        for t_type, t_sum in fin_agg:
+        fin_agg = fin_query.group_by(FinancialTransaction.type, FinancialInstallment.status).all()
+        for t_type, i_status, t_sum in fin_agg:
+            val = float(t_sum or 0)
             if t_type == "PAYABLE":
-                financial_metrics["payable"] = float(t_sum or 0)
+                if i_status == "PAID":
+                    financial_metrics["payable"]["paid"] += val
+                elif i_status in ["PENDING", "OVERDUE"]:
+                    financial_metrics["payable"]["pending"] += val
             elif t_type == "RECEIVABLE":
-                financial_metrics["receivable"] = float(t_sum or 0)
+                if i_status == "PAID":
+                    financial_metrics["receivable"]["paid"] += val
+                elif i_status in ["PENDING", "OVERDUE"]:
+                    financial_metrics["receivable"]["pending"] += val
 
     # 5. Service Metrics (if module enabled)
-    service_metrics = {"pending": 0, "completed": 0, "total_value": 0.0}
+    service_metrics = {
+        "pending": {"count": 0, "value": 0.0},
+        "completed": {"count": 0, "value": 0.0}
+    }
     if module_services:
         from app.models.service import ServiceOrder
         svc_query = db.query(ServiceOrder.status, func.count(ServiceOrder.id).label('count'), func.sum(ServiceOrder.negotiated_value).label('val'))\
@@ -168,18 +190,23 @@ def get_dashboard_metrics(
             
         svc_agg = svc_query.group_by(ServiceOrder.status).all()
         for s_status, cnt, val in svc_agg:
+            v = float(val or 0)
             if s_status == "Concluido":
-                service_metrics["completed"] += cnt
-                service_metrics["total_value"] += float(val or 0)
+                service_metrics["completed"]["count"] += cnt
+                service_metrics["completed"]["value"] += v
             elif s_status in ["Pendente", "Em Execucao"]:
-                service_metrics["pending"] += cnt
+                service_metrics["pending"]["count"] += cnt
+                service_metrics["pending"]["value"] += v
 
     return {
         "active_products": active_products,
         "total_customers": total_customers,
         "active_orders": active_orders,
         "orders_by_status": orders_by_status,
-        "total_revenue": invoiced_revenue,
+        "orders_revenue": {
+            "invoiced": invoiced_revenue,
+            "pending": pending_revenue
+        },
         "financial_metrics": financial_metrics,
         "service_metrics": service_metrics,
         "uses_horus": uses_horus,

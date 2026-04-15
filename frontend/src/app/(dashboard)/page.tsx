@@ -77,65 +77,7 @@ export default function DashboardPage() {
     fetchRecentOrders();
   }, [filterMonth]);
 
-  const displayStats: any[] = [
-     // Always show Customers
-     { id: 'customers', name: 'Empresas Clientes', value: metrics?.total_customers?.toString() || '0', change: '', icon: Users, color: 'text-indigo-600' }
-  ];
-
-  if (metrics) {
-      if (metrics.module_orders) {
-          displayStats.push({ 
-              id: 'revenue', name: 'Total Faturado', 
-              value: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.total_revenue || 0), 
-              change: 'Pedidos', icon: TrendingUp, color: 'text-emerald-600' 
-          });
-          displayStats.push({ 
-              id: 'orders', name: 'Pedidos Pendentes (Mês)', 
-              value: metrics.active_orders?.toString() || '0', 
-              change: 'Aguard.', icon: ShoppingCart, color: 'text-amber-500' 
-          });
-      }
-      if (metrics.module_services) {
-          displayStats.push({ 
-              id: 'services', name: 'Serviços Faturados', 
-              value: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.service_metrics?.total_value || 0), 
-              change: 'O.S.', icon: Target, color: 'text-blue-500' 
-          });
-          displayStats.push({ 
-              id: 'services_pending', name: 'Serviços Pendentes', 
-              value: metrics.service_metrics?.pending?.toString() || '0', 
-              change: 'O.S.', icon: Clock, color: 'text-slate-500' 
-          });
-      }
-      if (metrics.module_financial) {
-          const rec = metrics.financial_metrics?.receivable || 0;
-          const pay = metrics.financial_metrics?.payable || 0;
-          const bal = rec - pay;
-          displayStats.push({ 
-              id: 'fin_balance', name: 'Balanço Financeiro (Mês)', 
-              value: '', 
-              change: 'Prev.', icon: ArrowUpRight, color: bal >= 0 ? 'text-green-600' : 'text-red-500',
-              customRender: () => (
-                 <div className="mt-2 space-y-1 w-full">
-                    <div className="flex justify-between items-center text-xs">
-                       <span className="text-slate-500">A Receber:</span>
-                       <span className="font-semibold text-green-600">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(rec)}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-xs">
-                       <span className="text-slate-500">A Pagar:</span>
-                       <span className="font-semibold text-red-500">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(pay)}</span>
-                    </div>
-                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center mt-2">
-                       <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Saldo:</span>
-                       <span className={`font-bold text-base ${bal >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                           {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(bal)}
-                       </span>
-                    </div>
-                 </div>
-              )
-          } as any);
-      }
-  }
+  const formatBRL = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
   return (
     <div className="space-y-8">
@@ -158,32 +100,167 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Basic Stats Row (Customers & Products) */}
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {displayStats.map((stat, i) => (
           <motion.div
-            key={`${stat.id}-${i}`}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1, duration: 0.4 }}
+            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.4 }}
             className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 hover:bg-slate-50 shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900/40 dark:hover:bg-slate-900/60"
           >
             <div className="flex items-center justify-between mb-4">
-              <stat.icon className={`h-5 w-5 ${stat.color || 'text-[var(--color-primary-base)]'}`} />
-              <span className="flex items-center text-xs font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-full">
-                {stat.change}
-              </span>
+              <Users className="h-5 w-5 text-indigo-600" />
             </div>
-            <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">{stat.name}</h3>
-            {loadingMetrics ? (
-                <div className="h-8 w-24 bg-slate-200 dark:bg-slate-800 rounded animate-pulse mt-1"></div>
-            ) : stat.customRender ? (
-                stat.customRender()
-            ) : (
-                <p className="text-2xl font-bold text-slate-900 dark:text-white">{stat.value}</p>
+            <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Empresas Clientes</h3>
+            {loadingMetrics ? <div className="h-8 w-24 bg-slate-200 dark:bg-slate-800 rounded animate-pulse mt-1"></div> : (
+                <p className="text-2xl font-bold text-slate-900 dark:text-white">{metrics?.total_customers?.toString() || '0'}</p>
             )}
           </motion.div>
-        ))}
+          
+          {metrics && metrics.module_products && (
+             <motion.div
+               initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2, duration: 0.4 }}
+               className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 hover:bg-slate-50 shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900/40 dark:hover:bg-slate-900/60"
+             >
+               <div className="flex items-center justify-between mb-4">
+                 <Package className="h-5 w-5 text-indigo-400" />
+               </div>
+               <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Produtos Cadastrados</h3>
+               {loadingMetrics ? <div className="h-8 w-24 bg-slate-200 dark:bg-slate-800 rounded animate-pulse mt-1"></div> : (
+                   <p className="text-2xl font-bold text-slate-900 dark:text-white">{metrics?.active_products?.toString() || '0'}</p>
+               )}
+             </motion.div>
+          )}
       </div>
+
+      {/* Orders Modulo */}
+      {metrics && metrics.module_orders && (
+         <div className="mt-8">
+            <h2 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2"><ShoppingCart className="w-5 h-5 text-[var(--color-primary-base)]" /> B2B e Pedidos</h2>
+            <div className="grid gap-6 sm:grid-cols-2">
+               {/* Effectivo */}
+               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40">
+                  <h3 className="text-sm font-medium text-slate-500 mb-1 uppercase">Efetivado (Faturados)</h3>
+                  {loadingMetrics ? <div className="h-10 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
+                     <div className="flex items-center justify-between">
+                         <p className="text-3xl font-bold text-emerald-600">{formatBRL(metrics.orders_revenue?.invoiced || 0)}</p>
+                     </div>
+                  )}
+               </motion.div>
+
+               {/* Previsao */}
+               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40">
+                  <h3 className="text-sm font-medium text-slate-500 mb-1 uppercase">Previsão (Pendentes / Aguard. Faturamento)</h3>
+                  {loadingMetrics ? <div className="h-10 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
+                     <div className="flex items-center justify-between">
+                         <p className="text-3xl font-bold text-blue-500">{formatBRL(metrics.orders_revenue?.pending || 0)}</p>
+                         <p className="text-sm text-slate-500">{metrics.active_orders || 0} pedidos</p>
+                     </div>
+                  )}
+               </motion.div>
+            </div>
+         </div>
+      )}
+
+      {/* Services Modulo */}
+      {metrics && metrics.module_services && (
+         <div className="mt-8">
+            <h2 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2"><Target className="w-5 h-5 text-indigo-500" /> Ordens de Serviço</h2>
+            <div className="grid gap-6 sm:grid-cols-2">
+               {/* Effectivo */}
+               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40">
+                  <h3 className="text-sm font-medium text-slate-500 mb-1 uppercase">Efetivado (Concluídas)</h3>
+                  {loadingMetrics ? <div className="h-10 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
+                     <div className="flex items-center justify-between">
+                         <p className="text-3xl font-bold text-emerald-600">{formatBRL(metrics.service_metrics?.completed?.value || 0)}</p>
+                         <p className="text-sm text-slate-500">{metrics.service_metrics?.completed?.count || 0} OS</p>
+                     </div>
+                  )}
+               </motion.div>
+
+               {/* Previsao */}
+               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40">
+                  <h3 className="text-sm font-medium text-slate-500 mb-1 uppercase">Previsão (Pendentes / Em Execução)</h3>
+                  {loadingMetrics ? <div className="h-10 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
+                     <div className="flex items-center justify-between">
+                         <p className="text-3xl font-bold text-amber-500">{formatBRL(metrics.service_metrics?.pending?.value || 0)}</p>
+                         <p className="text-sm text-slate-500">{metrics.service_metrics?.pending?.count || 0} OS</p>
+                     </div>
+                  )}
+               </motion.div>
+            </div>
+         </div>
+      )}
+
+       {/* Financial Modulo */}
+      {metrics && metrics.module_financial && (
+         <div className="mt-8">
+            <h2 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-green-500" /> Financeiro e Caixa</h2>
+            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+               {/* Receitas */}
+               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40 shadow-sm flex flex-col gap-4">
+                  <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-2">
+                     <h3 className="text-sm font-bold text-slate-900 dark:text-white uppercase">Entradas (Receitas)</h3>
+                     <ArrowUpRight className="w-4 h-4 text-green-500" />
+                  </div>
+                  {loadingMetrics ? <div className="h-16 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
+                     <>
+                        <div className="flex justify-between items-end">
+                           <span className="text-xs text-slate-500">Realizado (Recebido)</span>
+                           <span className="font-bold text-green-600 text-lg">{formatBRL(metrics.financial_metrics?.receivable?.paid || 0)}</span>
+                        </div>
+                        <div className="flex justify-between items-end">
+                           <span className="text-xs text-slate-500">Previsto (A Receber)</span>
+                           <span className="font-semibold text-slate-700 dark:text-slate-300">{formatBRL(metrics.financial_metrics?.receivable?.pending || 0)}</span>
+                        </div>
+                     </>
+                  )}
+               </motion.div>
+
+               {/* Despesas */}
+               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40 shadow-sm flex flex-col gap-4">
+                  <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-2">
+                     <h3 className="text-sm font-bold text-slate-900 dark:text-white uppercase">Saídas (Despesas)</h3>
+                     <ArrowUpRight className="w-4 h-4 text-red-500 rotate-90" />
+                  </div>
+                  {loadingMetrics ? <div className="h-16 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
+                     <>
+                        <div className="flex justify-between items-end">
+                           <span className="text-xs text-slate-500">Realizado (Pago)</span>
+                           <span className="font-bold text-red-500 text-lg">{formatBRL(metrics.financial_metrics?.payable?.paid || 0)}</span>
+                        </div>
+                        <div className="flex justify-between items-end">
+                           <span className="text-xs text-slate-500">Previsto (A Pagar)</span>
+                           <span className="font-semibold text-slate-700 dark:text-slate-300">{formatBRL(metrics.financial_metrics?.payable?.pending || 0)}</span>
+                        </div>
+                     </>
+                  )}
+               </motion.div>
+
+               {/* Saldo Líquido */}
+               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40 shadow-sm flex flex-col gap-4">
+                  <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-2">
+                     <h3 className="text-sm font-bold text-slate-900 dark:text-white uppercase">Balanço Líquido</h3>
+                     <div className="w-4 h-4 rounded-full bg-slate-200 flex items-center justify-center font-bold text-[10px] text-slate-600">Σ</div>
+                  </div>
+                  {loadingMetrics ? <div className="h-16 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (() => {
+                      const netRealizado = (metrics.financial_metrics?.receivable?.paid || 0) - (metrics.financial_metrics?.payable?.paid || 0);
+                      const netPrevisto = (metrics.financial_metrics?.receivable?.pending || 0) - (metrics.financial_metrics?.payable?.pending || 0);
+                      return (
+                     <>
+                        <div className="flex justify-between items-end">
+                           <span className="text-xs text-slate-500">Saldo Atual (Efetivado)</span>
+                           <span className={`font-black text-xl ${netRealizado >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatBRL(netRealizado)}</span>
+                        </div>
+                        <div className="flex justify-between items-end">
+                           <span className="text-xs text-slate-500">Saldo Futuro (Previsto)</span>
+                           <span className={`font-bold ${netPrevisto >= 0 ? 'text-green-600' : 'text-red-500'}`}>{formatBRL(netPrevisto)}</span>
+                        </div>
+                     </>
+                     )
+                  })()}
+               </motion.div>
+            </div>
+         </div>
+      )}
 
       <div className={`grid gap-6 ${(!metrics || metrics.module_orders) ? 'lg:grid-cols-2' : 'lg:grid-cols-1'}`}>
         {(!metrics || metrics.module_orders) && (
