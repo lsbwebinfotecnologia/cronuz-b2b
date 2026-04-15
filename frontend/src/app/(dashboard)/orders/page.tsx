@@ -220,18 +220,30 @@ export default function OrdersPage() {
                     </div>
                 </div>
 
-                {/* Pedidos Pendentes e Rascunhos (Substituindo o antigo bloco de 5 Clientes se desejado, mas o usuário pediu para consertar o Top 5 para Faturado. Como eu já consertei no backend, eu mostrarei os Pendentes aqui e deixo o Top Itens na 3ª coluna. Wait! Vou juntar Top Clientes e Itens em um layout melhor ou usar essa 2ª caixa para os Pendentes) */}
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-center">
-                    <div className="flex items-center gap-4">
-                        <div className="bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 p-4 rounded-full">
-                            <Clock className="w-8 h-8" />
-                        </div>
-                        <div>
-                            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Aguardando Faturamento</h3>
-                            <div className="text-3xl font-black text-slate-900 dark:text-white">
-                                {metricsLoading ? '...' : (metrics?.pending_count || 0)} pedidos
-                            </div>
-                        </div>
+                {/* Rank 5 Clientes */}
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                    <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
+                        <Users className="w-4 h-4 text-emerald-500" />
+                        Top 5 Clientes (Faturados)
+                    </h3>
+                    <div className="space-y-3">
+                        {metricsLoading ? (
+                            Array(3).fill(0).map((_, i) => <div key={i} className="h-8 bg-slate-50 dark:bg-slate-800 rounded animate-pulse"></div>)
+                        ) : metrics?.top_clients?.length > 0 ? (
+                            metrics.top_clients.map((c: any, i: number) => (
+                                <div key={c.id} className="flex justify-between items-center text-sm">
+                                    <div className="flex items-center gap-2 overflow-hidden">
+                                        <span className="text-slate-400 font-mono text-xs w-4">{i + 1}</span>
+                                        <span className="truncate font-medium text-slate-700 dark:text-slate-300">{c.fantasy_name || c.corporate_name}</span>
+                                    </div>
+                                    <span className="font-bold text-slate-900 dark:text-white shrink-0 ml-2">
+                                        R$ {(c.total_spent || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                    </span>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="text-sm text-slate-400 italic">Sem vendas no período.</div>
+                        )}
                     </div>
                 </div>
 
