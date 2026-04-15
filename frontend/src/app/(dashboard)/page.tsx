@@ -55,7 +55,7 @@ export default function DashboardPage() {
       const endDate = `${filterMonth}-${lastDay}`;
       
       const [resMetrics, resTasks] = await Promise.all([
-         fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics?start_date=${startDate}&end_date=${endDate}`, { headers: { 'Authorization': `Bearer ${token}` } }),
+         fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics?start_date=${startDate}&end_date=${endDate}&t=${new Date().getTime()}`, { headers: { 'Authorization': `Bearer ${token}` } }),
          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/crm-tasks`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
       
