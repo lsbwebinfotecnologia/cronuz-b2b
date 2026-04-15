@@ -222,19 +222,19 @@ export default function CheckoutPage() {
                                     </div>
                                     <div className="flex items-center justify-between text-sm">
                                        <div className="flex flex-col">
-                                          {item.promotional_price && item.promotional_price > 0 && item.promotional_price < item.base_price ? (
+                                          {item.promotional_price && item.promotional_price > 0 && item.promotional_price < (item.base_price || 0) ? (
                                               <>
-                                                <span className="line-through text-[10px] text-slate-400">{item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(item.base_price)}</span>
-                                                <span className="text-emerald-600 font-medium">{item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)}</span>
+                                                <span className="line-through text-[10px] text-slate-400">{item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(item.base_price || 0)}</span>
+                                                <span className="text-emerald-600 font-medium">{item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price || 0)}</span>
                                               </>
                                           ) : (
                                               <span className="text-slate-600 dark:text-slate-400">
-                                                {item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price)}
+                                                {item.quantity}x {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price || 0)}
                                               </span>
                                           )}
                                        </div>
                                        <span className="font-bold text-slate-900 dark:text-white text-base">
-                                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(price * item.quantity)}
+                                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((price || 0) * item.quantity)}
                                        </span>
                                     </div>
                                     {(() => {
@@ -285,7 +285,7 @@ export default function CheckoutPage() {
                    <div className="space-y-4 mb-8">
                        <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
                            <span>Subtotal</span>
-                           <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotal)}</span>
+                           <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotal || 0)}</span>
                        </div>
                        <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
                            <span className="flex items-center gap-2"><Truck className="w-4 h-4"/> Frete</span>
@@ -302,7 +302,7 @@ export default function CheckoutPage() {
                        <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
                            <span className="text-lg font-bold text-slate-900 dark:text-white">Total Geral</span>
                            <span className="text-2xl font-black text-[var(--color-primary-base)]">
-                               {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotal)}
+                               {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotal || 0)}
                            </span>
                        </div>
                    </div>

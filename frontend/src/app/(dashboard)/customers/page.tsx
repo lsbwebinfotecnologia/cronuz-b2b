@@ -129,7 +129,7 @@ export default function CustomersPage() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
         <input
           type="text"
-          placeholder="Buscar empresas por nome ou CNPJ..."
+          placeholder="Buscar empresas por ID, Nome ou CNPJ..."
           className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all shadow-sm dark:bg-slate-800/50 dark:border-slate-700 dark:text-white"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -184,6 +184,7 @@ export default function CustomersPage() {
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-slate-50 text-slate-500 font-medium dark:bg-slate-950/50 dark:text-slate-400">
               <tr>
+                <th className="px-6 py-4 w-16">ID</th>
                 <th className="px-6 py-4">Empresa</th>
                 <th className="px-6 py-4">Última Compra</th>
                 <th className="px-6 py-4 text-right">Créditos / Débitos</th>
@@ -213,6 +214,9 @@ export default function CustomersPage() {
                     key={customer.id} 
                     className="hover:bg-slate-50 dark:hover:bg-slate-800/20 transition-colors"
                   >
+                    <td className="px-6 py-4 text-slate-500 font-mono text-sm">
+                      #{customer.id}
+                    </td>
                     <td className="px-6 py-4">
                       <Link href={`/customers/${customer.id}`} className="block group w-max">
                         <div className="font-medium text-slate-900 dark:text-slate-200 group-hover:text-[var(--color-primary-base)] transition-colors">

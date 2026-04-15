@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye } from 'lucide-react';
+import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
@@ -18,9 +18,11 @@ export default function ServiceOrdersPage() {
     
     const currentDate = new Date();
     const currentYear = currentDate.getFullYear();
-    const currentMonth = String(currentDate.getMonth() + 1).padStart(2, '0');
-    const [monthFilter, setMonthFilter] = useState<string>(new Date().toISOString().slice(0, 7)); // YYYY-MM
+    const currentMonthStr = currentDate.toISOString().slice(0, 7);
+    const [startDate, setStartDate] = useState<string>(`${currentMonthStr}-01`);
+    const [endDate, setEndDate] = useState<string>(new Date(currentYear, currentDate.getMonth() + 1, 0).toISOString().split('T')[0]);
     const [statusFilter, setStatusFilter] = useState<string>('Ativas'); // Changed to only show Ativas by default
+    const [customerFilter, setCustomerFilter] = useState<string>('');
     const [totalExpected, setTotalExpected] = useState(0);
     const [totalCompleted, setTotalCompleted] = useState(0);
     const [totalCancelled, setTotalCancelled] = useState(0);
@@ -82,7 +84,7 @@ export default function ServiceOrdersPage() {
 
     useEffect(() => {
         fetchOrders();
-    }, [page, monthFilter]);
+    }, [page, startDate, endDate, customerFilter]);
 
     useEffect(() => {
         fetchAuxData();
@@ -91,13 +93,15 @@ export default function ServiceOrdersPage() {
     const fetchOrders = async () => {
         setLoading(true);
         try {
-            let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders?skip=${(page-1)*50}&limit=50&search=${search}`;
-            if (monthFilter) {
-                const year = parseInt(monthFilter.split('-')[0]);
-                const month = parseInt(monthFilter.split('-')[1]);
-                const start_date = `${year}-${String(month).padStart(2, '0')}-01`;
-                const end_date = `${year}-${String(month).padStart(2, '0')}-${new Date(year, month, 0).getDate()}`;
-                url += `&start_date=${start_date}&end_date=${end_date}`;
+            let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders?skip=${(page-1)*50}&limit=50`;
+            if (search) url += `&search=${search}`;
+            if (customerFilter) url += `&customer_id=${customerFilter}`;
+            if (startDate && endDate) {
+                url += `&start_date=${startDate}&end_date=${endDate}`;
+            } else if (startDate) {
+                url += `&start_date=${startDate}`;
+            } else if (endDate) {
+                url += `&end_date=${endDate}`;
             }
             const res = await fetch(url, {
                 headers: { 'Authorization': `Bearer ${getToken()}` }
@@ -223,6 +227,25 @@ export default function ServiceOrdersPage() {
         }
     };
 
+    const handleDeleteOrder = async (orderId: number) => {
+        if (!window.confirm(`Atenção: Tem certeza que deseja excluir permanentemente a O.S #${orderId}? A ação é irreversível.`)) return;
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/${orderId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            });
+            if (res.ok) {
+                toast.success('O.S excluída com sucesso.');
+                fetchOrders();
+            } else {
+                const error = await res.json();
+                toast.error(error.detail || 'Erro ao excluir O.S.');
+            }
+        } catch (e) {
+            toast.error('Erro de conexão ao excluir.');
+        }
+    };
+
     const [selectedOrders, setSelectedOrders] = useState<number[]>([]);
     
     const handleBulkStatus = async (newStatus: string) => {
@@ -238,6 +261,25 @@ export default function ServiceOrdersPage() {
                 fetchOrders();
             } else {
                 toast.error('Erro ao atualizar lote.');
+            }
+        } catch (e) { toast.error('Servidor offline'); }
+    };
+
+    const handleBulkDelete = async () => {
+        if (!window.confirm(`Atenção: Tem certeza que deseja EXCLUIR PERMANENTEMENTE as ${selectedOrders.length} O.S selecionadas? A ação é irreversível.`)) return;
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/bulk/delete`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+                body: JSON.stringify({ order_ids: selectedOrders })
+            });
+            if (res.ok) {
+                toast.success(`Lote de ${selectedOrders.length} O.S excluído com sucesso!`);
+                setSelectedOrders([]);
+                fetchOrders();
+            } else {
+                const error = await res.json();
+                toast.error(error.detail || 'Erro ao excluir lote de O.S.');
             }
         } catch (e) { toast.error('Servidor offline'); }
     };
@@ -582,13 +624,22 @@ export default function ServiceOrdersPage() {
                 {/* Linha Superior: Filtros */}
                 <div className="flex flex-wrap items-center gap-5 w-full">
                     <div className="flex items-center gap-3 min-w-fit">
-                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Competência:</label>
-                        <input 
-                            type="month" 
-                            value={monthFilter}
-                            onChange={(e) => setMonthFilter(e.target.value)}
-                            className="px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
-                        />
+                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Período:</label>
+                        <div className="flex items-center gap-2">
+                           <input 
+                               type="date" 
+                               value={startDate}
+                               onChange={(e) => setStartDate(e.target.value)}
+                               className="px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
+                           />
+                           <span className="text-slate-400 text-xs">até</span>
+                           <input 
+                               type="date" 
+                               value={endDate}
+                               onChange={(e) => setEndDate(e.target.value)}
+                               className="px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
+                           />
+                        </div>
                     </div>
                     
                     <div className="flex items-center gap-3 min-w-fit">
@@ -599,8 +650,35 @@ export default function ServiceOrdersPage() {
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && fetchOrders()}
-                            className="px-4 py-2 w-32 md:w-auto border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
+                            className="px-4 py-2 w-28 md:w-auto border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
                         />
+                    </div>
+
+                    <div className="flex items-center gap-3 min-w-fit relative">
+                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Cliente:</label>
+                        <input
+                            type="text"
+                            list="customers-list"
+                            placeholder="Todos os Clientes..."
+                            value={customerFilter}
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                setCustomerFilter(val);
+                                // if empty, trigger load all immediately
+                                if (!val) fetchOrders();
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    fetchOrders();
+                                }
+                            }}
+                            className="px-4 py-2 w-48 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
+                        />
+                        <datalist id="customers-list">
+                            {customers.map(c => (
+                                <option key={c.id} value={c.id.toString()}>{c.name}</option>
+                            ))}
+                        </datalist>
                     </div>
 
                     <div className="flex items-center gap-3 min-w-fit md:ml-auto">
@@ -657,7 +735,11 @@ export default function ServiceOrdersPage() {
                             <select 
                                 onChange={(e) => { 
                                     if(e.target.value) {
-                                        handleBulkStatus(e.target.value);
+                                        if (e.target.value === 'delete') {
+                                            handleBulkDelete();
+                                        } else {
+                                            handleBulkStatus(e.target.value);
+                                        }
                                         e.target.value = '';
                                     }
                                 }}
@@ -667,6 +749,7 @@ export default function ServiceOrdersPage() {
                                 <option value="Em Execucao">Em Execução</option>
                                 <option value="Concluido">Concluir Lote</option>
                                 <option value="Cancelado">Cancelar Lote</option>
+                                <option value="delete">Excluir Lote (Não Faturadas)</option>
                             </select>
                         </div>
                         
@@ -925,10 +1008,19 @@ export default function ServiceOrdersPage() {
                                                     {order.status_nfse === 'Nao Emitida' && order.status !== 'Cancelado' && order.status !== 'Pendente' && (
                                                         <button 
                                                             onClick={() => handleCancelLocal(order.id)}
-                                                            className="p-2 bg-rose-100 hover:bg-rose-200 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400 font-bold rounded-lg transition"
+                                                            className="p-2 bg-amber-100 hover:bg-amber-200 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 font-bold rounded-lg transition"
                                                             title="Cancelar O.S do Sistema"
                                                         >
                                                             <X className="w-4 h-4"/>
+                                                        </button>
+                                                    )}
+                                                    {order.status_nfse === 'Nao Emitida' && (
+                                                        <button 
+                                                            onClick={() => handleDeleteOrder(order.id)}
+                                                            className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition ml-2"
+                                                            title="Excluir O.S."
+                                                        >
+                                                            <Trash2 className="w-4 h-4"/>
                                                         </button>
                                                     )}
                                                 </div>

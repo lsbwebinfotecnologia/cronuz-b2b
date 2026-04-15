@@ -48,7 +48,8 @@ async def create_pdv_order(
         type_order=payload.type_order or "V",
         subtotal=sum([i.quantity * i.unit_price for i in payload.items]),
         discount=payload.discount_amount,
-        total=payload.total_amount
+        total=payload.total_amount,
+        confirmed_at=datetime.utcnow()
     )
     db.add(order)
     db.commit()

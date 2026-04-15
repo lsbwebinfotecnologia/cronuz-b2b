@@ -501,7 +501,7 @@ def _get_or_create_cart(db: Session, company_id: int, customer_document: str) ->
         Order.company_id == company_id,
         Order.customer_id == customer.id,
         Order.status == "NEW"
-    ).first()
+    ).order_by(Order.created_at.desc()).first()
     
     if not order:
         order = Order(
@@ -593,7 +593,7 @@ def add_or_update_cart_item(
     # Recalculate totals
     subtotal = sum(i.total_price for i in cart.items)
     cart.subtotal = subtotal
-    cart.total = subtotal - cart.discount
+    cart.total = subtotal - (cart.discount or 0.0)
     db.commit()
     db.refresh(cart)
     
@@ -623,7 +623,7 @@ def remove_cart_item(
     # Recalculate totals
     subtotal = sum(i.total_price for i in cart.items)
     cart.subtotal = subtotal
-    cart.total = subtotal - cart.discount
+    cart.total = subtotal - (cart.discount or 0.0)
     db.commit()
     db.refresh(cart)
     
@@ -933,6 +933,8 @@ async def checkout_cart(
                 
             cart.horus_pedido_venda = str(horus_ped_venda).strip() if horus_ped_venda else None
             cart.status = "SENT_TO_HORUS"
+            from datetime import datetime
+            cart.confirmed_at = datetime.utcnow()
             db.commit()
             
             # Generate Financial Transactions
@@ -958,6 +960,8 @@ async def checkout_cart(
     # Default local branch
     cart.type_order = payload.type_order
     cart.status = "PROCESSING"
+    from datetime import datetime
+    cart.confirmed_at = datetime.utcnow()
     db.commit()
     
     # Generate Financial Transactions

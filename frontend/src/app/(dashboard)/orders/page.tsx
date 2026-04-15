@@ -26,6 +26,7 @@ interface OrderItem {
 interface Order {
     id: number;
     created_at: string;
+    confirmed_at?: string;
     total: number;
     status: string;
     origin?: string;
@@ -377,7 +378,7 @@ export default function OrdersPage() {
                                             )}
                                         </td>
                                         <td className="py-3 px-6 text-sm text-slate-600 dark:text-slate-300">
-                                            {new Date(order.created_at).toLocaleDateString('pt-BR')}
+                                            {new Date(order.confirmed_at || order.created_at).toLocaleDateString('pt-BR')}
                                         </td>
                                         <td className="py-3 px-6">
                                             <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${statusColorMap[order.status] || "bg-slate-100 text-slate-800"}`}>

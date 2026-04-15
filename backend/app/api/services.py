@@ -11,7 +11,7 @@ from app.models.service import Service, ServiceOrder, ServiceOrderStatus
 from app.schemas.service import (
     ServiceCreate, ServiceUpdate, ServiceResponse,
     ServiceOrderCreate, ServiceOrderUpdate, ServiceOrderResponse,
-    ServiceOrderBillRequest, ServiceOrderBulkStatusRequest, ServiceOrderBulkBillRequest
+    ServiceOrderBillRequest, ServiceOrderBulkStatusRequest, ServiceOrderBulkBillRequest, ServiceOrderBulkDeleteRequest
 )
 
 router = APIRouter(tags=["services"])
@@ -127,6 +127,7 @@ def get_service_orders(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     search: Optional[str] = None,
+    customer_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -139,6 +140,8 @@ def get_service_orders(
     if search:
         if search.isdigit():
             query = query.filter(ServiceOrder.id == int(search))
+    if customer_id:
+        query = query.filter(ServiceOrder.customer_id == customer_id)
         
     total = query.count()
     
@@ -156,6 +159,8 @@ def get_service_orders(
         stats_query = stats_query.filter(ServiceOrder.execution_date <= end_date)
     if search and search.isdigit():
         stats_query = stats_query.filter(ServiceOrder.id == int(search))
+    if customer_id:
+        stats_query = stats_query.filter(ServiceOrder.customer_id == customer_id)
         
     stats_res = stats_query.first()
     total_pending = float(stats_res.total_pending or 0.0)
@@ -259,6 +264,40 @@ def get_service_order_pdf(
     
     return Response(content=bytes(pdf_bytes), media_type="application/pdf")
 
+@router.delete("/service-orders/{order_id}")
+def delete_service_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    order = db.query(ServiceOrder).filter(
+        ServiceOrder.id == order_id,
+        ServiceOrder.company_id == current_user.company_id
+    ).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Ordem de Serviço não encontrada")
+        
+    # Trava Fiscal
+    from app.models.service import ServiceOrderNfseStatus
+    if order.status_nfse in [ServiceOrderNfseStatus.ISSUED, ServiceOrderNfseStatus.PROCESSING]:
+        raise HTTPException(status_code=400, detail="Não é permitido excluir uma O.S. que já possui processamento fiscal (NFS-e) ativo.")
+        
+    # Trava Financeira
+    from app.models.financial import FinancialTransaction
+    has_financials = db.query(FinancialTransaction).filter(
+        FinancialTransaction.company_id == current_user.company_id,
+        FinancialTransaction.description.like(f"%OS #{order.id}%"),
+        FinancialTransaction.transaction_status != "CANCELADO"
+    ).first()
+    
+    if has_financials:
+        raise HTTPException(status_code=400, detail="Não é permitido excluir uma O.S. que já possui faturamento atrelado. Cancele o faturamento atual primeiro.")
+
+    db.delete(order)
+    db.commit()
+    return {"status": "success", "message": "Ordem de Serviço excluída"}
+
 @router.put("/service-orders/{order_id}")
 def update_service_order(
     order_id: int,
@@ -276,13 +315,25 @@ def update_service_order(
         
     update_data = req.model_dump(exclude_unset=True)
     
-    # Restrição de Valor Negociado
+    # Restrição de Alterações
+    needs_financial_check = False
+    
     if "negotiated_value" in update_data and update_data["negotiated_value"] != order.negotiated_value:
+        needs_financial_check = True
+
+    if ("service_id" in update_data and update_data["service_id"] != order.service_id) or \
+       ("custom_description" in update_data and update_data["custom_description"] != order.custom_description):
         # Trava Fiscal
+        from app.models.service import ServiceOrderNfseStatus
+        if order.status_nfse in [ServiceOrderNfseStatus.ISSUED, ServiceOrderNfseStatus.PROCESSING]:
+            raise HTTPException(status_code=400, detail="Não é permitido alterar dados fundamentais da O.S. (serviço, observações ou valor) com NFS-e emitida ou em processamento.")
+        needs_financial_check = True
+        
+    if needs_financial_check:
+        from app.models.service import ServiceOrderNfseStatus
         if order.status_nfse in [ServiceOrderNfseStatus.ISSUED, ServiceOrderNfseStatus.PROCESSING]:
             raise HTTPException(status_code=400, detail="Não é permitido alterar o valor de uma O.S. que já possui processamento fiscal (NFS-e) ativo.")
             
-        # Trava Financeira
         from app.models.financial import FinancialTransaction
         has_financials = db.query(FinancialTransaction).filter(
             FinancialTransaction.company_id == current_user.company_id,
@@ -291,7 +342,7 @@ def update_service_order(
         ).first()
         
         if has_financials:
-            raise HTTPException(status_code=400, detail="Não é permitido alterar o valor de uma O.S. que já possui faturamento atrelado. Cancele o faturamento atual primeiro.")
+            raise HTTPException(status_code=400, detail="Não é permitido alterar a O.S. se houver financeiro atrelado ativo. Cancele o faturamento atual primeiro.")
 
     for field, value in update_data.items():
         setattr(order, field, value)
@@ -482,7 +533,7 @@ def bill_service_order(
 
 @router.post("/service-orders/bulk/bill")
 def bulk_bill_service_orders(
-    bulk_req: ServiceOrderBulkBillRequest,
+    bulk_req: ServiceOrderBulkBillRequest, ServiceOrderBulkDeleteRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -587,7 +638,7 @@ def bulk_bill_service_orders(
 
 @router.post("/service-orders/bulk/bill-individual")
 def bulk_bill_individual_service_orders(
-    bulk_req: ServiceOrderBulkBillRequest,
+    bulk_req: ServiceOrderBulkBillRequest, ServiceOrderBulkDeleteRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1124,3 +1175,38 @@ def cancel_local_service_order(
             
     db.commit()
     return {"status": "success", "message": "Ordem avulsa e faturamento cancelados com sucesso localmente."}
+
+@router.post("/service-orders/bulk/delete")
+def bulk_delete_service_orders(
+    bulk_req: ServiceOrderBulkDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.service import ServiceOrderNfseStatus
+    from app.models.financial import FinancialTransaction
+    
+    orders = db.query(ServiceOrder).filter(
+        ServiceOrder.id.in_(bulk_req.order_ids),
+        ServiceOrder.company_id == current_user.company_id
+    ).all()
+    
+    if not orders:
+        raise HTTPException(status_code=404, detail="Nenhuma Ordem de Serviço encontrada.")
+        
+    for order in orders:
+        if order.status_nfse in [ServiceOrderNfseStatus.ISSUED, ServiceOrderNfseStatus.PROCESSING]:
+            raise HTTPException(status_code=400, detail=f"OS #{order.id} possui processamento fiscal ativo e não pode ser excluída.")
+            
+        has_financials = db.query(FinancialTransaction).filter(
+            FinancialTransaction.company_id == current_user.company_id,
+            FinancialTransaction.description.like(f"%OS #{order.id}%"),
+            FinancialTransaction.transaction_status != "CANCELADO"
+        ).first()
+        
+        if has_financials:
+            raise HTTPException(status_code=400, detail=f"OS #{order.id} possui faturamento atrelado. Cancele-o primeiro.")
+            
+        db.delete(order)
+        
+    db.commit()
+    return {"status": "success", "message": f"{len(orders)} Ordens de Serviço excluídas"}

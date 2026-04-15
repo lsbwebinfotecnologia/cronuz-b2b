@@ -58,6 +58,7 @@ class ServiceOrderUpdate(BaseModel):
     status_nfse: Optional[ServiceOrderNfseStatus] = None
     is_recurrent: Optional[bool] = None
     recurrence_end_date: Optional[date] = None
+    service_id: Optional[int] = None
 
 class ServiceOrderResponse(ServiceOrderBase):
     id: int
@@ -89,3 +90,6 @@ class ServiceOrderBulkBillRequest(BaseModel):
     first_due_date: date
     account_id: Optional[int] = None
     print_point_id: Optional[int] = None
+
+class ServiceOrderBulkDeleteRequest(BaseModel):
+    order_ids: List[int]

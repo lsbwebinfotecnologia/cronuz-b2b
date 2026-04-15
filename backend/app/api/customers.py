@@ -106,14 +106,22 @@ def read_customers(
 
     if search:
         search_term = f"%{search}%"
-        query = query.filter(
-            (Customer.name.ilike(search_term)) | 
-            (Customer.document.ilike(search_term)) |
-            (Customer.corporate_name.ilike(search_term))
-        )
+        if search.isdigit():
+            query = query.filter(
+                (Customer.id == int(search)) |
+                (Customer.name.ilike(search_term)) | 
+                (Customer.document.ilike(search_term)) |
+                (Customer.corporate_name.ilike(search_term))
+            )
+        else:
+            query = query.filter(
+                (Customer.name.ilike(search_term)) | 
+                (Customer.document.ilike(search_term)) |
+                (Customer.corporate_name.ilike(search_term))
+            )
 
-    # Order by most recently created first
-    query = query.order_by(Customer.created_at.desc())
+    # Order by alphabetical name
+    query = query.order_by(Customer.name.asc())
 
     results = query.offset(skip).limit(limit).all()
 

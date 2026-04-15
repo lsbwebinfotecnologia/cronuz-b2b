@@ -40,6 +40,7 @@ class Order(Base):
     payment_condition = Column(String(50), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
+    confirmed_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationship to Company and Customer
