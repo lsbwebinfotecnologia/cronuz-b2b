@@ -105,9 +105,10 @@ def get_dashboard_metrics(
         
     revenue_grouped = revenue_query.group_by(Order.status).all()
     for st, rev in revenue_grouped:
-        if st == "INVOICED":
-            invoiced_revenue = float(rev or 0)
-        elif st in ["NEW", "PROCESSING", "SENT_TO_HORUS", "DISPATCH"]:
+        st_val = str(getattr(st, 'value', st)).upper().strip()
+        if st_val in ["INVOICED", "FATURADO"]:
+            invoiced_revenue += float(rev or 0)
+        elif st_val in ["NEW", "NOVO", "PROCESSING", "EM PROCESSAMENTO", "SENT_TO_HORUS", "DISPATCH", "AGUARDANDO"]:
             pending_revenue += float(rev or 0)
     
     # Check Integrations
