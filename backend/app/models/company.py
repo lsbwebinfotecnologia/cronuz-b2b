@@ -52,6 +52,7 @@ class Company(Base):
     module_financial = Column(Boolean, default=False, nullable=False)
     module_services = Column(Boolean, default=False, nullable=False)
     module_commercial = Column(Boolean, default=False, nullable=False)
+    module_crm = Column(Boolean, default=False, nullable=False)
     
     # Fiscal Configs (NFS-e Padrão Nacional)
     nfse_enabled = Column(Boolean, default=False, nullable=False)

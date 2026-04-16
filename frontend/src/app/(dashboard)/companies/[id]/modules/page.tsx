@@ -32,6 +32,7 @@ export default function CompanyModulesPage() {
       module_financial: company.module_financial,
       module_services: company.module_services,
       module_commercial: company.module_commercial,
+      module_crm: company.module_crm,
       [moduleName]: !currentValue
     };
 
@@ -343,7 +344,7 @@ export default function CompanyModulesPage() {
                     <Tags className="h-5 w-5" />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Políticas e Preços</p>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Políticas de Preço</p>
                     <p className="text-xs text-slate-500">Regras comerciais, tabelas de preço e descontos segmentados.</p>
                   </div>
                 </div>
@@ -353,6 +354,27 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_commercial', company.module_commercial)} 
                     disabled={togglingModule !== null}
                     colorClass="bg-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* CRM 360 */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_crm ? 'bg-purple-500/10 border-purple-500/20 text-purple-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <Users className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">CRM 360º</p>
+                    <p className="text-xs text-slate-500">Gestão de relacionamento, tarefas, pipeline e follow-ups.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch 
+                    active={company.module_crm} 
+                    onClick={() => handleToggleModule('module_crm', company.module_crm)} 
+                    disabled={togglingModule !== null}
+                    colorClass="bg-purple-500"
                   />
                 </div>
               </div>

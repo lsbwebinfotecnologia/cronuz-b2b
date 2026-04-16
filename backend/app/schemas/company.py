@@ -53,6 +53,7 @@ class CompanyBase(BaseModel):
     module_financial: bool = False
     module_services: bool = False
     module_commercial: bool = False
+    module_crm: bool = False
     active: bool = True
 
 class CompanyCreate(CompanyBase):
@@ -114,6 +115,7 @@ class CompanyUpdate(BaseModel):
     module_financial: Optional[bool] = None
     module_services: Optional[bool] = None
     module_commercial: Optional[bool] = None
+    module_crm: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

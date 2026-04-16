@@ -262,7 +262,7 @@ export default function DashboardPage() {
          </div>
       )}
 
-      <div className={`grid gap-6 ${(!metrics || metrics.module_orders) ? 'lg:grid-cols-2' : 'lg:grid-cols-1'}`}>
+      <div className={`grid gap-6 ${((!metrics || metrics.module_orders) && (!metrics || metrics.module_crm)) ? 'lg:grid-cols-2' : 'lg:grid-cols-1'}`}>
         {(!metrics || metrics.module_orders) && (
         <motion.div 
            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
@@ -324,6 +324,7 @@ export default function DashboardPage() {
         </motion.div>
         )}
 
+        {(!metrics || metrics.module_crm) && (
         <motion.div 
            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}
            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-[300px]"
@@ -372,6 +373,7 @@ export default function DashboardPage() {
               )}
            </div>
         </motion.div>
+        )}
       </div>
     </div>
   );

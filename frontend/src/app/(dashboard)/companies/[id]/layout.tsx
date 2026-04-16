@@ -42,6 +42,7 @@ interface Company {
   module_financial: boolean;
   module_services: boolean;
   module_commercial: boolean;
+  module_crm: boolean;
   active: boolean;
 }
 

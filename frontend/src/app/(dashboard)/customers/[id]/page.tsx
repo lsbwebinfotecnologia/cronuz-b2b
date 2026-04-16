@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Target, Loader2, Building2, MapPin, Users, ShoppingCart, MessageSquare, StickyNote, Mail, Phone, ExternalLink, Plus, X, RefreshCw, CheckCircle, DollarSign, Pencil, Edit2 } from 'lucide-react';
+import { ArrowLeft, Target, Loader2, Building2, MapPin, Users, ShoppingCart, MessageSquare, StickyNote, Mail, Phone, ExternalLink, Plus, X, RefreshCw, CheckCircle, DollarSign, Pencil, Edit2, Wrench } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -89,6 +89,9 @@ export default function CustomerDetailsPage() {
   const [syncingHorus, setSyncingHorus] = useState(false);
   const [usesHorus, setUsesHorus] = useState(false);
   const [moduleFinancial, setModuleFinancial] = useState(false);
+  const [moduleOrders, setModuleOrders] = useState(false);
+  const [moduleServices, setModuleServices] = useState(false);
+  const [moduleCrm, setModuleCrm] = useState(false);
 
   useEffect(() => {
     fetchCustomer();
@@ -143,6 +146,9 @@ export default function CustomerDetailsPage() {
         if (compRes.ok) {
           const compData = await compRes.json();
           setModuleFinancial(!!compData.module_financial);
+          setModuleOrders(!!compData.module_orders);
+          setModuleServices(!!compData.module_services);
+          setModuleCrm(!!compData.module_crm);
         }
       }
     } catch(e) {}
@@ -624,20 +630,33 @@ export default function CustomerDetailsPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          <Link
-            href={`/customers/${customer.id}/crm`}
-            className="bg-white hover:bg-slate-50 text-slate-700 font-bold py-2.5 px-5 rounded-xl flex items-center gap-2 border border-slate-200 transition-all shadow-sm dark:bg-slate-900 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
-          >
-            <Target className="h-4 w-4 text-[var(--color-primary-base)] drop-shadow-sm" />
-            CRM 360º
-          </Link>
-          <Link
-            href={`/orders/new?customer_id=${customer.id}`}
-            className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2.5 px-5 rounded-xl flex items-center gap-2 transition-all shadow-lg hover:scale-[1.02] active:scale-[0.98]"
-          >
-            <ShoppingCart className="h-4 w-4" />
-            Novo Pedido
-          </Link>
+          {moduleCrm && (
+            <Link
+              href={`/customers/${customer.id}/crm`}
+              className="bg-white hover:bg-slate-50 text-slate-700 font-bold py-2.5 px-5 rounded-xl flex items-center gap-2 border border-slate-200 transition-all shadow-sm dark:bg-slate-900 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              <Target className="h-4 w-4 text-[var(--color-primary-base)] drop-shadow-sm" />
+              CRM 360º
+            </Link>
+          )}
+          {moduleServices && (
+            <Link
+              href={`/services/new?customer_id=${customer.id}`}
+              className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold py-2.5 px-5 rounded-xl flex items-center gap-2 border border-indigo-200 transition-all shadow-sm dark:bg-indigo-900/30 dark:border-indigo-800/50 dark:text-indigo-300 dark:hover:bg-indigo-800/50"
+            >
+              <Wrench className="h-4 w-4" />
+              Nova O.S
+            </Link>
+          )}
+          {moduleOrders && (
+            <Link
+              href={`/orders/new?customer_id=${customer.id}`}
+              className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2.5 px-5 rounded-xl flex items-center gap-2 transition-all shadow-lg hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <ShoppingCart className="h-4 w-4" />
+              Novo Pedido
+            </Link>
+          )}
         </div>
       </div>
 
