@@ -160,19 +160,24 @@ def get_dashboard_metrics(
         
         if company_id:
             fin_query = fin_query.filter(FinancialTransaction.company_id == company_id)
+        elif current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) and current_user.tenant_id != "cronuz":
+            fin_query = fin_query.join(Company, FinancialTransaction.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
             
         fin_agg = fin_query.group_by(FinancialTransaction.type, FinancialInstallment.status).all()
         for t_type, i_status, t_sum in fin_agg:
             val = float(t_sum or 0)
-            if t_type == "PAYABLE":
-                if i_status == "PAID":
+            t_type_str = str(getattr(t_type, 'value', t_type)).upper().strip()
+            i_status_str = str(getattr(i_status, 'value', i_status)).upper().strip()
+            
+            if t_type_str == "PAYABLE":
+                if i_status_str in ["PAID", "PAGO"]:
                     financial_metrics["payable"]["paid"] += val
-                elif i_status in ["PENDING", "OVERDUE"]:
+                elif i_status_str in ["PENDING", "OVERDUE", "PENDENTE", "VENCIDO"]:
                     financial_metrics["payable"]["pending"] += val
-            elif t_type == "RECEIVABLE":
-                if i_status == "PAID":
+            elif t_type_str == "RECEIVABLE":
+                if i_status_str in ["PAID", "PAGO"]:
                     financial_metrics["receivable"]["paid"] += val
-                elif i_status in ["PENDING", "OVERDUE"]:
+                elif i_status_str in ["PENDING", "OVERDUE", "PENDENTE", "VENCIDO"]:
                     financial_metrics["receivable"]["pending"] += val
 
     # 5. Service Metrics (if module enabled)
@@ -187,14 +192,18 @@ def get_dashboard_metrics(
             
         if company_id:
             svc_query = svc_query.filter(ServiceOrder.company_id == company_id)
+        elif current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) and current_user.tenant_id != "cronuz":
+            svc_query = svc_query.join(Company, ServiceOrder.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
             
         svc_agg = svc_query.group_by(ServiceOrder.status).all()
         for s_status, cnt, val in svc_agg:
             v = float(val or 0)
-            if s_status == "Concluido":
+            s_status_str = str(getattr(s_status, 'value', s_status)).upper().strip()
+            
+            if s_status_str in ["CONCLUIDO", "COMPLETED"]:
                 service_metrics["completed"]["count"] += cnt
                 service_metrics["completed"]["value"] += v
-            elif s_status in ["Pendente", "Em Execucao"]:
+            elif s_status_str in ["PENDENTE", "PENDING", "EM EXECUCAO", "EM EXECUSAO", "IN_PROGRESS"]:
                 service_metrics["pending"]["count"] += cnt
                 service_metrics["pending"]["value"] += v
 
