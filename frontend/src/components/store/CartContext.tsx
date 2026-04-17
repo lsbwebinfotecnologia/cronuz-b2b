@@ -16,6 +16,7 @@ export interface CartItem {
   category?: { name: string };
   weight_kg?: number;
   quantity: number;
+  consigned_balance?: number;
 }
 
 interface CartContextType {
