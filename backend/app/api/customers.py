@@ -41,14 +41,22 @@ def create_customer(
     if current_user.company_id is None:
         raise HTTPException(status_code=400, detail="Usuário precisa estar vinculado a uma empresa para cadastrar clientes.")
 
+    # Sanitize document input to digits only for uniqueness check
+    import re
+    clean_doc = re.sub(r'\D', '', customer.document)
+    
     # Check if document already exists for this company
+    from sqlalchemy import func
     existing = db.query(Customer).filter(
         Customer.company_id == current_user.company_id,
-        Customer.document == customer.document
+        func.regexp_replace(Customer.document, r'\D', '', 'g') == clean_doc
     ).first()
     
     if existing:
-        raise HTTPException(status_code=400, detail="Cliente com este CNPJ já cadastrado nesta empresa.")
+        raise HTTPException(status_code=400, detail="Cliente com este CPF/CNPJ já cadastrado nesta empresa.")
+        
+    # Standardize saving the document cleaned
+    customer.document = clean_doc
 
     # Extract nested data
     customer_data = customer.model_dump(exclude={"addresses", "contacts"})
@@ -203,6 +211,23 @@ def update_customer(
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
 
     update_data = customer_in.model_dump(exclude_unset=True)
+    
+    # Validação de unicidade no UPDATE
+    if "document" in update_data and update_data["document"]:
+        import re
+        from sqlalchemy import func
+        clean_new_doc = re.sub(r'\D', '', update_data["document"])
+        
+        existing = db.query(Customer).filter(
+            Customer.id != customer_id,
+            Customer.company_id == current_user.company_id,
+            func.regexp_replace(Customer.document, r'\D', '', 'g') == clean_new_doc
+        ).first()
+        
+        if existing:
+            raise HTTPException(status_code=400, detail="Outro cliente já possui este CPF/CNPJ cadastrado.")
+            
+        update_data["document"] = clean_new_doc
     for field, value in update_data.items():
         setattr(customer, field, value)
         
@@ -619,3 +644,103 @@ def get_crm_insights(
         },
         "recommendations": top_products
     }
+
+@router.get("/customers/{customer_id}/invoices")
+async def get_customer_invoices_api(
+    customer_id: int,
+    data_ini: str,
+    data_fim: str,
+    xml_base64: str = "N",
+    cod_pedido_origem: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
+        raise HTTPException(status_code=403, detail="Não autorizado a consultar Notas Fiscais.")
+
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+
+    from app.models.company import Company
+    from app.integrators.horus_clients import HorusClients
+    
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not company or not company.document:
+        raise HTTPException(status_code=400, detail="Documento da empresa não configurado.")
+
+    id_guid = customer.id_guid if customer.id_guid else ""
+    if not id_guid:
+        from app.models.company_settings import CompanySettings
+        settings = db.query(CompanySettings).filter(CompanySettings.company_id == customer.company_id).first()
+        id_guid = settings.horus_default_b2b_guid if settings and settings.horus_default_b2b_guid else ""
+        
+    horus_client = HorusClients(db, current_user.company_id)
+    try:
+        result = await horus_client.get_customer_invoices(
+            cnpj_destino=company.document,
+            cnpj_cliente=customer.document,
+            id_guid=id_guid,
+            data_ini=data_ini,
+            data_fim=data_fim,
+            xml_base64=xml_base64,
+            cod_pedido_origem=cod_pedido_origem
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await horus_client.close()
+
+@router.get("/customers/{customer_id}/debits")
+async def get_customer_debits_api(
+    customer_id: int,
+    data_ini: str,
+    data_fim: str,
+    arq_base64: str = "N",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
+        raise HTTPException(status_code=403, detail="Não autorizado a consultar Débitos.")
+
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+
+    from app.models.company import Company
+    from app.integrators.horus_clients import HorusClients
+    
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not company or not company.document:
+        raise HTTPException(status_code=400, detail="Documento da empresa não configurado.")
+
+    id_guid = customer.id_guid if customer.id_guid else ""
+    if not id_guid:
+        from app.models.company_settings import CompanySettings
+        settings = db.query(CompanySettings).filter(CompanySettings.company_id == customer.company_id).first()
+        id_guid = settings.horus_default_b2b_guid if settings and settings.horus_default_b2b_guid else ""
+
+    horus_client = HorusClients(db, current_user.company_id)
+    try:
+        result = await horus_client.get_customer_debits(
+            cnpj_destino=company.document,
+            cnpj_cliente=customer.document,
+            id_guid=id_guid,
+            data_ini=data_ini,
+            data_fim=data_fim,
+            arq_base64=arq_base64
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await horus_client.close()

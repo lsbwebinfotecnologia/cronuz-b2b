@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Target, Loader2, Building2, MapPin, Users, ShoppingCart, MessageSquare, StickyNote, Mail, Phone, ExternalLink, Plus, X, RefreshCw, CheckCircle, DollarSign, Pencil, Edit2, Wrench } from 'lucide-react';
+import { ArrowLeft, Target, Loader2, Building2, MapPin, Users, ShoppingCart, MessageSquare, StickyNote, Mail, Phone, ExternalLink, Plus, X, RefreshCw, CheckCircle, DollarSign, Pencil, Edit2, Wrench, Database, Banknote, Receipt, Download } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -38,6 +38,12 @@ export default function CustomerDetailsPage() {
   const [activeTab, setActiveTab] = useState<'overview' | 'interactions' | 'orders' | 'financial' | 'contacts'>('overview');
   const [orders, setOrders] = useState<any[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(true);
+
+  // ERP Finance States
+  const [erpInvoices, setErpInvoices] = useState<any[]>([]);
+  const [erpLoadingInvoices, setErpLoadingInvoices] = useState(false);
+  const [erpDebits, setErpDebits] = useState<any[]>([]);
+  const [erpLoadingDebits, setErpLoadingDebits] = useState(false);
 
   // Edit states for Financial Overview
   const [editingFinance, setEditingFinance] = useState(false);
@@ -92,12 +98,20 @@ export default function CustomerDetailsPage() {
   const [moduleOrders, setModuleOrders] = useState(false);
   const [moduleServices, setModuleServices] = useState(false);
   const [moduleCrm, setModuleCrm] = useState(false);
+  const [moduleConsignment, setModuleConsignment] = useState(false);
 
   useEffect(() => {
     fetchCustomer();
     fetchCustomerOrders();
     checkHorusConfig();
   }, [customerId]);
+
+  useEffect(() => {
+    if (activeTab === 'financial_erp') {
+       if (erpInvoices.length === 0) fetchErpInvoices();
+       if (erpDebits.length === 0) fetchErpDebits();
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (!usesHorus || moduleFinancial) {
@@ -149,6 +163,7 @@ export default function CustomerDetailsPage() {
           setModuleOrders(!!compData.module_orders);
           setModuleServices(!!compData.module_services);
           setModuleCrm(!!compData.module_crm);
+          setModuleConsignment(!!compData.module_consignment);
         }
       }
     } catch(e) {}
@@ -175,6 +190,72 @@ export default function CustomerDetailsPage() {
       setOrdersLoading(false);
     }
   }
+
+  async function fetchErpInvoices() {
+    setErpLoadingInvoices(true);
+    try {
+      const token = getToken();
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const today = new Date();
+      const thirtyDaysAgo = new Date(today.getTime() - (30 * 24 * 60 * 60 * 1000));
+      const pad = (n: number) => n < 10 ? '0'+n : n;
+      const dataIni = `${pad(thirtyDaysAgo.getDate())}/${pad(thirtyDaysAgo.getMonth()+1)}/${thirtyDaysAgo.getFullYear()}`;
+      const dataFim = `${pad(today.getDate())}/${pad(today.getMonth()+1)}/${today.getFullYear()}`;
+      
+      const res = await fetch(`${apiUrl}/customers/${customerId}/invoices?data_ini=${dataIni}&data_fim=${dataFim}&xml_base64=N`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && !data[0]?.Falha) {
+           setErpInvoices(data);
+        } else if (data && data.Falha) {
+           toast.error(data.Mensagem || "Erro ao buscar notas fiscais no Horus");
+        }
+      }
+    } catch(e) {
+       toast.error("Falha na conexão com Horus.");
+    } finally {
+      setErpLoadingInvoices(false);
+    }
+  }
+
+  async function fetchErpDebits() {
+    setErpLoadingDebits(true);
+    try {
+      const token = getToken();
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${apiUrl}/customers/${customerId}/debits?data_ini=01/01/2020&data_fim=31/12/2030&arq_base64=S`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && !data[0]?.Falha) {
+           setErpDebits(data.filter((d: any) => d.STA_LANCTO_CRECEBER === "AB"));
+        } else if (data && data.Falha) {
+           toast.error(data.Mensagem || "Erro ao buscar boletos no Horus");
+        }
+      }
+    } catch(e) {
+       toast.error("Falha na conexão com Horus.");
+    } finally {
+      setErpLoadingDebits(false);
+    }
+  }
+
+  const downloadBase64PDF = (base64String: string, filename: string) => {
+    try {
+      const linkSource = `data:application/pdf;base64,${base64String}`;
+      const downloadLink = document.createElement("a");
+      downloadLink.href = linkSource;
+      downloadLink.download = filename;
+      downloadLink.click();
+    } catch (e) {
+      toast.error("Falha ao gerar o PDF.");
+    }
+  };
 
   async function fetchCustomer() {
     try {
@@ -624,6 +705,12 @@ export default function CustomerDetailsPage() {
                   {customer.customer_type === 'PF' ? 'CPF:' : 'CNPJ:'} {customer.document}
                 </span>
                 {customer.corporate_name && <span className="opacity-75">{customer.corporate_name}</span>}
+                {customer.id_guid && (
+                  <span className="font-mono bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] px-2 py-0.5 rounded-md border border-[var(--color-primary-base)]/20 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20 flex items-center gap-1.5" title="Integração Horus ID GUID">
+                    <Database className="w-3 h-3" />
+                    {customer.id_guid}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -637,6 +724,16 @@ export default function CustomerDetailsPage() {
             >
               <Target className="h-4 w-4 text-[var(--color-primary-base)] drop-shadow-sm" />
               CRM 360º
+            </Link>
+          )}
+
+          {moduleConsignment && (
+            <Link
+              href={`/customers/${customer.id}/consignment`}
+              className="bg-white hover:bg-slate-50 text-slate-700 font-bold py-2.5 px-5 rounded-xl flex items-center gap-2 border border-slate-200 transition-all shadow-sm dark:bg-slate-900 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              <Database className="h-4 w-4 text-orange-500 drop-shadow-sm" />
+              Consignação
             </Link>
           )}
           {moduleServices && (
@@ -750,9 +847,13 @@ export default function CustomerDetailsPage() {
             {([
               { id: 'overview', label: 'Visão Geral', icon: Building2 },
               { id: 'orders', label: 'Pedidos Recentes', icon: ShoppingCart },
-              { id: 'financial', label: 'Financeiro', icon: DollarSign },
+              { id: 'financial_erp', label: 'Financeiro ERP', icon: Banknote },
               { id: 'contacts', label: 'Contatos & Locais', icon: Users }
-            ].filter(tab => tab.id !== 'financial' || moduleFinancial || !usesHorus)).map(tab => (
+            ].filter(tab => {
+              if (tab.id === 'financial') return moduleFinancial || !usesHorus;
+              if (tab.id === 'financial_erp') return usesHorus && customer.id_guid;
+              return true;
+            })).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
@@ -896,6 +997,100 @@ export default function CustomerDetailsPage() {
                     <p className="text-sm text-slate-500 mb-4 dark:text-slate-400">Este cliente ainda não possui histórico de faturamento.</p>
                   </div>
                 )}
+              </div>
+            )}
+
+            {activeTab === 'financial_erp' && (
+              <div className="space-y-6">
+                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                           <Banknote className="w-5 h-5 text-indigo-500" /> Títulos em Aberto (Horus ERP)
+                        </h2>
+                        <button onClick={fetchErpDebits} className="text-sm font-bold text-indigo-500 hover:text-indigo-600 px-4 py-2 bg-indigo-50 rounded-xl">Atualizar</button>
+                    </div>
+                    {erpLoadingDebits ? (
+                       <div className="flex flex-col items-center justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-indigo-500 mb-4"/><p className="text-slate-500 font-medium">Buscando no ERP...</p></div>
+                    ) : erpDebits.length === 0 ? (
+                       <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-8 text-center text-emerald-700">O cliente não possui débitos em aberto.</div>
+                    ) : (
+                       <div className="overflow-x-auto">
+                          <table className="w-full text-sm text-left whitespace-nowrap">
+                             <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 font-semibold uppercase text-xs">
+                                <tr>
+                                   <th className="px-6 py-4 rounded-tl-xl">Lançamento / Tipo</th>
+                                   <th className="px-6 py-4">Ref. NFE</th>
+                                   <th className="px-6 py-4">Vencimento</th>
+                                   <th className="px-6 py-4">Valor (R$)</th>
+                                   <th className="px-6 py-4 rounded-tr-xl flex justify-end">Ação</th>
+                                </tr>
+                             </thead>
+                             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {erpDebits.map((d, i) => (
+                                   <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/20">
+                                      <td className="px-6 py-4">
+                                         <div className="font-bold text-slate-900 dark:text-white">{d.NRO_LANCTO_CRECEBER}</div>
+                                         <div className="text-xs text-slate-500">{d.NOM_FORMA}</div>
+                                      </td>
+                                      <td className="px-6 py-4 font-mono text-slate-500">{d.NRO_NOTA_FISCAL || '-'}</td>
+                                      <td className="px-6 py-4 font-bold text-rose-600">{d.DAT_VENC_CRECEBER}</td>
+                                      <td className="px-6 py-4 font-black">R$ {parseFloat(d.VLR_LANCTO_CRECEBER || 0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
+                                      <td className="px-6 py-4 flex justify-end">
+                                          {d.PDF_Base64 && !d.PDF_Base64.includes('ERRO') ? (
+                                            <button onClick={() => downloadBase64PDF(d.PDF_Base64, `Boleto_${d.NRO_LANCTO_CRECEBER}.pdf`)} className="px-3 py-1.5 bg-slate-900 text-white rounded-lg hover:bg-slate-800 text-xs font-bold flex items-center gap-2">
+                                               <Download className="w-3.5 h-3.5" /> Baixar
+                                            </button>
+                                          ) : (
+                                            <span className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">Indisponível</span>
+                                          )}
+                                      </td>
+                                   </tr>
+                                ))}
+                             </tbody>
+                          </table>
+                       </div>
+                    )}
+                 </div>
+                 
+                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                           <Receipt className="w-5 h-5 text-indigo-500" /> Notas Fiscais (Últimos 30 Dias)
+                        </h2>
+                        <button onClick={fetchErpInvoices} className="text-sm font-bold text-indigo-500 hover:text-indigo-600 px-4 py-2 bg-indigo-50 rounded-xl">Atualizar</button>
+                    </div>
+                    {erpLoadingInvoices ? (
+                       <div className="flex flex-col items-center justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-indigo-500 mb-4"/><p className="text-slate-500 font-medium">Buscando no ERP...</p></div>
+                    ) : erpInvoices.length === 0 ? (
+                       <div className="p-8 text-center text-slate-500">Nenhuma Nota fiscal localizada nos últimos 30 dias.</div>
+                    ) : (
+                       <div className="overflow-x-auto">
+                          <table className="w-full text-sm text-left whitespace-nowrap">
+                             <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 font-semibold uppercase text-xs">
+                                <tr>
+                                   <th className="px-6 py-4 rounded-tl-xl">NF-e</th>
+                                   <th className="px-6 py-4">Data Emissão</th>
+                                   <th className="px-6 py-4">Chave de Acesso</th>
+                                   <th className="px-6 py-4 rounded-tr-xl flex justify-end">Vlr. Líquido (R$)</th>
+                                </tr>
+                             </thead>
+                             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {erpInvoices.map((inv, i) => (
+                                   <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/20">
+                                      <td className="px-6 py-4">
+                                         <div className="font-bold text-slate-900 dark:text-white">{inv.NRO_NOTA_FISCAL}</div>
+                                         <div className="text-[10px] text-slate-500 uppercase">{inv.STATUS} / Série {inv.SERIE_FISCAL}</div>
+                                      </td>
+                                      <td className="px-6 py-4 font-bold text-slate-600">{inv.DAT_EMISSAO_NF}</td>
+                                      <td className="px-6 py-4 font-mono text-xs text-slate-400">{inv.CHAVE_ACESSO_NFE || '---'}</td>
+                                      <td className="px-6 py-4 font-black flex justify-end">R$ {parseFloat(inv.VLR_LIQUIDO_NF || 0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
+                                   </tr>
+                                ))}
+                             </tbody>
+                          </table>
+                       </div>
+                    )}
+                 </div>
               </div>
             )}
 

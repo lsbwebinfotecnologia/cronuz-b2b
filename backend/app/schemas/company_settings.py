@@ -53,6 +53,7 @@ class CompanySettingsBase(BaseModel):
     smtp_password: Optional[str] = None
     smtp_from_email: Optional[str] = None
     b2b_showcases_config: Optional[Dict[str, Any]] = None
+    b2b_show_stock_quantity: Optional[bool] = True
 
 class CompanySettingsUpdate(CompanySettingsBase):
     pass

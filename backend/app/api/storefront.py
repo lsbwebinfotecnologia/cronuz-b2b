@@ -42,6 +42,10 @@ def calculate_product_availability(stock_qty: int, situacao: str = None, is_pre_
     return allow_purchase, status_label
 
 def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dict:
+    import json
+    with open("horus_dump.json", "a") as f: f.write(json.dumps(item) + "\n")
+    print(json.dumps(item))
+    print("HORUS_ITEM_END")
     from app.core.utils import parse_horus_price
     vlr_capa = parse_horus_price(item.get("VLR_CAPA", "0")) if "VLR_CAPA" in item else 0.0
     vlr_liq = parse_horus_price(item.get("VLR_LIQ_CLI", item.get("VLR_LIQ_DESCONTO_PDV", "0")))
@@ -61,6 +65,12 @@ def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dic
     if isinstance(cat_id, str) and cat_id.isdigit():
         cat_id = int(cat_id)
     
+    try:
+        r = item.get("REMESSA")
+        cd = int(float(str(r).replace(',', '.'))) if r else 0
+    except (ValueError, TypeError):
+        cd = 0
+
     return {
         "id": int(item.get("COD_ITEM", 0)),
         "company_id": company_id,
@@ -70,6 +80,7 @@ def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dic
         "base_price": vlr_capa,
         "promotional_price": vlr_liq if vlr_liq < vlr_capa else None,
         "stock_quantity": stock_quantity,
+        "consigned_balance": cd,
         "status": "ACTIVE",
         "short_description": item.get("DESC_SINOPSE", ""),
         "long_description": item.get("DESC_SINOPSE", ""),
@@ -140,6 +151,7 @@ def get_storefront_config(
         "cover_image_base_url": settings.cover_image_base_url if settings else None,
         "uses_horus": settings.horus_enabled if settings else False,
         "b2b_showcases_config": settings.b2b_showcases_config if settings else None,
+        "b2b_show_stock_quantity": settings.b2b_show_stock_quantity if settings else True,
         "logo": company.logo if company else None,
         "name": company.name if company else None
     }

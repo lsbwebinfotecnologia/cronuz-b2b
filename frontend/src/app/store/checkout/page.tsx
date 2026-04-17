@@ -224,6 +224,13 @@ export default function CheckoutPage() {
                                         <span>{item.brand || (item.category ? item.category.name : 'Vários Autores')}</span>
                                         {item.ean_gtin ? <span className="text-slate-400">ISBN: {item.ean_gtin}</span> : null}
                                     </div>
+                                    <div className="flex flex-col gap-1 mb-2">
+                                        {item.consigned_balance && item.consigned_balance > 0 ? (
+                                            <span className="text-[10px] w-fit font-bold uppercase tracking-wider text-orange-600 bg-orange-50 px-2 py-0.5 rounded border border-orange-200 dark:bg-orange-500/10 dark:text-orange-400 dark:border-orange-500/20">
+                                                Seu saldo consignado: {item.consigned_balance} un.
+                                            </span>
+                                        ) : null}
+                                    </div>
                                     <div className="flex items-center justify-between text-sm">
                                        <div className="flex flex-col">
                                           {item.promotional_price && item.promotional_price > 0 && item.promotional_price < (item.base_price || 0) ? (

@@ -1,17 +1,13 @@
 import sys
 import os
-from sqlalchemy import text
-sys.path.append('/Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend')
-from app.db.session import SessionLocal
+sys.path.append(os.path.join(os.path.dirname(__file__), "."))
 
-db = SessionLocal()
+from app.db.session import engine
+from sqlalchemy import text
 
 try:
-    db.execute(text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS brand_logo_url VARCHAR(500);"))
-    db.execute(text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS brand_background_url VARCHAR(500);"))
-    db.execute(text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS brand_primary_color VARCHAR(20);"))
-    db.commit()
-    print("Columns added successfully.")
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE cmp_settings ADD COLUMN b2b_show_stock_quantity BOOLEAN NOT NULL DEFAULT TRUE;"))
+        print("Column added successfully!")
 except Exception as e:
     print(f"Error: {e}")
-    db.rollback()

@@ -19,6 +19,7 @@ import Link from 'next/link';
 import { ProductImage } from '@/components/store/ProductImage';
 import { ProductCard } from '@/components/store/ProductCard';
 import { useCart } from '@/components/store/CartContext';
+import { useStoreConfig } from '@/components/store/StoreContext';
 
 export default function ProductDetailsPage() {
   const params = useParams();
@@ -32,6 +33,7 @@ export default function ProductDetailsPage() {
   const [addedTemp, setAddedTemp] = useState(false);
   const [relatedProducts, setRelatedProducts] = useState<any[]>([]);
   const { addToCart } = useCart();
+  const { b2bShowStockQuantity } = useStoreConfig();
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -233,14 +235,20 @@ export default function ProductDetailsPage() {
                  
                  <div className="mt-2">
                    {isOutOfStock ? (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-50 text-rose-600 font-bold text-sm dark:bg-rose-500/10 dark:text-rose-400 border border-rose-200 dark:border-rose-500/20">
+                      <span className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-50 text-rose-600 font-bold text-sm dark:bg-rose-500/10 dark:text-rose-400 border border-rose-200 dark:border-rose-500/20 w-fit">
                         <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
                         Produto sem estoque no momento
                       </span>
                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-50 text-emerald-600 font-bold text-sm dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
+                      <span className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-50 text-emerald-600 font-bold text-sm dark:bg-emerald-500/10 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20 w-fit">
                         <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                        Estoque disponível: {product.stock_quantity} un
+                        {b2bShowStockQuantity ? `Estoque disponível: ${product.stock_quantity} un` : 'Produto disponível em estoque'}
+                      </span>
+                   )}
+                   {product.consigned_balance > 0 && (
+                      <span className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-orange-50 text-orange-600 font-bold text-sm dark:bg-orange-500/10 dark:text-orange-400 border border-orange-200 dark:border-orange-500/20 mt-2 w-fit">
+                        <span className="w-2 h-2 rounded-full bg-orange-500"></span>
+                        Seu saldo consignado: {product.consigned_balance} un
                       </span>
                    )}
                  </div>

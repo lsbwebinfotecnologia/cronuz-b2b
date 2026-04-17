@@ -80,21 +80,40 @@ def get_current_customer(token: str = Depends(oauth2_scheme), db: Session = Depe
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        role: str = payload.get("role")
-        customer_id_str: str = payload.get("sub")
         jti: str = payload.get("jti")
-        if not customer_id_str or role != "customer" or not jti:
+        if not jti:
             raise credentials_exception
-            
+
         # Check session explicitly
         session_log = db.query(UserSession).filter(UserSession.jti == jti).first()
         if not session_log or not session_log.is_active:
             raise credentials_exception
+
+        role: str = payload.get("role")
+        user_type: str = payload.get("type")
+        sub_val: str = payload.get("sub")
+        
+        customer = None
+        
+        # Schema 1: Legacy Customer Portal (/h/[slug]/login)
+        if role == "customer" and sub_val:
+            customer = db.query(Customer).filter(Customer.id == int(sub_val)).first()
             
+        # Schema 2: Storefront B2B Multi-tenant (/login)
+        elif user_type == "CUSTOMER" and sub_val:
+            # sub_val is the user's email
+            from app.models.user import User
+            user = db.query(User).filter(User.email == sub_val).first()
+            if user and user.document:
+                customer = db.query(Customer).filter(
+                    Customer.document == user.document,
+                    Customer.company_id == user.company_id
+                ).first()
+
+        if not customer:
+            raise credentials_exception
+
     except JWTError:
         raise credentials_exception
         
-    customer = db.query(Customer).filter(Customer.id == int(customer_id_str)).first()
-    if customer is None:
-        raise credentials_exception
     return customer

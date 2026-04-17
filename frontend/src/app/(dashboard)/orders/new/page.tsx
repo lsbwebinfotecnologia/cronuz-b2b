@@ -35,6 +35,7 @@ interface Product {
     base_price?: number;
     promotional_price?: number;
     stock: number;
+    consigned_balance?: number;
 }
 
 interface CartItem extends Product {
@@ -193,7 +194,8 @@ export default function NewSellerOrderPage() {
                         base_price: i.base_price,
                         promotional_price: i.promotional_price,
                         price: i.promotional_price || i.base_price || i.price || 0,
-                        stock: i.stock_quantity || i.stock || 0
+                        stock: i.stock_quantity || i.stock || 0,
+                        consigned_balance: i.consigned_balance || 0
                     }));
                     setSearchResults(mappedItems);
                 }
@@ -479,7 +481,10 @@ export default function NewSellerOrderPage() {
                                                     ) : (
                                                         <span className="font-bold text-[var(--color-primary-base)] text-sm block">R$ {finalValue.toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>
                                                     )}
-                                                    <span className={`text-[9px] uppercase font-bold mt-1 block ${p.stock > 0 ? 'text-slate-500' : 'text-red-500'}`}>Estoque: {p.stock}</span>
+                                                    <span className={`text-[9px] uppercase font-bold mt-1 block ${p.stock > 0 ? 'text-slate-500' : 'text-red-500'}`}>Estoque livre: {p.stock}</span>
+                                                    {p.consigned_balance && p.consigned_balance > 0 ? (
+                                                        <span className="text-[9px] uppercase font-bold text-orange-500 block">Saldo Consignado: {p.consigned_balance}</span>
+                                                    ) : null}
                                                 </div>
                                             </button>
                                         )})}

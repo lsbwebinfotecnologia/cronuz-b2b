@@ -25,7 +25,8 @@ export default function CompanySettingsPage() {
 
   const [settings, setSettings] = useState({
     cover_image_base_url: '',
-    b2b_showcases_config: defaultShowcases
+    b2b_showcases_config: defaultShowcases,
+    b2b_show_stock_quantity: true
   });
 
   // Search State
@@ -46,7 +47,8 @@ export default function CompanySettingsPage() {
           const data = await res.json();
           setSettings({
             cover_image_base_url: data.cover_image_base_url || '',
-            b2b_showcases_config: data.b2b_showcases_config || defaultShowcases
+            b2b_showcases_config: data.b2b_showcases_config || defaultShowcases,
+            b2b_show_stock_quantity: data.b2b_show_stock_quantity !== undefined ? data.b2b_show_stock_quantity : true
           });
         }
       } catch (e) {
@@ -188,6 +190,27 @@ export default function CompanySettingsPage() {
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 px-4 text-sm font-mono text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
                 />
               </div>
+           </div>
+
+           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 dark:border-slate-800/60 dark:bg-slate-900/40 mt-6">
+              <h3 className="text-sm font-bold text-blue-600 tracking-wide uppercase mb-1">Visibilidade da Loja B2B</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">Controle as informações de estoque exibidas para os clientes.</p>
+              
+              <label className="flex items-center gap-4 cursor-pointer">
+                  <div className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${settings.b2b_show_stock_quantity ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.b2b_show_stock_quantity ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </div>
+                  <div className="flex flex-col">
+                      <span className="text-sm font-bold text-slate-800 dark:text-slate-200">Exibir quantidade exata em estoque</span>
+                      <span className="text-xs text-slate-500">Se ativo, mostra "Disponível: X un". Se inativo, mostra apenas visualmente a palavra "Produto Disponível" sem o detalhe exato.</span>
+                  </div>
+                  <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={settings.b2b_show_stock_quantity}
+                      onChange={(e) => setSettings(prev => ({ ...prev, b2b_show_stock_quantity: e.target.checked }))}
+                  />
+              </label>
            </div>
         </section>
 

@@ -77,5 +77,6 @@ class CompanySettings(Base):
 
     # B2B Dynamics
     b2b_showcases_config = Column(JSON, nullable=True)
+    b2b_show_stock_quantity = Column(Boolean, default=True, nullable=False)
 
     company = relationship("Company")

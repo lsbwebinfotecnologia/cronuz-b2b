@@ -18,6 +18,7 @@ from app.models import system_integrator as system_integrator_models
 from app.models import order as order_models
 from app.models import commercial_policy as commercial_models
 from app.models import print_point as print_point_models
+from app.models import consignment_draft as consignment_draft_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -66,6 +67,7 @@ print_point_models.Base.metadata.create_all(bind=engine)
 system_integrator_models.Base.metadata.create_all(bind=engine)
 marketing_nav_models.Base.metadata.create_all(bind=engine)
 order_models.Base.metadata.create_all(bind=engine)
+consignment_draft_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -128,6 +130,8 @@ app.include_router(services.router, tags=["services"])
 app.include_router(print_points.router, prefix="/print-points", tags=["print-points"])
 app.include_router(commercial_policies.router, tags=["commercial-policies"])
 app.include_router(financial.router, tags=["financial"])
+app.include_router(customer_portal.router)
+app.include_router(customer_auth.router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -294,6 +298,7 @@ class ModuleUpdate(BaseModel):
     module_services: bool
     module_commercial: bool
     module_crm: bool
+    module_consignment: bool
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(
@@ -478,6 +483,7 @@ def update_company_modules(
     company.module_services = module_update.module_services
     company.module_commercial = module_update.module_commercial
     company.module_crm = module_update.module_crm
+    company.module_consignment = module_update.module_consignment
     
     db.commit()
     db.refresh(company)

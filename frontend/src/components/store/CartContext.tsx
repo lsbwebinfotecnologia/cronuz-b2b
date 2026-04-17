@@ -99,16 +99,29 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       .then(res => res.json())
       .then(data => {
          if (data && data.items) {
-             const mapped = data.items.map((i: any) => ({
-                 id: i.product_id || Math.random(), 
-                 company_id: 1,
-                 sku: i.sku,
-                 ean_gtin: i.ean_isbn,
-                 name: i.name || 'Produto',
-                 brand: i.brand,
-                 base_price: i.unit_price,
-                 quantity: i.quantity
-             }));
+             const mapped = data.items.map((i: any) => {
+                 let localStock = 999;
+                 if (saved) {
+                    try {
+                       const parsed = JSON.parse(saved);
+                       const match = parsed.find((p: any) => (p.sku && p.sku === i.sku) || (p.ean_gtin && p.ean_gtin === i.ean_isbn));
+                       if (match && match.stock_quantity !== undefined) {
+                           localStock = match.stock_quantity;
+                       }
+                    } catch(e){}
+                 }
+                 return {
+                     id: i.product_id || Math.random(), 
+                     company_id: 1,
+                     sku: i.sku,
+                     ean_gtin: i.ean_isbn,
+                     name: i.name || 'Produto',
+                     brand: i.brand,
+                     base_price: i.unit_price,
+                     quantity: i.quantity,
+                     stock_quantity: localStock
+                 };
+             });
              setItems(mapped);
              setSubtotal(data.subtotal || 0);
          }
@@ -189,12 +202,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     let syncNeeded = false;
 
     setItems(prev => {
-      const existing = prev.find(item => item.id === product.id);
+      const existing = prev.find(item => 
+          item.id === product.id || 
+          (product.ean_gtin && item.ean_gtin === product.ean_gtin) || 
+          (product.sku && item.sku === product.sku)
+      );
       if (existing) {
         const newQuantity = Math.min(existing.quantity + quantity, product.stock_quantity || 999);
         newItemObj = { ...existing, quantity: newQuantity };
         syncNeeded = true;
-        return prev.map(item => item.id === product.id ? newItemObj! : item);
+        return prev.map(item => item.id === existing.id ? newItemObj! : item);
       }
       
       newItemObj = {

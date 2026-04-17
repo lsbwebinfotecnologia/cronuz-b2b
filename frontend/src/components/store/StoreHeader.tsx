@@ -177,10 +177,12 @@ export function StoreHeader() {
             <div className="hidden sm:block"><ThemeToggle /></div>
 
             {isMounted && isCustomer && (
-              <Link href="/store/orders" className="hidden lg:flex items-center gap-2 p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                <ShoppingBag className="h-5 w-5" />
-                <span className="text-sm font-bold">Pedidos</span>
-              </Link>
+              <>
+                <Link href="/store/orders" className="hidden lg:flex items-center gap-2 p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                  <ShoppingBag className="h-5 w-5" />
+                  <span className="text-sm font-bold">Pedidos</span>
+                </Link>
+              </>
             )}
             
             <Link href="/store/account" className="hidden sm:flex items-center gap-2 p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">

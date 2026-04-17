@@ -148,3 +148,71 @@ class HorusClients(HorusClient):
             pass
             
         return []
+
+    async def get_consignment_summary(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, cod_ctr: Optional[str] = None) -> Any:
+        params = {
+            "ID_GUID": id_guid,
+            "CNPJ_DESTINO": cnpj_destino,
+            "ID_DOC": cnpj_cliente,
+            "LIMIT": 100,
+            "OFFSET": 0
+        }
+        if cod_ctr:
+            params["COD_CTR"] = cod_ctr
+            
+        result = await self.get("Busca_Contrato_Cliente_Sintetico", params=params)
+        return result
+
+    async def get_consignment_details(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, cod_ctr: Optional[str] = None) -> Any:
+        params = {
+            "ID_GUID": id_guid,
+            "CNPJ_DESTINO": cnpj_destino,
+            "ID_DOC": cnpj_cliente,
+            "LIMIT": 500,
+            "OFFSET": 0
+        }
+        # COD_CTR is strictly avoided in Analitico according to Horus specs
+            
+        result = await self.get("Busca_Contrato_Cliente_Analitico", params=params)
+        return result
+
+    async def submit_consignment(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, tipo_a_d: str, items: list, cod_ctr: Optional[str] = None) -> Any:
+        params = {
+            "ID_GUID": id_guid,
+            "CNPJ_DESTINO": cnpj_destino,
+            "ID_DOC": cnpj_cliente,
+            "TIPO_A_D": tipo_a_d,
+        }
+        if cod_ctr:
+            params["COD_CTR"] = cod_ctr
+            
+        result = await self.post("Conf_Contrato_ClienteB2B", params=params, json_data=items)
+        return result
+
+    async def get_customer_invoices(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, data_ini: str, data_fim: str, xml_base64: str = "N", cod_pedido_origem: Optional[str] = None) -> Any:
+        params = {
+            "ID_GUID": id_guid,
+            "CNPJ_DESTINO": cnpj_destino,
+            "ID_DOC": cnpj_cliente,
+            "DATA_INI": data_ini,
+            "DATA_FIM": data_fim,
+            "XML_BASE64": xml_base64
+        }
+        if cod_pedido_origem:
+            params["COD_PEDIDO_ORIGEM"] = cod_pedido_origem
+            
+        result = await self.get("Busca_notafiscal", params=params)
+        return result
+
+    async def get_customer_debits(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, data_ini: str, data_fim: str, arq_base64: str = "N") -> Any:
+        params = {
+            "ID_GUID": id_guid,
+            "CNPJ_DESTINO": cnpj_destino,
+            "ID_DOC": cnpj_cliente,
+            "DATA_INI": data_ini,
+            "DATA_FIM": data_fim,
+            "ARQ_BASE64": arq_base64
+        }
+        
+        result = await self.get("Busca_debitos", params=params)
+        return result

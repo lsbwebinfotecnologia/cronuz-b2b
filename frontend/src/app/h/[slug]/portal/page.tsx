@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Loader2, LogOut, Package, CreditCard, AlertTriangle, Calendar, CheckCircle2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { Database } from 'lucide-react';
+import HorusConsignmentManager from '@/components/HorusConsignmentManager';
 import Link from 'next/link';
 
 export default function CustomerPortalPage() {
@@ -18,6 +20,7 @@ export default function CustomerPortalPage() {
     const [error, setError] = useState<string | null>(null);
 
     const [cancelingId, setCancelingId] = useState<number | null>(null);
+    const [activeTab, setActiveTab] = useState<'subscriptions' | 'consignment'>('subscriptions');
 
     useEffect(() => {
         const token = localStorage.getItem(`customer_token_${slug}`);
@@ -151,108 +154,141 @@ export default function CustomerPortalPage() {
             </header>
 
             <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-                <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                        <h1 className="text-3xl font-black text-slate-900 tracking-tight">Minhas Assinaturas</h1>
-                        <p className="text-slate-500 mt-1">Gerencie seus planos e faturamentos recorrentes.</p>
-                    </div>
-                    
-                    <Link href={`/h/${slug}`} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-bold px-6 py-2.5 rounded-xl shadow-sm transition-all text-center">
-                        Explorar Planos
-                    </Link>
-                </div>
-
-                {error ? (
-                    <div className="p-6 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-4 text-rose-700">
-                        <AlertTriangle className="h-6 w-6" />
-                        <span className="font-semibold">{error}</span>
-                    </div>
-                ) : subscriptions.length === 0 ? (
-                    <div className="bg-white border border-slate-200 rounded-3xl p-16 text-center shadow-sm">
-                        <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <Package className="h-10 w-10 text-slate-400" />
-                        </div>
-                        <h2 className="text-2xl font-bold text-slate-800 mb-2">Nenhuma assinatura ativa</h2>
-                        <p className="text-slate-500 max-w-sm mx-auto mb-8">Você ainda não contratou nenhum plano nesta loja. Explore os planos disponíveis e aproveite.</p>
-                        <Link href={`/h/${slug}`} className="inline-flex bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-bold text-sm uppercase tracking-wider px-8 py-4 rounded-xl shadow-lg shadow-[var(--color-primary-base)]/20 transition-all">
-                            Ver Planos Disponíveis
-                        </Link>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        {subscriptions.map(sub => (
-                            <div key={sub.id} className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden flex flex-col group hover:shadow-md transition-shadow">
-                                <div className={`h-2 w-full ${sub.status === 'ACTIVE' ? 'bg-emerald-500' : 'bg-slate-300'}`}></div>
-                                <div className="p-6 sm:p-8 flex-1 flex flex-col">
-                                    <div className="flex justify-between items-start mb-6">
-                                        <div>
-                                            <div className="flex items-center gap-3 mb-2">
-                                                <h3 className="text-xl font-black text-slate-900 uppercase">{sub.product_name}</h3>
-                                                {sub.status === 'ACTIVE' && (
-                                                    <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
-                                                        <CheckCircle2 className="h-3 w-3" /> ATIVO
-                                                    </span>
-                                                )}
-                                                {sub.status === 'CANCELED' && (
-                                                    <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
-                                                        <XCircle className="h-3 w-3" /> CANCELADO
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <p className="text-slate-500 font-medium text-sm">Identificador: #{sub.external_reference || sub.id}</p>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="grid grid-cols-2 gap-4 mb-8 bg-slate-50 p-4 rounded-2xl">
-                                        <div>
-                                            <span className="text-xs text-slate-500 font-bold uppercase block mb-1">Valor do Plano</span>
-                                            <div className="flex items-center gap-2 text-slate-900 font-black">
-                                                <CreditCard className="h-4 w-4 text-[var(--color-primary-base)]" />
-                                                R$ {sub.amount.toFixed(2).replace('.', ',')}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <span className="text-xs text-slate-500 font-bold uppercase block mb-1">Ciclo de Cobrança</span>
-                                            <div className="flex items-center gap-2 text-slate-900 font-bold">
-                                                <Calendar className="h-4 w-4 text-slate-400" />
-                                                {sub.periodicity === 1 ? 'Mensal' : 
-                                                 sub.periodicity === 2 ? 'Bimestral' : 
-                                                 sub.periodicity === 3 ? 'Trimestral' :
-                                                 sub.periodicity === 6 ? 'Semestral' :
-                                                 sub.periodicity === 12 ? 'Anual' : `${sub.periodicity} Meses`}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="mt-auto pt-6 border-t border-slate-100 flex items-center justify-between">
-                                        <div className="text-sm">
-                                            {sub.status === 'ACTIVE' && sub.next_billing_date ? (
-                                                <span className="text-slate-600">Próxima renovação em <strong className="text-slate-900">{new Date(sub.next_billing_date).toLocaleDateString('pt-BR')}</strong></span>
-                                            ) : (
-                                                <span className="text-slate-400">Assinatura inativa</span>
-                                            )}
-                                        </div>
-                                        
-                                        {sub.status === 'ACTIVE' && (
-                                            <button 
-                                                onClick={() => handleCancel(sub.id)}
-                                                disabled={cancelingId === sub.id}
-                                                className="text-sm font-bold text-rose-600 hover:text-rose-700 bg-white border border-rose-200 hover:border-rose-300 hover:bg-rose-50 px-4 py-2 rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400 flex items-center gap-2"
-                                            >
-                                                {cancelingId === sub.id ? (
-                                                    <><Loader2 className="h-4 w-4 animate-spin" /> Cancelando...</>
-                                                ) : (
-                                                    "Cancelar Assinatura"
-                                                )}
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
+                {/* Tabs */}
+                {customerInfo?.consignment_status === 'ACTIVE' && (
+                    <div className="flex border-b border-slate-200 mb-8 overflow-x-auto hide-scrollbar">
+                        <button 
+                            onClick={() => setActiveTab('subscriptions')}
+                            className={`flex items-center gap-2 py-4 px-6 border-b-2 font-bold whitespace-nowrap transition-colors ${activeTab === 'subscriptions' ? 'border-[var(--color-primary-base)] text-[var(--color-primary-base)]' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}`}
+                        >
+                            <Package className="w-5 h-5" /> Minhas Assinaturas
+                        </button>
+                        <button 
+                            onClick={() => setActiveTab('consignment')}
+                            className={`flex items-center gap-2 py-4 px-6 border-b-2 font-bold whitespace-nowrap transition-colors ${activeTab === 'consignment' ? 'border-[var(--color-primary-base)] text-[var(--color-primary-base)]' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}`}
+                        >
+                            <Database className="w-5 h-5" /> Consignação
+                        </button>
                     </div>
                 )}
-            </main>
+
+                
+                {activeTab === 'subscriptions' && (
+                    <>
+<div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                            <h1 className="text-3xl font-black text-slate-900 tracking-tight">Minhas Assinaturas</h1>
+                            <p className="text-slate-500 mt-1">Gerencie seus planos e faturamentos recorrentes.</p>
+                        </div>
+                        
+                        <Link href={`/h/${slug}`} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-bold px-6 py-2.5 rounded-xl shadow-sm transition-all text-center">
+                            Explorar Planos
+                        </Link>
+                    </div>
+    
+                    {error ? (
+                        <div className="p-6 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-4 text-rose-700">
+                            <AlertTriangle className="h-6 w-6" />
+                            <span className="font-semibold">{error}</span>
+                        </div>
+                    ) : subscriptions.length === 0 ? (
+                        <div className="bg-white border border-slate-200 rounded-3xl p-16 text-center shadow-sm">
+                            <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                                <Package className="h-10 w-10 text-slate-400" />
+                            </div>
+                            <h2 className="text-2xl font-bold text-slate-800 mb-2">Nenhuma assinatura ativa</h2>
+                            <p className="text-slate-500 max-w-sm mx-auto mb-8">Você ainda não contratou nenhum plano nesta loja. Explore os planos disponíveis e aproveite.</p>
+                            <Link href={`/h/${slug}`} className="inline-flex bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-bold text-sm uppercase tracking-wider px-8 py-4 rounded-xl shadow-lg shadow-[var(--color-primary-base)]/20 transition-all">
+                                Ver Planos Disponíveis
+                            </Link>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            {subscriptions.map(sub => (
+                                <div key={sub.id} className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden flex flex-col group hover:shadow-md transition-shadow">
+                                    <div className={`h-2 w-full ${sub.status === 'ACTIVE' ? 'bg-emerald-500' : 'bg-slate-300'}`}></div>
+                                    <div className="p-6 sm:p-8 flex-1 flex flex-col">
+                                        <div className="flex justify-between items-start mb-6">
+                                            <div>
+                                                <div className="flex items-center gap-3 mb-2">
+                                                    <h3 className="text-xl font-black text-slate-900 uppercase">{sub.product_name}</h3>
+                                                    {sub.status === 'ACTIVE' && (
+                                                        <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
+                                                            <CheckCircle2 className="h-3 w-3" /> ATIVO
+                                                        </span>
+                                                    )}
+                                                    {sub.status === 'CANCELED' && (
+                                                        <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
+                                                            <XCircle className="h-3 w-3" /> CANCELADO
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-slate-500 font-medium text-sm">Identificador: #{sub.external_reference || sub.id}</p>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-2 gap-4 mb-8 bg-slate-50 p-4 rounded-2xl">
+                                            <div>
+                                                <span className="text-xs text-slate-500 font-bold uppercase block mb-1">Valor do Plano</span>
+                                                <div className="flex items-center gap-2 text-slate-900 font-black">
+                                                    <CreditCard className="h-4 w-4 text-[var(--color-primary-base)]" />
+                                                    R$ {sub.amount.toFixed(2).replace('.', ',')}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <span className="text-xs text-slate-500 font-bold uppercase block mb-1">Ciclo de Cobrança</span>
+                                                <div className="flex items-center gap-2 text-slate-900 font-bold">
+                                                    <Calendar className="h-4 w-4 text-slate-400" />
+                                                    {sub.periodicity === 1 ? 'Mensal' : 
+                                                     sub.periodicity === 2 ? 'Bimestral' : 
+                                                     sub.periodicity === 3 ? 'Trimestral' :
+                                                     sub.periodicity === 6 ? 'Semestral' :
+                                                     sub.periodicity === 12 ? 'Anual' : `${sub.periodicity} Meses`}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="mt-auto pt-6 border-t border-slate-100 flex items-center justify-between">
+                                            <div className="text-sm">
+                                                {sub.status === 'ACTIVE' && sub.next_billing_date ? (
+                                                    <span className="text-slate-600">Próxima renovação em <strong className="text-slate-900">{new Date(sub.next_billing_date).toLocaleDateString('pt-BR')}</strong></span>
+                                                ) : (
+                                                    <span className="text-slate-400">Assinatura inativa</span>
+                                                )}
+                                            </div>
+                                            
+                                            {sub.status === 'ACTIVE' && (
+                                                <button 
+                                                    onClick={() => handleCancel(sub.id)}
+                                                    disabled={cancelingId === sub.id}
+                                                    className="text-sm font-bold text-rose-600 hover:text-rose-700 bg-white border border-rose-200 hover:border-rose-300 hover:bg-rose-50 px-4 py-2 rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400 flex items-center gap-2"
+                                                >
+                                                    {cancelingId === sub.id ? (
+                                                        <><Loader2 className="h-4 w-4 animate-spin" /> Cancelando...</>
+                                                    ) : (
+                                                        "Cancelar Assinatura"
+                                                    )}
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                
+                    </>
+                )}
+                
+                {activeTab === 'consignment' && (
+                    <div className="h-[75vh]">
+                        <HorusConsignmentManager 
+                             apiBaseUrl="/me/consignment"
+                             token={typeof window !== 'undefined' ? localStorage.getItem(`customer_token_${slug}`) || '' : ''}
+                        />
+                    </div>
+                )}
+</main>
         </div>
     );
 }

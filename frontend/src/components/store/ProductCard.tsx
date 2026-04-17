@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ShoppingCart, Plus, Minus } from 'lucide-react';
 import { ProductImage } from './ProductImage';
 import { useCart } from '@/components/store/CartContext';
+import { useStoreConfig } from '@/components/store/StoreContext';
 
 interface ProductProps {
   product: any;
@@ -12,6 +13,7 @@ interface ProductProps {
 
 export function ProductCard({ product }: ProductProps) {
   const { items, addToCart, updateQuantity, removeFromCart } = useCart();
+  const { b2bShowStockQuantity } = useStoreConfig();
   
   const existingItem = items.find(item => item.id === product.id);
   const [localQuantity, setLocalQuantity] = useState(1);
@@ -125,9 +127,16 @@ export function ProductCard({ product }: ProductProps) {
                 ) : null}
               </div>
               
-              <span className={`text-xs font-semibold mt-1 ${isOutOfStock ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                {isOutOfStock ? statusLabel : (statusLabel === 'DISPONÍVEL' ? `Disponível: ${product.stock_quantity} un` : statusLabel)}
-              </span>
+              <div className="flex flex-col mt-1">
+                <span className={`text-xs font-semibold ${isOutOfStock ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                  {isOutOfStock ? statusLabel : (statusLabel === 'DISPONÍVEL' && b2bShowStockQuantity ? `Disponível: ${product.stock_quantity} un` : statusLabel)}
+                </span>
+                {product.consigned_balance > 0 && (
+                  <span className="text-[10px] uppercase font-bold text-orange-500 mt-1 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/20 px-1.5 py-0.5 rounded w-max">
+                    Seu saldo consignado: {product.consigned_balance} un
+                  </span>
+                )}
+              </div>
            </div>
         </div>
       </Link>

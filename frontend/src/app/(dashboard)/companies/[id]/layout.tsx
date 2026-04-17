@@ -43,6 +43,7 @@ interface Company {
   module_services: boolean;
   module_commercial: boolean;
   module_crm: boolean;
+  module_consignment: boolean;
   active: boolean;
 }
 

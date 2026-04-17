@@ -47,7 +47,15 @@ async def get_horus_customer(
         if not company:
             raise HTTPException(status_code=404, detail="Company not found")
             
-        cnpj_destino = company.document
+        cnpj_destino = company.document        
+        from app.models.customer import Customer
+        customer = db.query(Customer).filter(Customer.document == cnpj_cliente, Customer.company_id == company_id).first()
+        id_guid = customer.id_guid if customer and customer.id_guid else ""
+        if not id_guid:
+            from app.models.company_settings import CompanySettings
+            settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+            id_guid = settings.horus_default_b2b_guid if settings and settings.horus_default_b2b_guid else ""
+
         
         try:
             horus_client = HorusClients(db, company_id)
@@ -94,3 +102,241 @@ async def get_horus_customer(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+from pydantic import BaseModel
+from typing import Optional, List
+
+class ConsignmentSubmitItem(BaseModel):
+    BARRAS_ISBN: str
+    QTD: str
+
+class ConsignmentSubmitRequest(BaseModel):
+    tipo_a_d: str
+    items: List[ConsignmentSubmitItem]
+    cod_ctr: Optional[str] = None
+
+@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/summary")
+async def get_consignment_summary(
+    company_id: int, 
+    cnpj_cliente: str, 
+    cod_ctr: Optional[str] = None,
+    db: Session = Depends(get_db), 
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        from app.models.company import Company
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+            
+        cnpj_destino = company.document        
+        from app.models.customer import Customer
+        customer = db.query(Customer).filter(Customer.document == cnpj_cliente, Customer.company_id == company_id).first()
+        id_guid = customer.id_guid if customer and customer.id_guid else ""
+        if not id_guid:
+            from app.models.company_settings import CompanySettings
+            settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+            id_guid = settings.horus_default_b2b_guid if settings and settings.horus_default_b2b_guid else ""
+
+        
+        try:
+            horus_client = HorusClients(db, company_id)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
+        result = await horus_client.get_consignment_summary(
+            cnpj_destino=cnpj_destino,
+            cnpj_cliente=cnpj_cliente,
+            id_guid=id_guid,
+            cod_ctr=cod_ctr
+        )
+        await horus_client.close()
+        
+        # Horus returns lists or objects, wrap in a single standard response
+        if isinstance(result, list):
+            if len(result) > 0 and result[0].get("Falha"):
+                raise HTTPException(status_code=400, detail=result[0].get("Mensagem", "Erro na API Horus"))
+            return result
+        elif isinstance(result, dict) and result.get("Falha"):
+            raise HTTPException(status_code=400, detail=result.get("Mensagem", "Erro na API Horus"))
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/details")
+async def get_consignment_details(
+    company_id: int, 
+    cnpj_cliente: str, 
+    cod_ctr: Optional[str] = None,
+    db: Session = Depends(get_db), 
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        from app.models.company import Company
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+            
+        cnpj_destino = company.document        
+        from app.models.customer import Customer
+        customer = db.query(Customer).filter(Customer.document == cnpj_cliente, Customer.company_id == company_id).first()
+        id_guid = customer.id_guid if customer and customer.id_guid else ""
+        if not id_guid:
+            from app.models.company_settings import CompanySettings
+            settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+            id_guid = settings.horus_default_b2b_guid if settings and settings.horus_default_b2b_guid else ""
+
+        
+        try:
+            horus_client = HorusClients(db, company_id)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
+        result = await horus_client.get_consignment_details(
+            cnpj_destino=cnpj_destino,
+            cnpj_cliente=cnpj_cliente,
+            id_guid=id_guid,
+            cod_ctr=cod_ctr
+        )
+        await horus_client.close()
+        
+        if isinstance(result, list):
+            if len(result) > 0 and result[0].get("Falha"):
+                raise HTTPException(status_code=400, detail=result[0].get("Mensagem", "Erro na API Horus"))
+            return result
+        elif isinstance(result, dict) and result.get("Falha"):
+            raise HTTPException(status_code=400, detail=result.get("Mensagem", "Erro na API Horus"))
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/submit")
+async def submit_consignment(
+    company_id: int, 
+    cnpj_cliente: str, 
+    payload: ConsignmentSubmitRequest,
+    db: Session = Depends(get_db), 
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        from app.models.company import Company
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+            
+        cnpj_destino = company.document        
+        from app.models.customer import Customer
+        customer = db.query(Customer).filter(Customer.document == cnpj_cliente, Customer.company_id == company_id).first()
+        id_guid = customer.id_guid if customer and customer.id_guid else ""
+        if not id_guid:
+            from app.models.company_settings import CompanySettings
+            settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+            id_guid = settings.horus_default_b2b_guid if settings and settings.horus_default_b2b_guid else ""
+
+        
+        if payload.tipo_a_d not in ["A", "D"]:
+            raise HTTPException(status_code=400, detail="Invalid tipo_a_d parameters. Must be 'A' or 'D'.")
+            
+        items_dict = [item.model_dump() for item in payload.items]
+        
+        try:
+            horus_client = HorusClients(db, company_id)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
+        result = await horus_client.submit_consignment(
+            cnpj_destino=cnpj_destino,
+            cnpj_cliente=cnpj_cliente,
+            id_guid=id_guid,
+            tipo_a_d=payload.tipo_a_d,
+            items=items_dict,
+            cod_ctr=payload.cod_ctr
+        )
+        await horus_client.close()
+        
+        if isinstance(result, list):
+            if len(result) > 0 and result[0].get("Falha") and "CONTRATO BLOQUEADO" in str(result[0].get("Mensagem", "")):
+                 raise HTTPException(status_code=400, detail=result[0].get("Mensagem"))
+        elif isinstance(result, dict) and result.get("Falha"):
+            raise HTTPException(status_code=400, detail=result.get("Mensagem", "Erro na API Horus"))
+            
+        # Update draft to COMPLETED
+        from app.models.consignment_draft import ConsignmentDraft
+        draft = db.query(ConsignmentDraft).filter(
+            ConsignmentDraft.company_id == company_id,
+            ConsignmentDraft.cnpj_cliente == cnpj_cliente,
+            ConsignmentDraft.cod_ctr == (payload.cod_ctr or ""),
+            ConsignmentDraft.status == "DRAFT"
+        ).first()
+        if draft:
+            draft.status = "COMPLETED"
+            db.commit()
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ConsignmentDraftRequest(BaseModel):
+    cod_ctr: str
+    operation_type: str
+    items_json: list
+
+@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/draft")
+async def get_consignment_draft(
+    company_id: int, 
+    cnpj_cliente: str, 
+    cod_ctr: str,
+    db: Session = Depends(get_db), 
+    current_user: dict = Depends(get_current_user)
+):
+    from app.models.consignment_draft import ConsignmentDraft
+    draft = db.query(ConsignmentDraft).filter(
+        ConsignmentDraft.company_id == company_id,
+        ConsignmentDraft.cnpj_cliente == cnpj_cliente,
+        ConsignmentDraft.cod_ctr == cod_ctr,
+        ConsignmentDraft.status == "DRAFT"
+    ).first()
+    if not draft:
+        return {"items_json": [], "operation_type": "A"}
+    return {"items_json": draft.items_json, "operation_type": draft.operation_type}
+
+@router.post("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/draft")
+async def save_consignment_draft(
+    company_id: int, 
+    cnpj_cliente: str, 
+    payload: ConsignmentDraftRequest,
+    db: Session = Depends(get_db), 
+    current_user: dict = Depends(get_current_user)
+):
+    from app.models.consignment_draft import ConsignmentDraft
+    draft = db.query(ConsignmentDraft).filter(
+        ConsignmentDraft.company_id == company_id,
+        ConsignmentDraft.cnpj_cliente == cnpj_cliente,
+        ConsignmentDraft.cod_ctr == payload.cod_ctr,
+        ConsignmentDraft.status == "DRAFT"
+    ).first()
+    
+    if draft:
+        draft.operation_type = payload.operation_type
+        draft.items_json = payload.items_json
+    else:
+        draft = ConsignmentDraft(
+            company_id=company_id,
+            cnpj_cliente=cnpj_cliente,
+            cod_ctr=payload.cod_ctr,
+            operation_type=payload.operation_type,
+            items_json=payload.items_json
+        )
+        db.add(draft)
+    
+    db.commit()
+    return {"success": True}
+

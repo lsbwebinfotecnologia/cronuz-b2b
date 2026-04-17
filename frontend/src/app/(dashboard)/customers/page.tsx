@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, Plus, Loader2, Building, DollarSign, Wallet, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Users, Plus, Loader2, Building, DollarSign, Wallet, Search, ChevronLeft, ChevronRight, Database } from 'lucide-react';
 import Link from 'next/link';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner'; // Assuming toast is imported from sonner or similar library
@@ -15,6 +15,7 @@ interface Customer {
   consignment_status: string;
   open_debts: number;
   last_purchase?: string;
+  id_guid?: string;
 }
 
 const formatCNPJ = (cnpj: string) => {
@@ -225,6 +226,12 @@ export default function CustomersPage() {
                         <div className="text-slate-500 dark:text-slate-400 font-mono text-xs mt-0.5">
                           {formatCNPJ(customer.document)}
                         </div>
+                        {customer.id_guid && (
+                           <div className="text-[var(--color-primary-base)]/80 dark:text-indigo-400/80 font-mono text-[10px] mt-0.5 flex items-center gap-1" title="Horus GUID">
+                             <Database className="w-3 h-3" />
+                             {customer.id_guid}
+                           </div>
+                        )}
                       </Link>
                     </td>
                     <td className="px-6 py-4 text-slate-500 dark:text-slate-400 text-sm">
