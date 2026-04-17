@@ -31,7 +31,7 @@ from app.db.session import get_db
 from app.integrators.horus_clients import HorusClients
 from app.core.dependencies import get_current_user
 
-@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente}")
+@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente:path}")
 async def get_horus_customer(
     company_id: int, 
     cnpj_cliente: str, 
@@ -115,7 +115,7 @@ class ConsignmentSubmitRequest(BaseModel):
     items: List[ConsignmentSubmitItem]
     cod_ctr: Optional[str] = None
 
-@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/summary")
+@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente:path}/consignment/summary")
 async def get_consignment_summary(
     company_id: int, 
     cnpj_cliente: str, 
@@ -166,7 +166,7 @@ async def get_consignment_summary(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/details")
+@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente:path}/consignment/details")
 async def get_consignment_details(
     company_id: int, 
     cnpj_cliente: str, 
@@ -216,7 +216,7 @@ async def get_consignment_details(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/submit")
+@router.post("/companies/{company_id}/horus/customers/{cnpj_cliente:path}/consignment/submit")
 async def submit_consignment(
     company_id: int, 
     cnpj_cliente: str, 
@@ -289,7 +289,7 @@ class ConsignmentDraftRequest(BaseModel):
     operation_type: str
     items_json: list
 
-@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/draft")
+@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente:path}/consignment/draft")
 async def get_consignment_draft(
     company_id: int, 
     cnpj_cliente: str, 
@@ -308,7 +308,7 @@ async def get_consignment_draft(
         return {"items_json": [], "operation_type": "A"}
     return {"items_json": draft.items_json, "operation_type": draft.operation_type}
 
-@router.post("/companies/{company_id}/horus/customers/{cnpj_cliente}/consignment/draft")
+@router.post("/companies/{company_id}/horus/customers/{cnpj_cliente:path}/consignment/draft")
 async def save_consignment_draft(
     company_id: int, 
     cnpj_cliente: str, 

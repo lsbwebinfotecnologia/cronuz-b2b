@@ -122,13 +122,20 @@ async def get_my_consignment_summary(
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
             
-        result = await horus_client.get_consignment_summary(
-            cnpj_destino=cnpj_destino,
-            cnpj_cliente=cnpj_cliente,
-            id_guid=id_guid,
-            cod_ctr=cod_ctr
-        )
-        await horus_client.close()
+        try:
+            result = await horus_client.get_consignment_summary(
+                cnpj_destino=cnpj_destino,
+                cnpj_cliente=cnpj_cliente,
+                id_guid=id_guid,
+                cod_ctr=cod_ctr
+            )
+        except HTTPException as e:
+            if e.status_code == 404:
+                result = []
+            else:
+                raise e
+        finally:
+            await horus_client.close()
         
         if isinstance(result, list):
             if len(result) > 0 and result[0].get("Falha"):
@@ -169,13 +176,20 @@ async def get_my_consignment_details(
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
             
-        result = await horus_client.get_consignment_details(
-            cnpj_destino=cnpj_destino,
-            cnpj_cliente=cnpj_cliente,
-            id_guid=id_guid,
-            cod_ctr=cod_ctr
-        )
-        await horus_client.close()
+        try:
+            result = await horus_client.get_consignment_details(
+                cnpj_destino=cnpj_destino,
+                cnpj_cliente=cnpj_cliente,
+                id_guid=id_guid,
+                cod_ctr=cod_ctr
+            )
+        except HTTPException as e:
+            if e.status_code == 404:
+                result = []
+            else:
+                raise e
+        finally:
+            await horus_client.close()
         
         if isinstance(result, list):
             if len(result) > 0 and result[0].get("Falha"):
