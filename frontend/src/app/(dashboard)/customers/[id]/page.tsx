@@ -35,7 +35,7 @@ export default function CustomerDetailsPage() {
 
   const [customer, setCustomer] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'interactions' | 'orders' | 'financial' | 'contacts'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'interactions' | 'orders' | 'financial' | 'contacts' | 'financial_erp'>('overview');
   const [orders, setOrders] = useState<any[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(true);
 
