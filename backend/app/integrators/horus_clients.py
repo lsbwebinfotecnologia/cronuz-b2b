@@ -1,3 +1,4 @@
+import re
 from typing import Dict, Any, Optional
 from app.integrators.horus import HorusClient
 
@@ -150,6 +151,8 @@ class HorusClients(HorusClient):
         return []
 
     async def get_consignment_summary(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, cod_ctr: Optional[str] = None) -> Any:
+        cnpj_destino = re.sub(r'\D', '', cnpj_destino)
+        cnpj_cliente = re.sub(r'\D', '', cnpj_cliente)
         params = {
             "ID_GUID": id_guid,
             "CNPJ_DESTINO": cnpj_destino,

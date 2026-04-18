@@ -33,6 +33,7 @@ export default function CompanyModulesPage() {
       module_services: company.module_services,
       module_commercial: company.module_commercial,
       module_crm: company.module_crm,
+      module_consignment: company.module_consignment,
       [moduleName]: !currentValue
     };
 
