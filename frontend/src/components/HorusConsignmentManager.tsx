@@ -463,15 +463,23 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
 
     if (error && !summary && items.length === 0) {
         return (
-            <div className="bg-red-50 border border-red-200 rounded-xl p-8 max-w-2xl mx-auto text-center">
-                 <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-                 <h2 className="text-xl font-bold text-red-900 mb-2">Ops! Verificamos um problema.</h2>
-                 <p className="text-red-700 mb-6">{error}</p>
-                 <div className="flex justify-center gap-4">
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-12 max-w-2xl mx-auto text-center relative group">
+                 <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+                 <h2 className="text-xl font-bold text-slate-600 mb-2">Nenhum Contrato Encontrado</h2>
+                 <p className="text-slate-500 mb-6 max-w-sm mx-auto">Este cliente não possui nenhum contrato de consignação pendente na base local ou não pôde ser carregado no momento.</p>
+                 
+                 {/* Hidden debug info - reveals on hover of the container */}
+                 <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="text-[10px] text-left max-w-[200px] bg-slate-800 text-slate-300 p-2 rounded shadow-lg overflow-hidden break-words">
+                           <strong>Retorno Horus:</strong> <br/>{error}
+                      </div>
+                 </div>
+
+                 <div className="flex justify-center gap-4 relative z-10">
                       {backUrl && (
-                          <a href={backUrl} className="px-4 py-2 bg-white text-slate-800 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">Voltar</a>
+                          <a href={backUrl} className="px-5 py-2.5 bg-white text-slate-800 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors font-semibold">Voltar</a>
                       )}
-                      <button onClick={fetchData} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2">
+                      <button onClick={fetchData} className="px-5 py-2.5 bg-slate-800 text-white rounded-lg hover:bg-slate-900 flex items-center gap-2 font-semibold">
                           <RefreshCw className="w-4 h-4" /> Tentar Novamente
                       </button>
                  </div>
