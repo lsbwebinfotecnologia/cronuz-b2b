@@ -155,10 +155,12 @@ async def get_consignment_summary(
         # Horus returns lists or objects, wrap in a single standard response
         if isinstance(result, list):
             if len(result) > 0 and result[0].get("Falha"):
-                raise HTTPException(status_code=400, detail=result[0].get("Mensagem", "Erro na API Horus"))
+                err_msg = result[0].get("Mensagem", "Erro na API Horus")
+                raise HTTPException(status_code=400, detail=f"{err_msg} | Params: DEST={cnpj_destino} CLI={cnpj_cliente} GUID={id_guid}")
             return result
         elif isinstance(result, dict) and result.get("Falha"):
-            raise HTTPException(status_code=400, detail=result.get("Mensagem", "Erro na API Horus"))
+            err_msg = result.get("Mensagem", "Erro na API Horus")
+            raise HTTPException(status_code=400, detail=f"{err_msg} | Params: DEST={cnpj_destino} CLI={cnpj_cliente} GUID={id_guid}")
             
         return result
     except HTTPException:
