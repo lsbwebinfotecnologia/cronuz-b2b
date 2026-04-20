@@ -74,29 +74,9 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
     
     // Import errors to show at the end
     const [importErrors, setImportErrors] = useState<string[]>([]);
+    const [hideZeroBalance, setHideZeroBalance] = useState(false);
     const [showImportModal, setShowImportModal] = useState(false);
 
-    // Divergence Alert
-    
-    const [devMode, setDevMode] = useState(false);
-    const [devLogs, setDevLogs] = useState<any>(null);
-    const [loadingDev, setLoadingDev] = useState(false);
-
-    const runDebugRequest = async () => {
-        setLoadingDev(true);
-        try {
-            const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-            const req = await fetch(`${baseUrl}${apiBaseUrl}/debug`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            const data = await req.json();
-            setDevLogs(data);
-        } catch(e: any) {
-            setDevLogs({ error: e.message || "Failed to fetch debug data" });
-        } finally {
-            setLoadingDev(false);
-        }
-    };
 
     const [divergenceItems, setDivergenceItems] = useState<{barcode: string, oldDraftQty: number, newHorusMax: number}[]>([]);
     const [showDivergenceModal, setShowDivergenceModal] = useState(false);
@@ -460,11 +440,12 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
          fetchData(); // Recarrega saldos sempre que fechar
     };
 
-    const filteredItems = items.filter(i => 
-        i.NOM_ITEM.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        i.COD_BARRA_ITEM.includes(searchTerm) ||
-        i.NOM_EDITORA.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const filteredItems = items.filter(i => {
+        if (hideZeroBalance && i.SALDO_ITENS === 0) return false;
+        return i.NOM_ITEM.toLowerCase().includes(searchTerm.toLowerCase()) || 
+               i.COD_BARRA_ITEM.includes(searchTerm) ||
+               i.NOM_EDITORA.toLowerCase().includes(searchTerm.toLowerCase());
+    });
 
     // Calculations
     const totalQtdApurada = items.reduce((acc, curr) => acc + curr.qtdConferida, 0);
@@ -487,58 +468,7 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-12 max-w-2xl mx-auto text-center relative group">
                  <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
                  <h2 className="text-xl font-bold text-slate-600 mb-2">Nenhum Contrato Encontrado</h2>
-                 <p className="text-slate-500 mb-6 max-w-sm mx-auto">Este cliente não possui nenhum contrato de consignação pendente na base local ou não pôde ser carregado no momento.</p>
-                 
-                 
-                  {/* DEBUG HORUS PANEL */}
-                  <div className="mt-8 border border-slate-200 rounded-xl overflow-hidden bg-white">
-                      <div className="bg-slate-100 p-4 border-b border-slate-200 flex justify-between items-center cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => setDevMode(!devMode)}>
-                           <div className="flex items-center gap-2">
-                                <Database className="w-5 h-5 text-slate-500" />
-                                <h3 className="font-bold text-slate-700">Painel de Debug (Horus)</h3>
-                           </div>
-                           <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{devMode ? 'Ocultar' : 'Exibir'}</span>
-                      </div>
-                      
-                      {devMode && (
-                          <div className="p-6 bg-slate-50">
-                               <p className="text-sm text-slate-600 mb-4">Esta ferramenta realiza uma requisição de simulação direta para o endpoint `Busca_Contrato_Cliente_Sintetico` utilizando as credenciais exatas montadas no backend.</p>
-                               <button 
-                                   onClick={runDebugRequest} 
-                                   disabled={loadingDev}
-                                   className="px-6 py-3 bg-slate-800 text-white rounded-lg font-bold hover:bg-slate-900 transition-colors flex items-center gap-2 mb-6 shadow-sm border border-slate-700 disabled:opacity-50"
-                               >
-                                   {loadingDev ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} 
-                                   Disparar Requisição Teste
-                               </button>
-
-                               {devLogs && (
-                                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                                        <div>
-                                            <h4 className="text-xs font-bold uppercase text-slate-500 mb-2 tracking-wider">Parâmetros Enviados:</h4>
-                                            <div className="bg-slate-900 rounded-lg p-4 font-mono text-xs text-green-400 overflow-x-auto h-64 border border-slate-800">{JSON.stringify(devLogs.params, null, 4)}</div>
-                                        </div>
-                                        <div>
-                                            <h4 className="text-xs font-bold uppercase text-slate-500 mb-2 tracking-wider">Retorno Sintético:</h4>
-                                            <div className="bg-slate-900 rounded-lg p-4 font-mono text-xs text-sky-400 overflow-x-auto h-64 border border-slate-800">{JSON.stringify(devLogs.response, null, 4)}</div>
-                                        </div>
-                                        <div>
-                                            <h4 className="text-xs font-bold uppercase text-slate-500 mb-2 tracking-wider">Retorno Analítico:</h4>
-                                            <div className="bg-slate-900 rounded-lg p-4 font-mono text-xs text-purple-400 overflow-x-auto h-64 border border-slate-800">{JSON.stringify(devLogs.response_analitico, null, 4)}</div>
-                                        </div>
-                                   </div>
-                               )}
-                          </div>
-                      )}
-                  </div>
-
-
-                 {/* Hidden debug info - reveals on hover of the container */}
-                 <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <div className="text-[10px] text-left max-w-[200px] bg-slate-800 text-slate-300 p-2 rounded shadow-lg overflow-hidden break-words">
-                           <strong>Retorno Horus:</strong> <br/>{error}
-                      </div>
-                 </div>
+                  <p className="text-slate-500 mb-6 max-w-sm mx-auto">Não foi localizado nenhum contrato de consignação em aberto para este cliente no sistema no momento.</p>
 
                  <div className="flex justify-center gap-4 relative z-10">
                       {backUrl && (
@@ -576,7 +506,7 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
                            <div className="w-px h-8 bg-slate-200 hidden sm:block"></div>
                            <div>
                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Valor Líquido</p>
-                               <p className="text-lg font-black text-slate-800">R$ {summary.VLR_TOTAL_LIQUIDO.toFixed(2).replace('.',',')}</p>
+                               <p className="text-lg font-black text-slate-800">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(summary.VLR_TOTAL_LIQUIDO)}</p>
                            </div>
                            
                            {/* LIVE DRAFT SUMMARY */}
@@ -589,7 +519,7 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
                                <p className="text-base font-black text-indigo-800">
                                    {totalQtdApurada} <span className="text-xs font-normal text-indigo-600">un</span>
                                    <span className="mx-2 text-indigo-300 font-normal">|</span>
-                                   <span className="text-sm font-bold">R$ {totalValorApurado.toFixed(2).replace('.',',')}</span>
+                                   <span className="text-sm font-bold">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalValorApurado)}</span>
                                </p>
                            </div>
                       </div>
@@ -680,6 +610,11 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
 
                   {/* Right Tools (CSV Import, Refresh, Local Search) */}
                   <div className="flex items-center gap-2 w-full xl:w-auto">
+                       <label className="flex items-center gap-2 cursor-pointer bg-slate-50 px-3 py-2 border border-slate-200 rounded-lg whitespace-nowrap hidden md:flex transition-colors hover:bg-slate-100">
+                           <input type="checkbox" checked={hideZeroBalance} onChange={(e) => setHideZeroBalance(e.target.checked)} className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-600" />
+                           <span className="text-xs font-bold text-slate-600">Não exibir zerados</span>
+                       </label>
+                       
                        <div className="relative flex-1">
                             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                             <input 
@@ -817,7 +752,7 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
                                       <td className="px-4 py-3 font-mono font-medium text-slate-700">{item.COD_BARRA_ITEM}</td>
                                       <td className="px-4 py-3 truncate max-w-[280px]" title={item.NOM_ITEM}>{item.NOM_ITEM}</td>
                                       <td className="px-4 py-3 truncate max-w-[150px]">{item.NOM_EDITORA}</td>
-                                      <td className="px-4 py-3 text-right font-medium">R$ {item.VLR_LIQUIDO}</td>
+                                      <td className="px-4 py-3 text-right font-medium">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(parseFloat(item.VLR_LIQUIDO.replace(',', '.')) || 0)}</td>
                                       <td className="px-4 py-3 text-center font-bold border-x border-slate-100 bg-slate-50/50">
                                           {item.SALDO_ITENS}
                                       </td>

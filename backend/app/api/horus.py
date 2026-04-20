@@ -8,58 +8,6 @@ from app.core.dependencies import get_current_user
 
 router = APIRouter()
 
-@router.get("/companies/{company_id}/horus/customers/{cnpj_cliente:path}/consignment/debug")
-async def get_consignment_debug(
-    company_id: int, 
-    cnpj_cliente: str, 
-    cod_ctr: Optional[str] = None,
-    db: Session = Depends(get_db), 
-    current_user: dict = Depends(get_current_user)
-):
-    try:
-        from app.models.company import Company
-        company = db.query(Company).filter(Company.id == company_id).first()
-        if not company:
-            raise HTTPException(status_code=404, detail="Company not found")
-            
-        cnpj_destino = company.document        
-        from app.models.customer import Customer
-        customer = db.query(Customer).filter(Customer.document == cnpj_cliente, Customer.company_id == company_id).first()
-        id_guid = customer.id_guid if customer and customer.id_guid else ""
-        if not id_guid:
-            from app.models.company_settings import CompanySettings
-            settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
-            id_guid = settings.horus_default_b2b_guid if settings and settings.horus_default_b2b_guid else ""
-
-        import re
-        debug_payload = {
-            "ID_GUID": id_guid,
-            "CNPJ_DESTINO": re.sub(r'\D', '', cnpj_destino),
-            "ID_DOC": re.sub(r'\D', '', cnpj_cliente)
-        }
-        
-        try:
-            horus_client = HorusClients(db, company_id)
-            result_sintetico = await horus_client.get_consignment_summary(
-                cnpj_destino=cnpj_destino,
-                cnpj_cliente=cnpj_cliente,
-                id_guid=id_guid,
-                cod_ctr=cod_ctr
-            )
-            result_analitico = await horus_client.get_consignment_details(
-                cnpj_destino=cnpj_destino,
-                cnpj_cliente=cnpj_cliente,
-                id_guid=id_guid,
-                cod_ctr=cod_ctr
-            )
-            await horus_client.close()
-        except Exception as e:
-            result_sintetico = str(e)
-            result_analitico = "Not reached due to error in Sintetico"
-
-        return {"params": debug_payload, "response": result_sintetico, "response_analitico": result_analitico}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/inventory/horus/status")
