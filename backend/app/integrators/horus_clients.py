@@ -156,9 +156,7 @@ class HorusClients(HorusClient):
         params = {
             "ID_GUID": id_guid,
             "CNPJ_DESTINO": cnpj_destino,
-            "ID_DOC": cnpj_cliente,
-            "LIMIT": 100,
-            "OFFSET": 0
+            "ID_DOC": cnpj_cliente
         }
         if cod_ctr:
             params["COD_CTR"] = cod_ctr
@@ -170,9 +168,7 @@ class HorusClients(HorusClient):
         params = {
             "ID_GUID": id_guid,
             "CNPJ_DESTINO": cnpj_destino,
-            "ID_DOC": cnpj_cliente,
-            "LIMIT": 500,
-            "OFFSET": 0
+            "ID_DOC": cnpj_cliente
         }
         # COD_CTR is strictly avoided in Analitico according to Horus specs
             
