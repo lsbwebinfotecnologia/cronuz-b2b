@@ -77,6 +77,27 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
     const [showImportModal, setShowImportModal] = useState(false);
 
     // Divergence Alert
+    
+    const [devMode, setDevMode] = useState(false);
+    const [devLogs, setDevLogs] = useState<any>(null);
+    const [loadingDev, setLoadingDev] = useState(false);
+
+    const runDebugRequest = async () => {
+        setLoadingDev(true);
+        try {
+            const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const req = await fetch(`${baseUrl}${apiBaseUrl}/debug`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await req.json();
+            setDevLogs(data);
+        } catch(e: any) {
+            setDevLogs({ error: e.message || "Failed to fetch debug data" });
+        } finally {
+            setLoadingDev(false);
+        }
+    };
+
     const [divergenceItems, setDivergenceItems] = useState<{barcode: string, oldDraftQty: number, newHorusMax: number}[]>([]);
     const [showDivergenceModal, setShowDivergenceModal] = useState(false);
     
@@ -468,6 +489,50 @@ export default function HorusConsignmentManager({ apiBaseUrl, token, backUrl }: 
                  <h2 className="text-xl font-bold text-slate-600 mb-2">Nenhum Contrato Encontrado</h2>
                  <p className="text-slate-500 mb-6 max-w-sm mx-auto">Este cliente não possui nenhum contrato de consignação pendente na base local ou não pôde ser carregado no momento.</p>
                  
+                 
+                  {/* DEBUG HORUS PANEL */}
+                  <div className="mt-8 border border-slate-200 rounded-xl overflow-hidden bg-white">
+                      <div className="bg-slate-100 p-4 border-b border-slate-200 flex justify-between items-center cursor-pointer hover:bg-slate-200 transition-colors" onClick={() => setDevMode(!devMode)}>
+                           <div className="flex items-center gap-2">
+                                <Database className="w-5 h-5 text-slate-500" />
+                                <h3 className="font-bold text-slate-700">Painel de Debug (Horus)</h3>
+                           </div>
+                           <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{devMode ? 'Ocultar' : 'Exibir'}</span>
+                      </div>
+                      
+                      {devMode && (
+                          <div className="p-6 bg-slate-50">
+                               <p className="text-sm text-slate-600 mb-4">Esta ferramenta realiza uma requisição de simulação direta para o endpoint `Busca_Contrato_Cliente_Sintetico` utilizando as credenciais exatas montadas no backend.</p>
+                               <button 
+                                   onClick={runDebugRequest} 
+                                   disabled={loadingDev}
+                                   className="px-6 py-3 bg-slate-800 text-white rounded-lg font-bold hover:bg-slate-900 transition-colors flex items-center gap-2 mb-6 shadow-sm border border-slate-700 disabled:opacity-50"
+                               >
+                                   {loadingDev ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} 
+                                   Disparar Requisição Teste
+                               </button>
+
+                               {devLogs && (
+                                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                                        <div>
+                                            <h4 className="text-xs font-bold uppercase text-slate-500 mb-2 tracking-wider">Parâmetros Enviados:</h4>
+                                            <div className="bg-slate-900 rounded-lg p-4 font-mono text-xs text-green-400 overflow-x-auto h-64 border border-slate-800">{JSON.stringify(devLogs.params, null, 4)}</div>
+                                        </div>
+                                        <div>
+                                            <h4 className="text-xs font-bold uppercase text-slate-500 mb-2 tracking-wider">Retorno Sintético:</h4>
+                                            <div className="bg-slate-900 rounded-lg p-4 font-mono text-xs text-sky-400 overflow-x-auto h-64 border border-slate-800">{JSON.stringify(devLogs.response, null, 4)}</div>
+                                        </div>
+                                        <div>
+                                            <h4 className="text-xs font-bold uppercase text-slate-500 mb-2 tracking-wider">Retorno Analítico:</h4>
+                                            <div className="bg-slate-900 rounded-lg p-4 font-mono text-xs text-purple-400 overflow-x-auto h-64 border border-slate-800">{JSON.stringify(devLogs.response_analitico, null, 4)}</div>
+                                        </div>
+                                   </div>
+                               )}
+                          </div>
+                      )}
+                  </div>
+
+
                  {/* Hidden debug info - reveals on hover of the container */}
                  <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
                       <div className="text-[10px] text-left max-w-[200px] bg-slate-800 text-slate-300 p-2 rounded shadow-lg overflow-hidden break-words">

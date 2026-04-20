@@ -1,16 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from datetime import datetime
-from typing import List
-
 from app.db.session import get_db
+from app.integrators.horus_clients import HorusClients
+from typing import Optional, List
+from app.core.dependencies import get_current_customer
 from app.models.customer import Customer
+from datetime import datetime
 from app.models.subscription import CustomerSubscription, SubscriptionPlan
 from app.models.company_settings import CompanySettings
-from app.core.dependencies import get_current_customer
 from app.integrators.efi_pay import efi_service
-from app.integrators.horus_clients import HorusClients
-from typing import Optional
 
 router = APIRouter(prefix="/me", tags=["customer_portal"])
 
