@@ -959,7 +959,7 @@ def issue_inter_slip(
             codigo_solicitacao = boleto_data.get("codigoSolicitacao")
             nosso_numero = inter_client.find_nosso_numero_v3(codigo_solicitacao=codigo_solicitacao, timeout=4)
             if nosso_numero:
-                installment.bank_slip_nosso_numero = nosso_numero
+                installment.bank_slip_nosso_numero = f"V3_REQ|{codigo_solicitacao}|{nosso_numero}"
                 # Puxar boleto dnv para pegar linha digitavel? Na V3 teríamos q pegar via webhook ou webhook_polling, mas vamos seguir a vida com NossoNumero
             else:
                 # Still processing
