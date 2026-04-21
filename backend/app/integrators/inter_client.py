@@ -109,12 +109,17 @@ class BancoInterClient:
                 try:
                     err_details = e.response.json()
                     viols = ""
+                    title = err_details.get("title", "")
+                    mensagem = err_details.get("mensagem", "") or err_details.get("detail", "")
+                    
+                    details = []
                     if "violacoes" in err_details:
-                        viols = ", ".join([f"{v.get('propriedade', 'Campo Desconhecido')}: {v.get('razao', '')}" for v in err_details["violacoes"]])
-                    elif "mensagem" in err_details:
-                        viols = err_details["mensagem"]
-                    elif "title" in err_details:
-                        viols = err_details["title"]
+                        details = [f"{v.get('propriedade', 'CampoDesconhecido')}: {v.get('razao', '')}" for v in err_details["violacoes"]]
+                    
+                    if details:
+                        viols = f"{title} - {mensagem} - " + ", ".join(details)
+                    else:
+                        viols = f"{title} - {mensagem}" if title and mensagem else title or mensagem or "Erro Desconhecido"
                         
                     if viols:
                         raise Exception(f"Erro no Inter: {viols}")
