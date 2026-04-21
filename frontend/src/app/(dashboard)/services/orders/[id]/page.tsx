@@ -7,7 +7,7 @@ import { getToken } from '@/lib/auth';
 
 import { 
     ArrowLeft, Save, FileText, Calendar, Building, Info, 
-    AlertTriangle, ShieldAlert, Receipt, CircleDollarSign, Check, Trash2
+    AlertTriangle, ShieldAlert, Receipt, CircleDollarSign, Check, Trash2, QrCode 
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CurrencyInput } from '@/components/CurrencyInput';
@@ -142,6 +142,27 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
     }
 
     if (!order) return null;
+
+    const handleIssueInterSlip = async () => {
+        if (!order) return;
+        const loadingId = toast.loading("Gerando Boleto Banco Inter...");
+        try {
+            const token = getToken();
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const res = await fetch(`${apiUrl}/service-orders/${order.id}/issue-inter-slip`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                toast.success("Boleto emitido! Acesse o painel financeiro para visualizar.", { id: loadingId });
+            } else {
+                const data = await res.json();
+                toast.error(data.detail || "Erro ao emitir boleto.", { id: loadingId });
+            }
+        } catch (e) {
+            toast.error("Erro de conexão.", { id: loadingId });
+        }
+    };
 
     return (
         <div className="max-w-5xl mx-auto pb-12">

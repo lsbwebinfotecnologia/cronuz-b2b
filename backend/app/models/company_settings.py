@@ -46,6 +46,16 @@ class CompanySettings(Base):
     efi_payee_code = Column(String(255), nullable=True) 
     efi_certificate_path = Column(String(500), nullable=True)
 
+    # Banco Inter Integracao
+    inter_enabled = Column(Boolean, default=False, nullable=False)
+    inter_sandbox = Column(Boolean, default=True, nullable=False)
+    inter_api_version = Column(String(10), default="V2", nullable=False) # 'V2' or 'V3'
+    inter_client_id = Column(String(255), nullable=True)
+    inter_client_secret = Column(String(255), nullable=True)
+    inter_cert_path = Column(String(500), nullable=True)
+    inter_key_path = Column(String(500), nullable=True)
+    inter_account_number = Column(String(50), nullable=True)
+
     # Gateways de Pagamento (Loja Virtual)
     payment_gateway_active = Column(String(50), default='EFI', nullable=False) # EFI, CIELO, REDE, VINDI
     cielo_client_id = Column(String(255), nullable=True)

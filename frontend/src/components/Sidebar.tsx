@@ -30,7 +30,8 @@ import {
   ListTodo,
   UserCheck,
   Briefcase,
-  ClipboardList
+  ClipboardList,
+  Receipt
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -236,6 +237,7 @@ export function Sidebar() {
        icon: DollarSign,
        subItems: [
          { name: 'Lançamentos', href: '/financial', icon: Wallet },
+         { name: 'Boletos Emitidos', href: '/financial/bank-slips', icon: Receipt },
          { name: 'Conciliação', href: '/financial/reconciliation', icon: Landmark },
          { name: 'DRE', href: '/financial/reports', icon: BarChart3 }
        ]

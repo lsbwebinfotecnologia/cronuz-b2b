@@ -885,3 +885,261 @@ def edit_financial_installment(
     
     db.commit()
     return {"message": "Parcela atualizada"}
+
+@router.post("/financial/installments/{inst_id}/issue-inter-slip")
+def issue_inter_slip(
+    inst_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    cid = get_company_id(current_user)
+    
+    from app.models.financial import FinancialInstallment, FinancialTransaction
+    from app.models.company_settings import CompanySettings
+    from app.models.customer import Customer, Address
+    from app.models.company import Company
+    from app.integrators.inter_client import BancoInterClient
+    
+    installment = db.query(FinancialInstallment).join(FinancialTransaction).filter(
+        FinancialInstallment.id == inst_id,
+        FinancialTransaction.company_id == cid
+    ).first()
+    
+    if not installment:
+        raise HTTPException(status_code=404, detail="Parcela não encontrada.")
+    
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    if not settings or not settings.inter_enabled:
+        raise HTTPException(status_code=400, detail="Banco Inter não está ativado ou configurado para esta empresa.")
+        
+    if not settings.inter_client_id or not settings.inter_client_secret or not settings.inter_cert_path or not settings.inter_key_path:
+        raise HTTPException(status_code=400, detail="Credenciais ou certificados do Banco Inter ausentes.")
+
+    customer = db.query(Customer).filter(Customer.id == installment.transaction.customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=400, detail="Esta parcela não possui um cliente atrelado (Necessário para emissão do boleto Inter).")
+        
+    inter_client = BancoInterClient(
+        client_id=settings.inter_client_id,
+        client_secret=settings.inter_client_secret,
+        cert_path=settings.inter_cert_path,
+        key_path=settings.inter_key_path,
+        sandbox=settings.inter_sandbox,
+        account_number=settings.inter_account_number,
+        api_version=settings.inter_api_version
+    )
+    
+    inst_data = {
+        "id": installment.id,
+        "amount": float(installment.amount),
+        "due_date": installment.due_date
+    }
+    
+    addr = customer.addresses[0] if customer.addresses else None
+    customer_data = {
+        "name": customer.name,
+        "document": customer.document,
+        "address": addr.street if addr else "Nao Informado",
+        "number": addr.number if addr else "S/N",
+        "neighborhood": addr.neighborhood if addr else "Nao Informado",
+        "city": addr.city if addr else "Cidade",
+        "uf": addr.state if addr else "SP",
+        "zipcode": addr.zip_code if addr else "00000000"
+    }
+    
+    if not customer_data["document"]:
+        raise HTTPException(status_code=400, detail="O Cliente da transação não possui CPF/CNPJ cadastrado.")
+    
+    try:
+        boleto_data = inter_client.emit_boleto(installment_data=inst_data, customer_data=customer_data)
+        
+        installment.bank_slip_provider = "INTER"
+        
+        if settings.inter_api_version == "V3":
+            codigo_solicitacao = boleto_data.get("codigoSolicitacao")
+            nosso_numero = inter_client.find_nosso_numero_v3(seu_numero=str(inst_data['id']), timeout=4)
+            if nosso_numero:
+                installment.bank_slip_nosso_numero = nosso_numero
+                # Puxar boleto dnv para pegar linha digitavel? Na V3 teríamos q pegar via webhook ou webhook_polling, mas vamos seguir a vida com NossoNumero
+            else:
+                # Still processing
+                installment.status = "PROCESSING"
+                # Keep tracking ID just in case
+                installment.bank_slip_nosso_numero = f"V3_REQ|{codigo_solicitacao}"
+        else:
+            installment.bank_slip_nosso_numero = boleto_data.get("nossoNumero")
+            installment.bank_slip_codigo_barras = boleto_data.get("codigoBarras")
+            installment.bank_slip_linha_digitavel = boleto_data.get("linhaDigitavel")
+            
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro ao emitir boleto no Inter: {str(e)}")
+        
+    return {"message": "Boleto emitido com sucesso!", "boleto": boleto_data}
+
+
+@router.post("/orders/{order_id}/issue-inter-slip")
+def issue_inter_slip_for_order(
+    order_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    cid = get_company_id(current_user)
+    
+    from app.models.order import Order
+    from app.models.financial import FinancialTransaction, FinancialInstallment
+    
+    order = db.query(Order).filter(Order.id == order_id, Order.company_id == cid).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+        
+    transaction = db.query(FinancialTransaction).filter(FinancialTransaction.order_id == order.id).first()
+    if not transaction:
+        from datetime import datetime, timedelta, timezone
+        transaction = FinancialTransaction(
+            company_id=cid,
+            order_id=order.id,
+            customer_id=order.customer_id,
+            type="RECEIVABLE",
+            description=f"Faturamento Receita Pedido #{order.id}",
+            total_amount=order.total,
+            status="CONFIRMADO",
+            created_at=datetime.now(timezone.utc)
+        )
+        db.add(transaction)
+        db.flush()
+        
+        installment = FinancialInstallment(
+            transaction_id=transaction.id,
+            number=1,
+            amount=order.total,
+            due_date=datetime.now(timezone.utc).date() + timedelta(days=3),
+            status="PENDING",
+            provider="BANCO_INTER"
+        )
+        db.add(installment)
+        db.commit()
+    else:
+        installment = db.query(FinancialInstallment).filter(FinancialInstallment.transaction_id == transaction.id, FinancialInstallment.status == "PENDING").first()
+        if not installment:
+            raise HTTPException(status_code=400, detail="Todas as parcelas deste pedido já estão pagas ou canceladas.")
+    
+    # We call the existing logic
+    return issue_inter_slip(inst_id=installment.id, db=db, current_user=current_user)
+
+
+@router.post("/service-orders/{order_id}/issue-inter-slip")
+def issue_inter_slip_for_service_order(
+    order_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    cid = get_company_id(current_user)
+    
+    from app.models.service_order import ServiceOrder
+    from app.models.financial import FinancialTransaction, FinancialInstallment
+    
+    order = db.query(ServiceOrder).filter(ServiceOrder.id == order_id, ServiceOrder.company_id == cid).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="OS não encontrada")
+        
+    transaction = db.query(FinancialTransaction).filter(FinancialTransaction.service_order_id == order.id).first()
+    if not transaction:
+        from datetime import datetime, timedelta, timezone
+        transaction = FinancialTransaction(
+            company_id=cid,
+            service_order_id=order.id,
+            customer_id=order.customer_id,
+            type="RECEIVABLE",
+            description=f"Faturamento OS #{order.id}",
+            total_amount=order.total,
+            status="CONFIRMADO",
+            created_at=datetime.now(timezone.utc)
+        )
+        db.add(transaction)
+        db.flush()
+        
+        installment = FinancialInstallment(
+            transaction_id=transaction.id,
+            number=1,
+            amount=order.total,
+            due_date=datetime.now(timezone.utc).date() + timedelta(days=3),
+            status="PENDING",
+            provider="BANCO_INTER"
+        )
+        db.add(installment)
+        db.commit()
+    else:
+        installment = db.query(FinancialInstallment).filter(FinancialInstallment.transaction_id == transaction.id, FinancialInstallment.status == "PENDING").first()
+        if not installment:
+            raise HTTPException(status_code=400, detail="Todas as parcelas desta O.S já estão pagas ou canceladas.")
+    
+    return issue_inter_slip(inst_id=installment.id, db=db, current_user=current_user)
+
+
+from fastapi.responses import Response
+
+@router.get("/financial/installments/{inst_id}/bank-slip-pdf")
+def get_installment_bank_slip_pdf(inst_id: int, db: Session = Depends(get_db)):
+    from app.models.financial import FinancialInstallment, FinancialTransaction
+    from app.models.company_settings import CompanySettings
+    from app.integrators.inter_client import BancoInterClient
+    import base64
+    
+    installment = db.query(FinancialInstallment).join(FinancialTransaction).filter(
+        FinancialInstallment.id == inst_id
+    ).first()
+    
+    if not installment or not installment.bank_slip_nosso_numero:
+        raise HTTPException(status_code=404, detail="Boleto não encontrado")
+        
+    cid = installment.transaction.company_id
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    
+    if not settings or not settings.inter_enabled:
+        raise HTTPException(status_code=400, detail="Banco Inter inativo")
+        
+    inter_client = BancoInterClient(
+        client_id=settings.inter_client_id,
+        client_secret=settings.inter_client_secret,
+        cert_path=settings.inter_cert_path,
+        key_path=settings.inter_key_path,
+        sandbox=settings.inter_sandbox,
+        account_number=settings.inter_account_number,
+        api_version=settings.inter_api_version
+    )
+    
+    try:
+        nosso_numero_final = installment.bank_slip_nosso_numero
+        if nosso_numero_final.startswith("V3_REQ|"):
+            parts = nosso_numero_final.split("|")
+            codigo_solicitacao = parts[1]
+            
+            # If it doesn't have the nosso_numero resolved yet (length == 2)
+            if len(parts) == 2:
+                novo_nosso_numero = inter_client.find_nosso_numero_v3(codigo_solicitacao=codigo_solicitacao, timeout=2)
+                if novo_nosso_numero:
+                    nosso_numero_final = f"V3_REQ|{codigo_solicitacao}|{novo_nosso_numero}"
+                    installment.bank_slip_nosso_numero = nosso_numero_final
+                    if installment.status == "PROCESSING":
+                        installment.status = "OPEN"
+                    db.commit()
+                else:
+                    raise HTTPException(status_code=400, detail="Boleto ainda em processamento no Banco Inter (V3 BolePix). Tente novamente em alguns instantes.")
+                    
+            # Set target identifier for get_boleto_pdf depending on API Version
+            target_id_for_pdf = codigo_solicitacao # V3 uses codigoSolicitacao
+        else:
+            target_id_for_pdf = nosso_numero_final # V2 uses nosso_numero
+            
+        base64_pdf = inter_client.get_boleto_pdf(target_id_for_pdf)
+        if not base64_pdf:
+            raise HTTPException(status_code=404, detail="PDF vazio retornado pelo Banco Inter")
+            
+        pdf_bytes = base64.b64decode(base64_pdf)
+        return Response(content=pdf_bytes, media_type="application/pdf")
+        
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        raise HTTPException(status_code=500, detail=f"Erro ao obter PDF do Inter: {str(e)}")

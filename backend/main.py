@@ -47,6 +47,7 @@ from app.api import bookinfo_hub
 from app.api import bookinfo_purchases
 from app.api import services
 from app.api import print_points
+from app.api import bank_slips
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -128,6 +129,7 @@ app.include_router(bookinfo_hub.router, tags=["bookinfo"])
 app.include_router(bookinfo_purchases.router, tags=["bookinfo_purchases"])
 app.include_router(services.router, tags=["services"])
 app.include_router(print_points.router, prefix="/print-points", tags=["print-points"])
+app.include_router(bank_slips.router, tags=["financial"])
 app.include_router(commercial_policies.router, tags=["commercial-policies"])
 app.include_router(financial.router, tags=["financial"])
 app.include_router(customer_portal.router)

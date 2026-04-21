@@ -31,6 +31,15 @@ class CompanySettingsBase(BaseModel):
     efi_payee_code: Optional[str] = None
     efi_certificate_path: Optional[str] = None
     
+    inter_enabled: Optional[bool] = False
+    inter_sandbox: Optional[bool] = True
+    inter_api_version: Optional[str] = "V2"
+    inter_client_id: Optional[str] = None
+    inter_client_secret: Optional[str] = None
+    inter_cert_path: Optional[str] = None
+    inter_key_path: Optional[str] = None
+    inter_account_number: Optional[str] = None
+    
     payment_gateway_active: Optional[str] = "EFI"
     cielo_client_id: Optional[str] = None
     cielo_client_secret: Optional[str] = None

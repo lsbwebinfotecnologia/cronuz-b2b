@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Package, ArrowLeft, Building2, User, FileText, Download, Truck, MessageSquare, Send, Check, CheckCheck, Terminal, X, RefreshCw, AlertCircle } from "lucide-react";
+import { Package, ArrowLeft, Building2, User, FileText, Download, Truck, MessageSquare, Send, Check, CheckCheck, Terminal, X, RefreshCw, AlertCircle, QrCode } from "lucide-react";
+import { toast } from "sonner";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { getToken } from "@/lib/auth";
@@ -196,6 +197,27 @@ export default function OrderDetailPage() {
         }
     };
 
+    const handleIssueInterSlip = async () => {
+        if (!order) return;
+        const loadingId = toast.loading("Gerando Boleto Banco Inter...");
+        try {
+            const token = getToken();
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const res = await fetch(`${apiUrl}/orders/${order.id}/issue-inter-slip`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                toast.success("Boleto emitido! Acesse o painel financeiro para visualizar o PDF.", { id: loadingId });
+            } else {
+                const data = await res.json();
+                toast.error(data.detail || "Erro ao emitir boleto.", { id: loadingId });
+            }
+        } catch (e) {
+            toast.error("Erro de conexão.", { id: loadingId });
+        }
+    };
+
     const handleDownloadInvoice = () => {
         if (!order || !order.invoice_xml) return;
         
@@ -328,6 +350,14 @@ export default function OrderDetailPage() {
                     <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-semibold uppercase tracking-wide ${statusColorMap[order.status] || "bg-slate-100 text-slate-800"}`}>
                         {statusLabelMap[order.status] || order.status}
                     </span>
+
+                    <button
+                        onClick={() => window.confirm("Emitir boleto para este pedido no Banco Inter?") && handleIssueInterSlip()}
+                        className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-2 shadow-sm shadow-orange-500/20"
+                    >
+                        <QrCode className="w-4 h-4" />
+                        Boleto Inter
+                    </button>
 
                     {order.invoice_xml_available && (
                         <button

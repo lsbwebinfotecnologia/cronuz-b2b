@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, use } from 'react';
-import { ArrowLeft, Clock, CheckCircle, Tag, TrendingUp, TrendingDown, DollarSign, Pencil, X, Save } from 'lucide-react';
+import { ArrowLeft, Clock, CheckCircle, Tag, TrendingUp, TrendingDown, DollarSign, Pencil, X, Save, FileText, QrCode, BookOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
@@ -104,6 +104,25 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
             }
         } catch(e) { toast.error('Ocorreu um erro'); }
         setSaving(false);
+    };
+
+    const handleIssueInterSlip = async (instId: number) => {
+        const loadingId = toast.loading("Emitindo boleto no Banco Inter...");
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/${instId}/issue-inter-slip`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${getToken()}` },
+            });
+            if (res.ok) {
+                toast.success("Boleto emitido com sucesso!", { id: loadingId });
+                fetchDetails(); // Reload to get PDF URL
+            } else {
+                const err = await res.json();
+                toast.error(err.detail || "Erro ao emitir boleto", { id: loadingId });
+            }
+        } catch (e: any) {
+            toast.error(e.message || "Falha na comunicação", { id: loadingId });
+        }
     };
 
     return (
@@ -211,6 +230,22 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                             Aberto / Pendente
                                         </div>
                                     )}
+                                    {inst.bank_slip_nosso_numero && String(inst.bank_slip_nosso_numero).startsWith("V3_REQ|") ? (
+                                        <div className="px-3 py-1.5 ml-1 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-lg shrink-0 flex items-center gap-1 font-bold text-xs border border-slate-200 dark:border-slate-700 cursor-help" title="Atualize a página para checar novamente.">
+                                            <div className="w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"/> Processando
+                                        </div>
+                                    ) : inst.pdf_url || inst.bank_slip_nosso_numero ? (
+                                        <a href={inst.pdf_url || `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/${inst.id}/bank-slip-pdf`} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 ml-1 bg-orange-100 hover:bg-orange-200 dark:bg-orange-900/50 dark:hover:bg-orange-900/70 text-orange-700 dark:text-orange-400 rounded-lg transition shrink-0 flex items-center gap-1 font-bold text-xs border border-orange-200 dark:border-orange-800" title="Ver Boleto (Inter/PDF)">
+                                            <FileText className="w-3.5 h-3.5"/> Boleto PDF
+                                        </a>
+                                    ) : (
+                                        inst.status !== 'PAID' && inst.status !== 'CANCELLED' && isReceivable && (
+                                            <button onClick={() => window.confirm("Deseja emitir boleto pelo Banco Inter para esta parcela?") && handleIssueInterSlip(inst.id)} className="p-2 ml-1 bg-slate-100 hover:bg-orange-100 dark:bg-slate-800 dark:hover:bg-orange-900/30 text-slate-500 hover:text-orange-600 dark:hover:text-orange-400 rounded-lg transition shrink-0 border border-transparent hover:border-orange-200 dark:hover:border-orange-800/50" title="Gerar Boleto Banco Inter">
+                                                <QrCode className="w-4 h-4"/>
+                                            </button>
+                                        )
+                                    )}
+
                                     {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && (
                                         <button onClick={()=>{setInstData({due_date: new Date(inst.due_date).toISOString().split('T')[0], amount: inst.amount}); setEditingInst(inst);}} className="p-2 ml-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 rounded-lg transition shrink-0" title="Editar Valores da Parcela">
                                             <Pencil className="w-4 h-4"/>

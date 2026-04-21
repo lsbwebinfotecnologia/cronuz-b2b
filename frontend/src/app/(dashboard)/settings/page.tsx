@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2, CreditCard, Truck, ChevronRight, FileText } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2, CreditCard, Truck, ChevronRight, FileText, Key } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -36,6 +36,43 @@ export default function SettingsPage() {
 
   const [printPoints, setPrintPoints] = useState<any[]>([]);
 
+  const [interCertFile, setInterCertFile] = useState<File | null>(null);
+  const [interKeyFile, setInterKeyFile] = useState<File | null>(null);
+
+  const handleInterCertUpload = async () => {
+    if (!interCertFile || !interKeyFile) {
+        toast.error('Selecione ambos os arquivos (.crt e .key)');
+        return;
+    }
+    const freshUser = getUser();
+    const cid = freshUser?.company_id;
+    if (!cid) return;
+
+    const fd = new FormData();
+    fd.append('cert_file', interCertFile);
+    fd.append('key_file', interKeyFile);
+    fd.append('company_id', cid.toString());
+
+    try {
+        const loadingId = toast.loading('Enviando certificados MTLS...');
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/inter-certificates`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${getToken()}` },
+            body: fd
+        });
+
+        if (res.ok) {
+            toast.success('Certificados validados e importados com sucesso!', { id: loadingId });
+            setInterCertFile(null);
+            setInterKeyFile(null);
+        } else {
+            const err = await res.json();
+            toast.error(err.detail || 'Falha ao importar certificados.', { id: loadingId });
+        }
+    } catch(e: any) {
+        toast.error('Erro de conexão ao enviar os certificados.');
+    }
+  };
   const [settings, setSettings] = useState({
     pdv_type: 'NON_FISCAL',
     horus_api_mode: 'B2B',
@@ -68,6 +105,12 @@ export default function SettingsPage() {
     jadlog_token: '',
     tray_envios_token: '',
     b2b_show_stock_quantity: true,
+    inter_enabled: false,
+    inter_sandbox: true,
+    inter_api_version: 'V2',
+    inter_client_id: '',
+    inter_client_secret: '',
+    inter_account_number: '',
   });
 
   useEffect(() => {
@@ -145,6 +188,12 @@ export default function SettingsPage() {
         jadlog_token: data.jadlog_token || '',
         tray_envios_token: data.tray_envios_token || '',
         b2b_show_stock_quantity: data.b2b_show_stock_quantity !== undefined ? data.b2b_show_stock_quantity : true,
+        inter_enabled: data.inter_enabled || false,
+        inter_sandbox: data.inter_sandbox ?? true,
+        inter_api_version: data.inter_api_version || 'V2',
+        inter_client_id: data.inter_client_id || '',
+        inter_client_secret: data.inter_client_secret || '',
+        inter_account_number: data.inter_account_number || '',
       }));
       const resPoints = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/print-points`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -852,6 +901,94 @@ export default function SettingsPage() {
                         </div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* BANCO INTER INTEGRATION */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 dark:bg-slate-800/50 dark:border-slate-700 mt-6">
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center dark:bg-orange-900/40">
+                        <Building2 className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="text-lg font-bold text-slate-800 dark:text-white">Banco Inter (Boletos)</h3>
+                        <p className="text-sm text-slate-500 font-medium">Emissão e conciliação automática de boletos bancários</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" className="sr-only peer" checked={settings.inter_enabled} onChange={e => setSettings({ ...settings, inter_enabled: e.target.checked })} />
+                        <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300 rounded-full peer dark:bg-slate-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+                      </label>
+                    </div>
+
+                    {settings.inter_enabled && (
+                      <div className="space-y-6 animate-in fade-in slide-in-from-top-4 relative">
+                        <div className="absolute -left-6 top-0 bottom-0 w-1 bg-orange-500 rounded-r-md"></div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div className="space-y-1.5">
+                            <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Conta Corrente (Opcional)</label>
+                            <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-orange-500/50" placeholder="Ex: 1234567-8" value={settings.inter_account_number} onChange={e => setSettings({ ...settings, inter_account_number: e.target.value })} />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-sm font-medium text-slate-700 block">Ambiente</label>
+                            <div className="flex bg-slate-200 p-1 rounded-xl">
+                              <button type="button" onClick={() => setSettings({...settings, inter_sandbox: true})} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${settings.inter_sandbox ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Sandbox (Homol)</button>
+                              <button type="button" onClick={() => setSettings({...settings, inter_sandbox: false})} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${!settings.inter_sandbox ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Produção REAL</button>
+                            </div>
+                          </div>
+                          <div className="space-y-1.5 md:col-span-2">
+                            <label className="text-sm font-medium text-slate-700 block">Motor de Emissão (API)</label>
+                            <div className="flex bg-slate-200 p-1 rounded-xl">
+                              <button type="button" onClick={() => setSettings({...settings, inter_api_version: 'V2'})} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${settings.inter_api_version === 'V2' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>V2 Clássica (Síncrono)</button>
+                              <button type="button" onClick={() => setSettings({...settings, inter_api_version: 'V3'})} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${settings.inter_api_version === 'V3' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>V3 BolePix (Assíncrono)</button>
+                            </div>
+                          </div>
+                          
+                          <div className="space-y-1.5 md:col-span-2">
+                            <label className="text-sm font-medium text-slate-700 block">Client ID</label>
+                            <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-mono text-sm" placeholder="Client_Id" value={settings.inter_client_id} onChange={e => setSettings({ ...settings, inter_client_id: e.target.value })} />
+                          </div>
+                          <div className="space-y-1.5 md:col-span-2">
+                            <label className="text-sm font-medium text-slate-700 block">Client Secret</label>
+                            <input type="password" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-mono text-sm" placeholder="Client_Secret" value={settings.inter_client_secret} onChange={e => setSettings({ ...settings, inter_client_secret: e.target.value })} />
+                          </div>
+                        </div>
+
+                        <div className="bg-orange-50 p-4 rounded-xl border border-orange-100">
+                          <h4 className="text-sm font-bold text-orange-900 flex items-center mb-2"><Key className="w-4 h-4 mr-2" /> Certificados de Aplicação (MTLS)</h4>
+                          <p className="text-xs text-orange-800 mb-4">Você precisa fazer upload do arquivo <b>.crt</b> e da chave privada <b>.key</b> gerados no portal do Banco Inter.</p>
+                          
+                          <div className="flex flex-col gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="border-2 border-dashed border-orange-300 rounded-xl p-4 bg-white relative hover:bg-orange-50 transition-colors">
+                                <input type="file" accept=".crt,.pem" onChange={e => setInterCertFile(e.target.files?.[0] || null)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                                <div className="flex items-center gap-3">
+                                  <FileText className="w-8 h-8 text-orange-500" />
+                                  <div>
+                                    <p className="font-bold text-sm text-slate-700">{interCertFile ? interCertFile.name : 'Clique para enviar .CRT'}</p>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="border-2 border-dashed border-orange-300 rounded-xl p-4 bg-white relative hover:bg-orange-50 transition-colors">
+                                <input type="file" accept=".key" onChange={e => setInterKeyFile(e.target.files?.[0] || null)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                                <div className="flex items-center gap-3">
+                                  <Key className="w-8 h-8 text-slate-500" />
+                                  <div>
+                                    <p className="font-bold text-sm text-slate-700">{interKeyFile ? interKeyFile.name : 'Clique para enviar .KEY'}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            <button type="button" onClick={handleInterCertUpload} disabled={!interCertFile || !interKeyFile} className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 font-bold rounded-lg text-sm w-full md:w-auto">Enviar e Validar Certificados</button>
+                          </div>
+                          
+                          {settings.inter_cert_path && (
+                            <div className="mt-4 flex items-center gap-2 text-xs font-bold text-emerald-600 bg-emerald-50 py-1.5 px-3 rounded-lg w-fit border border-emerald-200">
+                              <CheckCircle className="w-4 h-4" /> Certificados ativos e salvos no servidor
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
