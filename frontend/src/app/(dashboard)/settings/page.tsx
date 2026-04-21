@@ -110,6 +110,8 @@ export default function SettingsPage() {
     inter_api_version: 'V2',
     inter_client_id: '',
     inter_client_secret: '',
+    inter_cert_path: '',
+    inter_key_path: '',
     inter_account_number: '',
   });
 
@@ -193,6 +195,8 @@ export default function SettingsPage() {
         inter_api_version: data.inter_api_version || 'V2',
         inter_client_id: data.inter_client_id || '',
         inter_client_secret: data.inter_client_secret || '',
+        inter_cert_path: data.inter_cert_path || '',
+        inter_key_path: data.inter_key_path || '',
         inter_account_number: data.inter_account_number || '',
       }));
       const resPoints = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/print-points`, {
