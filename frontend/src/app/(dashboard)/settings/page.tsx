@@ -251,13 +251,18 @@ export default function SettingsPage() {
         body: JSON.stringify(fiscalPayload)
       });
 
+      const payloadSettings = { ...settings };
+      delete payloadSettings.inter_cert_path;
+      delete payloadSettings.inter_key_path;
+      delete payloadSettings.efi_certificate_path;
+
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(settings)
+        body: JSON.stringify(payloadSettings)
       });
 
       if (!res.ok) throw new Error('Falha ao salvar configurações');
