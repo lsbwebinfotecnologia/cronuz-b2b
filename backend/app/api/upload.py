@@ -205,7 +205,7 @@ async def upload_inter_certificates(
     Upload MTLS certificates (.crt and .key) for Banco Inter.
     """
     from app.models.user import UserRole
-    if current_user.type != UserRole.SELLER or current_user.company_id != company_id:
+    if current_user.type != UserRole.MASTER and current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
     if not cert_file.filename.endswith(".crt") and not cert_file.filename.endswith(".pem"):
