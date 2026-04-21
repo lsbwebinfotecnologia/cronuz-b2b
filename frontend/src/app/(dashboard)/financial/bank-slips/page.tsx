@@ -250,7 +250,7 @@ export default function BankSlipsPage() {
                                                         
                                                         <div className="hidden group-focus-within:block absolute right-0 top-full mt-1 w-48 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 p-1 z-50 text-left">
                                                             
-                                                            {!proc && slip.provider === "INTER" && (
+                                                            {(slip.provider === "INTER" || (slip.nosso_numero && slip.nosso_numero.startsWith("V3_REQ|"))) && (
                                                                 <button
                                                                     onClick={async (e) => {
                                                                         e.preventDefault();
