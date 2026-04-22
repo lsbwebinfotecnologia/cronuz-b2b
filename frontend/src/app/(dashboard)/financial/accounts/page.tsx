@@ -103,7 +103,7 @@ export default function AccountsPage() {
                 toast.success(editingAccount ? "Conta atualizada!" : "Conta criada!");
                 setIsModalOpen(false);
                 setEditingAccount(null);
-                setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '' });
+                setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '' });
                 fetchAccounts();
             } else {
                 let errText = "Erro desconhecido";
