@@ -227,11 +227,11 @@ export default function BankSlipsPage() {
                                             <td className="px-6 py-4">
                                                 <div className="flex items-center gap-2 max-w-xs">
                                                     <div className="font-mono text-xs truncate bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                                                        {proc ? "Na Fila (Assíncrono)..." : slip.nosso_numero || 'Não gerado'}
+                                                        {proc ? "Na Fila (Assíncrono)..." : displayNumero}
                                                     </div>
                                                     {!proc && slip.nosso_numero && (
                                                         <button 
-                                                            onClick={() => copyToClipboard(slip.nosso_numero, slip.id)}
+                                                            onClick={() => copyToClipboard(displayNumero, slip.id)}
                                                             className="p-1.5 text-slate-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-500/10 rounded-lg transition-colors"
                                                             title="Copiar Nosso Número"
                                                         >
