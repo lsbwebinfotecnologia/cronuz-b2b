@@ -93,7 +93,16 @@ def sync_bank_slip_status(inst_id: int, db: Session = Depends(get_db), current_u
         raise HTTPException(status_code=400, detail=str(e))
         
     situacao = inter_status.get("status")
+    cobranca_data = inter_status.get("cobranca", {})
+    boleto_data = inter_status.get("boleto", {})
     
+    if len(parts) == 2 and boleto_data.get("nossoNumero"):
+        # We finally got the final NossoNumero from the API
+        inst.bank_slip_nosso_numero = f"V3_REQ|{codigo_solicitacao}|{boleto_data.get('nossoNumero')}"
+        
+    if not situacao and cobranca_data.get("situacao"):
+        situacao = cobranca_data.get("situacao")
+        
     if situacao in ["RECEBIDO", "MARCADO_RECEBIDO"]:
         inst.status = "PAID"
         if inst.transaction.transaction_status == "PROSPECCAO":
