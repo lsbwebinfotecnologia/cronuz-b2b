@@ -294,7 +294,7 @@ def list_generic_installments(
             "customer_name": cust.name if cust else None,
             "is_conciliated": inst.is_conciliated,
             "is_fixed": trans.is_fixed,
-            "bank_slip_pdf": inst.bank_slip_pdf,
+            "bank_slip_pdf": inst.bank_slip_pdf_url,
             "bank_slip_nosso_numero": inst.bank_slip_nosso_numero,
             "inter_enabled": inter_enabled or False
         })
