@@ -242,7 +242,7 @@ def list_generic_installments(
 ):
     cid = get_company_id(current_user)
     from app.models.customer import Customer
-    from app.models.settings import CompanySettings
+    from app.models.company_settings import CompanySettings
     query = db.query(FinancialInstallment, FinancialTransaction, FinancialCategory, Customer, CompanySettings.inter_enabled).join(
         FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
     ).join(FinancialCategory, FinancialTransaction.category_id == FinancialCategory.id).outerjoin(
