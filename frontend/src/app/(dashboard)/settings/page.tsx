@@ -542,9 +542,6 @@ export default function SettingsPage() {
                           </div>
                         )}
                         
-                        <div className="space-y-1.5 md:col-span-2 border-t border-slate-100 dark:border-slate-800/60 pt-4 mt-2">
-                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
-                            
                         <div className="space-y-1.5 md:col-span-2 mt-4 pt-4 border-t border-slate-100 dark:border-slate-800/60">
                           <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Ponto de Impressão Padrão</h3>
                           <p className="text-xs text-slate-500 mb-3">Defina qual Série de Impressão será utilizada automaticamente nas rotinas do sistema.</p>
@@ -563,8 +560,9 @@ export default function SettingsPage() {
                             </select>
                           </div>
                         </div>
-                          </label>
-                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block mt-4">
+
+                        <div className="space-y-1.5 md:col-span-2 border-t border-slate-100 dark:border-slate-800/60 pt-4 mt-2">
+                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block mb-2">
                             Certificado Digital A1 (.pfx)
                           </label>
                           <div className="flex items-center gap-3 w-full">
@@ -574,7 +572,7 @@ export default function SettingsPage() {
                               onChange={handleNfseCertificateUpload}
                               className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100 dark:file:bg-purple-900/30 dark:file:text-purple-400"
                             />
-                            <div className="w-48">
+                            <div className="w-48 shrink-0">
                               <input type="password" placeholder="Senha do Certificado" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={fiscalSettings.cert_password || ''} onChange={e => setFiscalSettings({...fiscalSettings, cert_password: e.target.value})} />
                             </div>
                           </div>
