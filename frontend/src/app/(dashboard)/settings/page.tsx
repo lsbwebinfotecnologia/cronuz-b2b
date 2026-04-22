@@ -251,7 +251,7 @@ export default function SettingsPage() {
         body: JSON.stringify(fiscalPayload)
       });
 
-      const payloadSettings = { ...settings };
+      const payloadSettings: any = { ...settings };
       delete payloadSettings.inter_cert_path;
       delete payloadSettings.inter_key_path;
       delete payloadSettings.efi_certificate_path;
