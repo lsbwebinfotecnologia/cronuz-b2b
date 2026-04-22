@@ -507,8 +507,8 @@ export default function FinancialPage() {
                                                 </td>
                                                 <td className="px-6 py-4 text-right">
                                                     <div className="flex items-center justify-end gap-2">
-                                                        {inst.bank_slip_pdf ? (
-                                                            <a href={inst.bank_slip_pdf} target="_blank" rel="noopener noreferrer" className="p-1.5 ml-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 rounded-lg transition shrink-0" title="Visualizar Boleto PDF Banco Inter">
+                                                        {(inst.bank_slip_nosso_numero || inst.bank_slip_pdf) ? (
+                                                            <a href={inst.bank_slip_nosso_numero ? `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/${inst.id}/bank-slip-pdf` : inst.bank_slip_pdf} target="_blank" rel="noopener noreferrer" className="p-1.5 ml-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 rounded-lg transition shrink-0" title="Visualizar Boleto PDF Banco Inter">
                                                                 <FileText className="w-4 h-4"/>
                                                             </a>
                                                         ) : (

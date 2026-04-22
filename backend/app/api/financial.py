@@ -15,7 +15,8 @@ from app.schemas.financial import (
     FinancialAccount as FinancialAccountSchema, FinancialAccountCreate, FinancialAccountUpdate,
     FinancialCashFlowLog as FinancialCashFlowLogSchema,
     FinancialBulkConciliate,
-    FinancialTransactionUpdate, FinancialInstallmentEdit
+    FinancialTransactionUpdate, FinancialInstallmentEdit,
+    BankTransferRequest
 )
 from app.models.financial import FinancialCategory, FinancialTransaction, FinancialInstallment, FinancialAccount, FinancialCashFlowLog
 from app.models.company import Company
@@ -786,6 +787,28 @@ def update_account(acc_id: int, account: FinancialAccountUpdate, db: Session = D
         acc.closing_day = account.closing_day
     if account.due_day is not None:
         acc.due_day = account.due_day
+        
+    if account.current_balance is not None and account.current_balance != acc.current_balance:
+        difference = account.current_balance - acc.current_balance
+        move_type = "+" if difference > 0 else "-"
+        abs_diff = abs(difference)
+        desc = account.adjustment_description or "Ajuste manual de saldo"
+        
+        # Create category if missing
+        cat = db.query(FinancialCategory).filter(FinancialCategory.company_id == cid, FinancialCategory.name == "Ajuste de Saldo Manual").first()
+        if not cat:
+            cat = FinancialCategory(company_id=cid, name="Ajuste de Saldo Manual", type="RECEIVABLE" if move_type == "+" else "PAYABLE", is_system=True)
+            db.add(cat)
+            db.flush()
+            
+        acc.current_balance = account.current_balance
+        
+        log = FinancialCashFlowLog(
+            account_id=acc.id, description=desc, movement_type=move_type,
+            amount=abs_diff, progressive_balance=acc.current_balance
+        )
+        db.add(log)
+        
     db.commit()
     return {"message": "Account updated"}
 
@@ -804,6 +827,77 @@ def delete_account(acc_id: int, db: Session = Depends(get_db), current_user: Use
     db.delete(acc)
     db.commit()
     return {"message": "Deleted"}
+
+@router.post("/financial/accounts/transfer")
+def transfer_account(data: BankTransferRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    cid = get_company_id(current_user)
+    if data.amount <= 0: raise HTTPException(status_code=400, detail="Valor deve ser maior que zero.")
+    if data.source_account_id == data.destination_account_id: raise HTTPException(status_code=400, detail="As contas de origem e destino devem ser diferentes.")
+    
+    src = db.query(FinancialAccount).filter(FinancialAccount.id == data.source_account_id, FinancialAccount.company_id == cid).first()
+    dst = db.query(FinancialAccount).filter(FinancialAccount.id == data.destination_account_id, FinancialAccount.company_id == cid).first()
+    
+    if not src or not dst: raise HTTPException(status_code=404, detail="Conta(s) não encontrada(s).")
+    
+    # Create or find "Transferência entre Contas" categories
+    cat_out = db.query(FinancialCategory).filter(FinancialCategory.company_id == cid, FinancialCategory.name == "Transferência entre Contas", FinancialCategory.type == "PAYABLE").first()
+    if not cat_out:
+        cat_out = FinancialCategory(company_id=cid, name="Transferência entre Contas", type="PAYABLE", is_system=True)
+        db.add(cat_out)
+    
+    cat_in = db.query(FinancialCategory).filter(FinancialCategory.company_id == cid, FinancialCategory.name == "Transferência entre Contas", FinancialCategory.type == "RECEIVABLE").first()
+    if not cat_in:
+        cat_in = FinancialCategory(company_id=cid, name="Transferência entre Contas", type="RECEIVABLE", is_system=True)
+        db.add(cat_in)
+    
+    db.flush()
+    
+    # Source Transaction (PAYABLE)
+    t_out = FinancialTransaction(
+        company_id=cid, description=data.description, category_id=cat_out.id, type="PAYABLE",
+        transaction_status="CONFIRMADO", is_fixed=False, total_amount=data.amount, issue_date=data.transfer_date,
+        first_due_date=data.transfer_date
+    )
+    db.add(t_out)
+    db.flush()
+    
+    i_out = FinancialInstallment(
+        transaction_id=t_out.id, number=1, due_date=data.transfer_date, amount=data.amount, status="PAID",
+        account_id=src.id, payment_date=datetime.now(), is_conciliated=True, conciliated_at=datetime.now()
+    )
+    db.add(i_out)
+    
+    src.current_balance -= data.amount
+    log_out = FinancialCashFlowLog(
+        account_id=src.id, installment_id=i_out.id, description=f"Transf. p/ {dst.name}",
+        movement_type="-", amount=data.amount, progressive_balance=src.current_balance
+    )
+    db.add(log_out)
+    
+    # Destination Transaction (RECEIVABLE)
+    t_in = FinancialTransaction(
+        company_id=cid, description=data.description, category_id=cat_in.id, type="RECEIVABLE",
+        transaction_status="CONFIRMADO", is_fixed=False, total_amount=data.amount, issue_date=data.transfer_date,
+        first_due_date=data.transfer_date
+    )
+    db.add(t_in)
+    db.flush()
+    
+    i_in = FinancialInstallment(
+        transaction_id=t_in.id, number=1, due_date=data.transfer_date, amount=data.amount, status="PAID",
+        account_id=dst.id, payment_date=datetime.now(), is_conciliated=True, conciliated_at=datetime.now()
+    )
+    db.add(i_in)
+    
+    dst.current_balance += data.amount
+    log_in = FinancialCashFlowLog(
+        account_id=dst.id, installment_id=i_in.id, description=f"Transf. de {src.name}",
+        movement_type="+", amount=data.amount, progressive_balance=dst.current_balance
+    )
+    db.add(log_in)
+    
+    db.commit()
+    return {"message": "Transferência realizada com sucesso!"}
 
 @router.delete("/financial/installments/{inst_id}")
 def delete_installment(
@@ -917,6 +1011,9 @@ def issue_inter_slip(
     
     if not installment:
         raise HTTPException(status_code=404, detail="Parcela não encontrada.")
+        
+    if installment.bank_slip_nosso_numero or installment.bank_slip_pdf_url:
+        raise HTTPException(status_code=400, detail="Boleto já emitido para esta parcela.")
     
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
     if not settings or not settings.inter_enabled:

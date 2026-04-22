@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { CheckCircle, ShieldAlert, ArrowLeft, RefreshCw, Layers, Calendar, Hash, Search } from 'lucide-react';
+import { CheckCircle, ShieldAlert, ArrowLeft, RefreshCw, Layers, Calendar, Hash, Search, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
@@ -174,6 +174,37 @@ export default function BankReconciliationPage() {
         else setSelectedIds(installments.map(i => i.id));
     };
 
+    const exportToCSV = () => {
+        if (installments.length === 0) {
+            toast.error("Não há dados para exportar");
+            return;
+        }
+
+        const headers = ["Status", "Lançamento", "Vencimento", "Pagamento", "Origem / Destino", "Descrição", "Conta Bancária", "Valor"];
+        const rows = installments.map(inst => [
+            activeTab === 'CONCILIATED' ? 'Conciliado' : 'Pendente',
+            inst.id,
+            inst.due_date ? new Date(inst.due_date).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '',
+            inst.payment_date ? new Date(inst.payment_date).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '',
+            inst.customer_name || 'Diversos',
+            inst.description,
+            accounts.find(a => a.id === inst.account_id)?.name || 'N/A',
+            (inst.type === 'RECEIVABLE' ? inst.amount : -inst.amount).toFixed(2).replace('.', ',')
+        ]);
+
+        const csvContent = "data:text/csv;charset=utf-8,\uFEFF" 
+            + headers.join(";") + "\n" 
+            + rows.map(e => e.join(";")).join("\n");
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `conciliacao_${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
     let runningBalance = previousBalance !== null ? previousBalance : 0;
 
     return (
@@ -236,6 +267,9 @@ export default function BankReconciliationPage() {
                         <button type="submit" className="px-6 h-11 bg-[var(--color-primary-base)] text-white font-bold rounded-xl hover:opacity-90 transition flex items-center justify-center gap-2 text-sm shadow-sm w-full sm:w-auto md:ml-auto shrink-0">
                             <Search className="w-4 h-4" /> Buscar
                         </button>
+                        <button type="button" onClick={exportToCSV} className="px-5 h-11 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition flex items-center justify-center gap-2 text-sm shadow-sm w-full sm:w-auto shrink-0">
+                            <Download className="w-4 h-4" /> Excel
+                        </button>
                     </form>
                 </div>
 
@@ -248,11 +282,11 @@ export default function BankReconciliationPage() {
                                         <input type="checkbox" checked={installments.length > 0 && selectedIds.length === installments.length} onChange={toggleAll} className="w-4 h-4 rounded border-slate-300 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)] cursor-pointer" />
                                     </th>
                                 )}
-                                <th className="px-6 py-4">Status Interno</th>
-                                <th className="px-6 py-4">Lançamento</th>
-                                <th className="px-6 py-4">Data Pagamento</th>
-                                <th className="px-6 py-4">Fatura / Título</th>
-                                <th className="px-6 py-4">Movimentação Banco</th>
+                                <th className="px-6 py-4">Transação (Origem / Destino)</th>
+                                <th className="px-6 py-4">Vencimento</th>
+                                <th className="px-6 py-4">Pagamento</th>
+                                <th className="px-6 py-4">Descrição</th>
+                                <th className="px-6 py-4">Valor</th>
                                 {activeTab === 'CONCILIATED' && accountFilter && (
                                     <th className="px-6 py-4 text-right">Saldo Atualizado</th>
                                 )}
@@ -261,10 +295,10 @@ export default function BankReconciliationPage() {
                         </thead>
                         <tbody>
                             {loading ? (
-                                <tr><td colSpan={6} className="py-12 text-center text-slate-500">Listando auditoria...</td></tr>
+                                <tr><td colSpan={activeTab === 'PENDING' ? 6 : 5} className="py-12 text-center text-slate-500">Listando auditoria...</td></tr>
                             ) : installments.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} className="py-16 text-center text-slate-400 dark:text-slate-500">
+                                    <td colSpan={activeTab === 'PENDING' ? 6 : 5} className="py-16 text-center text-slate-400 dark:text-slate-500">
                                         {activeTab === 'PENDING' ? (
                                             <div className="flex flex-col items-center gap-3 text-emerald-500 font-bold">
                                                 <CheckCircle className="w-10 h-10"/> <span className="text-lg text-slate-500 font-medium">Nenhuma conciliação pendente. Tudo em dia!</span>
@@ -276,7 +310,7 @@ export default function BankReconciliationPage() {
                                 <>
                                     {activeTab === 'CONCILIATED' && accountFilter && (
                                         <tr className="bg-slate-50/50 dark:bg-slate-800/30 border-b border-slate-200 dark:border-slate-800">
-                                            <td colSpan={5} className="px-6 py-4 font-semibold text-slate-500 text-right uppercase text-xs tracking-wider">
+                                            <td colSpan={4} className="px-6 py-4 font-semibold text-slate-500 text-right uppercase text-xs tracking-wider">
                                                 Saldo Inicial (Até {startDate ? new Date(startDate).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'o Início'})
                                             </td>
                                             <td className="px-6 py-4 font-black text-slate-700 dark:text-slate-300 text-right">
@@ -302,21 +336,26 @@ export default function BankReconciliationPage() {
                                                 </td>
                                             )}
                                             <td className="px-6 py-4">
-                                                {activeTab === 'PENDING' ? (
-                                                    <span className="bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-400 font-bold px-2.5 py-1 rounded-md text-[10px] tracking-wider">A FECHAR</span>
-                                                ) : (
-                                                    <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400 font-bold px-2.5 py-1 rounded-md text-[10px] tracking-wider">(FECHADO)</span>
-                                                )}
+                                                <div className="flex flex-col gap-1.5">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-bold text-slate-500 text-xs">#{inst.id}</span>
+                                                        {activeTab === 'PENDING' ? (
+                                                            <span className="bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-400 font-bold px-2 py-0.5 rounded text-[9px] tracking-wider">A FECHAR</span>
+                                                        ) : (
+                                                            <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400 font-bold px-2 py-0.5 rounded text-[9px] tracking-wider">FECHADO</span>
+                                                        )}
+                                                    </div>
+                                                    <p className="font-bold text-[var(--color-primary-base)] text-sm truncate max-w-[200px]" title={inst.customer_name || 'Diversos'}>{inst.customer_name || 'Diversos'}</p>
+                                                </div>
                                             </td>
-                                            <td className="px-6 py-4 font-bold text-slate-500">
-                                                #{inst.id}
+                                            <td className="px-6 py-4 font-medium text-slate-900 dark:text-white">
+                                                {inst.due_date ? new Date(inst.due_date).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '-'}
                                             </td>
                                             <td className="px-6 py-4 font-medium text-slate-900 dark:text-white">
                                                 {inst.payment_date ? new Date(inst.payment_date).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'Sem data'}
                                             </td>
                                             <td className="px-6 py-4">
-                                                <p className="font-bold text-slate-900 dark:text-white max-w-xs truncate" title={inst.description}>{inst.description}</p>
-                                                <p className="text-xs text-slate-500">{inst.customer_name || 'Entidade Diversa'}</p>
+                                                <p className="font-medium text-slate-900 dark:text-white max-w-[200px] truncate" title={inst.description}>{inst.description}</p>
                                             </td>
                                             <td className="px-6 py-4">
                                                 <span className={`font-bold ${inst.type === 'RECEIVABLE' ? 'text-emerald-600' : 'text-rose-600'}`}>
@@ -344,7 +383,7 @@ export default function BankReconciliationPage() {
                                     })}
                                     {activeTab === 'CONCILIATED' && accountFilter && installments.length > 0 && (
                                         <tr className="bg-indigo-50/50 dark:bg-indigo-900/10 border-t-2 border-indigo-100 dark:border-indigo-900/50">
-                                            <td colSpan={5} className="px-6 py-4 font-bold text-indigo-700 dark:text-indigo-400 text-right uppercase text-sm tracking-wider">
+                                            <td colSpan={4} className="px-6 py-4 font-bold text-indigo-700 dark:text-indigo-400 text-right uppercase text-sm tracking-wider">
                                                 Saldo Final no Período
                                             </td>
                                             <td className="px-6 py-4 font-black text-indigo-700 dark:text-indigo-400 text-right text-base text-nowrap">

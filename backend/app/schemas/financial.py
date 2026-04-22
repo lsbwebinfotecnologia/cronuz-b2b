@@ -98,6 +98,8 @@ class FinancialAccountUpdate(BaseModel):
     name: Optional[str] = None
     closing_day: Optional[int] = None
     due_day: Optional[int] = None
+    current_balance: Optional[float] = None
+    adjustment_description: Optional[str] = None
 
 class FinancialAccount(FinancialAccountBase):
     id: int
@@ -151,3 +153,10 @@ class FinancialTransaction(FinancialTransactionBase):
     
     class Config:
         from_attributes = True
+
+class BankTransferRequest(BaseModel):
+    source_account_id: int
+    destination_account_id: int
+    amount: float
+    transfer_date: date
+    description: str = "Transferência entre contas"
