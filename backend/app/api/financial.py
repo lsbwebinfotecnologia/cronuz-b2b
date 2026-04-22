@@ -237,7 +237,10 @@ def list_generic_installments(
     installment_id: Optional[int] = None,
     transaction_id: Optional[int] = None,
     type: Optional[str] = None,
+    types: Optional[str] = None,
     account_id: Optional[int] = None,
+    order_id: Optional[int] = None,
+    search: Optional[str] = None,
     page: int = 1,
     page_size: int = 50
 ):
