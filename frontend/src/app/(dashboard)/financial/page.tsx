@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { DollarSign, CheckCircle, Search, Clock, AlertCircle, Plus, X, ArrowUpCircle, ArrowDownCircle, BarChart3, TrendingUp, Building2, CreditCard, Wallet, Pencil, Eye, ChevronLeft, ChevronRight, Hash, Trash2, AlertTriangle } from 'lucide-react';
+import { DollarSign, CheckCircle, Search, Clock, AlertCircle, Plus, X, ArrowUpCircle, ArrowDownCircle, BarChart3, TrendingUp, Building2, CreditCard, Wallet, Pencil, Eye, ChevronLeft, ChevronRight, Hash, Trash2, AlertTriangle, FileText, QrCode } from 'lucide-react';
 import { toast } from 'sonner';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
 
 export default function FinancialPage() {
@@ -14,6 +14,7 @@ export default function FinancialPage() {
     const [metrics, setMetrics] = useState({ total_open: 0, total_paid: 0, total_overdue: 0 });
     const [cashflow, setCashflow] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [interEnabled, setInterEnabled] = useState(false);
     const [installmentIdFilter, setInstallmentIdFilter] = useState('');
     const [page, setPage] = useState(1);
     const [total, setTotal] = useState(0);
@@ -54,6 +55,20 @@ export default function FinancialPage() {
         fetchCustomers();
         fetchAccounts();
         fetchCashflow();
+        
+        const fetchSettings = async () => {
+            const u = getUser();
+            if (u?.company_id) {
+                try {
+                    const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${u.company_id}/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
+                    if (r.ok) {
+                        const d = await r.json();
+                        setInterEnabled(d.inter_enabled || false);
+                    }
+                } catch(e) {}
+            }
+        };
+        fetchSettings();
     }, []);
 
     useEffect(() => {
@@ -322,6 +337,25 @@ export default function FinancialPage() {
         } catch(e) { toast.error("Erro ao excluir"); }
     };
 
+    const handleIssueInterSlip = async (instId: number) => {
+        const loadingId = toast.loading("Emitindo boleto no Banco Inter...");
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/${instId}/issue-inter-slip`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${getToken()}` },
+            });
+            if (res.ok) {
+                toast.success("Boleto emitido com sucesso!", { id: loadingId });
+                fetchInstallments(); // Reload to get PDF URL
+            } else {
+                const data = await res.json();
+                toast.error(data.detail || "Erro ao emitir boleto.", { id: loadingId });
+            }
+        } catch (e) {
+            toast.error("Erro de conexão com o servidor.", { id: loadingId });
+        }
+    };
+
     const maxChartValue = Math.max(...cashflow.map(c => Math.max(c.Receitas, c.Despesas + c.Prospeccoes, 100)));
     const totalConsolidated = accounts.reduce((acc, curr) => acc + (curr.type !== 'CREDIT_CARD' ? curr.current_balance : 0), 0);
     const totalCreditDebt = accounts.reduce((acc, curr) => acc + (curr.type === 'CREDIT_CARD' && curr.current_balance < 0 ? Math.abs(curr.current_balance) : 0), 0);
@@ -487,6 +521,17 @@ export default function FinancialPage() {
                                                 </td>
                                                 <td className="px-6 py-4 text-right">
                                                     <div className="flex items-center justify-end gap-2">
+                                                        {inst.bank_slip_pdf ? (
+                                                            <a href={inst.bank_slip_pdf} target="_blank" rel="noopener noreferrer" className="p-1.5 ml-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 rounded-lg transition shrink-0" title="Visualizar Boleto PDF Banco Inter">
+                                                                <FileText className="w-4 h-4"/>
+                                                            </a>
+                                                        ) : (
+                                                            inst.status !== 'PAID' && inst.status !== 'CANCELLED' && isReceivable && interEnabled && (
+                                                                <button onClick={() => window.confirm("Deseja emitir boleto pelo Banco Inter para esta parcela?") && handleIssueInterSlip(inst.id)} className="p-1.5 ml-1 bg-slate-100 hover:bg-orange-100 dark:bg-slate-800 dark:hover:bg-orange-900/30 text-slate-500 hover:text-orange-600 dark:hover:text-orange-400 rounded-lg transition shrink-0" title="Gerar Boleto Banco Inter">
+                                                                    <QrCode className="w-4 h-4"/>
+                                                                </button>
+                                                            )
+                                                        )}
                                                         {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && (
                                                             <button onClick={()=>{
                                                                 setPayData({inst_id: inst.id, account_id: '', amount: inst.amount, editMode: false, payment_date: new Date().toISOString().split('T')[0], category_id: inst.category_id || ''});
