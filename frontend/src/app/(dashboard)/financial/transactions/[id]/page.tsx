@@ -22,25 +22,44 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
     const [instData, setInstData] = useState({ due_date: '', amount: 0 });
     const [saving, setSaving] = useState(false);
 
+    const fetchSettings = async (companyId: number) => {
+        try {
+            const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
+            if (r.ok) {
+                const d = await r.json();
+                setInterEnabled(d.inter_enabled || false);
+            }
+        } catch(e) {}
+    };
+
     useEffect(() => {
         fetchDetails();
         fetchCategories();
         fetchCustomers();
-        
-        const fetchSettings = async () => {
-            const u = getUser();
-            if (u?.company_id) {
-                try {
-                    const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${u.company_id}/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
-                    if (r.ok) {
-                        const d = await r.json();
-                        setInterEnabled(d.inter_enabled || false);
-                    }
-                } catch(e) {}
-            }
-        };
-        fetchSettings();
     }, []);
+
+    const fetchDetails = async () => {
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/transactions/${unwrappedParams.id}/details`, {
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setTrans(data);
+                if (data.company_id) {
+                    fetchSettings(data.company_id);
+                } else {
+                    const u = getUser();
+                    if(u?.company_id) fetchSettings(u.company_id);
+                }
+            }
+            else toast.error("Transação não encontrada");
+        } catch (e) {
+            toast.error("Erro ao carregar detalhes");
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const fetchCategories = async () => {
         try {
@@ -57,20 +76,6 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                 setCustomers(data.items || data);
             }
         } catch (e) {}
-    };
-
-    const fetchDetails = async () => {
-        try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/transactions/${unwrappedParams.id}/details`, {
-                headers: { 'Authorization': `Bearer ${getToken()}` }
-            });
-            if (res.ok) setTrans(await res.json());
-            else toast.error("Transação não encontrada");
-        } catch (e) {
-            toast.error("Erro ao carregar detalhes");
-        } finally {
-            setLoading(false);
-        }
     };
 
     if (loading) return <div className="p-12 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>;

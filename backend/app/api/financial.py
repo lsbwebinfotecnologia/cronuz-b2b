@@ -242,10 +242,13 @@ def list_generic_installments(
 ):
     cid = get_company_id(current_user)
     from app.models.customer import Customer
-    query = db.query(FinancialInstallment, FinancialTransaction, FinancialCategory, Customer).join(
+    from app.models.settings import CompanySettings
+    query = db.query(FinancialInstallment, FinancialTransaction, FinancialCategory, Customer, CompanySettings.inter_enabled).join(
         FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
     ).join(FinancialCategory, FinancialTransaction.category_id == FinancialCategory.id).outerjoin(
         Customer, FinancialTransaction.customer_id == Customer.id
+    ).outerjoin(
+        CompanySettings, FinancialTransaction.company_id == CompanySettings.company_id
     )
     if cid: query = query.filter(FinancialTransaction.company_id == cid)
     if status and status != 'ALL': 
@@ -278,7 +281,7 @@ def list_generic_installments(
     results = query.order_by(FinancialInstallment.due_date.asc()).offset((page - 1) * page_size).limit(page_size).all()
     
     items = []
-    for inst, trans, cat, cust in results:
+    for inst, trans, cat, cust, inter_enabled in results:
         items.append({
             "id": inst.id, "number": inst.number, "due_date": inst.due_date, "amount": inst.amount, "status": inst.status,
             "payment_date": inst.payment_date, "transaction_id": trans.id, "description": trans.description, "order_id": trans.order_id,
@@ -288,7 +291,8 @@ def list_generic_installments(
             "is_conciliated": inst.is_conciliated,
             "is_fixed": trans.is_fixed,
             "bank_slip_pdf": inst.bank_slip_pdf,
-            "bank_slip_nosso_numero": inst.bank_slip_nosso_numero
+            "bank_slip_nosso_numero": inst.bank_slip_nosso_numero,
+            "inter_enabled": inter_enabled or False
         })
     return {
         "items": items,

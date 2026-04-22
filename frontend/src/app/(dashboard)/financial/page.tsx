@@ -55,20 +55,6 @@ export default function FinancialPage() {
         fetchCustomers();
         fetchAccounts();
         fetchCashflow();
-        
-        const fetchSettings = async () => {
-            const u = getUser();
-            if (u?.company_id) {
-                try {
-                    const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${u.company_id}/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
-                    if (r.ok) {
-                        const d = await r.json();
-                        setInterEnabled(d.inter_enabled || false);
-                    }
-                } catch(e) {}
-            }
-        };
-        fetchSettings();
     }, []);
 
     useEffect(() => {
@@ -526,7 +512,7 @@ export default function FinancialPage() {
                                                                 <FileText className="w-4 h-4"/>
                                                             </a>
                                                         ) : (
-                                                            inst.status !== 'PAID' && inst.status !== 'CANCELLED' && isReceivable && interEnabled && (
+                                                            inst.status !== 'PAID' && inst.status !== 'CANCELLED' && isReceivable && inst.inter_enabled && (
                                                                 <button onClick={() => window.confirm("Deseja emitir boleto pelo Banco Inter para esta parcela?") && handleIssueInterSlip(inst.id)} className="p-1.5 ml-1 bg-slate-100 hover:bg-orange-100 dark:bg-slate-800 dark:hover:bg-orange-900/30 text-slate-500 hover:text-orange-600 dark:hover:text-orange-400 rounded-lg transition shrink-0" title="Gerar Boleto Banco Inter">
                                                                     <QrCode className="w-4 h-4"/>
                                                                 </button>

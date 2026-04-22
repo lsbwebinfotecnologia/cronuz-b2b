@@ -100,6 +100,16 @@ export default function OrderDetailPage() {
     const [horusSyncing, setHorusSyncing] = useState(false);
     const [interEnabled, setInterEnabled] = useState(false);
 
+    const fetchSettings = async (companyId: number) => {
+        try {
+            const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
+            if (r.ok) {
+                const d = await r.json();
+                setInterEnabled(d.inter_enabled || false);
+            }
+        } catch(e) {}
+    };
+
     const fetchOrder = async () => {
         try {
             const token = getToken();
@@ -110,6 +120,12 @@ export default function OrderDetailPage() {
             if (response.ok) {
                 const data = await response.json();
                 setOrder(data);
+                if (data.company_id) {
+                    fetchSettings(data.company_id);
+                } else {
+                    const u = getUser();
+                    if(u?.company_id) fetchSettings(u.company_id);
+                }
             }
         } catch (error) {
             console.error("Error fetching order detail:", error);
@@ -117,24 +133,10 @@ export default function OrderDetailPage() {
             setLoading(false);
         }
     };
-    
-    const fetchSettings = async () => {
-        const u = getUser();
-        if (u?.company_id) {
-            try {
-                const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${u.company_id}/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
-                if (r.ok) {
-                    const d = await r.json();
-                    setInterEnabled(d.inter_enabled || false);
-                }
-            } catch(e) {}
-        }
-    };
 
     useEffect(() => {
         if (params.id) {
             fetchOrder();
-            fetchSettings();
         }
     }, [params.id]);
 
