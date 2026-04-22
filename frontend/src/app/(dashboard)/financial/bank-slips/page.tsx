@@ -141,7 +141,7 @@ export default function BankSlipsPage() {
                             <div className="w-2 h-2 rounded-full bg-sky-500"></div> A Receber
                         </div>
                         <span className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(slips.filter(s => ['OPEN', 'PROCESSING'].includes(s.status) && new Date(s.due_date) >= new Date()).reduce((acc, s) => acc + s.amount, 0))}
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(slips.filter(s => ['OPEN', 'PENDING', 'PROCESSING'].includes(s.status) && new Date(s.due_date) >= new Date(new Date().setHours(0,0,0,0))).reduce((acc, s) => acc + s.amount, 0))}
                         </span>
                     </div>
 
@@ -150,7 +150,7 @@ export default function BankSlipsPage() {
                             <div className="w-2 h-2 rounded-full bg-orange-500"></div> Atrasado
                         </div>
                         <span className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(slips.filter(s => s.status === 'OVERDUE' || (s.status === 'OPEN' && new Date(s.due_date) < new Date())).reduce((acc, s) => acc + s.amount, 0))}
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(slips.filter(s => s.status === 'OVERDUE' || (['OPEN', 'PENDING'].includes(s.status) && new Date(s.due_date) < new Date(new Date().setHours(0,0,0,0)))).reduce((acc, s) => acc + s.amount, 0))}
                         </span>
                     </div>
 
