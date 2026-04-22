@@ -3,7 +3,7 @@
 import { useState, useEffect, use } from 'react';
 import { ArrowLeft, Clock, CheckCircle, Tag, TrendingUp, TrendingDown, DollarSign, Pencil, X, Save, FileText, QrCode, BookOpen, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
 
 export default function FinancialTransactionDetailsPage({ params }: { params: any }) {
@@ -13,6 +13,7 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
 
     const [categories, setCategories] = useState<any[]>([]);
     const [customers, setCustomers] = useState<any[]>([]);
+    const [interEnabled, setInterEnabled] = useState(false);
 
     const [editTransOpen, setEditTransOpen] = useState(false);
     const [editTransData, setEditTransData] = useState({ description: '', category_id: '', customer_id: '' });
@@ -25,6 +26,20 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
         fetchDetails();
         fetchCategories();
         fetchCustomers();
+        
+        const fetchSettings = async () => {
+            const u = getUser();
+            if (u?.company_id) {
+                try {
+                    const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${u.company_id}/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
+                    if (r.ok) {
+                        const d = await r.json();
+                        setInterEnabled(d.inter_enabled || false);
+                    }
+                } catch(e) {}
+            }
+        };
+        fetchSettings();
     }, []);
 
     const fetchCategories = async () => {
@@ -256,7 +271,7 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                             <FileText className="w-3.5 h-3.5"/> Boleto PDF
                                         </a>
                                     ) : (
-                                        inst.status !== 'PAID' && inst.status !== 'CANCELLED' && isReceivable && (
+                                        inst.status !== 'PAID' && inst.status !== 'CANCELLED' && isReceivable && interEnabled && (
                                             <button onClick={() => window.confirm("Deseja emitir boleto pelo Banco Inter para esta parcela?") && handleIssueInterSlip(inst.id)} className="p-2 ml-1 bg-slate-100 hover:bg-orange-100 dark:bg-slate-800 dark:hover:bg-orange-900/30 text-slate-500 hover:text-orange-600 dark:hover:text-orange-400 rounded-lg transition shrink-0 border border-transparent hover:border-orange-200 dark:hover:border-orange-800/50" title="Gerar Boleto Banco Inter">
                                                 <QrCode className="w-4 h-4"/>
                                             </button>

@@ -5,7 +5,7 @@ import { Package, ArrowLeft, Building2, User, FileText, Download, Truck, Message
 import { toast } from "sonner";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { getToken } from "@/lib/auth";
+import { getToken, getUser } from "@/lib/auth";
 import { ProductImage } from "@/components/store/ProductImage";
 
 interface Customer {
@@ -98,6 +98,7 @@ export default function OrderDetailPage() {
     const [horusPreviewLoading, setHorusPreviewLoading] = useState(false);
     const [horusPreviewData, setHorusPreviewData] = useState<any>(null);
     const [horusSyncing, setHorusSyncing] = useState(false);
+    const [interEnabled, setInterEnabled] = useState(false);
 
     const fetchOrder = async () => {
         try {
@@ -116,10 +117,24 @@ export default function OrderDetailPage() {
             setLoading(false);
         }
     };
+    
+    const fetchSettings = async () => {
+        const u = getUser();
+        if (u?.company_id) {
+            try {
+                const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${u.company_id}/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
+                if (r.ok) {
+                    const d = await r.json();
+                    setInterEnabled(d.inter_enabled || false);
+                }
+            } catch(e) {}
+        }
+    };
 
     useEffect(() => {
         if (params.id) {
             fetchOrder();
+            fetchSettings();
         }
     }, [params.id]);
 
@@ -351,13 +366,15 @@ export default function OrderDetailPage() {
                         {statusLabelMap[order.status] || order.status}
                     </span>
 
-                    <button
-                        onClick={() => window.confirm("Emitir boleto para este pedido no Banco Inter?") && handleIssueInterSlip()}
-                        className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-2 shadow-sm shadow-orange-500/20"
-                    >
-                        <QrCode className="w-4 h-4" />
-                        Boleto Inter
-                    </button>
+                    {interEnabled && (
+                        <button
+                            onClick={() => window.confirm("Emitir boleto para este pedido no Banco Inter?") && handleIssueInterSlip()}
+                            className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-2 shadow-sm shadow-orange-500/20"
+                        >
+                            <QrCode className="w-4 h-4" />
+                            Boleto Inter
+                        </button>
+                    )}
 
                     {order.invoice_xml_available && (
                         <button

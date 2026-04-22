@@ -3,7 +3,7 @@
 import { useEffect, useState, use } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 
 import { 
     ArrowLeft, Save, FileText, Calendar, Building, Info, 
@@ -21,6 +21,7 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
 
     const [order, setOrder] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+    const [interEnabled, setInterEnabled] = useState(false);
     
     // Formulation states
     const [negotiatedValue, setNegotiatedValue] = useState<number>(0);
@@ -54,6 +55,17 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                 });
                 const srvData = await srvRes.json();
                 setServicesOptions(srvData.items || []);
+
+                const u = getUser();
+                if (u?.company_id) {
+                    try {
+                        const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${u.company_id}/settings`, { headers: { 'Authorization': `Bearer ${token}` }});
+                        if (r.ok) {
+                            const d = await r.json();
+                            setInterEnabled(d.inter_enabled || false);
+                        }
+                    } catch(e) {}
+                }
 
             } catch (error) {
                 console.error("Erro ao carregar detalhes:", error);
@@ -143,26 +155,6 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
 
     if (!order) return null;
 
-    const handleIssueInterSlip = async () => {
-        if (!order) return;
-        const loadingId = toast.loading("Gerando Boleto Banco Inter...");
-        try {
-            const token = getToken();
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-            const res = await fetch(`${apiUrl}/service-orders/${order.id}/issue-inter-slip`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (res.ok) {
-                toast.success("Boleto emitido! Acesse o painel financeiro para visualizar.", { id: loadingId });
-            } else {
-                const data = await res.json();
-                toast.error(data.detail || "Erro ao emitir boleto.", { id: loadingId });
-            }
-        } catch (e) {
-            toast.error("Erro de conexão.", { id: loadingId });
-        }
-    };
 
     return (
         <div className="max-w-5xl mx-auto pb-12">
