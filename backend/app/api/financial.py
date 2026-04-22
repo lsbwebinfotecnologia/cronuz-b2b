@@ -18,6 +18,9 @@ from app.schemas.financial import (
     FinancialTransactionUpdate, FinancialInstallmentEdit
 )
 from app.models.financial import FinancialCategory, FinancialTransaction, FinancialInstallment, FinancialAccount, FinancialCashFlowLog
+from app.models.company import Company
+from app.models.customer import Customer
+from app.models.company_settings import CompanySettings
 from datetime import timedelta
 
 router = APIRouter()
@@ -235,14 +238,12 @@ def list_generic_installments(
     transaction_id: Optional[int] = None,
     type: Optional[str] = None,
     account_id: Optional[int] = None,
-    order_id: Optional[int] = None,
-    search: Optional[str] = None,
     page: int = 1,
     page_size: int = 50
 ):
     cid = get_company_id(current_user)
-    from app.models.customer import Customer
-    from app.models.company_settings import CompanySettings
+    str_types = types.split(',') if types else []
+    
     query = db.query(FinancialInstallment, FinancialTransaction, FinancialCategory, Customer, CompanySettings.inter_enabled).join(
         FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
     ).join(FinancialCategory, FinancialTransaction.category_id == FinancialCategory.id).outerjoin(
