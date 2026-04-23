@@ -242,7 +242,8 @@ def get_service_order_pdf(
                 headers={"Content-Disposition": f"inline; filename=NFSe_{order_id}.pdf"}
             )
         else:
-            return JSONResponse(status_code=400, content={"error": res.get("error", "Não foi possível baixar o DANFSe. Verifique o status da nota.")})
+            # Falha no download do PDF da Sefaz (ex: erro 502). Vamos usar o gerador local de PDF como fallback.
+            pass
             
     xml_content = nfse_q.xml_retorno
         
