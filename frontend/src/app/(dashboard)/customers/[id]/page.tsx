@@ -460,11 +460,11 @@ export default function CustomerDetailsPage() {
           if (!data.erro) {
             setNewAddress(prev => ({
               ...prev,
-              street: data.logradouro || prev.street,
-              neighborhood: data.bairro || prev.neighborhood,
-              city: data.localidade || prev.city,
-              state: data.uf || prev.state,
-              ibge_code: data.ibge || prev.ibge_code
+              street: data.logradouro || '',
+              neighborhood: data.bairro || '',
+              city: data.localidade || '',
+              state: data.uf || '',
+              ibge_code: data.ibge || ''
             }));
           }
         }
