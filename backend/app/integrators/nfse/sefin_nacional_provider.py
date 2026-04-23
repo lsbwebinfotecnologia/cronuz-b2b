@@ -74,12 +74,17 @@ class SefinNacionalProvider(BaseNfseProvider):
         
         inf_dps = etree.SubElement(dps_root, "infDPS", Id=id_dps)
         
+        import pytz
+        from datetime import timedelta
+        sp_tz = pytz.timezone('America/Sao_Paulo')
+        now_sp = datetime.now(sp_tz) - timedelta(minutes=2)
+
         etree.SubElement(inf_dps, "tpAmb").text = self.tpAmb
-        etree.SubElement(inf_dps, "dhEmi").text = datetime.now().astimezone().replace(microsecond=0).isoformat()
+        etree.SubElement(inf_dps, "dhEmi").text = now_sp.replace(microsecond=0).isoformat()
         etree.SubElement(inf_dps, "verAplic").text = "Cronuz-B2B-1.0"
         etree.SubElement(inf_dps, "serie").text = serie
         etree.SubElement(inf_dps, "nDPS").text = str(num_dps_int)
-        etree.SubElement(inf_dps, "dCompet").text = datetime.now().strftime("%Y-%m-%d")
+        etree.SubElement(inf_dps, "dCompet").text = now_sp.strftime("%Y-%m-%d")
         etree.SubElement(inf_dps, "tpEmit").text = tp_emit
         etree.SubElement(inf_dps, "cLocEmi").text = ibge_clean_emit
         

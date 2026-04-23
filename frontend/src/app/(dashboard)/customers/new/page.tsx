@@ -115,7 +115,7 @@ export default function NewCustomerPage() {
                    city: data.municipio || '',
                    state: data.uf || '',
                    zip_code: maskCEP(data.cep.toString()),
-                   ibge_code: data.codigo_municipio ? data.codigo_municipio.toString() : '',
+                   ibge_code: data.codigo_municipio_ibge ? data.codigo_municipio_ibge.toString() : '',
                    type: 'MAIN'
                  }]);
               }
