@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, AlertCircle, Lock, Mail, User, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -16,13 +16,23 @@ export default function CustomerLoginPage() {
     const [error, setError] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
 
-    const [mode, setMode] = useState<'LOGIN' | 'SETUP'>('LOGIN');
+    const searchParams = useSearchParams();
+    const token = searchParams.get('token');
+
+    const [mode, setMode] = useState<'LOGIN' | 'SETUP' | 'FORGOT_PASSWORD' | 'RESET_PASSWORD'>('LOGIN');
 
     const [formData, setFormData] = useState({
         email: '',
         password: '',
-        document: ''
+        document: '',
+        confirmPassword: ''
     });
+
+    useEffect(() => {
+        if (token) {
+            setMode('RESET_PASSWORD');
+        }
+    }, [token]);
 
     useEffect(() => {
         const fetchPlan = async () => {
@@ -100,6 +110,39 @@ export default function CustomerLoginPage() {
                     } else {
                         toast.error(data.detail || "E-mail ou senha incorretos.");
                     }
+                }
+            } else if (mode === 'FORGOT_PASSWORD') {
+                const response = await fetch(`${apiUrl}/auth/customer/forgot-password`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: formData.email, tenant_slug: slug })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    toast.success("Se o e-mail existir, você receberá um link de redefinição.");
+                    setMode('LOGIN');
+                } else {
+                    toast.error(data.detail || "Erro ao solicitar recuperação.");
+                }
+            } else if (mode === 'RESET_PASSWORD') {
+                if (formData.password !== formData.confirmPassword) {
+                    toast.error("As senhas não coincidem.");
+                    setSubmitting(false);
+                    return;
+                }
+                const response = await fetch(`${apiUrl}/auth/customer/reset-password`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: token, new_password: formData.password })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    toast.success("Senha redefinida com sucesso! Faça login para continuar.");
+                    router.push(`/h/${slug}/login`);
+                    setMode('LOGIN');
+                    setFormData(prev => ({ ...prev, password: '', confirmPassword: '' }));
+                } else {
+                    toast.error(data.detail || "Erro ao redefinir a senha. O link pode ter expirado.");
                 }
             } else {
                 const response = await fetch(`${apiUrl}/auth/customer/set-password`, {
@@ -186,33 +229,39 @@ export default function CustomerLoginPage() {
 
                 <div className="mb-8 text-center">
                     <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-                        {mode === 'LOGIN' ? 'Área do Assinante' : 'Primeiro Acesso'}
+                        {mode === 'LOGIN' ? 'Área do Assinante' : 
+                         mode === 'SETUP' ? 'Primeiro Acesso' : 
+                         mode === 'FORGOT_PASSWORD' ? 'Recuperar Senha' : 'Nova Senha'}
                     </h1>
                     <p className="text-slate-500 text-sm mt-2">
                         {mode === 'LOGIN' 
                             ? 'Acesse seu portal para gerenciar sua assinatura.'
-                            : 'Crie uma senha de acesso informando seus dados cadastrais.'}
+                            : mode === 'SETUP' ? 'Crie uma senha de acesso informando seus dados cadastrais.'
+                            : mode === 'FORGOT_PASSWORD' ? 'Informe seu e-mail para receber um link de redefinição de senha.'
+                            : 'Crie uma nova senha de acesso seguro.'}
                     </p>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-5">
-                    <div className="space-y-1.5">
-                        <label className="text-sm font-bold text-slate-700">E-mail Cadastrado</label>
-                        <div className="relative">
-                            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                                <Mail className="h-5 w-5 text-slate-400" />
+                    {mode !== 'RESET_PASSWORD' && (
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-bold text-slate-700">E-mail Cadastrado</label>
+                            <div className="relative">
+                                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                    <Mail className="h-5 w-5 text-slate-400" />
+                                </div>
+                                <input 
+                                    type="email" 
+                                    name="email" 
+                                    required 
+                                    value={formData.email} 
+                                    onChange={handleFormChange} 
+                                    className="w-full bg-slate-50 flex-1 border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] focus:ring-1 focus:ring-[var(--color-primary-base)] transition-colors" 
+                                    placeholder="seu@email.com" 
+                                />
                             </div>
-                            <input 
-                                type="email" 
-                                name="email" 
-                                required 
-                                value={formData.email} 
-                                onChange={handleFormChange} 
-                                className="w-full bg-slate-50 flex-1 border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] focus:ring-1 focus:ring-[var(--color-primary-base)] transition-colors" 
-                                placeholder="seu@email.com" 
-                            />
                         </div>
-                    </div>
+                    )}
 
                     {mode === 'SETUP' && (
                         <div className="space-y-1.5 animate-in slide-in-from-bottom-2 fade-in">
@@ -234,24 +283,54 @@ export default function CustomerLoginPage() {
                         </div>
                     )}
 
-                    <div className="space-y-1.5">
-                        <label className="text-sm font-bold text-slate-700">Senha</label>
-                        <div className="relative">
-                            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                                <Lock className="h-5 w-5 text-slate-400" />
+                    {(mode === 'LOGIN' || mode === 'SETUP' || mode === 'RESET_PASSWORD') && (
+                        <div className="space-y-1.5">
+                            <div className="flex items-center justify-between">
+                                <label className="text-sm font-bold text-slate-700">Senha</label>
+                                {mode === 'LOGIN' && (
+                                    <button type="button" onClick={() => setMode('FORGOT_PASSWORD')} className="text-xs font-bold text-[var(--color-primary-base)] hover:underline">
+                                        Esqueci a senha
+                                    </button>
+                                )}
                             </div>
-                            <input 
-                                type="password" 
-                                name="password" 
-                                required 
-                                value={formData.password} 
-                                onChange={handleFormChange} 
-                                minLength={6}
-                                className="w-full bg-slate-50 flex-1 border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] focus:ring-1 focus:ring-[var(--color-primary-base)] transition-colors" 
-                                placeholder="••••••••" 
-                            />
+                            <div className="relative">
+                                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                    <Lock className="h-5 w-5 text-slate-400" />
+                                </div>
+                                <input 
+                                    type="password" 
+                                    name="password" 
+                                    required 
+                                    value={formData.password} 
+                                    onChange={handleFormChange} 
+                                    minLength={6}
+                                    className="w-full bg-slate-50 flex-1 border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] focus:ring-1 focus:ring-[var(--color-primary-base)] transition-colors" 
+                                    placeholder="••••••••" 
+                                />
+                            </div>
                         </div>
-                    </div>
+                    )}
+
+                    {mode === 'RESET_PASSWORD' && (
+                        <div className="space-y-1.5 animate-in slide-in-from-bottom-2 fade-in">
+                            <label className="text-sm font-bold text-slate-700">Confirmar Nova Senha</label>
+                            <div className="relative">
+                                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                    <Lock className="h-5 w-5 text-slate-400" />
+                                </div>
+                                <input 
+                                    type="password" 
+                                    name="confirmPassword" 
+                                    required 
+                                    value={formData.confirmPassword} 
+                                    onChange={handleFormChange} 
+                                    minLength={6}
+                                    className="w-full bg-slate-50 flex-1 border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] focus:ring-1 focus:ring-[var(--color-primary-base)] transition-colors" 
+                                    placeholder="••••••••" 
+                                />
+                            </div>
+                        </div>
+                    )}
 
                     <div className="pt-4">
                         <button
@@ -262,7 +341,11 @@ export default function CustomerLoginPage() {
                             {submitting ? (
                                 <Loader2 className="h-5 w-5 animate-spin" />
                             ) : mode === 'LOGIN' ? (
-                                "Entrar Seguro"
+                                "Entrar"
+                            ) : mode === 'FORGOT_PASSWORD' ? (
+                                "Enviar Link de Recuperação"
+                            ) : mode === 'RESET_PASSWORD' ? (
+                                "Salvar Nova Senha"
                             ) : (
                                 "Salvar Senha e Voltar"
                             )}
@@ -283,9 +366,15 @@ export default function CustomerLoginPage() {
                         </p>
                     ) : (
                         <p className="text-sm text-slate-500">
-                            Já possui uma senha?{" "}
+                            Lembrou sua senha?{" "}
                             <span 
-                                onClick={() => setMode('LOGIN')}
+                                onClick={() => {
+                                    if(mode === 'RESET_PASSWORD') {
+                                        router.push(`/h/${slug}/login`);
+                                    } else {
+                                        setMode('LOGIN');
+                                    }
+                                }}
                                 className="font-bold text-[var(--color-primary-base)] hover:underline cursor-pointer"
                             >
                                 Faça Login aqui

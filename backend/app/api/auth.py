@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Form
+from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -155,3 +156,91 @@ def logout(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
     
     return {"message": "Deslogado com sucesso."}
 
+class UserForgotPasswordRequest(BaseModel):
+    email: str
+
+class UserResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+@router.post("/forgot-password")
+def forgot_password_user(payload: UserForgotPasswordRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+
+    if not user:
+        return {"message": "Se o e-mail estiver cadastrado, você receberá um link de recuperação."}
+
+    from app.core.security import create_reset_token
+    from app.models.company_settings import CompanySettings
+    from app.core.email import send_smtp_email
+    
+    token = create_reset_token(email=user.email, company_id=user.company_id or 1, user_type="user")
+    
+    company_id_to_check = user.company_id if user.company_id else 1
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id_to_check).first()
+    
+    if settings and settings.smtp_host and settings.smtp_username and settings.smtp_password:
+        company = db.query(Company).filter(Company.id == company_id_to_check).first()
+        company_name = company.name if company else "Cronuz"
+        
+        # Link para redefinição no frontend (login B2B)
+        reset_link = f"{settings.cover_image_base_url or 'http://localhost:3000'}/login?token={token}"
+        # Fallback local
+        reset_link = f"http://localhost:3000/login?token={token}"
+        
+        html_content = f"""
+        <html>
+            <body style="font-family: sans-serif; line-height: 1.6; color: #333;">
+                <h2 style="color: #0f172a;">Recuperação de Senha - {company_name}</h2>
+                <p>Olá, {user.name}</p>
+                <p>Recebemos uma solicitação para redefinir a senha do seu acesso corporativo.</p>
+                <p>Para criar uma nova senha, clique no botão abaixo (este link expira em 30 minutos):</p>
+                <div style="margin: 30px 0;">
+                    <a href="{reset_link}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Redefinir Minha Senha</a>
+                </div>
+                <p>Se você não solicitou esta alteração, pode ignorar este e-mail em segurança.</p>
+                <hr style="border: 1px solid #eee; margin-top: 40px;" />
+                <p style="font-size: 12px; color: #888;">Equipe {company_name}</p>
+            </body>
+        </html>
+        """
+        try:
+            send_smtp_email(
+                smtp_host=settings.smtp_host,
+                smtp_port=settings.smtp_port or 587,
+                smtp_username=settings.smtp_username,
+                smtp_password=settings.smtp_password,
+                smtp_from=settings.smtp_from_email or settings.smtp_username,
+                to_email=user.email,
+                subject=f"Recuperação de Senha - {company_name}",
+                html_content=html_content,
+                use_ssl=settings.smtp_use_ssl or False
+            )
+        except Exception as e:
+            print(f"Erro ao enviar email de recuperação (User): {e}")
+            pass
+
+    return {"message": "Se o e-mail estiver cadastrado, você receberá um link de recuperação."}
+
+@router.post("/reset-password")
+def reset_password_user(payload: UserResetPasswordRequest, db: Session = Depends(get_db)):
+    from app.core.security import verify_reset_token
+    
+    token_data = verify_reset_token(payload.token)
+    if not token_data or token_data.get("user_type") != "user":
+        raise HTTPException(status_code=400, detail="Token inválido ou expirado.")
+        
+    email = token_data.get("sub")
+    
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="A senha deve ter no mínimo 6 caracteres.")
+        
+    user = db.query(User).filter(User.email == email).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+        
+    user.password_hash = security.get_password_hash(payload.new_password)
+    db.commit()
+    
+    return {"message": "Senha redefinida com sucesso! Você já pode fazer login."}

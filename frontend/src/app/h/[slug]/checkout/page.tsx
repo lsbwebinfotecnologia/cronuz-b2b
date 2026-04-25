@@ -121,6 +121,22 @@ export default function HotsiteCheckoutPage() {
         setFormData(prev => ({ ...prev, [name]: value }));
     };
 
+    const handleInputBlur = () => {
+        // Only send if email is basically valid
+        if (formData.email && formData.email.includes('@')) {
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            fetch(`${apiUrl}/subscriptions/hotsite/${slug}/abandon`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: formData.customer_name,
+                    email: formData.email,
+                    phone: formData.phone
+                })
+            }).catch(e => console.error("Abandon tracker error:", e));
+        }
+    };
+
     const fetchAddressByCep = async (cepStr: string) => {
         try {
             const response = await fetch(`https://viacep.com.br/ws/${cepStr}/json/`);
@@ -417,7 +433,7 @@ export default function HotsiteCheckoutPage() {
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             <div className="space-y-1.5 md:col-span-2">
                                                 <label className="text-sm font-bold text-slate-700">Nome Completo</label>
-                                                <input type="text" name="customer_name" required value={formData.customer_name} onChange={handleFormChange} disabled={isSoldOut || submitting} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="João da Silva" />
+                                                <input type="text" name="customer_name" required value={formData.customer_name} onChange={handleFormChange} onBlur={handleInputBlur} disabled={isSoldOut || submitting} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="João da Silva" />
                                             </div>
                                             <div className="space-y-1.5">
                                                 <label className="text-sm font-bold text-slate-700">CPF ou CNPJ</label>
@@ -425,11 +441,11 @@ export default function HotsiteCheckoutPage() {
                                             </div>
                                             <div className="space-y-1.5">
                                                 <label className="text-sm font-bold text-slate-700">Telefone / WhatsApp</label>
-                                                <input type="text" name="phone" required value={formData.phone} onChange={handleFormChange} disabled={isSoldOut || submitting} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="(11) 90000-0000" />
+                                                <input type="text" name="phone" required value={formData.phone} onChange={handleFormChange} onBlur={handleInputBlur} disabled={isSoldOut || submitting} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="(11) 90000-0000" />
                                             </div>
                                             <div className="space-y-1.5 md:col-span-2">
                                                 <label className="text-sm font-bold text-slate-700">E-mail</label>
-                                                <input type="email" name="email" required value={formData.email} onChange={handleFormChange} disabled={isSoldOut || submitting} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="seu@email.com" />
+                                                <input type="email" name="email" required value={formData.email} onChange={handleFormChange} onBlur={handleInputBlur} disabled={isSoldOut || submitting} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-[var(--color-primary-base)] transition-colors text-sm" placeholder="seu@email.com" />
                                             </div>
                                         </div>
                                     </div>

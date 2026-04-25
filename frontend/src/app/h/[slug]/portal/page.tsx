@@ -22,6 +22,10 @@ export default function CustomerPortalPage() {
     const [cancelingId, setCancelingId] = useState<number | null>(null);
     const [activeTab, setActiveTab] = useState<'subscriptions' | 'consignment'>('subscriptions');
 
+    const [selectedSubscriptionId, setSelectedSubscriptionId] = useState<number | null>(null);
+    const [selectedSubscriptionDetails, setSelectedSubscriptionDetails] = useState<any>(null);
+    const [loadingDetails, setLoadingDetails] = useState(false);
+
     useEffect(() => {
         const token = localStorage.getItem(`customer_token_${slug}`);
         if (!token) {
@@ -89,6 +93,9 @@ export default function CustomerPortalPage() {
             if (res.ok) {
                 toast.success("Sua assinatura foi cancelada com sucesso.");
                 setSubscriptions(prev => prev.map(s => s.id === subId ? { ...s, status: 'CANCELED' } : s));
+                if (selectedSubscriptionDetails && selectedSubscriptionDetails.id === subId) {
+                    setSelectedSubscriptionDetails({...selectedSubscriptionDetails, status: 'CANCELED'});
+                }
             } else {
                 toast.error(data.detail || "Erro ao tentar cancelar a assinatura.");
             }
@@ -96,6 +103,31 @@ export default function CustomerPortalPage() {
             toast.error("Ocorreu um erro na requisição de cancelamento.");
         } finally {
             setCancelingId(null);
+        }
+    };
+
+    const fetchSubscriptionDetails = async (subId: number) => {
+        setSelectedSubscriptionId(subId);
+        setLoadingDetails(true);
+        const token = localStorage.getItem(`customer_token_${slug}`);
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+        try {
+            const res = await fetch(`${apiUrl}/me/subscriptions/${subId}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setSelectedSubscriptionDetails(data);
+            } else {
+                toast.error("Erro ao carregar detalhes da assinatura.");
+                setSelectedSubscriptionId(null);
+            }
+        } catch (err) {
+            toast.error("Falha de conexão com o servidor.");
+            setSelectedSubscriptionId(null);
+        } finally {
+            setLoadingDetails(false);
         }
     };
 
@@ -202,12 +234,12 @@ export default function CustomerPortalPage() {
                                 Ver Planos Disponíveis
                             </Link>
                         </div>
-                    ) : (
+                    ) : !selectedSubscriptionId ? (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             {subscriptions.map(sub => (
-                                <div key={sub.id} className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden flex flex-col group hover:shadow-md transition-shadow">
+                                <div key={sub.id} className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden flex flex-col group hover:shadow-md transition-shadow cursor-pointer" onClick={() => fetchSubscriptionDetails(sub.id)}>
                                     <div className={`h-2 w-full ${sub.status === 'ACTIVE' ? 'bg-emerald-500' : 'bg-slate-300'}`}></div>
-                                    <div className="p-6 sm:p-8 flex-1 flex flex-col">
+                                    <div className="p-6 sm:p-8 flex-1 flex flex-col pointer-events-none">
                                         <div className="flex justify-between items-start mb-6">
                                             <div>
                                                 <div className="flex items-center gap-3 mb-2">
@@ -248,7 +280,7 @@ export default function CustomerPortalPage() {
                                             </div>
                                         </div>
                                         
-                                        <div className="mt-auto pt-6 border-t border-slate-100 flex items-center justify-between">
+                                        <div className="mt-auto pt-6 border-t border-slate-100 flex items-center justify-between pointer-events-auto">
                                             <div className="text-sm">
                                                 {sub.status === 'ACTIVE' && sub.next_billing_date ? (
                                                     <span className="text-slate-600">Próxima renovação em <strong className="text-slate-900">{new Date(sub.next_billing_date).toLocaleDateString('pt-BR')}</strong></span>
@@ -259,7 +291,7 @@ export default function CustomerPortalPage() {
                                             
                                             {sub.status === 'ACTIVE' && (
                                                 <button 
-                                                    onClick={() => handleCancel(sub.id)}
+                                                    onClick={(e) => { e.stopPropagation(); handleCancel(sub.id); }}
                                                     disabled={cancelingId === sub.id}
                                                     className="text-sm font-bold text-rose-600 hover:text-rose-700 bg-white border border-rose-200 hover:border-rose-300 hover:bg-rose-50 px-4 py-2 rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400 flex items-center gap-2"
                                                 >
@@ -275,7 +307,106 @@ export default function CustomerPortalPage() {
                                 </div>
                             ))}
                         </div>
-                    )}
+                    ) : selectedSubscriptionId ? (
+                         <div>
+                             <button onClick={() => { setSelectedSubscriptionId(null); setSelectedSubscriptionDetails(null); }} className="mb-6 text-[var(--color-primary-base)] hover:underline font-bold text-sm flex items-center gap-2">
+                                 &larr; Voltar para Minhas Assinaturas
+                             </button>
+
+                             {loadingDetails ? (
+                                 <div className="flex justify-center py-20">
+                                     <Loader2 className="h-8 w-8 animate-spin text-[var(--color-primary-base)]" />
+                                 </div>
+                             ) : selectedSubscriptionDetails && (
+                                 <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm">
+                                     <div className="flex flex-col md:flex-row justify-between items-start gap-4 mb-8 border-b border-slate-100 pb-8">
+                                         <div>
+                                             <h2 className="text-2xl font-black text-slate-900 uppercase flex items-center gap-3">
+                                                 {selectedSubscriptionDetails.plan_name}
+                                                 {selectedSubscriptionDetails.status === 'ACTIVE' && (
+                                                     <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
+                                                         ATIVO
+                                                     </span>
+                                                 )}
+                                                 {selectedSubscriptionDetails.status === 'CANCELED' && (
+                                                     <span className="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-1 rounded flex items-center gap-1">
+                                                         CANCELADO
+                                                     </span>
+                                                 )}
+                                             </h2>
+                                             <p className="text-slate-500 font-medium text-sm mt-2">ID: #{selectedSubscriptionDetails.efi_subscription_id || selectedSubscriptionDetails.id} • Criada em: {selectedSubscriptionDetails.created_at ? new Date(selectedSubscriptionDetails.created_at).toLocaleDateString('pt-BR') : '-'}</p>
+                                         </div>
+                                         {selectedSubscriptionDetails.status === 'ACTIVE' && (
+                                             <button 
+                                                 onClick={() => handleCancel(selectedSubscriptionDetails.id)}
+                                                 disabled={cancelingId === selectedSubscriptionDetails.id}
+                                                 className="text-sm font-bold text-rose-600 hover:text-rose-700 bg-white border border-rose-200 hover:border-rose-300 hover:bg-rose-50 px-4 py-2 rounded-xl transition-all shadow-sm flex items-center gap-2"
+                                             >
+                                                 {cancelingId === selectedSubscriptionDetails.id ? "Cancelando..." : "Cancelar Assinatura"}
+                                             </button>
+                                         )}
+                                     </div>
+
+                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                                         <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                                             <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><CreditCard className="w-5 h-5 text-[var(--color-primary-base)]" /> Histórico Financeiro</h3>
+                                             <div className="space-y-4 max-h-80 overflow-y-auto pr-2">
+                                                 {selectedSubscriptionDetails.billings && selectedSubscriptionDetails.billings.length > 0 ? selectedSubscriptionDetails.billings.map((bill: any) => (
+                                                     <div key={bill.id} className="bg-white border border-slate-200 p-4 rounded-xl flex items-center justify-between">
+                                                         <div>
+                                                             <p className="font-bold text-sm text-slate-900">Fatura #{bill.delivery_number}</p>
+                                                             <p className="text-xs text-slate-500">Venc: {new Date(bill.due_date).toLocaleDateString('pt-BR')}</p>
+                                                         </div>
+                                                         <div className="text-right">
+                                                             <p className="font-black text-slate-900 text-sm">R$ {bill.amount.toFixed(2).replace('.', ',')}</p>
+                                                             {bill.status === 'PAID' ? (
+                                                                 <span className="text-emerald-600 text-xs font-bold block">PAGO</span>
+                                                             ) : bill.status === 'FAILED' ? (
+                                                                 <span className="text-rose-600 text-xs font-bold block">FALHOU</span>
+                                                             ) : (
+                                                                 <span className="text-amber-600 text-xs font-bold block">PENDENTE</span>
+                                                             )}
+                                                         </div>
+                                                     </div>
+                                                 )) : (
+                                                     <p className="text-sm text-slate-500 italic">Nenhuma cobrança gerada ainda.</p>
+                                                 )}
+                                             </div>
+                                         </div>
+
+                                         <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                                             <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Package className="w-5 h-5 text-[var(--color-primary-base)]" /> Histórico de Entregas</h3>
+                                             <div className="space-y-4 max-h-80 overflow-y-auto pr-2">
+                                                 {selectedSubscriptionDetails.billings && selectedSubscriptionDetails.billings.length > 0 ? selectedSubscriptionDetails.billings.map((bill: any) => (
+                                                     <div key={bill.id} className="relative pl-6 pb-6 border-l-2 border-slate-200 last:border-0 last:pb-0">
+                                                         <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 border-white ${bill.status === 'PAID' ? 'bg-emerald-500' : 'bg-slate-300'}`}></div>
+                                                         <p className="font-bold text-sm text-slate-900 -mt-1">Entrega {bill.delivery_number}</p>
+                                                         <p className={`text-xs mt-1 font-medium ${bill.status === 'PAID' ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                             {bill.status === 'PAID' ? 'Liberada/Aprovada para Envio' : 'Aguardando Pagamento'}
+                                                         </p>
+                                                     </div>
+                                                 )) : (
+                                                     <p className="text-sm text-slate-500 italic">Nenhuma entrega agendada ainda.</p>
+                                                 )}
+                                             </div>
+                                         </div>
+                                     </div>
+
+                                     {selectedSubscriptionDetails.shipping_address && selectedSubscriptionDetails.shipping_address.street && (
+                                         <div className="bg-white border border-slate-200 p-6 rounded-2xl">
+                                             <h3 className="font-bold text-slate-800 mb-3 text-sm uppercase">Endereço de Entrega Cadastrado</h3>
+                                             <p className="text-slate-600 text-sm">
+                                                 {selectedSubscriptionDetails.shipping_address.street}, {selectedSubscriptionDetails.shipping_address.number} 
+                                                 {selectedSubscriptionDetails.shipping_address.complement ? ` - ${selectedSubscriptionDetails.shipping_address.complement}` : ''}<br />
+                                                 {selectedSubscriptionDetails.shipping_address.neighborhood} - {selectedSubscriptionDetails.shipping_address.city}/{selectedSubscriptionDetails.shipping_address.state}<br />
+                                                 CEP: {selectedSubscriptionDetails.shipping_address.zipcode}
+                                             </p>
+                                         </div>
+                                     )}
+                                 </div>
+                             )}
+                         </div>
+                    ) : null}
                 
                     </>
                 )}

@@ -16,6 +16,8 @@ export default function SettingsPage() {
   const companyId = currentUser?.company_id;
 
   const [activeTab, setActiveTab] = useState('geral');
+  const [testEmail, setTestEmail] = useState('');
+  const [testingSmtp, setTestingSmtp] = useState(false);
 
   const [fiscalCep, setFiscalCep] = useState('');
   const [fiscalSettings, setFiscalSettings] = useState({
@@ -90,6 +92,7 @@ export default function SettingsPage() {
     smtp_username: '',
     smtp_password: '',
     smtp_from_email: '',
+    smtp_use_ssl: false,
     payment_gateway_active: 'EFI',
     cielo_client_id: '',
     cielo_client_secret: '',
@@ -175,6 +178,7 @@ export default function SettingsPage() {
         smtp_username: data.smtp_username || '',
         smtp_password: data.smtp_password || '',
         smtp_from_email: data.smtp_from_email || '',
+        smtp_use_ssl: data.smtp_use_ssl || false,
         payment_gateway_active: data.payment_gateway_active || 'EFI',
         cielo_client_id: data.cielo_client_id || '',
         cielo_client_secret: data.cielo_client_secret || '',
@@ -373,6 +377,31 @@ export default function SettingsPage() {
       </div>
     );
   }
+
+  const handleTestSmtp = async () => {
+    if (!testEmail) return toast.error('Digite o e-mail de teste.');
+    setTestingSmtp(true);
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/smtp-test`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${getToken()}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ to_email: testEmail })
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.detail || 'Erro ao enviar e-mail');
+      }
+      toast.success('E-mail enviado com sucesso! Verifique sua caixa de entrada.');
+      setTestEmail('');
+    } catch(err: any) {
+      toast.error(err.message);
+    } finally {
+      setTestingSmtp(false);
+    }
+  };
 
   const tabs = [
     { id: 'geral', label: 'Dados Gerais', icon: Settings2 },
@@ -1142,6 +1171,47 @@ export default function SettingsPage() {
                         value={settings.smtp_password}
                         onChange={e => setSettings({ ...settings, smtp_password: e.target.value })}
                       />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 mt-4 px-1">
+                    <label className="relative flex items-center cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        className="sr-only peer" 
+                        checked={settings.smtp_use_ssl} 
+                        onChange={e => setSettings({ ...settings, smtp_use_ssl: e.target.checked })} 
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                    </label>
+                    <div>
+                      <span className="text-sm font-bold text-slate-700 dark:text-slate-300 block">Usar conexão segura fechada (SSL)</span>
+                      <span className="text-xs text-slate-500 block">Marque se a porta exigir conexão SSL direta (ex: 465). Se for STARTTLS (ex: 587), deixe desmarcado.</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-5 mt-6 dark:bg-indigo-900/20 dark:border-indigo-800/50">
+                    <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-300 mb-2">Testar Configuração</h3>
+                    <p className="text-xs text-indigo-700 dark:text-indigo-400 mb-4">
+                      Recomendamos salvar as configurações antes de realizar o teste. O sistema enviará um e-mail de teste para o endereço informado abaixo utilizando as credenciais salvas.
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="email"
+                        placeholder="E-mail de destino para teste"
+                        className="flex-1 bg-white border border-indigo-200 rounded-xl px-4 py-2.5 text-slate-900 text-sm focus:ring-2 focus:ring-indigo-500 outline-none dark:bg-slate-900/50 dark:border-indigo-800/50 dark:text-white"
+                        value={testEmail}
+                        onChange={e => setTestEmail(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        disabled={testingSmtp}
+                        onClick={handleTestSmtp}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 px-6 rounded-xl text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
+                      >
+                        {testingSmtp ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                        Enviar Teste
+                      </button>
                     </div>
                   </div>
                 </div>

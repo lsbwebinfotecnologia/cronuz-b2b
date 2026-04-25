@@ -81,6 +81,7 @@ class CompanySettings(Base):
     smtp_username = Column(String(255), nullable=True)
     smtp_password = Column(String(255), nullable=True)
     smtp_from_email = Column(String(255), nullable=True)
+    smtp_use_ssl = Column(Boolean, default=False, nullable=False)
 
     # Audit trail
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

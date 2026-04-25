@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { 
-  Layers, Search, Plus, ExternalLink, CheckCircle2, XCircle, MoreVertical, Copy
+  Layers, Search, Plus, ExternalLink, CheckCircle2, XCircle, MoreVertical, Copy, ShoppingCart
 } from 'lucide-react';
 import Link from 'next/link';
 import { getToken } from '@/lib/auth';
@@ -72,6 +72,13 @@ export default function SubscriptionsPage() {
                 </div>
                 
                 <div className="flex items-center gap-3">
+                    <Link
+                        href="/subscriptions/abandoned"
+                        className="bg-white hover:bg-slate-50 text-rose-500 font-medium py-2.5 px-4 rounded-xl flex items-center gap-2 transition-all shadow-sm border border-slate-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800"
+                    >
+                        <ShoppingCart className="h-4 w-4" />
+                        Abandonados
+                    </Link>
                     <Link
                         href="/subscriptions/new"
                         className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2.5 px-4 rounded-xl flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-sm"

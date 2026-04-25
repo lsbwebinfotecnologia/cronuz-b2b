@@ -278,3 +278,48 @@ def get_dashboard_crm_tasks(
          })
          
     return output
+
+from pydantic import BaseModel
+class SmtpTestRequest(BaseModel):
+    to_email: str
+
+@router.post("/smtp-test")
+def test_smtp_settings(
+    payload: SmtpTestRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional)
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Não autorizado")
+        
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    if not settings or not settings.smtp_host or not settings.smtp_username or not settings.smtp_password:
+        raise HTTPException(status_code=400, detail="Configurações de SMTP incompletas no painel.")
+        
+    from app.core.email import send_smtp_email
+    try:
+        html_content = f"""
+        <html>
+            <body style="font-family: sans-serif; line-height: 1.6; color: #333;">
+                <h2 style="color: #0f172a;">Teste de Conexão SMTP</h2>
+                <p>Olá,</p>
+                <p>Se você está recebendo este e-mail, significa que as configurações de SMTP do sistema Cronuz B2B estão funcionando corretamente!</p>
+                <hr style="border: 1px solid #eee; my-4" />
+                <p style="font-size: 12px; color: #888;">Enviado a partir de {settings.smtp_host}</p>
+            </body>
+        </html>
+        """
+        send_smtp_email(
+            smtp_host=settings.smtp_host,
+            smtp_port=settings.smtp_port or 587,
+            smtp_username=settings.smtp_username,
+            smtp_password=settings.smtp_password,
+            smtp_from=settings.smtp_from_email or settings.smtp_username,
+            to_email=payload.to_email,
+            subject="Cronuz B2B - Teste de Conexão SMTP",
+            html_content=html_content,
+            use_ssl=settings.smtp_use_ssl or False
+        )
+        return {"message": "E-mail de teste enviado com sucesso!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Falha ao enviar e-mail: {str(e)}")

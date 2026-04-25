@@ -5,12 +5,16 @@ from app.integrators.horus_clients import HorusClients
 from typing import Optional, List
 from app.core.dependencies import get_current_customer
 from app.models.customer import Customer
-from datetime import datetime
-from app.models.subscription import CustomerSubscription, SubscriptionPlan
+from datetime import datetime, timezone, timedelta
+from app.models.subscription import CustomerSubscription, SubscriptionPlan, SubscriptionBilling
 from app.models.company_settings import CompanySettings
 from app.integrators.efi_pay import efi_service
 
 router = APIRouter(prefix="/me", tags=["customer_portal"])
+
+def get_current_br_time():
+    tz = timezone(timedelta(hours=-3))
+    return datetime.now(tz)
 
 @router.get("/subscriptions")
 def get_my_subscriptions(
@@ -45,6 +49,133 @@ def get_my_subscriptions(
         })
         
     return {"subscriptions": results}
+
+@router.get("/subscriptions/{sub_id}")
+def get_my_subscription_detail(
+    sub_id: int,
+    customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db)
+):
+    sub = db.query(CustomerSubscription).filter(
+        CustomerSubscription.id == sub_id,
+        CustomerSubscription.customer_id == customer.id
+    ).first()
+    
+    if not sub:
+        raise HTTPException(status_code=404, detail="Assinatura não encontrada")
+        
+    plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == sub.plan_id).first()
+    
+    efi_sync_err = None
+    if sub.efi_subscription_id:
+        from app.integrators.efi_pay import EFIPayIntegration
+        settings = db.query(CompanySettings).filter(CompanySettings.company_id == sub.company_id).first()
+        try:
+            efi_srv = EFIPayIntegration(
+                client_id=settings.efi_client_id if settings else None,
+                client_secret=settings.efi_client_secret if settings else None,
+                sandbox=settings.efi_sandbox if settings else None,
+                certificate_path=settings.efi_certificate_path if settings else None,
+                pix_key=settings.efi_payee_code if settings else None
+            )
+            efi_data = efi_srv.detail_subscription(int(sub.efi_subscription_id))
+            
+            if 'data' in efi_data:
+                efi_status = efi_data['data'].get("status", "").lower()
+                local_status = str(sub.status.value) if hasattr(sub.status, 'value') else str(sub.status)
+                status_map = {"active": "ACTIVE", "canceled": "CANCELED", "expired": "CANCELED"}
+                mapped_status = status_map.get(efi_status)
+                if mapped_status and mapped_status != local_status:
+                    sub.status = mapped_status
+                    db.commit()
+                
+                efi_history = efi_data['data'].get("history", [])
+                local_billings = db.query(SubscriptionBilling).filter(SubscriptionBilling.subscription_id == sub.id).all()
+                local_charge_ids = [str(b.efi_charge_id) for b in local_billings if b.efi_charge_id]
+                
+                try: efi_history = sorted(efi_history, key=lambda x: int(x.get('charge_id', 0)))
+                except: pass
+                
+                max_delivery_number = int(max([b.delivery_number for b in local_billings])) if local_billings else 0
+                has_changes = False
+                
+                for charge in efi_history:
+                    charge_id = str(charge.get('charge_id'))
+                    charge_status = str(charge.get('status', '')).lower()
+                    charge_value = float(charge.get('value', 0)) / 100.0 if charge.get('value') else 0.0
+                    
+                    c_status_map = {
+                        "paid": "PAID", "settled": "PAID", "active": "PAID", "approved": "PAID",
+                        "waiting": "PENDING", "unpaid": "PENDING",
+                        "canceled": "FAILED", "failed": "FAILED", "refused": "FAILED"
+                    }
+                    mapped_charge_status = c_status_map.get(charge_status, "PENDING")
+                    
+                    if charge_id not in local_charge_ids:
+                        max_delivery_number += 1
+                        new_bill = SubscriptionBilling(
+                            subscription_id=sub.id,
+                            delivery_number=max_delivery_number,
+                            amount=charge_value,
+                            status=mapped_charge_status,
+                            efi_charge_id=charge_id,
+                            due_date=get_current_br_time()
+                        )
+                        if mapped_charge_status == "PAID":
+                            new_bill.paid_at = get_current_br_time()
+                        db.add(new_bill)
+                        has_changes = True
+                    else:
+                        existing_bill = next((b for b in local_billings if str(b.efi_charge_id) == charge_id), None)
+                        if existing_bill:
+                            current_c_status = str(existing_bill.status.value) if hasattr(existing_bill.status, 'value') else str(existing_bill.status)
+                            if current_c_status != mapped_charge_status:
+                                existing_bill.status = mapped_charge_status
+                                if mapped_charge_status == "PAID" and not existing_bill.paid_at:
+                                    existing_bill.paid_at = get_current_br_time()
+                                has_changes = True
+                                
+                if has_changes:
+                    sub.current_delivery_number = max_delivery_number
+                    db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[EFI SYNC ERR] {str(e)}", flush=True)
+
+    billings = db.query(SubscriptionBilling).filter(
+        SubscriptionBilling.subscription_id == sub.id
+    ).order_by(SubscriptionBilling.delivery_number.desc()).all()
+    
+    billings_data = []
+    for b in billings:
+        billings_data.append({
+            "id": b.id,
+            "delivery_number": b.delivery_number,
+            "amount": float(b.amount) if b.amount else 0,
+            "status": b.status.value if hasattr(b.status, 'value') else b.status,
+            "efi_charge_id": b.efi_charge_id,
+            "due_date": b.due_date.isoformat() if b.due_date else None,
+            "paid_at": b.paid_at.isoformat() if b.paid_at else None
+        })
+        
+    return {
+        "id": sub.id,
+        "plan_name": plan.name if plan else "Desconhecido",
+        "plan_frequency": plan.delivery_frequency.value if (plan and hasattr(plan.delivery_frequency, 'value')) else "MONTHLY",
+        "status": sub.status.value if hasattr(sub.status, 'value') else sub.status,
+        "current_delivery": sub.current_delivery_number,
+        "shipping_address": {
+            "street": sub.shipping_street,
+            "number": sub.shipping_number,
+            "complement": sub.shipping_complement,
+            "neighborhood": sub.shipping_neighborhood,
+            "city": sub.shipping_city,
+            "state": sub.shipping_state,
+            "zipcode": sub.shipping_zip_code
+        },
+        "created_at": sub.created_at.isoformat() if sub.created_at else None,
+        "billings": billings_data
+    }
 
 @router.post("/subscriptions/{sub_id}/cancel")
 def cancel_my_subscription(

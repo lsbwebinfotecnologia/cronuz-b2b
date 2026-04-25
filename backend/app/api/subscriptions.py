@@ -19,6 +19,32 @@ def get_current_br_time():
 
 # ----------------- ADMIN SELLER CRUD -----------------
 
+@router.get("/abandoned")
+def list_abandoned_checkouts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.user import UserRole
+    if current_user.type != UserRole.SELLER:
+        raise HTTPException(status_code=403, detail="Acesso restrito a vendedores")
+        
+    from app.models.lead import Lead
+    abandoned_leads = db.query(Lead).filter(
+        Lead.company_id == current_user.company_id,
+        Lead.source.like("Abandonado:%")
+    ).order_by(Lead.created_at.desc()).all()
+    
+    return [
+        {
+            "id": lead.id,
+            "name": lead.name,
+            "email": lead.email,
+            "phone": lead.whatsapp,
+            "plan_name": lead.source.replace("Abandonado: ", ""),
+            "created_at": lead.created_at.isoformat() if lead.created_at else None
+        } for lead in abandoned_leads
+    ]
+
 @router.get("")
 def list_subscription_plans(
     db: Session = Depends(get_db),
@@ -399,6 +425,61 @@ def get_hotsite_config(slug: str, db: Session = Depends(get_db)):
             }
         }
     }
+
+class AbandonCheckoutRequest(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+
+@router.post("/hotsite/{slug}/abandon")
+def capture_abandoned_checkout(slug: str, payload: AbandonCheckoutRequest, db: Session = Depends(get_db)):
+    """
+    Public Route: Silently captures lead data when a user types their email on the checkout page
+    but doesn't finish the subscription.
+    """
+    plan = db.query(SubscriptionPlan).filter(
+        SubscriptionPlan.hotsite_slug == slug,
+        SubscriptionPlan.is_active == True
+    ).first()
+    
+    if not plan:
+        return {"status": "ignored", "detail": "Hotsite não encontrado"}
+
+    from app.models.lead import Lead
+    
+    # Check if lead already exists to avoid spamming the database
+    existing_lead = db.query(Lead).filter(
+        Lead.email == payload.email,
+        Lead.company_id == plan.company_id
+    ).first()
+    
+    source_name = f"Abandonado: {plan.name}"
+    
+    if existing_lead:
+        # Just update phone or name if they provided better ones
+        if payload.phone and not existing_lead.whatsapp:
+            existing_lead.whatsapp = payload.phone
+        if payload.name and existing_lead.name == "":
+            existing_lead.name = payload.name
+        existing_lead.source = source_name
+        db.commit()
+        return {"status": "updated"}
+        
+    # Create new lead
+    new_lead = Lead(
+        name=payload.name or "Sem nome",
+        email=payload.email,
+        whatsapp=payload.phone,
+        company_id=plan.company_id,
+        source=source_name,
+        need_type="Assinatura Recorrente",
+        description=f"O cliente iniciou o processo de assinatura do plano '{plan.name}' mas abandonou a tela de checkout antes de pagar.",
+        status="new"
+    )
+    db.add(new_lead)
+    db.commit()
+    
+    return {"status": "created"}
 
 class SubscribeRequest(BaseModel):
     customer_name: str

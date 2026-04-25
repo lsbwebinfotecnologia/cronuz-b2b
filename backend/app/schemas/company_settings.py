@@ -61,6 +61,7 @@ class CompanySettingsBase(BaseModel):
     smtp_username: Optional[str] = None
     smtp_password: Optional[str] = None
     smtp_from_email: Optional[str] = None
+    smtp_use_ssl: Optional[bool] = False
     b2b_showcases_config: Optional[Dict[str, Any]] = None
     b2b_show_stock_quantity: Optional[bool] = True
 
