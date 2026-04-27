@@ -55,6 +55,25 @@ export default function FinancialPage() {
         fetchCustomers();
         fetchAccounts();
         fetchCashflow();
+        
+        // Auto-open new transaction modal if requested via URL
+        if (typeof window !== 'undefined') {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('newTransaction') === 'true') {
+                setIsModalOpen(true);
+                const custId = urlParams.get('customerId');
+                const custName = urlParams.get('customerName');
+                const custDoc = urlParams.get('customerDoc');
+                
+                if (custId && custName) {
+                    setFormData(prev => ({
+                        ...prev,
+                        customer_id: custId,
+                        customer_search_text: `${custName} - ${custDoc || ''}`
+                    }));
+                }
+            }
+        }
     }, []);
 
     useEffect(() => {
@@ -133,7 +152,7 @@ export default function FinancialPage() {
 
     const fetchCustomers = async () => {
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers?limit=10000`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
             if (res.ok) setCustomers(await res.json());
         } catch (e) {}
     };

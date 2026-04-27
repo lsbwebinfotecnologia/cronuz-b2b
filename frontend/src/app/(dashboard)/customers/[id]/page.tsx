@@ -94,6 +94,7 @@ export default function CustomerDetailsPage() {
   const [interactions, setInteractions] = useState<any[]>([]);
   const [syncingHorus, setSyncingHorus] = useState(false);
   const [usesHorus, setUsesHorus] = useState(false);
+  const [usesHorusB2B, setUsesHorusB2B] = useState(false);
   const [moduleFinancial, setModuleFinancial] = useState(false);
   const [moduleOrders, setModuleOrders] = useState(false);
   const [moduleServices, setModuleServices] = useState(false);
@@ -151,6 +152,7 @@ export default function CustomerDetailsPage() {
       if (res.ok) {
         const data = await res.json();
         setUsesHorus(!!data.uses_horus);
+        setUsesHorusB2B(!!data.uses_horus && data.horus_api_mode === 'B2B');
       }
       const token = getToken();
       if (token) {
@@ -745,6 +747,15 @@ export default function CustomerDetailsPage() {
               Nova O.S
             </Link>
           )}
+          {moduleFinancial && (
+            <Link
+              href={`/financial?newTransaction=true&customerId=${customer.id}&customerName=${encodeURIComponent(customer.name || customer.corporate_name)}&customerDoc=${customer.document}`}
+              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold py-2.5 px-5 rounded-xl flex items-center gap-2 border border-emerald-200 transition-all shadow-sm dark:bg-emerald-900/30 dark:border-emerald-800/50 dark:text-emerald-300 dark:hover:bg-emerald-800/50"
+            >
+              <DollarSign className="h-4 w-4" />
+              Novo Lançamento
+            </Link>
+          )}
           {moduleOrders && (
             <Link
               href={`/orders/new?customer_id=${customer.id}`}
@@ -883,7 +894,7 @@ export default function CustomerDetailsPage() {
                       <h3 className="text-lg font-medium text-slate-900 dark:text-white">Dados Cadastrais</h3>
                       
                       {/* Horus Integration Status / Sync Button */}
-                      {usesHorus && customer.customer_type === 'PJ' && (!customer.id_guid || !customer.id_doc) && (
+                      {usesHorusB2B && customer.customer_type === 'PJ' && (!customer.id_guid || !customer.id_doc) && (
                         <button
                           onClick={handleSyncHorus}
                           disabled={syncingHorus}
@@ -894,7 +905,7 @@ export default function CustomerDetailsPage() {
                         </button>
                       )}
                       
-                      {usesHorus && customer.id_guid && customer.id_doc && (
+                      {usesHorusB2B && customer.id_guid && customer.id_doc && (
                          <div className="flex gap-2 items-center">
                            <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center gap-1.5 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 font-medium whitespace-nowrap">
                              <CheckCircle className="w-3.5 h-3.5" /> Integrado ao Horus

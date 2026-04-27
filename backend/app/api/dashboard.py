@@ -221,6 +221,7 @@ def get_dashboard_metrics(
         "financial_metrics": financial_metrics,
         "service_metrics": service_metrics,
         "uses_horus": uses_horus,
+        "horus_api_mode": settings.horus_api_mode if settings else 'B2B',
         "uses_bookinfo": uses_bookinfo,
         "module_b2b_native": module_b2b_native,
         "module_horus_erp": module_horus_erp,
