@@ -37,8 +37,14 @@ export default function FinancialPage() {
     const [orderIdFilter, setOrderIdFilter] = useState('');
     const [searchFilter, setSearchFilter] = useState('');
     const [types, setTypes] = useState({ receivable: true, payable: true });
-    const [startDate, setStartDate] = useState('');
-    const [endDate, setEndDate] = useState('');
+    const [startDate, setStartDate] = useState(() => {
+        const d = new Date();
+        return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+    });
+    const [endDate, setEndDate] = useState(() => {
+        const d = new Date();
+        return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0];
+    });
     const [dateType, setDateType] = useState<'due' | 'payment'>('due');
     const [activeTab, setActiveTab] = useState<'LIST' | 'CASHFLOW'>('LIST');
 
