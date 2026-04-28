@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.db.session import get_db
 from app.models.customer import Customer, Address, Contact, Interaction
+from app.models.customer_group import CustomerGroup, CustomerGroupLink
 from app.models.user import User, UserRole
 from app.schemas.customer import CustomerCreate, CustomerUpdate, Customer as CustomerSchema, ContactCreate, Contact as ContactSchema, AddressCreate, Address as AddressSchema
+from app.schemas.customer_group import CustomerGroup as CustomerGroupSchema, CustomerGroupCreate, CustomerGroupUpdate, CustomerGroupsUpdate
 from app.core.dependencies import get_current_user
 from app.core.security import get_password_hash
 from pydantic import BaseModel
@@ -136,8 +138,24 @@ def read_customers(
     # Map the scalar value into the Customer object
     final_customers = []
     for c, last_purchase in results:
-        c.last_purchase = last_purchase
-        final_customers.append(c)
+        # Avoid mutating the SQLAlchemy object
+        c_dict = {col.name: getattr(c, col.name) for col in c.__table__.columns}
+        c_dict['last_purchase'] = last_purchase
+        
+        # Include relationships needed by schema
+        c_dict['addresses'] = getattr(c, 'addresses', [])
+        c_dict['contacts'] = getattr(c, 'contacts', [])
+        c_dict['interactions'] = getattr(c, 'interactions', [])
+        c_dict['commercial_policy'] = getattr(c, 'commercial_policy', None)
+        
+        if getattr(c, 'default_group', None):
+            c_dict['default_group'] = {"id": c.default_group.id, "name": c.default_group.name, "color": c.default_group.color}
+        else:
+            c_dict['default_group'] = None
+            
+        c_dict['additional_groups'] = [{"id": link.group.id, "name": link.group.name, "color": link.group.color} for link in c.additional_groups_links if link.group]
+        
+        final_customers.append(c_dict)
 
     return final_customers
 
@@ -173,6 +191,102 @@ def get_customers_stats(
         "total_debts": result.total_debts or 0
     }
 
+# --- Customer Groups Routes ---
+
+@router.get("/customers/groups", response_model=List[CustomerGroupSchema])
+def get_customer_groups(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.company_id:
+        print("DEBUG: User has no company_id:", current_user.email)
+        return []
+    
+    groups = db.query(CustomerGroup).filter(CustomerGroup.company_id == current_user.company_id).all()
+    print(f"DEBUG: company_id={current_user.company_id}, groups found={len(groups)}")
+    return groups
+
+@router.post("/customers/groups", response_model=CustomerGroupSchema)
+def create_customer_group(
+    group: CustomerGroupCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=403, detail="Acesso negado.")
+    db_group = CustomerGroup(**group.model_dump(), company_id=current_user.company_id)
+    db.add(db_group)
+    db.commit()
+    db.refresh(db_group)
+    return db_group
+
+@router.put("/customers/groups/{group_id}", response_model=CustomerGroupSchema)
+def update_customer_group(
+    group_id: int,
+    group: CustomerGroupUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    db_group = db.query(CustomerGroup).filter(
+        CustomerGroup.id == group_id, 
+        CustomerGroup.company_id == current_user.company_id
+    ).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado.")
+    
+    update_data = group.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_group, key, value)
+        
+    db.commit()
+    db.refresh(db_group)
+    return db_group
+
+@router.delete("/customers/groups/{group_id}")
+def delete_customer_group(
+    group_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    db_group = db.query(CustomerGroup).filter(
+        CustomerGroup.id == group_id, 
+        CustomerGroup.company_id == current_user.company_id
+    ).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado.")
+        
+    db.delete(db_group)
+    db.commit()
+    return {"status": "success"}
+
+@router.post("/customers/{customer_id}/groups")
+def update_customer_groups_links(
+    customer_id: int,
+    payload: CustomerGroupsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+    
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+        
+    customer.default_group_id = payload.default_group_id
+    
+    # Remove existing links
+    db.query(CustomerGroupLink).filter(CustomerGroupLink.customer_id == customer_id).delete()
+    
+    # Add new links
+    for gid in payload.additional_group_ids:
+        link = CustomerGroupLink(customer_id=customer_id, group_id=gid)
+        db.add(link)
+        
+    db.commit()
+    return {"status": "success"}
+
 @router.get("/customers/{customer_id}", response_model=CustomerSchema)
 def read_customer(
     customer_id: int,
@@ -189,8 +303,21 @@ def read_customer(
     
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    # Para não mutar o objeto do SQLAlchemy e evitar o erro _sa_instance_state
+    customer_dict = {c.name: getattr(customer, c.name) for c in customer.__table__.columns}
+    customer_dict['addresses'] = customer.addresses
+    customer_dict['contacts'] = customer.contacts
+    customer_dict['interactions'] = customer.interactions
+    customer_dict['commercial_policy'] = customer.commercial_policy
+    
+    if getattr(customer, 'default_group', None):
+        customer_dict['default_group'] = {"id": customer.default_group.id, "name": customer.default_group.name, "color": customer.default_group.color}
+    else:
+        customer_dict['default_group'] = None
         
-    return customer
+    customer_dict['additional_groups'] = [{"id": link.group.id, "name": link.group.name, "color": link.group.color} for link in customer.additional_groups_links if link.group]
+        
+    return customer_dict
 
 @router.patch("/customers/{customer_id}", response_model=CustomerSchema)
 def update_customer(
@@ -744,3 +871,4 @@ async def get_customer_debits_api(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         await horus_client.close()
+

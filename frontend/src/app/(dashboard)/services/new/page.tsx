@@ -6,13 +6,13 @@ import { ArrowLeft, Save, Briefcase, Calendar, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
+import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
 export default function NewServiceOrderPage() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const initialCustomerId = searchParams?.get('customer_id') || '';
 
-    const [customers, setCustomers] = useState<any[]>([]);
     const [services, setServices] = useState<any[]>([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
     
@@ -29,9 +29,6 @@ export default function NewServiceOrderPage() {
     useEffect(() => {
         const fetchAuxData = async () => {
             try {
-                const resCust = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
-                if (resCust.ok) setCustomers(await resCust.json());
-                
                 const resSvc = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/services`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
                 if (resSvc.ok) setServices((await resSvc.json()).items);
             } catch (e) {
@@ -107,15 +104,11 @@ export default function NewServiceOrderPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="space-y-2">
                             <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Cliente (Tomador do Serviço) <span className="text-rose-500">*</span></label>
-                            <select 
-                                required 
+                            <CustomerAutocomplete 
                                 value={newOrder.customer_id} 
-                                onChange={(e) => setNewOrder({...newOrder, customer_id: e.target.value})} 
-                                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] transition-colors shadow-sm"
-                            >
-                                <option value="">Selecione...</option>
-                                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                            </select>
+                                onChange={(id) => setNewOrder({...newOrder, customer_id: id})} 
+                                required 
+                            />
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Serviço <span className="text-rose-500">*</span></label>

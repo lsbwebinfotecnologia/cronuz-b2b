@@ -5,6 +5,7 @@ import { CheckCircle, ShieldAlert, ArrowLeft, RefreshCw, Layers, Calendar, Hash,
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
+import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
 export default function BankReconciliationPage() {
     const [installments, setInstallments] = useState<any[]>([]);
@@ -24,7 +25,6 @@ export default function BankReconciliationPage() {
     const [accountFilter, setAccountFilter] = useState('');
     const [customerFilter, setCustomerFilter] = useState('');
     const [accounts, setAccounts] = useState<any[]>([]);
-    const [customers, setCustomers] = useState<any[]>([]);
 
     useEffect(() => {
         const fetchAccounts = async () => {
@@ -33,14 +33,7 @@ export default function BankReconciliationPage() {
                 if (res.ok) setAccounts(await res.json());
             } catch (e) {}
         };
-        const fetchCustomers = async () => {
-            try {
-                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
-                if (res.ok) setCustomers(await res.json());
-            } catch (e) {}
-        };
         fetchAccounts();
-        fetchCustomers();
     }, []);
 
     useEffect(() => {
@@ -254,10 +247,14 @@ export default function BankReconciliationPage() {
                             {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
                         </select>
 
-                        <select value={customerFilter} onChange={(e)=>setCustomerFilter(e.target.value)} className="w-full sm:w-auto min-w-[180px] px-3 h-11 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium outline-none text-slate-700 dark:text-slate-200 shadow-sm shrink-0">
-                            <option value="">Cliente / Fornecedor</option>
-                            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                        </select>
+                        <div className="w-full sm:w-auto min-w-[220px] shrink-0 h-11">
+                            <CustomerAutocomplete 
+                                value={customerFilter}
+                                onChange={(id) => setCustomerFilter(id)}
+                                placeholder="Cliente / Fornecedor"
+                                className="h-full [&>div]:h-full [&>div]:py-0 [&>div]:rounded-xl"
+                            />
+                        </div>
                         
                         <div className="flex items-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 h-11 shadow-sm shrink-0 w-full sm:w-auto">
                             <Hash className="w-4 h-4 text-slate-400 mr-2"/>

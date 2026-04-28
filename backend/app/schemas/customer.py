@@ -90,6 +90,7 @@ class CustomerBase(BaseModel):
     commercial_policy_id: Optional[int] = None
     crm_status: Optional[str] = "ACTIVE"
     nfse_notes: Optional[str] = None
+    default_group_id: Optional[int] = None
 
 class CustomerCreate(CustomerBase):
     addresses: Optional[list[AddressCreate]] = []
@@ -114,6 +115,7 @@ class CustomerUpdate(BaseModel):
     commercial_policy_id: Optional[int] = None
     crm_status: Optional[str] = None
     nfse_notes: Optional[str] = None
+    default_group_id: Optional[int] = None
 
 class CustomerInDBBase(CustomerBase):
     id: int
@@ -130,3 +132,5 @@ class Customer(CustomerInDBBase):
     contacts: list[Contact] = []
     interactions: list[Interaction] = []
     commercial_policy: Optional[CustomerCommercialPolicy] = None
+    default_group: Optional[dict] = None # Will be resolved dynamically
+    additional_groups: list[dict] = [] # Will be resolved dynamically

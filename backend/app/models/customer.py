@@ -34,6 +34,7 @@ class Customer(Base):
     default_payment_method = Column(String(50), default="ERP_STANDARD", nullable=True) # ERP_STANDARD, EFI_PIX_CREDIT, PIX_MANUAL
     payment_condition = Column(String(50), nullable=True) # e.g. "30/60/90"
     commercial_policy_id = Column(Integer, ForeignKey("crm_commercial_policy.id", ondelete="SET NULL"), nullable=True)
+    default_group_id = Column(Integer, ForeignKey("crm_customer_group.id", ondelete="SET NULL"), nullable=True)
     crm_status = Column(String(50), default="ACTIVE", nullable=False) # LEAD, NEGOTIATION, ACTIVE, BLOCKED, CHURN_ALERT
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -45,6 +46,9 @@ class Customer(Base):
     addresses = relationship("Address", back_populates="customer", cascade="all, delete-orphan")
     contacts = relationship("Contact", back_populates="customer", cascade="all, delete-orphan")
     interactions = relationship("Interaction", back_populates="customer", cascade="all, delete-orphan")
+    
+    default_group = relationship("app.models.customer_group.CustomerGroup", foreign_keys=[default_group_id])
+    additional_groups_links = relationship("app.models.customer_group.CustomerGroupLink", back_populates="customer", cascade="all, delete-orphan")
 
 class Address(Base):
     __tablename__ = "crm_address"

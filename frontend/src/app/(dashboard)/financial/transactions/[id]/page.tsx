@@ -5,6 +5,7 @@ import { ArrowLeft, Clock, CheckCircle, Tag, TrendingUp, TrendingDown, DollarSig
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
+import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
 export default function FinancialTransactionDetailsPage({ params }: { params: any }) {
     const unwrappedParams = use(params) as { id: string };
@@ -12,7 +13,6 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
     const [loading, setLoading] = useState(true);
 
     const [categories, setCategories] = useState<any[]>([]);
-    const [customers, setCustomers] = useState<any[]>([]);
     const [interEnabled, setInterEnabled] = useState(false);
 
     const [editTransOpen, setEditTransOpen] = useState(false);
@@ -35,7 +35,6 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
     useEffect(() => {
         fetchDetails();
         fetchCategories();
-        fetchCustomers();
     }, []);
 
     const fetchDetails = async () => {
@@ -68,15 +67,6 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
         } catch (e) {}
     };
 
-    const fetchCustomers = async () => {
-        try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
-            if (res.ok) {
-                const data = await res.json();
-                setCustomers(data.items || data);
-            }
-        } catch (e) {}
-    };
 
     if (loading) return <div className="p-12 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>;
     if (!trans) return <div className="p-12 text-center text-slate-500">Transação não encontrada ou sem permissão.</div>;
@@ -319,10 +309,11 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                             </div>
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Cliente / Fornecedor</label>
-                                <select value={editTransData.customer_id} onChange={e=>setEditTransData({...editTransData, customer_id: e.target.value})} className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[var(--color-primary-base)]/20">
-                                    <option value="">Sem vínculo com Entidade</option>
-                                    {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                </select>
+                                <CustomerAutocomplete 
+                                    value={editTransData.customer_id}
+                                    onChange={(id) => setEditTransData({...editTransData, customer_id: id})}
+                                    placeholder="Sem vínculo com Entidade"
+                                />
                             </div>
                         </div>
                         <div className="p-5 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-3 bg-slate-50 dark:bg-slate-900/50">

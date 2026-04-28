@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { getToken } from '@/lib/auth';
 import { Package, Search, ArrowLeft, Loader2, Minus, Plus, Trash2, ShoppingCart } from 'lucide-react';
 import Link from 'next/link';
+import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
 interface Customer {
     id: number;
@@ -46,10 +47,7 @@ export default function NewSellerOrderPage() {
     const router = useRouter();
     
     // Step 1: Customer Selection
-    const [customers, setCustomers] = useState<Customer[]>([]);
-    const [searchCustomer, setSearchCustomer] = useState('');
     const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-    const [loadingCustomers, setLoadingCustomers] = useState(false);
 
     // Step 2: Product Selection
     const [searchProduct, setSearchProduct] = useState('');
@@ -134,34 +132,6 @@ export default function NewSellerOrderPage() {
         fetchOrder();
     }, [urlOrderId, urlCustomerId]);
 
-    // Fetch Customers
-    useEffect(() => {
-        const fetchCustomers = async () => {
-            setLoadingCustomers(true);
-            try {
-                const token = getToken();
-                const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-                const url = new URL(`${apiUrl}/customers`);
-                url.searchParams.append('limit', '50');
-                if (searchCustomer) url.searchParams.append('search', searchCustomer);
-                
-                const res = await fetch(url.toString(), {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    setCustomers(data);
-                }
-            } catch (e) {
-                console.error(e);
-            } finally {
-                setLoadingCustomers(false);
-            }
-        };
-
-        const timer = setTimeout(fetchCustomers, 400);
-        return () => clearTimeout(timer);
-    }, [searchCustomer]);
 
     // Fetch Products
     useEffect(() => {
@@ -354,37 +324,18 @@ export default function NewSellerOrderPage() {
                     <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
                         <h2 className="font-bold text-slate-800 dark:text-slate-200 mb-4 text-lg">1. Selecione o Cliente</h2>
                         {!selectedCustomer ? (
-                            <div className="relative">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                <input 
-                                    type="text" 
-                                    placeholder="Buscar por nome ou CNPJ..." 
-                                    value={searchCustomer}
-                                    onChange={e => setSearchCustomer(e.target.value)}
-                                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl dark:bg-slate-800/50 dark:border-slate-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)]"
-                                />
-                                {searchCustomer.trim() !== '' && customers.length > 0 && (
-                                    <div className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg z-10 max-h-60 overflow-y-auto">
-                                        {customers.map(c => (
-                                            <button 
-                                                key={c.id} 
-                                                onClick={() => { setSelectedCustomer(c); setSearchCustomer(''); }}
-                                                className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 border-b border-slate-100 dark:border-slate-800 last:border-0 flex justify-between items-center"
-                                            >
-                                                <div>
-                                                    <span className="font-semibold text-slate-800 dark:text-slate-200 block">
-                                                        {c.name}
-                                                        {c.discount && c.discount > 0 ? (
-                                                            <span className="ml-2 text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-bold dark:bg-emerald-500/20 dark:text-emerald-300">-{c.discount}%</span>
-                                                        ) : null}
-                                                    </span>
-                                                    <span className="text-xs text-slate-400 font-mono">{c.document}</span>
-                                                </div>
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
+                            <CustomerAutocomplete 
+                                value=""
+                                onChange={(id, customer) => {
+                                    if (customer) {
+                                        setSelectedCustomer(customer as Customer);
+                                    } else {
+                                        setSelectedCustomer(null);
+                                        setCart([]);
+                                    }
+                                }}
+                                placeholder="Buscar por nome ou CNPJ..."
+                            />
                         ) : (
                             <>
                                 <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 p-4 rounded-xl flex justify-between items-center">

@@ -5,6 +5,7 @@ import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X,
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
+import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
 export default function ServiceOrdersPage() {
     const [orders, setOrders] = useState<any[]>([]);
@@ -126,9 +127,6 @@ export default function ServiceOrdersPage() {
 
     const fetchAuxData = async () => {
         try {
-            const resCust = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
-            if (resCust.ok) setCustomers(await resCust.json());
-            
             const resSvc = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/services`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
             if (resSvc.ok) setServices((await resSvc.json()).items);
             
@@ -656,29 +654,13 @@ export default function ServiceOrdersPage() {
 
                     <div className="flex items-center gap-3 min-w-fit relative">
                         <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Cliente:</label>
-                        <input
-                            type="text"
-                            list="customers-list"
-                            placeholder="Todos os Clientes..."
-                            value={customerFilter}
-                            onChange={(e) => {
-                                const val = e.target.value;
-                                setCustomerFilter(val);
-                                // if empty, trigger load all immediately
-                                if (!val) fetchOrders();
-                            }}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    fetchOrders();
-                                }
-                            }}
-                            className="px-4 py-2 w-48 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
-                        />
-                        <datalist id="customers-list">
-                            {customers.map(c => (
-                                <option key={c.id} value={c.id.toString()}>{c.name}</option>
-                            ))}
-                        </datalist>
+                        <div className="w-64">
+                            <CustomerAutocomplete 
+                                value={customerFilter}
+                                onChange={(id) => setCustomerFilter(id)}
+                                placeholder="Todos os Clientes..."
+                            />
+                        </div>
                     </div>
 
                     <div className="flex items-center gap-3 min-w-fit md:ml-auto">
@@ -1045,10 +1027,11 @@ export default function ServiceOrdersPage() {
                         <form onSubmit={handleCreateOrder} className="p-6 space-y-4">
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Cliente</label>
-                                <select required value={newOrder.customer_id} onChange={(e) => setNewOrder({...newOrder, customer_id: e.target.value})} className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-sm">
-                                    <option value="">Selecione...</option>
-                                    {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                </select>
+                                <CustomerAutocomplete 
+                                    value={newOrder.customer_id} 
+                                    onChange={(id) => setNewOrder({...newOrder, customer_id: id})} 
+                                    required 
+                                />
                             </div>
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Serviço</label>

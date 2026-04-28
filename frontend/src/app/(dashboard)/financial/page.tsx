@@ -5,11 +5,12 @@ import { DollarSign, CheckCircle, Search, Clock, AlertCircle, Plus, X, ArrowUpCi
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
+import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
 export default function FinancialPage() {
     const [installments, setInstallments] = useState<any[]>([]);
     const [categories, setCategories] = useState<any[]>([]);
-    const [customers, setCustomers] = useState<any[]>([]);
+
     const [accounts, setAccounts] = useState<any[]>([]);
     const [metrics, setMetrics] = useState({ total_open: 0, total_paid: 0, total_overdue: 0 });
     const [cashflow, setCashflow] = useState<any[]>([]);
@@ -52,7 +53,6 @@ export default function FinancialPage() {
     useEffect(() => {
         fetchMetrics();
         fetchCategories();
-        fetchCustomers();
         fetchAccounts();
         fetchCashflow();
         
@@ -151,10 +151,7 @@ export default function FinancialPage() {
     };
 
     const fetchCustomers = async () => {
-        try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers?limit=10000`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
-            if (res.ok) setCustomers(await res.json());
-        } catch (e) {}
+        // Obsolete, replaced by CustomerAutocomplete
     };
 
     useEffect(() => {
@@ -439,10 +436,14 @@ export default function FinancialPage() {
                                     </button>
                                 </div>
                                 
-                                <select value={customerFilter} onChange={(e)=>setCustomerFilter(e.target.value)} className="w-full sm:w-auto min-w-[180px] px-3 h-11 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl text-sm font-medium outline-none text-slate-700 dark:text-slate-200 shadow-sm shrink-0">
-                                    <option value="">Cliente / Fornecedor</option>
-                                    {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                </select>
+                                <div className="w-full sm:w-auto min-w-[220px] shrink-0 h-11">
+                                    <CustomerAutocomplete 
+                                        value={customerFilter}
+                                        onChange={(id) => setCustomerFilter(id)}
+                                        placeholder="Cliente / Fornecedor"
+                                        className="h-full [&>div]:h-full [&>div]:py-0 [&>div]:rounded-xl"
+                                    />
+                                </div>
                                 
                                 <button type="submit" className="px-6 h-11 bg-[var(--color-primary-base)] text-white font-bold rounded-xl hover:opacity-90 transition flex items-center justify-center gap-2 text-sm shadow-sm w-full sm:w-auto md:ml-auto shrink-0">
                                     <Search className="w-4 h-4" /> Buscar
@@ -678,29 +679,17 @@ export default function FinancialPage() {
                                     </div>
                                     <div>
                                         <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Nome Cliente / Fornecedor <span className="text-rose-500">*</span></label>
-                                        <input 
-                                            required 
-                                            type="text"
-                                            list="customer-list-form"
-                                            value={formData.customer_search_text || ''}
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                const match = customers.find(c => `${c.name} - ${c.cnpj_cpf || c.document || ''}` === val);
+                                        <CustomerAutocomplete 
+                                            value={formData.customer_id}
+                                            onChange={(id) => {
                                                 setFormData({
-                                                    ...formData, 
-                                                    customer_search_text: val,
-                                                    customer_id: match ? String(match.id) : '',
+                                                    ...formData,
+                                                    customer_id: id,
                                                     order_id: ''
                                                 });
                                             }}
-                                            className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm"
-                                            placeholder="Busque por nome ou documento..."
+                                            required
                                         />
-                                        <datalist id="customer-list-form">
-                                            {customers.map(c => (
-                                                <option key={c.id} value={`${c.name} - ${c.cnpj_cpf || c.document || ''}`} />
-                                            ))}
-                                        </datalist>
                                     </div>
                                     {formData.customer_id && customerOrders.length > 0 && (
                                     <div>

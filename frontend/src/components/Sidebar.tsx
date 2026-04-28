@@ -87,7 +87,15 @@ const sellerNavigation: NavItem[] = [
     ]
   },
   { name: 'Pedidos', href: '/orders', icon: ShoppingBag },
-  { name: 'Empresas', href: '/customers', icon: Users },
+  { 
+    name: 'Empresas', 
+    href: '/customers', 
+    icon: Users,
+    subItems: [
+      { name: 'Listagem e Cadastro', href: '/customers', icon: Users },
+      { name: 'Grupos de Clientes', href: '/customers/groups', icon: Layers }
+    ]
+  },
   { 
     name: 'Marketing', 
     href: '/promotions', 
@@ -145,6 +153,9 @@ export function Sidebar() {
        const initialOpen: Record<string, boolean> = {};
        sellerNavigation.forEach(item => {
            if (item.subItems && item.subItems.some(sub => pathname.startsWith(sub.href === '/products' ? '/products/' : sub.href) || pathname === sub.href)) {
+               initialOpen[item.name] = true;
+           }
+           if (item.name === 'Empresas' && pathname.startsWith('/customers')) {
                initialOpen[item.name] = true;
            }
        });

@@ -101,11 +101,32 @@ export default function CustomerDetailsPage() {
   const [moduleCrm, setModuleCrm] = useState(false);
   const [moduleConsignment, setModuleConsignment] = useState(false);
 
+  // Groups states
+  const [allGroups, setAllGroups] = useState<any[]>([]);
+  const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+  const [savingGroups, setSavingGroups] = useState(false);
+  const [selectedDefaultGroupId, setSelectedDefaultGroupId] = useState<number | ''>('');
+  const [selectedAdditionalGroupIds, setSelectedAdditionalGroupIds] = useState<number[]>([]);
+
   useEffect(() => {
     fetchCustomer();
     fetchCustomerOrders();
     checkHorusConfig();
+    fetchGroups();
   }, [customerId]);
+
+  async function fetchGroups() {
+    try {
+      const token = getToken();
+      if (!token) return;
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/groups`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setAllGroups(await res.json());
+      }
+    } catch(e) {}
+  }
 
   useEffect(() => {
     if (activeTab === 'financial_erp') {
@@ -592,6 +613,39 @@ export default function CustomerDetailsPage() {
     finally { setSavingAuth(false); }
   }
 
+  function openGroupModal() {
+    setSelectedDefaultGroupId(customer?.default_group?.id || '');
+    setSelectedAdditionalGroupIds(customer?.additional_groups?.map((g: any) => g.id) || []);
+    setIsGroupModalOpen(true);
+  }
+
+  async function handleSaveGroups(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingGroups(true);
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/groups`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          default_group_id: selectedDefaultGroupId || null,
+          additional_group_ids: selectedAdditionalGroupIds 
+        })
+      });
+      if (res.ok) {
+        toast.success("Classificação atualizada com sucesso!");
+        setIsGroupModalOpen(false);
+        fetchCustomer(); // Reload customer to get new groups
+      } else {
+        toast.error("Erro ao atualizar grupos.");
+      }
+    } catch (e) {
+      toast.error("Falha na conexão.");
+    } finally {
+      setSavingGroups(false);
+    }
+  }
+
+
   async function handleSyncHorus() {
     if (!customer?.document) return;
     const cleanCnpj = customer.document.replace(/\D/g, '');
@@ -956,6 +1010,33 @@ export default function CustomerDetailsPage() {
                         <p className="text-sm text-slate-900 dark:text-slate-300 font-mono bg-slate-50 dark:bg-slate-800 inline-block px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 mt-1">
                           {customer.payment_condition || 'À vista (0 dias)'}
                         </p>
+                      </div>
+
+                      <div className="col-span-2 border-t border-slate-100 pt-4 mt-2 dark:border-slate-800">
+                        <div className="flex justify-between items-center mb-3">
+                          <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold">Classificação / Grupos</p>
+                          <button onClick={openGroupModal} className="text-xs text-[var(--color-primary-base)] transition-opacity flex items-center gap-1 bg-[var(--color-primary-base)]/10 hover:bg-[var(--color-primary-base)]/20 px-2.5 py-1 rounded-lg font-medium">
+                            <Edit2 className="w-3 h-3" /> Editar Grupos
+                          </button>
+                        </div>
+                        
+                        <div className="flex flex-wrap gap-2">
+                          {customer.default_group ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold shadow-sm text-white" style={{ backgroundColor: customer.default_group.color || '#64748b' }}>
+                              ★ {customer.default_group.name}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-3 py-1 rounded-full bg-slate-100 text-slate-500 text-xs font-medium dark:bg-slate-800 dark:text-slate-400">
+                              Sem grupo padrão
+                            </span>
+                          )}
+
+                          {customer.additional_groups?.map((g: any) => (
+                             <span key={g.id} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border" style={{ borderColor: g.color || '#64748b', color: g.color || '#64748b', backgroundColor: `${g.color || '#64748b'}15` }}>
+                               {g.name}
+                             </span>
+                          ))}
+                        </div>
                       </div>
                     </div>
                  </div>
@@ -1482,6 +1563,70 @@ export default function CustomerDetailsPage() {
                  </button>
                </div>
             </form>
+          </motion.div>
+        </div>
+      )}
+
+      {isGroupModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center items-center p-4">
+          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-2xl shadow-xl w-full max-w-lg dark:bg-slate-900 dark:border dark:border-slate-800 overflow-hidden">
+             <div className="flex justify-between items-center p-6 border-b border-slate-100 dark:border-slate-800">
+               <h3 className="text-lg font-bold text-slate-900 dark:text-white">Classificação do Cliente</h3>
+               <button onClick={() => setIsGroupModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                 <X className="w-5 h-5" />
+               </button>
+             </div>
+             <form onSubmit={handleSaveGroups} className="p-6">
+                <div className="space-y-6">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700 block mb-2 dark:text-slate-300">Grupo Principal (Padrão)</label>
+                    <select
+                      value={selectedDefaultGroupId}
+                      onChange={(e) => setSelectedDefaultGroupId(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white"
+                    >
+                      <option value="">Nenhum</option>
+                      {allGroups.map((g: any) => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-slate-500 mt-2">O grupo principal é destacado na visualização e pode ser usado como critério principal de filtro.</p>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700 block mb-2 dark:text-slate-300">Outros Grupos (Opcional)</label>
+                    <div className="grid grid-cols-2 gap-3 max-h-48 overflow-y-auto p-1">
+                       {allGroups.map((g: any) => {
+                          if (g.id === selectedDefaultGroupId) return null; // Can't be default and additional at same time
+                          return (
+                            <label key={g.id} className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 cursor-pointer hover:bg-slate-50 transition-colors dark:border-slate-800 dark:hover:bg-slate-800/50">
+                               <input 
+                                 type="checkbox" 
+                                 checked={selectedAdditionalGroupIds.includes(g.id)}
+                                 onChange={(e) => {
+                                   if (e.target.checked) setSelectedAdditionalGroupIds([...selectedAdditionalGroupIds, g.id]);
+                                   else setSelectedAdditionalGroupIds(selectedAdditionalGroupIds.filter(id => id !== g.id));
+                                 }}
+                                 className="rounded border-slate-300 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)]"
+                               />
+                               <span className="text-sm font-medium text-slate-700 flex items-center gap-2 dark:text-slate-300">
+                                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: g.color || '#64748b' }}></div>
+                                  {g.name}
+                               </span>
+                            </label>
+                          )
+                       })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-6 border-t border-slate-200 mt-6 dark:border-slate-800">
+                 <button type="button" onClick={() => setIsGroupModalOpen(false)} className="px-4 py-2 text-slate-500 hover:text-slate-700 transition-colors text-sm dark:text-slate-400 dark:hover:text-white">Cancelar</button>
+                 <button type="submit" disabled={savingGroups} className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white px-6 py-2 rounded-xl transition-colors disabled:opacity-50 text-sm font-medium">
+                    {savingGroups ? 'Salvando...' : 'Salvar Grupos'}
+                 </button>
+               </div>
+             </form>
           </motion.div>
         </div>
       )}
