@@ -7,6 +7,18 @@ import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
+const getCategoryHierarchyName = (cat: any, categories: any[]) => {
+    let current = cat;
+    let names = [];
+    let safe = 0;
+    while (current && safe < 10) {
+        names.unshift(current.name);
+        current = current.parent_id ? categories.find(c => c.id === current.parent_id) : null;
+        safe++;
+    }
+    return names.join(' > ');
+};
+
 export default function FinancialTransactionDetailsPage({ params }: { params: any }) {
     const unwrappedParams = use(params) as { id: string };
     const [trans, setTrans] = useState<any>(null);
@@ -304,7 +316,10 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Classificação</label>
                                 <select value={editTransData.category_id} onChange={e=>setEditTransData({...editTransData, category_id: e.target.value})} className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[var(--color-primary-base)]/20">
                                     <option value="">Selecione...</option>
-                                    {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                    {categories
+                                        .map(c => ({...c, hierarchy: getCategoryHierarchyName(c, categories)}))
+                                        .sort((a, b) => a.hierarchy.localeCompare(b.hierarchy))
+                                        .map(c => <option key={c.id} value={c.id}>{c.hierarchy}</option>)}
                                 </select>
                             </div>
                             <div>

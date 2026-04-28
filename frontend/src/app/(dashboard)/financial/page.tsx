@@ -7,6 +7,18 @@ import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
+const getCategoryHierarchyName = (cat: any, categories: any[]) => {
+    let current = cat;
+    let names = [];
+    let safe = 0;
+    while (current && safe < 10) {
+        names.unshift(current.name);
+        current = current.parent_id ? categories.find(c => c.id === current.parent_id) : null;
+        safe++;
+    }
+    return names.join(' > ');
+};
+
 export default function FinancialPage() {
     const [installments, setInstallments] = useState<any[]>([]);
     const [categories, setCategories] = useState<any[]>([]);
@@ -672,8 +684,12 @@ export default function FinancialPage() {
                                         <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Categoria</label>
                                         <select required value={formData.category_id} onChange={(e)=>setFormData({...formData, category_id: e.target.value})} className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm">
                                             <option value="">Selecione...</option>
-                                            {categories.filter(c => c.type === formData.type).map(cat => (
-                                                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                                            {categories
+                                                .filter(c => c.type === formData.type)
+                                                .map(c => ({...c, hierarchy: getCategoryHierarchyName(c, categories)}))
+                                                .sort((a, b) => a.hierarchy.localeCompare(b.hierarchy))
+                                                .map(cat => (
+                                                <option key={cat.id} value={cat.id}>{cat.hierarchy}</option>
                                             ))}
                                         </select>
                                     </div>
@@ -866,8 +882,11 @@ export default function FinancialPage() {
                                 <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 mt-4">(Opcional) Corrigir Categoria</label>
                                 <select value={payData.category_id || ''} onChange={(e)=>setPayData({...payData, category_id: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 shadow-sm transition mb-2">
                                     <option value="">Manter categoria original...</option>
-                                    {categories.map(cat => (
-                                        <option key={cat.id} value={cat.id}>{cat.name} ({cat.type === 'RECEIVABLE' ? 'Receita' : 'Despesa'})</option>
+                                    {categories
+                                        .map(c => ({...c, hierarchy: getCategoryHierarchyName(c, categories)}))
+                                        .sort((a, b) => a.hierarchy.localeCompare(b.hierarchy))
+                                        .map(cat => (
+                                        <option key={cat.id} value={cat.id}>{cat.hierarchy} ({cat.type === 'RECEIVABLE' ? 'Receita' : 'Despesa'})</option>
                                     ))}
                                 </select>
                             </div>
