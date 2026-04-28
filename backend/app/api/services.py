@@ -1123,7 +1123,18 @@ def get_service_order_details(
             "id": tx.id,
             "status": tx.transaction_status,
             "amount": tx.total_amount,
-            "installments_count": len(tx.installments)
+            "installments_count": len(tx.installments),
+            "installments": [
+                {
+                    "id": inst.id,
+                    "number": inst.number,
+                    "amount": inst.amount,
+                    "due_date": inst.due_date.isoformat() if inst.due_date else None,
+                    "status": inst.status,
+                    "bank_slip_pdf_url": inst.bank_slip_pdf_url,
+                    "is_conciliated": inst.is_conciliated
+                } for inst in tx.installments
+            ]
         } for tx in txs
     ]
     

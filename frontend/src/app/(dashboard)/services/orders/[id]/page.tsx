@@ -273,15 +273,52 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                             <CircleDollarSign className="w-4 h-4 text-emerald-500"/> Transações Geradas
                         </h3>
                         {order.txs && order.txs.length > 0 ? (
-                            <div className="space-y-3">
+                            <div className="space-y-4">
                                 {order.txs.map((tx: any, idx: number) => (
-                                    <div key={idx} className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-700 text-sm">
-                                        <div className="flex justify-between font-bold mb-1">
-                                            <span className="text-slate-700 dark:text-slate-300">TX #{tx.id}</span>
-                                            <span className={tx.status === 'CONFIRMADO' ? 'text-emerald-600' : 'text-slate-500'}>{tx.status}</span>
+                                    <div key={idx} className="bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-700 overflow-hidden">
+                                        <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="font-black text-slate-800 dark:text-slate-200">TX #{tx.id}</span>
+                                                <span className={`text-xs font-bold px-2 py-1 rounded-md ${tx.status === 'CONFIRMADO' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30' : 'bg-slate-200 text-slate-600 dark:bg-slate-700'}`}>{tx.status}</span>
+                                            </div>
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-slate-500">Valor Faturado: <strong className="text-slate-800 dark:text-slate-200">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(tx.amount)}</strong></span>
+                                                <span className="text-slate-500">Parcelamento: <strong className="text-slate-800 dark:text-slate-200">{tx.installments_count}x</strong></span>
+                                            </div>
                                         </div>
-                                        <p className="text-slate-500 text-xs mb-1">Valor Faturado: <strong className="text-slate-700 dark:text-slate-300">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(tx.amount)}</strong></p>
-                                        <p className="text-slate-500 text-xs">Parcelamento em <strong className="text-slate-700 dark:text-slate-300">{tx.installments_count}x</strong></p>
+                                        
+                                        {tx.installments && tx.installments.length > 0 && (
+                                            <div className="p-4 space-y-2">
+                                                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Cronograma Financeiro</p>
+                                                {tx.installments.map((inst: any, iIdx: number) => (
+                                                    <div key={iIdx} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 bg-white dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-700/50 gap-3 shadow-sm hover:border-indigo-100 dark:hover:border-indigo-900/50 transition">
+                                                        <div className="flex flex-col">
+                                                            <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Parcela {inst.number}/{tx.installments_count}</span>
+                                                            <span className="text-[10px] text-slate-400">Venc: {new Date(inst.due_date + 'T12:00:00').toLocaleDateString('pt-BR')}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-4">
+                                                            <div className="flex flex-col items-end">
+                                                                <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(inst.amount)}</span>
+                                                                <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded mt-0.5 ${inst.status === 'PAID' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : inst.status === 'OVERDUE' ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'}`}>
+                                                                    {inst.status === 'PAID' ? 'Paga' : inst.status === 'OVERDUE' ? 'Atrasada' : 'Pendente'}
+                                                                </span>
+                                                            </div>
+                                                            {inst.bank_slip_pdf_url && (
+                                                                <a 
+                                                                    href={inst.bank_slip_pdf_url} 
+                                                                    target="_blank" 
+                                                                    rel="noopener noreferrer"
+                                                                    className="shrink-0 p-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 dark:text-indigo-400 rounded-lg transition"
+                                                                    title="Imprimir Boleto"
+                                                                >
+                                                                    <QrCode className="w-4 h-4"/>
+                                                                </a>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                             </div>
