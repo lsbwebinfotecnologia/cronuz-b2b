@@ -57,6 +57,10 @@ export default function FinancialPage() {
         recurrence_end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0],
         customer_search_text: ''
     });
+    // Simulation State
+    const [isSimulationOpen, setIsSimulationOpen] = useState(false);
+    const [simulationAccountId, setSimulationAccountId] = useState('');
+
     const [preview, setPreview] = useState<any[]>([]);
     const [customerOrders, setCustomerOrders] = useState<any[]>([]);
 
@@ -380,6 +384,15 @@ export default function FinancialPage() {
     const totalConsolidated = accounts.reduce((acc, curr) => acc + (curr.type !== 'CREDIT_CARD' ? curr.current_balance : 0), 0);
     const totalCreditDebt = accounts.reduce((acc, curr) => acc + (curr.type === 'CREDIT_CARD' && curr.current_balance < 0 ? Math.abs(curr.current_balance) : 0), 0);
 
+    const simulationAccount = accounts.find(a => a.id === parseInt(simulationAccountId));
+    const projectedReceivables = installments
+        .filter(inst => inst.status !== 'PAID' && inst.status !== 'CANCELLED' && inst.type === 'RECEIVABLE')
+        .reduce((sum, inst) => sum + inst.amount, 0);
+    const projectedPayables = installments
+        .filter(inst => inst.status !== 'PAID' && inst.status !== 'CANCELLED' && inst.type === 'PAYABLE')
+        .reduce((sum, inst) => sum + inst.amount, 0);
+    const projectedBalance = simulationAccount ? (simulationAccount.current_balance + projectedReceivables - projectedPayables) : 0;
+
     return (
         <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
             <div className="flex flex-col md:flex-row justify-between md:items-end gap-4">
@@ -394,6 +407,12 @@ export default function FinancialPage() {
                 </div>
                 
                 <div className="flex gap-2 relative z-10 w-full md:w-auto overflow-x-auto pb-2 md:pb-0 hide-scrollbar">
+                    <button 
+                        onClick={() => setIsSimulationOpen(!isSimulationOpen)} 
+                        className={`px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 text-sm text-center justify-center border whitespace-nowrap ${isSimulationOpen ? 'bg-amber-500 text-white border-amber-600' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
+                    >
+                        <TrendingUp className="w-4 h-4"/> Simular Caixa
+                    </button>
                     <Link href="/financial/accounts" className="px-5 py-2.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 rounded-xl font-bold hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition flex items-center gap-2 text-sm text-center justify-center border border-indigo-100 dark:border-indigo-500/20 whitespace-nowrap">
                         <Building2 className="w-4 h-4"/> Bancos & Cartões
                     </Link>
@@ -406,6 +425,53 @@ export default function FinancialPage() {
                 </div>
             </div>
 
+            {isSimulationOpen && (
+                <div className="bg-gradient-to-br from-slate-50 to-white dark:from-slate-900 dark:to-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm animate-in fade-in slide-in-from-top-4 duration-300">
+                    <div className="flex flex-col md:flex-row gap-6 items-start md:items-center">
+                        <div className="w-full md:w-1/3 shrink-0">
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Selecione uma conta para simular</label>
+                            <select 
+                                value={simulationAccountId} 
+                                onChange={(e) => setSimulationAccountId(e.target.value)}
+                                className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-700 dark:text-slate-300 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent outline-none transition shadow-sm"
+                            >
+                                <option value="">-- Escolha a Conta Base --</option>
+                                {accounts.map(a => (
+                                    <option key={a.id} value={a.id}>{a.name} (Saldo: {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(a.current_balance)})</option>
+                                ))}
+                            </select>
+                            <p className="text-[10px] text-slate-400 mt-2 font-medium">O cálculo abaixo vai considerar o saldo desta conta e adicionar/subtrair todos os lançamentos que estão exibidos na lista (conforme seu filtro).</p>
+                        </div>
+
+                        {simulationAccount ? (
+                            <div className="w-full grid grid-cols-1 sm:grid-cols-4 gap-3">
+                                <div className="bg-white dark:bg-slate-950 p-3 rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm">
+                                    <div className="text-[10px] uppercase font-bold text-slate-400 mb-1">Saldo da Conta</div>
+                                    <div className="font-black text-slate-700 dark:text-slate-200 text-lg">{new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(simulationAccount.current_balance)}</div>
+                                </div>
+                                <div className="bg-emerald-50 dark:bg-emerald-900/10 p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/30 shadow-sm">
+                                    <div className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-500 mb-1 flex items-center gap-1"><ArrowUpCircle className="w-3 h-3"/> Entradas Pendentes</div>
+                                    <div className="font-black text-emerald-700 dark:text-emerald-400 text-lg">+ {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(projectedReceivables)}</div>
+                                </div>
+                                <div className="bg-rose-50 dark:bg-rose-900/10 p-3 rounded-xl border border-rose-100 dark:border-rose-900/30 shadow-sm">
+                                    <div className="text-[10px] uppercase font-bold text-rose-600 dark:text-rose-500 mb-1 flex items-center gap-1"><ArrowDownCircle className="w-3 h-3"/> Saídas Pendentes</div>
+                                    <div className="font-black text-rose-700 dark:text-rose-400 text-lg">- {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(projectedPayables)}</div>
+                                </div>
+                                <div className={`p-3 rounded-xl border shadow-sm ${projectedBalance >= 0 ? 'bg-indigo-50 border-indigo-100 dark:bg-indigo-900/20 dark:border-indigo-800' : 'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800'}`}>
+                                    <div className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 mb-1">Saldo Final Projetado</div>
+                                    <div className={`font-black text-xl ${projectedBalance >= 0 ? 'text-indigo-700 dark:text-indigo-400' : 'text-red-700 dark:text-red-400'}`}>
+                                        {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(projectedBalance)}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="w-full flex items-center justify-center p-6 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-800/30">
+                                <span className="text-sm font-medium text-slate-400">Selecione uma conta para ver a projeção.</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
 
             {activeTab === 'LIST' && (
