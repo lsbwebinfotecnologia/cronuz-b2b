@@ -65,7 +65,7 @@ export default function HorusLanding() {
             <nav className={`fixed top-0 w-full z-50 transition-all duration-300 ${scrolled ? 'bg-white/80 backdrop-blur-lg border-b border-slate-200/50 shadow-sm py-4' : 'bg-transparent py-6'}`}>
                 <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
                     <div className="flex items-center gap-6 cursor-pointer" onClick={() => window.scrollTo({top: 0, behavior: 'smooth'})}>
-                        <img src="/img/logo-fmz.png" alt="FMZ Tecnologia" className="h-8 md:h-10 w-auto object-contain transition-transform hover:scale-105" />
+                        <img src="/img/logo-fmz-new.jpg" alt="FMZ Tecnologia" className="h-8 md:h-10 w-auto object-contain transition-transform hover:scale-105" />
                         <span className="hidden md:inline text-slate-300 font-light">+</span>
                         <img src="/img/logo-lsb.png" alt="Lsbwebinfo" className="hidden md:block h-6 md:h-8 w-auto object-contain transition-transform hover:scale-105" />
                     </div>
@@ -191,7 +191,7 @@ export default function HorusLanding() {
                 <div className="max-w-7xl mx-auto px-6 text-center">
                     <motion.div initial={{y:30, opacity:0}} whileInView={{y:0, opacity:1}} viewport={{once:true}} transition={{duration:0.6}} className="flex flex-col items-center">
                         <div className="flex items-center gap-6 mb-10 bg-white p-6 rounded-2xl border border-white/20 backdrop-blur-md shadow-xl">
-                            <img src="/img/logo-fmz.png" alt="FMZ Tecnologia" className="h-10 md:h-12 w-auto object-contain" />
+                            <img src="/img/logo-fmz-new.jpg" alt="FMZ Tecnologia" className="h-10 md:h-12 w-auto object-contain" />
                             <div className="w-px h-10 bg-slate-200 hidden md:block"></div>
                             <img src="/img/logo-lsb.png" alt="Lsbwebinfo" className="h-8 md:h-10 w-auto object-contain hidden md:block" />
                         </div>
@@ -259,7 +259,7 @@ export default function HorusLanding() {
             <footer className="w-full bg-slate-950 py-12 text-center text-slate-500 relative z-10 border-t border-slate-900">
                 <div className="flex flex-col items-center justify-center gap-4">
                     <div className="flex gap-4 items-center mb-2 bg-white/5 p-3 rounded-xl border border-white/10 backdrop-blur-md">
-                         <img src="/img/logo-fmz.png" alt="FMZ" className="h-6 w-auto object-contain" />
+                         <img src="/img/logo-fmz-new.jpg" alt="FMZ" className="h-6 w-auto object-contain" />
                          <span className="text-slate-600">|</span>
                          <img src="/img/logo-lsb.png" alt="Lsbwebinfo" className="h-5 w-auto object-contain" />
                     </div>

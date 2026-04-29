@@ -244,7 +244,7 @@ export default function CronuzLanding() {
                         {/* FMZ Tecnologia */}
                         <motion.div initial={{opacity:0, x:-50}} whileInView={{opacity:1, x:0}} viewport={{once:true}} transition={{duration:0.5}} className="bg-slate-900 border border-slate-800 rounded-3xl p-10 flex flex-col group hover:shadow-[0_20px_40px_-15px_rgba(1,169,175,0.2)] hover:border-[#01A9AF]/50 transition-all cursor-default">
                             <div className="h-20 flex items-center mb-6 w-full">
-                                <img src="/img/logo-fmz.png" alt="FMZ Tecnologia" className="max-h-16 w-auto object-contain transition-all opacity-80 group-hover:opacity-100" />
+                                <img src="/img/logo-fmz-new.jpg" alt="FMZ Tecnologia" className="max-h-16 w-auto object-contain transition-all opacity-80 group-hover:opacity-100" />
                             </div>
                             <h4 className="text-xl font-bold text-white mb-3">FMZ Tecnologia (ERP Horus)</h4>
                             <p className="text-slate-400 font-medium text-sm">
