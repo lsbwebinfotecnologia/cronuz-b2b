@@ -328,9 +328,9 @@ async def upload_financial_invoice(
         import re
         match = re.search(r'OS #(\d+)', trans.description)
         if match:
-            local_id = int(match.group(1))
+            order_id = int(match.group(1))
             order = db.query(ServiceOrder).filter(
-                ServiceOrder.local_id == local_id,
+                ServiceOrder.id == order_id,
                 ServiceOrder.company_id == current_user.company_id
             ).first()
 

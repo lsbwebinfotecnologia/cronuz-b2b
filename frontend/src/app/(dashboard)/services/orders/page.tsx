@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2 } from 'lucide-react';
+import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2, QrCode } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
@@ -988,6 +988,15 @@ export default function ServiceOrdersPage() {
                                                     </span>
                                                 )}
                                                 
+                                                {order.has_boleto && (
+                                                    <Link 
+                                                        href={`/services/orders/${order.id}`}
+                                                        className="p-2 ml-1 bg-orange-100 hover:bg-orange-200 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400 font-bold rounded-lg shadow-sm text-xs inline-flex items-center gap-1.5 transition cursor-pointer border border-orange-200 dark:border-orange-800/50"
+                                                        title="Ver Boletos / Faturas"
+                                                    >
+                                                        <QrCode className="w-4 h-4"/> Boleto
+                                                    </Link>
+                                                )}
                                                 <div className="flex gap-2 items-center ml-2 border-l border-slate-200 dark:border-slate-700 pl-3">
                                                     {order.status_nfse === 'Nao Emitida' && order.status !== 'Cancelado' && order.status !== 'Pendente' && (
                                                         <button 

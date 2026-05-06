@@ -177,10 +177,18 @@ def get_service_orders(
         resp["customer_name"] = o.customer.name if o.customer else None
         resp["service_name"] = o.service.name if o.service else None
         
-        # Search for the latest nfse submission to get PDF url
         nfse_q = db.query(NFSeQueue).filter(NFSeQueue.service_order_id == o.id).order_by(NFSeQueue.created_at.desc()).first()
         resp["pdf_url"] = nfse_q.pdf_url_link if nfse_q else None
         resp["nfse_number"] = nfse_q.xml_protocol_id if nfse_q else None
+        
+        from app.models.financial import FinancialTransaction, FinancialInstallment
+        has_boleto = db.query(FinancialInstallment).join(FinancialTransaction).filter(
+            FinancialTransaction.company_id == current_user.company_id,
+            FinancialTransaction.description.like(f"%OS #{o.id}%"),
+            FinancialInstallment.bank_slip_nosso_numero.isnot(None)
+        ).first() is not None
+        
+        resp["has_boleto"] = has_boleto
         
         results.append(resp)
         
@@ -1132,6 +1140,7 @@ def get_service_order_details(
                     "due_date": inst.due_date.isoformat() if inst.due_date else None,
                     "status": inst.status,
                     "bank_slip_pdf_url": inst.bank_slip_pdf_url,
+                    "bank_slip_nosso_numero": inst.bank_slip_nosso_numero,
                     "is_conciliated": inst.is_conciliated
                 } for inst in tx.installments
             ]

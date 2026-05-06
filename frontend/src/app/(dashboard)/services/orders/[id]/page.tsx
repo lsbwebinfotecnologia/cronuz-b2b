@@ -394,9 +394,9 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                                                                     {inst.status === 'PAID' ? 'Paga' : inst.status === 'OVERDUE' ? 'Atrasada' : 'Pendente'}
                                                                 </span>
                                                             </div>
-                                                            {inst.bank_slip_pdf_url && (
+                                                            {(inst.bank_slip_pdf_url || inst.bank_slip_nosso_numero) && (
                                                                 <a 
-                                                                    href={inst.bank_slip_pdf_url} 
+                                                                    href={inst.bank_slip_pdf_url || `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/${inst.id}/bank-slip-pdf`} 
                                                                     target="_blank" 
                                                                     rel="noopener noreferrer"
                                                                     className="shrink-0 p-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 dark:text-indigo-400 rounded-lg transition"

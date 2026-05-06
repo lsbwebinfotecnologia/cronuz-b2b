@@ -394,22 +394,28 @@ def transaction_details(trans_id: int, db: Session = Depends(get_db), current_us
     category_name = db.query(FinancialCategory.name).filter(FinancialCategory.id == trans.category_id).scalar()
     installments = db.query(FinancialInstallment).filter(FinancialInstallment.transaction_id == trans.id).order_by(FinancialInstallment.number.asc()).all()
     nfse_url = None
+    nfse_number = None
     if trans.description and "OS #" in trans.description:
         import re
         match = re.search(r'OS #(\d+)', trans.description)
         if match:
-            local_id = int(match.group(1))
+            order_id = int(match.group(1))
             from app.models.service import ServiceOrder
-            so = db.query(ServiceOrder).filter(ServiceOrder.local_id == local_id, ServiceOrder.company_id == cid).first()
-            if so and so.invoice_pdf_url:
-                nfse_url = so.invoice_pdf_url
+            from app.models.nfse import NFSeQueue
+            so = db.query(ServiceOrder).filter(ServiceOrder.id == order_id, ServiceOrder.company_id == cid).first()
+            if so:
+                if so.invoice_pdf_url:
+                    nfse_url = so.invoice_pdf_url
+                nfse_q = db.query(NFSeQueue).filter(NFSeQueue.service_order_id == so.id).order_by(NFSeQueue.created_at.desc()).first()
+                if nfse_q and nfse_q.xml_protocol_id:
+                    nfse_number = nfse_q.xml_protocol_id
 
     return {
         "id": trans.id, "description": trans.description, "type": trans.type, "total_amount": trans.total_amount,
         "is_fixed": trans.is_fixed, "created_at": trans.created_at, "customer_name": customer_name,
         "category_name": category_name, "installments": installments,
         "customer_id": trans.customer_id, "category_id": trans.category_id, "order_id": trans.order_id,
-        "nfse_url": nfse_url
+        "nfse_url": nfse_url, "nfse_number": nfse_number
     }
 
 @router.post("/financial/transactions/{trans_id}/send-email", response_model=dict)
@@ -1173,6 +1179,22 @@ def issue_inter_slip(
         "amount": float(installment.amount),
         "due_date": installment.due_date
     }
+    
+    if installment.transaction.description and "OS #" in installment.transaction.description:
+        import re
+        match = re.search(r'OS #(\d+)', installment.transaction.description)
+        if match:
+            order_id = int(match.group(1))
+            from app.models.service import ServiceOrder
+            from app.models.nfse import NFSeQueue
+            order = db.query(ServiceOrder).filter(ServiceOrder.id == order_id, ServiceOrder.company_id == cid).first()
+            if order:
+                nfse_q = db.query(NFSeQueue).filter(NFSeQueue.service_order_id == order.id).order_by(NFSeQueue.created_at.desc()).first()
+                if nfse_q and nfse_q.xml_protocol_id:
+                    inst_data["mensagem"] = {
+                        "linha1": f"Referente a O.S #{order.id}",
+                        "linha2": f"NFS-e Nº {nfse_q.xml_protocol_id}"
+                    }
     
     addr = customer.addresses[0] if customer.addresses else None
     customer_data = {

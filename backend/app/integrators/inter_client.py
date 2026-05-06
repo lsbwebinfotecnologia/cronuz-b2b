@@ -97,6 +97,9 @@ class BancoInterClient:
             }
         }
         
+        if "mensagem" in installment_data:
+            payload["mensagem"] = installment_data["mensagem"]
+        
         try:
             cert = (self.cert_path, self.key_path) if self.cert_path and self.key_path else None
             response = requests.post(url, headers=headers, json=payload, cert=cert, verify=not self.sandbox, timeout=15)
