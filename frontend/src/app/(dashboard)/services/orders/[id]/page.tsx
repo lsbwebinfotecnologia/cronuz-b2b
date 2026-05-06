@@ -206,7 +206,7 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                 throw new Error(err.detail || "Erro ao fazer upload do PDF.");
             }
             toast.success("Boleto anexado com sucesso!", { id: loadingId });
-            fetchOrder();
+            fetchDetails();
         } catch (error: any) {
             toast.error(error.message || "Erro no upload do arquivo.", { id: loadingId });
         } finally {
