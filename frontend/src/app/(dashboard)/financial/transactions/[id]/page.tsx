@@ -191,7 +191,7 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                     </div>
                 </div>
 
-                <div className={`p-6 bg-slate-50/50 dark:bg-slate-900/50 grid grid-cols-1 ${trans.order_id ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6`}>
+                <div className={`p-6 bg-slate-50/50 dark:bg-slate-900/50 grid grid-cols-1 ${(trans.order_id || trans.nfse_url) ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6`}>
                     <div className="p-4 bg-white dark:bg-slate-950 rounded-2xl border border-slate-100 dark:border-slate-800">
                         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Entidade / Cliente</p>
                         <p className="font-bold text-slate-900 dark:text-white">{trans.customer_name || 'Não Informado'}</p>
@@ -204,6 +204,14 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Data de Criação</p>
                         <p className="font-bold text-slate-900 dark:text-white">{new Date(trans.created_at).toLocaleDateString('pt-BR')}</p>
                     </div>
+                    {trans.nfse_url && (
+                        <div className="p-4 bg-white dark:bg-slate-950 rounded-2xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/30 dark:bg-amber-900/10">
+                            <p className="text-xs font-semibold text-amber-600 dark:text-amber-500 uppercase tracking-wider mb-1">Nota Fiscal (NFS-e)</p>
+                            <a href={trans.nfse_url.startsWith('http') ? trans.nfse_url : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${trans.nfse_url}`} target="_blank" rel="noopener noreferrer" className="font-bold text-slate-900 dark:text-white hover:text-amber-600 dark:hover:text-amber-400 flex items-center gap-1">
+                                <FileText className="w-4 h-4"/> Ver Documento
+                            </a>
+                        </div>
+                    )}
                     {trans.order_id && (
                         <div className="p-4 bg-white dark:bg-slate-950 rounded-2xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/30 dark:bg-emerald-900/10">
                             <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-500 uppercase tracking-wider mb-1">Pedido Vinculado</p>

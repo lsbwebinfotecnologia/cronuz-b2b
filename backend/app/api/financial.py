@@ -385,12 +385,23 @@ def transaction_details(trans_id: int, db: Session = Depends(get_db), current_us
     customer_name = db.query(Customer.name).filter(Customer.id == trans.customer_id).scalar() if trans.customer_id else None
     category_name = db.query(FinancialCategory.name).filter(FinancialCategory.id == trans.category_id).scalar()
     installments = db.query(FinancialInstallment).filter(FinancialInstallment.transaction_id == trans.id).order_by(FinancialInstallment.number.asc()).all()
-    
+    nfse_url = None
+    if trans.description and "OS #" in trans.description:
+        import re
+        match = re.search(r'OS #(\d+)', trans.description)
+        if match:
+            local_id = int(match.group(1))
+            from app.models.service import ServiceOrder
+            so = db.query(ServiceOrder).filter(ServiceOrder.local_id == local_id, ServiceOrder.company_id == cid).first()
+            if so and so.invoice_pdf_url:
+                nfse_url = so.invoice_pdf_url
+
     return {
         "id": trans.id, "description": trans.description, "type": trans.type, "total_amount": trans.total_amount,
         "is_fixed": trans.is_fixed, "created_at": trans.created_at, "customer_name": customer_name,
         "category_name": category_name, "installments": installments,
-        "customer_id": trans.customer_id, "category_id": trans.category_id, "order_id": trans.order_id
+        "customer_id": trans.customer_id, "category_id": trans.category_id, "order_id": trans.order_id,
+        "nfse_url": nfse_url
     }
 
 @router.patch("/financial/generic_installments/{inst_id}/pay")
