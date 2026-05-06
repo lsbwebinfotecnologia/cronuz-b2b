@@ -293,3 +293,69 @@ async def upload_service_order_invoice(
         raise HTTPException(status_code=500, detail="Erro ao atualizar a O.S.")
         
     return {"message": "PDF anexado com sucesso.", "url": relative_url}
+
+@router.post("/financial-invoice")
+async def upload_financial_invoice(
+    file: UploadFile = File(...),
+    transaction_id: int = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Faz upload do PDF da Nota Fiscal a partir de uma transação financeira,
+    amarrando o arquivo à Ordem de Serviço correspondente, se houver.
+    """
+    from app.models.financial import FinancialTransaction
+    from app.models.service import ServiceOrder
+    
+    if not current_user.company_id:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="O arquivo deve ser um PDF.")
+        
+    trans = db.query(FinancialTransaction).filter(
+        FinancialTransaction.id == transaction_id,
+        FinancialTransaction.company_id == current_user.company_id
+    ).first()
+    
+    if not trans:
+        raise HTTPException(status_code=404, detail="Transação financeira não encontrada.")
+
+    # Try to find the related ServiceOrder
+    order = None
+    if trans.description and "OS #" in trans.description:
+        import re
+        match = re.search(r'OS #(\d+)', trans.description)
+        if match:
+            local_id = int(match.group(1))
+            order = db.query(ServiceOrder).filter(
+                ServiceOrder.local_id == local_id,
+                ServiceOrder.company_id == current_user.company_id
+            ).first()
+
+    if not order:
+        raise HTTPException(status_code=400, detail="Esta transação não parece estar vinculada a uma Ordem de Serviço.")
+
+    invoices_dir = UPLOADS_DIR / "invoices" / str(current_user.company_id)
+    invoices_dir.mkdir(parents=True, exist_ok=True)
+    
+    unique_filename = f"nfse_os_{order.id}_{uuid.uuid4().hex}.pdf"
+    file_path = invoices_dir / unique_filename
+    
+    try:
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar o PDF: {str(e)}")
+        
+    relative_url = f"/uploads/invoices/{current_user.company_id}/{unique_filename}"
+    order.invoice_pdf_url = relative_url
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Erro ao atualizar a O.S.")
+        
+    return {"message": "PDF anexado com sucesso. Ele foi vinculado automaticamente à O.S correspondente.", "url": relative_url}

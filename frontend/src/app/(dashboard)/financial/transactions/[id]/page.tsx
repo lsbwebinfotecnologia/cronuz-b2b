@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, use } from 'react';
-import { ArrowLeft, Clock, CheckCircle, Tag, TrendingUp, TrendingDown, DollarSign, Pencil, X, Save, FileText, QrCode, BookOpen, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Clock, CheckCircle, Tag, TrendingUp, TrendingDown, DollarSign, Pencil, X, Save, FileText, QrCode, BookOpen, RefreshCw, Mail, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
@@ -34,6 +34,16 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
     const [instData, setInstData] = useState({ due_date: '', amount: 0 });
     const [saving, setSaving] = useState(false);
 
+    // Email and Upload States
+    const [uploadingPdf, setUploadingPdf] = useState(false);
+    const [showEmailModal, setShowEmailModal] = useState(false);
+    const [emailSubject, setEmailSubject] = useState('');
+    const [emailBody, setEmailBody] = useState('');
+    const [toEmails, setToEmails] = useState('');
+    const [attachInvoice, setAttachInvoice] = useState(true);
+    const [attachBoletos, setAttachBoletos] = useState(true);
+    const [sendingEmail, setSendingEmail] = useState(false);
+
     const fetchSettings = async (companyId: number) => {
         try {
             const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
@@ -63,6 +73,8 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                     const u = getUser();
                     if(u?.company_id) fetchSettings(u.company_id);
                 }
+                const cname = getUser()?.company_name || 'Nossa Empresa';
+                setEmailSubject(`Faturamento Financeiro - ${data.description || ''} - ${cname}`);
             }
             else toast.error("Transação não encontrada");
         } catch (e) {
@@ -147,6 +159,97 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
         }
     };
 
+    const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploadingPdf(true);
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("transaction_id", trans.id.toString());
+
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/financial-invoice`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${getToken()}` },
+                body: formData
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || "Erro ao fazer upload do PDF.");
+            }
+            toast.success("PDF da Nota Fiscal atrelado com sucesso!");
+            fetchDetails();
+        } catch (error: any) {
+            toast.error(error.message || "Erro no upload do arquivo.");
+        } finally {
+            setUploadingPdf(false);
+            e.target.value = '';
+        }
+    };
+
+    const handleSendEmail = async () => {
+        setSendingEmail(true);
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/transactions/${trans.id}/send-email`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${getToken()}`
+                },
+                body: JSON.stringify({
+                    subject: emailSubject,
+                    body: emailBody,
+                    to_emails: toEmails,
+                    attach_invoice: attachInvoice,
+                    attach_boletos: attachBoletos
+                })
+            });
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.detail || "Erro ao enviar e-mail.");
+            }
+            toast.success("E-mail enviado com sucesso para o cliente!");
+            setShowEmailModal(false);
+        } catch (error: any) {
+            toast.error(error.message || "Erro ao disparar e-mail.");
+        } finally {
+            setSendingEmail(false);
+        }
+    };
+
+    const handleIssueAllBoletos = async () => {
+        const pendingInsts = trans.installments.filter((i: any) => i.status !== 'PAID' && i.status !== 'CANCELLED' && !i.bank_slip_nosso_numero);
+        if(pendingInsts.length === 0) {
+            toast.info("Não há parcelas pendentes sem boleto emitido.");
+            return;
+        }
+        if(!window.confirm(`Deseja emitir boletos para ${pendingInsts.length} parcela(s)?`)) return;
+        
+        const loadingId = toast.loading("Emitindo boletos...");
+        let successCount = 0;
+        for(const inst of pendingInsts) {
+            try {
+                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/${inst.id}/issue-inter-slip`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${getToken()}` },
+                });
+                if(res.ok) successCount++;
+            } catch(e) {}
+        }
+        if(successCount > 0) {
+            toast.success(`${successCount} boleto(s) emitido(s) com sucesso!`, { id: loadingId });
+            fetchDetails();
+        } else {
+            toast.error("Erro ao emitir boletos.", { id: loadingId });
+        }
+    };
+
+    const openEmailModal = () => {
+        // Find if we have customer email in trans.customer or we don't have it nested?
+        // We might not have nested customer email. Let's just open modal.
+        setShowEmailModal(true);
+    };
+
     return (
         <div className="p-6 md:p-8 max-w-5xl mx-auto space-y-6">
             <Link href="/financial" className="text-slate-500 hover:text-slate-800 flex items-center gap-2 dark:text-slate-400 dark:hover:text-white font-medium mb-2 w-fit">
@@ -188,6 +291,22 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                 {new Intl.NumberFormat('pt-BR', {style: 'currency', currency:'BRL'}).format(trans.total_amount)}
                             </h2>
                         </div>
+                    </div>
+                    
+                    <div className="mt-6 pt-6 border-t border-slate-200/50 dark:border-slate-800/50 flex flex-wrap gap-3">
+                        {isReceivable && interEnabled && (
+                            <button onClick={handleIssueAllBoletos} className="px-4 py-2 bg-orange-100 hover:bg-orange-200 dark:bg-orange-900/30 dark:hover:bg-orange-900/50 text-orange-700 dark:text-orange-400 rounded-xl font-bold text-sm transition flex items-center gap-2 shadow-sm border border-orange-200 dark:border-orange-800/50">
+                                <QrCode className="w-4 h-4"/> Gerar Boletos
+                            </button>
+                        )}
+                        <button onClick={openEmailModal} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition flex items-center gap-2 shadow-sm">
+                            <Mail className="w-4 h-4"/> Enviar E-mail
+                        </button>
+                        <label className={`px-4 py-2 ${uploadingPdf ? 'bg-slate-300' : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700'} text-slate-700 dark:text-slate-300 rounded-xl font-bold text-sm transition flex items-center gap-2 cursor-pointer shadow-sm`}>
+                            {uploadingPdf ? <div className="w-4 h-4 rounded-full border-2 border-slate-500 border-b-transparent animate-spin"></div> : <Upload className="w-4 h-4"/>}
+                            {uploadingPdf ? 'Enviando...' : 'Anexar NFS-e (PDF)'}
+                            <input type="file" accept=".pdf" className="hidden" onChange={handlePdfUpload} disabled={uploadingPdf} />
+                        </label>
                     </div>
                 </div>
 
@@ -374,6 +493,63 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                             <button onClick={handleSaveInst} disabled={saving} className="px-5 py-2.5 rounded-xl font-bold text-sm bg-[var(--color-primary-base)] text-white hover:bg-[var(--color-primary-hover)] transition disabled:opacity-50 flex items-center gap-2">
                                 {saving ? 'Salvando...' : <Save className="w-4 h-4"/>}
                                 Salvar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showEmailModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className="flex items-center justify-between p-5 border-b border-slate-100 dark:border-slate-800 bg-indigo-50/50 dark:bg-indigo-900/10">
+                            <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                                <Mail className="w-5 h-5 text-indigo-600 dark:text-indigo-400"/>
+                                Enviar para Cliente
+                            </h3>
+                            <button onClick={()=>setShowEmailModal(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                                <X className="w-5 h-5"/>
+                            </button>
+                        </div>
+                        <div className="p-5 space-y-4">
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Para (E-mails separados por vírgula)</label>
+                                <input type="text" value={toEmails} onChange={e=>setToEmails(e.target.value)} placeholder="cliente@email.com, financeiro@email.com" className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-600/20" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Assunto</label>
+                                <input type="text" value={emailSubject} onChange={e=>setEmailSubject(e.target.value)} className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-600/20" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Mensagem</label>
+                                <textarea value={emailBody} onChange={e=>setEmailBody(e.target.value)} rows={4} className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-600/20" placeholder="Olá, segue em anexo o faturamento referente aos serviços prestados..." />
+                            </div>
+                            
+                            <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
+                                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Anexos Automáticos</p>
+                                <div className="space-y-3">
+                                    <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition">
+                                        <input type="checkbox" checked={attachInvoice} onChange={e=>setAttachInvoice(e.target.checked)} className="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600" />
+                                        <div>
+                                            <p className="font-semibold text-slate-900 dark:text-white text-sm">Nota Fiscal de Serviço (NFS-e)</p>
+                                            <p className="text-xs text-slate-500">Se o PDF da NFS-e estiver anexado no sistema, será enviado.</p>
+                                        </div>
+                                    </label>
+                                    <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition">
+                                        <input type="checkbox" checked={attachBoletos} onChange={e=>setAttachBoletos(e.target.checked)} className="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600" />
+                                        <div>
+                                            <p className="font-semibold text-slate-900 dark:text-white text-sm">Boletos Bancários</p>
+                                            <p className="text-xs text-slate-500">Baixa e envia todos os PDFs dos boletos já emitidos pelo Inter.</p>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-5 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-3 bg-slate-50 dark:bg-slate-900/50">
+                            <button onClick={()=>setShowEmailModal(false)} className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 transition">Cancelar</button>
+                            <button onClick={handleSendEmail} disabled={sendingEmail || !toEmails} className="px-6 py-2.5 rounded-xl font-bold text-sm bg-indigo-600 text-white hover:bg-indigo-700 transition disabled:opacity-50 flex items-center gap-2">
+                                {sendingEmail ? <div className="w-4 h-4 rounded-full border-2 border-white border-b-transparent animate-spin"></div> : <Mail className="w-4 h-4"/>}
+                                {sendingEmail ? 'Enviando...' : 'Disparar E-mail'}
                             </button>
                         </div>
                     </div>
