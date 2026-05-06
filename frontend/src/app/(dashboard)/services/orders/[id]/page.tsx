@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, use } from 'react';
+import { useEffect, useState, use, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
@@ -44,51 +44,51 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
     const [sendingEmail, setSendingEmail] = useState(false);
     const [uploadingPdf, setUploadingPdf] = useState(false);
     
-    useEffect(() => {
+    const fetchDetails = useCallback(async () => {
         if (!token || !orderId) return;
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/${orderId}/details`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            setOrder(data.data);
+            
+            // Init form
+            setNegotiatedValue(data.data.negotiated_value || 0);
+            setExecutionDate(data.data.execution_date || '');
+            setCustomDescription(data.data.custom_description || '');
+            setServiceId(data.data.service_id || 0);
+            
+            // Fetch services mapping for dropdown
+            const srvRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/services?limit=100`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const srvData = await srvRes.json();
+            setServicesOptions(srvData.items || []);
 
-        const fetchDetails = async () => {
-            try {
-                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/${orderId}/details`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await res.json();
-                setOrder(data.data);
-                
-                // Init form
-                setNegotiatedValue(data.data.negotiated_value || 0);
-                setExecutionDate(data.data.execution_date || '');
-                setCustomDescription(data.data.custom_description || '');
-                setServiceId(data.data.service_id || 0);
-                
-                // Fetch services mapping for dropdown
-                const srvRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/services?limit=100`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const srvData = await srvRes.json();
-                setServicesOptions(srvData.items || []);
-
-                const u = getUser();
-                if (u?.company_id) {
-                    try {
-                        const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${u.company_id}/settings`, { headers: { 'Authorization': `Bearer ${token}` }});
-                        if (r.ok) {
-                            const d = await r.json();
-                            setInterEnabled(d.inter_enabled || false);
-                        }
-                    } catch(e) {}
-                }
-
-            } catch (error) {
-                console.error("Erro ao carregar detalhes:", error);
-                toast.error("Ordem de Serviço não encontrada.");
-                router.push("/services/orders");
-            } finally {
-                setLoading(false);
+            const u = getUser();
+            if (u?.company_id) {
+                try {
+                    const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${u.company_id}/settings`, { headers: { 'Authorization': `Bearer ${token}` }});
+                    if (r.ok) {
+                        const d = await r.json();
+                        setInterEnabled(d.inter_enabled || false);
+                    }
+                } catch(e) {}
             }
-        };
-        fetchDetails();
+
+        } catch (error) {
+            console.error("Erro ao carregar detalhes:", error);
+            toast.error("Ordem de Serviço não encontrada.");
+            router.push("/services/orders");
+        } finally {
+            setLoading(false);
+        }
     }, [token, orderId, router]);
+
+    useEffect(() => {
+        fetchDetails();
+    }, [fetchDetails]);
 
     // Lógica para bloquear Inputs
     const isLockedByNFSe = order?.status_nfse === 'Emitida' || order?.status_nfse === 'Em Processamento';
