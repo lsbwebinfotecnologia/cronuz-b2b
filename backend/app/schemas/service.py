@@ -70,6 +70,7 @@ class ServiceOrderResponse(ServiceOrderBase):
     service_name: Optional[str] = None
     nfse_number: Optional[str] = None
     pdf_url: Optional[str] = None
+    invoice_pdf_url: Optional[str] = None
     
     class Config:
         from_attributes = True

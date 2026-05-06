@@ -186,6 +186,34 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
         }
     };
 
+    const handleBoletoUpload = async (e: React.ChangeEvent<HTMLInputElement>, installmentId: number) => {
+        const file = e.target.files?.[0];
+        if (!file || !token) return;
+        
+        const loadingId = toast.loading("Enviando boleto...");
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("installment_id", installmentId.toString());
+
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/financial-installment-boleto`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` },
+                body: formData
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || "Erro ao fazer upload do PDF.");
+            }
+            toast.success("Boleto anexado com sucesso!", { id: loadingId });
+            fetchOrder();
+        } catch (error: any) {
+            toast.error(error.message || "Erro no upload do arquivo.", { id: loadingId });
+        } finally {
+            e.target.value = '';
+        }
+    };
+
     const handleSendEmail = async () => {
         if (!token) return;
         setSendingEmail(true);
@@ -394,7 +422,7 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                                                                     {inst.status === 'PAID' ? 'Paga' : inst.status === 'OVERDUE' ? 'Atrasada' : 'Pendente'}
                                                                 </span>
                                                             </div>
-                                                            {(inst.bank_slip_pdf_url || inst.bank_slip_nosso_numero) && (
+                                                            {(inst.bank_slip_pdf_url || inst.bank_slip_nosso_numero) ? (
                                                                 <a 
                                                                     href={inst.bank_slip_pdf_url || `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/${inst.id}/bank-slip-pdf`} 
                                                                     target="_blank" 
@@ -404,6 +432,11 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                                                                 >
                                                                     <QrCode className="w-4 h-4"/>
                                                                 </a>
+                                                            ) : (
+                                                                <label className="shrink-0 p-2 cursor-pointer bg-slate-50 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 dark:bg-slate-800/50 dark:hover:bg-indigo-900/30 dark:text-slate-400 rounded-lg transition" title="Anexar Boleto Manualmente">
+                                                                    <Upload className="w-4 h-4"/>
+                                                                    <input type="file" accept=".pdf" className="hidden" onChange={(e) => handleBoletoUpload(e, inst.id)} />
+                                                                </label>
                                                             )}
                                                         </div>
                                                     </div>

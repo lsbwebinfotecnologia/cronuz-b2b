@@ -187,6 +187,34 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
         }
     };
 
+    const handleBoletoUpload = async (e: React.ChangeEvent<HTMLInputElement>, installmentId: number) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        
+        const loadingId = toast.loading("Enviando boleto...");
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("installment_id", installmentId.toString());
+
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/financial-installment-boleto`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${getToken()}` },
+                body: formData
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || "Erro ao fazer upload do PDF.");
+            }
+            toast.success("Boleto anexado com sucesso!", { id: loadingId });
+            fetchDetails();
+        } catch (error: any) {
+            toast.error(error.message || "Erro no upload do arquivo.", { id: loadingId });
+        } finally {
+            e.target.value = '';
+        }
+    };
+
     const handleSendEmail = async () => {
         setSendingEmail(true);
         try {
@@ -422,11 +450,19 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                             <FileText className="w-3.5 h-3.5"/> Boleto PDF
                                         </a>
                                     ) : (
-                                        inst.status !== 'PAID' && inst.status !== 'CANCELLED' && isReceivable && interEnabled && (
-                                            <button onClick={() => window.confirm("Deseja emitir boleto pelo Banco Inter para esta parcela?") && handleIssueInterSlip(inst.id)} className="p-2 ml-1 bg-slate-100 hover:bg-orange-100 dark:bg-slate-800 dark:hover:bg-orange-900/30 text-slate-500 hover:text-orange-600 dark:hover:text-orange-400 rounded-lg transition shrink-0 border border-transparent hover:border-orange-200 dark:hover:border-orange-800/50" title="Gerar Boleto Banco Inter">
-                                                <QrCode className="w-4 h-4"/>
-                                            </button>
-                                        )
+                                        <>
+                                            {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && isReceivable && interEnabled && (
+                                                <button onClick={() => window.confirm("Deseja emitir boleto pelo Banco Inter para esta parcela?") && handleIssueInterSlip(inst.id)} className="p-2 ml-1 bg-slate-100 hover:bg-orange-100 dark:bg-slate-800 dark:hover:bg-orange-900/30 text-slate-500 hover:text-orange-600 dark:hover:text-orange-400 rounded-lg transition shrink-0 border border-transparent hover:border-orange-200 dark:hover:border-orange-800/50" title="Gerar Boleto Banco Inter">
+                                                    <QrCode className="w-4 h-4"/>
+                                                </button>
+                                            )}
+                                            {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && (
+                                                <label className="p-2 ml-1 cursor-pointer bg-slate-100 hover:bg-indigo-100 dark:bg-slate-800 dark:hover:bg-indigo-900/30 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition shrink-0" title="Anexar PDF do Boleto Manualmente">
+                                                    <Upload className="w-4 h-4"/>
+                                                    <input type="file" accept=".pdf" className="hidden" onChange={(e) => handleBoletoUpload(e, inst.id)} />
+                                                </label>
+                                            )}
+                                        </>
                                     )}
 
                                     {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && (

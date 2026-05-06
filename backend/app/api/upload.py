@@ -359,3 +359,52 @@ async def upload_financial_invoice(
         raise HTTPException(status_code=500, detail="Erro ao atualizar a O.S.")
         
     return {"message": "PDF anexado com sucesso. Ele foi vinculado automaticamente à O.S correspondente.", "url": relative_url}
+
+@router.post("/financial-installment-boleto")
+async def upload_financial_installment_boleto(
+    file: UploadFile = File(...),
+    installment_id: int = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Faz upload do PDF do boleto amarrando à parcela financeira especificada.
+    """
+    from app.models.financial import FinancialInstallment, FinancialTransaction
+    
+    if not current_user.company_id:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="O arquivo deve ser um PDF.")
+        
+    inst = db.query(FinancialInstallment).join(FinancialTransaction).filter(
+        FinancialInstallment.id == installment_id,
+        FinancialTransaction.company_id == current_user.company_id
+    ).first()
+    
+    if not inst:
+        raise HTTPException(status_code=404, detail="Parcela financeira não encontrada.")
+
+    boletos_dir = UPLOADS_DIR / "boletos" / str(current_user.company_id)
+    boletos_dir.mkdir(parents=True, exist_ok=True)
+    
+    unique_filename = f"boleto_inst_{inst.id}_{uuid.uuid4().hex}.pdf"
+    file_path = boletos_dir / unique_filename
+    
+    try:
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar o PDF: {str(e)}")
+        
+    relative_url = f"/uploads/boletos/{current_user.company_id}/{unique_filename}"
+    inst.bank_slip_pdf_url = relative_url
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Erro ao atualizar a parcela.")
+        
+    return {"message": "PDF do boleto anexado com sucesso.", "url": relative_url}
