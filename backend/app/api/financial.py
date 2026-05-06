@@ -454,10 +454,10 @@ def send_financial_transaction_email(
             import re
             match = re.search(r'OS #(\d+)', trans.description)
             if match:
-                local_id = int(match.group(1))
+                order_id = int(match.group(1))
                 from app.models.service import ServiceOrder
                 order = db.query(ServiceOrder).filter(
-                    ServiceOrder.local_id == local_id,
+                    ServiceOrder.id == order_id,
                     ServiceOrder.company_id == cid
                 ).first()
                 
@@ -477,15 +477,16 @@ def send_financial_transaction_email(
                 })
                 
     if payload.attach_boletos:
-        from app.integrators.inter_v3 import InterBolePixClient
+        from app.integrators.inter_client import BancoInterClient
         inter_client = None
         if settings.inter_enabled and settings.inter_cert_path and settings.inter_key_path:
-            inter_client = InterBolePixClient(
+            inter_client = BancoInterClient(
                 client_id=settings.inter_client_id,
                 client_secret=settings.inter_client_secret,
                 cert_path=settings.inter_cert_path,
                 key_path=settings.inter_key_path,
-                sandbox=settings.inter_sandbox
+                sandbox=settings.inter_sandbox,
+                api_version=settings.inter_api_version
             )
             
         for inst in trans.installments:
