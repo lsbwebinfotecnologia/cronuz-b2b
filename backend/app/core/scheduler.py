@@ -77,7 +77,7 @@ def sync_horus_order_status():
                     id_doc=customer.document if customer else None,
                     id_guid=customer.id_guid if customer else None,
                     cnpj_destino=company.document if company else None,
-                    cod_pedido_origem=None if order.origin == "bookinfo" else order.id,
+                    cod_pedido_origem=None if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id),
                     cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None,
                     ignore_customer_context=(order.origin == "bookinfo")
                 )

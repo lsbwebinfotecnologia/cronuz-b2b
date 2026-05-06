@@ -66,7 +66,8 @@ export default function CustomerDetailsPage() {
     state_registration: '',
     default_payment_method: 'ERP_STANDARD',
     payment_condition: '',
-    nfse_notes: ''
+    nfse_notes: '',
+    billing_emails: ''
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -305,7 +306,8 @@ export default function CustomerDetailsPage() {
           state_registration: data.state_registration || '',
           default_payment_method: data.default_payment_method || 'ERP_STANDARD',
           payment_condition: data.payment_condition || '',
-          nfse_notes: data.nfse_notes || ''
+          nfse_notes: data.nfse_notes || '',
+          billing_emails: data.billing_emails || ''
         });
 
         try {
@@ -1405,6 +1407,11 @@ export default function CustomerDetailsPage() {
                <div>
                   <label className="text-xs font-medium text-slate-500 uppercase mb-1 block font-bold text-indigo-600 dark:text-indigo-400">Observações Padrão para NFS-e</label>
                   <textarea value={editFormData.nfse_notes || ''} onChange={e => setEditFormData({...editFormData, nfse_notes: e.target.value})} rows={3} placeholder="Texto fixo que sempre sairá na descrição do serviço da NFS-e para este cliente." className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-indigo-500 text-sm dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+               </div>
+               <div className="md:col-span-2">
+                  <label className="text-xs font-medium text-slate-500 uppercase mb-1 block font-bold text-indigo-600 dark:text-indigo-400">E-mails para Faturamento (separados por vírgula)</label>
+                  <input type="text" value={editFormData.billing_emails || ''} onChange={e => setEditFormData({...editFormData, billing_emails: e.target.value})} placeholder="financeiro@empresa.com.br, boletos@empresa.com.br" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-indigo-500 text-sm dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                  <p className="text-xs text-slate-500 mt-1">Estes e-mails receberão automaticamente cópias de NFS-e e Boletos disparados.</p>
                </div>
                <div className="flex justify-end gap-3 pt-6 border-t border-slate-200 mt-6 dark:border-slate-800">
                  <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-4 py-2 text-slate-500 hover:text-slate-700 transition-colors dark:text-slate-400 dark:hover:text-white">Cancelar</button>

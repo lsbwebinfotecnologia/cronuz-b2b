@@ -58,6 +58,7 @@ class OrderBase(BaseModel):
     type_order: Optional[str] = "V"
     horus_pedido_venda: Optional[str] = None
     external_id: Optional[str] = None
+    customer_order_ref: Optional[str] = None
     confirmed_at: Optional[datetime] = None
     partner_reference: Optional[str] = None
     tracking_code: Optional[str] = None
@@ -86,6 +87,7 @@ class OrderResponse(OrderBase):
 
 class CheckoutRequest(BaseModel):
     type_order: str = "V"
+    customer_order_ref: Optional[str] = None
 
 class PDVOrderItem(BaseModel):
     product_id: Optional[int] = None

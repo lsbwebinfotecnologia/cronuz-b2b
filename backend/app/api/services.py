@@ -1115,7 +1115,7 @@ def get_service_order_details(
     
     from app.schemas.service import ServiceOrderResponse
     resp = ServiceOrderResponse.model_validate(order).model_dump()
-    resp["customer"] = {"id": order.customer.id, "name": order.customer.name, "document_number": order.customer.document} if order.customer else None
+    resp["customer"] = {"id": order.customer.id, "name": order.customer.name, "document_number": order.customer.document, "email": order.customer.email, "billing_emails": order.customer.billing_emails} if order.customer else None
     resp["service_details"] = {"id": order.service.id, "name": order.service.name} if order.service else None
     
     resp["txs"] = [
@@ -1222,3 +1222,120 @@ def bulk_delete_service_orders(
         
     db.commit()
     return {"status": "success", "message": f"{len(orders)} Ordens de Serviço excluídas"}
+
+from pydantic import BaseModel
+
+class SendEmailRequest(BaseModel):
+    subject: str
+    body: str
+    to_emails: str
+    attach_invoice: bool = False
+    attach_boletos: bool = False
+
+@router.post("/services/orders/{order_id}/send-email", response_model=dict)
+async def send_service_order_email(
+    order_id: int,
+    payload: SendEmailRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.company_settings import CompanySettings
+    from app.core.email import send_smtp_email
+    import os
+    import base64
+    
+    order = db.query(ServiceOrder).filter(
+        ServiceOrder.id == order_id, 
+        ServiceOrder.company_id == current_user.company_id
+    ).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Ordem de Serviço não encontrada.")
+        
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    
+    if not settings or not settings.smtp_host or not settings.smtp_username:
+        raise HTTPException(status_code=400, detail="Configurações de SMTP não definidas para esta empresa.")
+        
+    customer = order.customer
+    if not payload.to_emails:
+        raise HTTPException(status_code=400, detail="Nenhum destinatário informado para o e-mail.")
+        
+    attachments = []
+    
+    if payload.attach_invoice and order.invoice_pdf_url:
+        local_path_suffix = order.invoice_pdf_url.replace("/uploads/", "", 1)
+        from app.api.upload import UPLOADS_DIR
+        local_pdf_path = UPLOADS_DIR / local_path_suffix
+        
+        if local_pdf_path.exists():
+            with open(local_pdf_path, "rb") as f:
+                pdf_content = f.read()
+            attachments.append({
+                "filename": f"Nota_Fiscal_OS_{order.local_id}.pdf",
+                "content": pdf_content,
+                "maintype": "application",
+                "subtype": "pdf"
+            })
+            
+    if payload.attach_boletos:
+        from app.models.financial import FinancialTransaction, FinancialInstallment
+        transactions = db.query(FinancialTransaction).filter(
+            FinancialTransaction.service_order_id == order.id
+        ).all()
+        
+        if transactions:
+            from app.integrators.inter_v3 import InterBolePixClient
+            inter_client = None
+            if settings.inter_enabled and settings.inter_cert_path and settings.inter_key_path:
+                inter_client = InterBolePixClient(
+                    client_id=settings.inter_client_id,
+                    client_secret=settings.inter_client_secret,
+                    cert_path=settings.inter_cert_path,
+                    key_path=settings.inter_key_path,
+                    sandbox=settings.inter_sandbox
+                )
+                
+            for tx in transactions:
+                for inst in tx.installments:
+                    if inst.bank_slip_nosso_numero and inter_client:
+                        try:
+                            nosso_numero = inst.bank_slip_nosso_numero
+                            if nosso_numero.startswith("V3_REQ|"):
+                                _, codigo_solicitacao, _ = nosso_numero.split("|")
+                                target_id = codigo_solicitacao
+                            else:
+                                target_id = nosso_numero
+                                
+                            pdf_base64 = inter_client.get_boleto_pdf(target_id)
+                            if pdf_base64:
+                                pdf_bytes = base64.b64decode(pdf_base64)
+                                attachments.append({
+                                    "filename": f"Boleto_{inst.installment_number}_OS_{order.local_id}.pdf",
+                                    "content": pdf_bytes,
+                                    "maintype": "application",
+                                    "subtype": "pdf"
+                                })
+                        except Exception as e:
+                            print(f"Erro ao baixar boleto {inst.id}: {str(e)}")
+                            pass
+                            
+    try:
+        html_body = payload.body.replace('\n', '<br>')
+        send_smtp_email(
+            smtp_host=settings.smtp_host,
+            smtp_port=settings.smtp_port,
+            smtp_username=settings.smtp_username,
+            smtp_password=settings.smtp_password,
+            smtp_from=settings.smtp_from_email or settings.smtp_username,
+            to_email=payload.to_emails,
+            subject=payload.subject,
+            html_content=html_body,
+            use_ssl=settings.smtp_use_ssl,
+            bcc_email=settings.smtp_bcc_email,
+            attachments=attachments
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao enviar o e-mail: {str(e)}")
+        
+    return {"message": "E-mail enviado com sucesso."}

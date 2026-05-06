@@ -24,6 +24,7 @@ class Order(Base):
     status = Column(String(50), nullable=False, default="NEW") # NEW, PROCESSING, SENT_TO_HORUS, CANCELLED
     type_order = Column(String(50), nullable=False, default="V") # V=Venda, C=Consignado
     origin = Column(String(50), nullable=False, default="store") # store, bookinfo, metabook, ml, shopee, amazon
+    customer_order_ref = Column(String(100), nullable=True) # "Meu Pedido" / Customer external order reference
     horus_pedido_venda = Column(String(100), nullable=True) # external reference ID (idErp)
     external_id = Column(String(100), nullable=True) # Used for Bookinfo ID, Hub IDs, etc (idOrderPartner)
     partner_reference = Column(String(100), nullable=True) # Used for Bookinfo Reference (idReference)

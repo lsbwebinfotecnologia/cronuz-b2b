@@ -25,6 +25,7 @@ class Customer(Base):
     id_doc = Column(String(255), nullable=True)
     
     nfse_notes = Column(Text, nullable=True)
+    billing_emails = Column(Text, nullable=True) # E-mails adicionais para faturamento (XML, PDF, Boletos) separados por vírgula
     
     # B2B Financial Data
     credit_limit = Column(Float, default=0.0, nullable=False)

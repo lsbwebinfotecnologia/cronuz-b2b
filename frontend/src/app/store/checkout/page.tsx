@@ -15,6 +15,7 @@ export default function CheckoutPage() {
   const [orderComplete, setOrderComplete] = useState<{order_id: string, horus_id: string} | null>(null);
   const [customer, setCustomer] = useState<any>(null);
   const [orderType, setOrderType] = useState('V');
+  const [customerOrderRef, setCustomerOrderRef] = useState('');
   const [stockErrors, setStockErrors] = useState<any[]>([]);
   const [validatingStock, setValidatingStock] = useState(false);
 
@@ -79,7 +80,10 @@ export default function CheckoutPage() {
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ type_order: orderType })
+            body: JSON.stringify({ 
+                type_order: orderType,
+                customer_order_ref: customerOrderRef ? customerOrderRef.trim() : null
+            })
         });
         
         if (res.ok) {
@@ -316,6 +320,18 @@ export default function CheckoutPage() {
                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(subtotal || 0)}
                            </span>
                        </div>
+                   </div>
+
+                   <div className="mb-4">
+                       <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Meu Pedido (Opcional)</label>
+                       <input 
+                           type="text"
+                           value={customerOrderRef}
+                           onChange={(e) => setCustomerOrderRef(e.target.value)}
+                           placeholder="Informe o número do seu pedido"
+                           className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-3 focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent outline-none transition-all dark:bg-slate-800 dark:border-slate-700 dark:text-white"
+                       />
+                       <p className="text-xs text-slate-500 mt-1">Será usado como a referência principal do pedido no envio e consultas.</p>
                    </div>
 
                    <div className="mb-6">

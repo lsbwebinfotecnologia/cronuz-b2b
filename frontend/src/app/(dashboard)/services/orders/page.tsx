@@ -432,6 +432,7 @@ export default function ServiceOrdersPage() {
 
     const handleBill = async (e: React.FormEvent) => {
         e.preventDefault();
+        setIsSubmitting(true);
         try {
             const isBulk = Array.isArray(billData.order_ids) && billData.order_ids.length > 0;
             
@@ -488,6 +489,7 @@ export default function ServiceOrdersPage() {
                 }
             }
         } catch (e) { toast.error('Servidor offline'); }
+        finally { setIsSubmitting(false); }
     };
     
     const handleIssueNF = async (orderId: number) => {
@@ -1132,8 +1134,8 @@ export default function ServiceOrdersPage() {
                                 </select>
                             </div>
                             <div className="pt-2">
-                                <button type="submit" className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-90 text-white font-bold rounded-xl transition shadow-md">
-                                    {billData.print_point_id ? 'Confirmar Faturamento e Emissão' : 'Confirmar e Lançar no Caixa'}
+                                <button type="submit" disabled={isSubmitting} className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-90 text-white font-bold rounded-xl transition shadow-md disabled:opacity-50">
+                                    {isSubmitting ? 'Processando...' : (billData.print_point_id ? 'Confirmar Faturamento e Emissão' : 'Confirmar e Lançar no Caixa')}
                                 </button>
                             </div>
                         </form>

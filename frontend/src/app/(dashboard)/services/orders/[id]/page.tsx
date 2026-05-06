@@ -7,7 +7,7 @@ import { getToken, getUser } from '@/lib/auth';
 
 import { 
     ArrowLeft, Save, FileText, Calendar, Building, Info, 
-    AlertTriangle, ShieldAlert, Receipt, CircleDollarSign, Check, Trash2, QrCode 
+    AlertTriangle, ShieldAlert, Receipt, CircleDollarSign, Check, Trash2, QrCode, Mail, Upload, Download 
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CurrencyInput } from '@/components/CurrencyInput';
@@ -32,6 +32,18 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
     const [saving, setSaving] = useState(false);
     const [deleting, setDeleting] = useState(false);
 
+    // Email Modal States
+    const [showEmailModal, setShowEmailModal] = useState(false);
+    const user = getUser();
+    const companyName = user?.company_name || 'Nossa Empresa';
+    const [emailSubject, setEmailSubject] = useState(`Faturamento O.S #${orderId} - ${companyName}`);
+    const [emailBody, setEmailBody] = useState('');
+    const [toEmails, setToEmails] = useState('');
+    const [attachInvoice, setAttachInvoice] = useState(true);
+    const [attachBoletos, setAttachBoletos] = useState(true);
+    const [sendingEmail, setSendingEmail] = useState(false);
+    const [uploadingPdf, setUploadingPdf] = useState(false);
+    
     useEffect(() => {
         if (!token || !orderId) return;
 
@@ -145,6 +157,79 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
         }
     };
 
+    const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file || !token) return;
+        setUploadingPdf(true);
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("order_id", orderId.toString());
+
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/service-order-invoice`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` },
+                body: formData
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || "Erro ao fazer upload do PDF.");
+            }
+            const data = await res.json();
+            setOrder({ ...order, invoice_pdf_url: data.url });
+            toast.success("PDF da Nota Fiscal atrelado com sucesso!");
+        } catch (error: any) {
+            toast.error(error.message || "Erro no upload do arquivo.");
+        } finally {
+            setUploadingPdf(false);
+            e.target.value = '';
+        }
+    };
+
+    const handleSendEmail = async () => {
+        if (!token) return;
+        setSendingEmail(true);
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/services/orders/${orderId}/send-email`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    subject: emailSubject,
+                    body: emailBody,
+                    to_emails: toEmails,
+                    attach_invoice: attachInvoice,
+                    attach_boletos: attachBoletos
+                })
+            });
+            
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.detail || "Erro ao enviar e-mail.");
+            }
+            
+            toast.success("E-mail enviado com sucesso para o cliente!");
+            setShowEmailModal(false);
+        } catch (error: any) {
+            toast.error(error.message || "Erro ao disparar e-mail.");
+        } finally {
+            setSendingEmail(false);
+        }
+    };
+
+    const openEmailModal = () => {
+        let emails = [];
+        if (order.customer?.email) emails.push(order.customer.email);
+        if (order.customer?.billing_emails) {
+            const bEmails = order.customer.billing_emails.split(',').map((e: string) => e.trim()).filter(Boolean);
+            emails.push(...bEmails);
+        }
+        setToEmails(emails.join(', '));
+        setShowEmailModal(true);
+    };
+
     if (loading) {
         return (
             <div className="flex justify-center items-center h-64">
@@ -172,7 +257,13 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                             <Building className="w-4 h-4"/> Cliente: {order.customer?.name} ({order.customer?.document_number})
                         </p>
                     </div>
-                    <div>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={openEmailModal}
+                            className="px-4 py-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-900/20 dark:hover:bg-indigo-900/40 rounded-xl transition flex items-center gap-2 text-sm font-semibold border border-indigo-100 dark:border-indigo-900/50"
+                        >
+                            <Mail className="w-4 h-4"/> Enviar E-mail
+                        </button>
                         {!isValueLocked && (
                             <button 
                                 onClick={handleDelete}
@@ -335,6 +426,34 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                             </h3>
                             <span className="text-[9px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-0.5 rounded font-bold uppercase">{order.is_nfse ? 'NFS-e Sefaz' : 'Apenas OS Avulsa'}</span>
                         </div>
+
+                        {/* Upload de Arquivo Manual */}
+                        <div className="mb-4 p-4 border border-dashed border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-800/30">
+                            <p className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-2">
+                                <FileText className="w-4 h-4 text-slate-500"/> Arquivo Físico da NFS-e
+                            </p>
+                            {order.invoice_pdf_url ? (
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold px-2 py-1 bg-emerald-50 dark:bg-emerald-900/20 rounded-md border border-emerald-100 dark:border-emerald-900/50">✔ Arquivo Vinculado</span>
+                                    <div className="flex gap-2">
+                                        <a href={process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL.replace('/api/v1', '') + order.invoice_pdf_url : order.invoice_pdf_url} target="_blank" rel="noopener noreferrer" className="p-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 dark:text-indigo-400 rounded-md transition" title="Baixar / Ver PDF">
+                                            <Download className="w-4 h-4"/>
+                                        </a>
+                                        <label className="cursor-pointer p-1.5 bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-400 rounded-md transition" title="Substituir PDF">
+                                            <Upload className="w-4 h-4"/>
+                                            <input type="file" accept=".pdf" className="hidden" onChange={handlePdfUpload} disabled={uploadingPdf} />
+                                        </label>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-3 w-full">
+                                    <label className={`cursor-pointer w-full text-center text-xs font-bold text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded-lg py-2 transition ${uploadingPdf ? 'opacity-50 cursor-wait' : ''}`}>
+                                        {uploadingPdf ? 'Enviando...' : 'Fazer Upload do PDF (.pdf)'}
+                                        <input type="file" accept=".pdf" className="hidden" onChange={handlePdfUpload} disabled={uploadingPdf} />
+                                    </label>
+                                </div>
+                            )}
+                        </div>
                         
                         {order.is_nfse && order.nfse_history && order.nfse_history.length > 0 ? (
                             <div className="space-y-3 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
@@ -361,6 +480,60 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                 </div>
 
             </div>
+            
+            {/* Email Modal */}
+            {showEmailModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-lg">
+                        <div className="flex justify-between items-center mb-6 border-b border-slate-100 dark:border-slate-800 pb-4">
+                            <h2 className="text-xl font-black text-slate-800 dark:text-white flex items-center gap-2">
+                                <Mail className="w-5 h-5 text-indigo-500"/>
+                                Enviar E-mail ao Cliente
+                            </h2>
+                            <button onClick={() => setShowEmailModal(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition">✕</button>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Para (Destinatários)</label>
+                                <input type="text" value={toEmails} onChange={e => setToEmails(e.target.value)} className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 dark:text-slate-300 text-sm" placeholder="email1@exemplo.com, email2@exemplo.com" />
+                            </div>
+                            
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Assunto</label>
+                                <input type="text" value={emailSubject} onChange={e => setEmailSubject(e.target.value)} className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 dark:text-slate-300 text-sm" />
+                            </div>
+                            
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Mensagem</label>
+                                <textarea value={emailBody} onChange={e => setEmailBody(e.target.value)} rows={5} className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 dark:text-slate-300 text-sm resize-y" placeholder="Escreva a mensagem..."></textarea>
+                            </div>
+                            
+                            <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                                <p className="text-xs font-bold text-slate-500 uppercase mb-3">Opções de Anexos</p>
+                                <div className="space-y-3">
+                                    <label className="flex items-center gap-3 cursor-pointer">
+                                        <input type="checkbox" checked={attachInvoice} onChange={e => setAttachInvoice(e.target.checked)} disabled={!order.invoice_pdf_url} className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 disabled:opacity-50" />
+                                        <span className={`text-sm ${order.invoice_pdf_url ? 'text-slate-700 dark:text-slate-300' : 'text-slate-400'}`}>Anexar PDF da Nota Fiscal {order.invoice_pdf_url ? '' : '(Sem arquivo)'}</span>
+                                    </label>
+                                    <label className="flex items-center gap-3 cursor-pointer">
+                                        <input type="checkbox" checked={attachBoletos} onChange={e => setAttachBoletos(e.target.checked)} className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500" />
+                                        <span className="text-sm text-slate-700 dark:text-slate-300">Anexar Boletos (se houver parcelas geradas)</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                            <button onClick={() => setShowEmailModal(false)} className="px-5 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 rounded-xl transition">Cancelar</button>
+                            <button onClick={handleSendEmail} disabled={sendingEmail || !toEmails.trim()} className="px-5 py-2 text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition disabled:opacity-50 flex items-center gap-2">
+                                {sendingEmail ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Mail className="w-4 h-4"/>}
+                                {sendingEmail ? "Enviando..." : "Enviar E-mail"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

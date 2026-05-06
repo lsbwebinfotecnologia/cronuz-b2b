@@ -244,3 +244,52 @@ async def upload_inter_certificates(
         raise HTTPException(status_code=500, detail="Erro ao salvar no banco.")
         
     return {"message": "Certificados do Inter enviados e configurados com sucesso."}
+
+@router.post("/service-order-invoice")
+async def upload_service_order_invoice(
+    file: UploadFile = File(...),
+    order_id: int = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Faz upload do PDF da Nota Fiscal de uma Ordem de Serviço.
+    """
+    from app.models.service import ServiceOrder
+    
+    if not current_user.company_id:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="O arquivo deve ser um PDF.")
+        
+    order = db.query(ServiceOrder).filter(
+        ServiceOrder.id == order_id,
+        ServiceOrder.company_id == current_user.company_id
+    ).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
+
+    invoices_dir = UPLOADS_DIR / "invoices" / str(current_user.company_id)
+    invoices_dir.mkdir(parents=True, exist_ok=True)
+    
+    unique_filename = f"nfse_os_{order.id}_{uuid.uuid4().hex}.pdf"
+    file_path = invoices_dir / unique_filename
+    
+    try:
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar o PDF: {str(e)}")
+        
+    relative_url = f"/uploads/invoices/{current_user.company_id}/{unique_filename}"
+    order.invoice_pdf_url = relative_url
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Erro ao atualizar a O.S.")
+        
+    return {"message": "PDF anexado com sucesso.", "url": relative_url}

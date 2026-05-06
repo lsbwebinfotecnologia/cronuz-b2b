@@ -36,7 +36,8 @@ export default function NewCustomerPage() {
     discount: 0,
     id_guid: '',
     id_doc: '',
-    nfse_notes: ''
+    nfse_notes: '',
+    billing_emails: ''
   });
 
   const [searchingHorus, setSearchingHorus] = useState(false);
@@ -434,6 +435,29 @@ export default function NewCustomerPage() {
                       onChange={e => setFiscalData({ ...fiscalData, phone: maskPhone(e.target.value) })}
                       className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
                     />
+                  </div>
+
+                  <div className="space-y-1.5 md:col-span-2">
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">E-mail Principal</label>
+                    <input
+                      type="email"
+                      placeholder="contato@empresa.com.br"
+                      value={fiscalData.email}
+                      onChange={e => setFiscalData({ ...fiscalData, email: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
+                    />
+                  </div>
+                  
+                  <div className="space-y-1.5 md:col-span-2">
+                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">E-mails para Faturamento (separados por vírgula)</label>
+                    <input
+                      type="text"
+                      placeholder="financeiro@empresa.com.br, boletos@empresa.com.br"
+                      value={fiscalData.billing_emails}
+                      onChange={e => setFiscalData({ ...fiscalData, billing_emails: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
+                    />
+                    <p className="text-xs text-slate-500">Estes e-mails receberão automaticamente cópias de NFS-e e Boletos disparados.</p>
                   </div>
 
                   <div className="space-y-1.5 md:col-span-2">

@@ -107,7 +107,7 @@ async def create_pdv_order(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
-                    cod_pedido_origem=order.id,
+                    cod_pedido_origem=order.customer_order_ref if order.customer_order_ref else order.id,
                     type_order=order.type_order,
                     obs=f"PDV VENDA {order.id}"
                 )
@@ -126,7 +126,7 @@ async def create_pdv_order(
                             id_doc=customer.document,
                             id_guid=customer.id_guid,
                             cnpj_destino=company.document,
-                            cod_pedido_origem=order.id,
+                            cod_pedido_origem=order.customer_order_ref if order.customer_order_ref else order.id,
                             isbn=isbn_or_sku,
                             qty=item.quantity,
                             price=item.unit_price
@@ -282,7 +282,7 @@ async def get_order_detail(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
-                    cod_pedido_origem=order.partner_reference if order.origin == "bookinfo" else order.id,
+                    cod_pedido_origem=order.partner_reference if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id),
                     cod_ped_venda=None
                 )
                 
@@ -605,7 +605,7 @@ async def get_horus_debug_preview(
                 "ID_DOC": customer.document,
                 "ID_GUID": customer.id_guid,
                 "CNPJ_DESTINO": company.document,
-                "COD_PEDIDO_ORIGEM": order.partner_reference if order.origin == "bookinfo" else order.id
+                "COD_PEDIDO_ORIGEM": order.partner_reference if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id)
             }
             
     return {
@@ -650,7 +650,7 @@ async def manual_sync_horus(
         from app.integrators.horus_orders import HorusOrders
         horus_client = HorusOrders(db, order.company_id)
         try:
-            search_origem = order.partner_reference if order.origin == "bookinfo" else order.id
+            search_origem = order.partner_reference if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id)
             
             raw_horus_data = await horus_client.get_order(
                 id_doc=customer.document,

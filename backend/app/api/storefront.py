@@ -906,14 +906,19 @@ async def checkout_cart(
         try:
             # 1. Start Order
             cart.type_order = payload.type_order
+            if payload.customer_order_ref:
+                cart.customer_order_ref = payload.customer_order_ref
+            
+            origem = cart.customer_order_ref if cart.customer_order_ref else cart.id
+            obs_text = f"B2B PEDIDO {cart.id} - Meu Pedido: {cart.customer_order_ref}" if cart.customer_order_ref else f"B2B PEDIDO {cart.id}"
             
             order_res = await horus_client.send_order(
                 id_doc=customer.document,
                 id_guid=customer.id_guid,
                 cnpj_destino=company.document,
-                cod_pedido_origem=cart.id,
+                cod_pedido_origem=origem,
                 type_order=cart.type_order,
-                obs=f"B2B PEDIDO {cart.id}"
+                obs=obs_text
             )
             
             if order_res.get("error"):
@@ -927,7 +932,7 @@ async def checkout_cart(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
-                    cod_pedido_origem=cart.id,
+                    cod_pedido_origem=origem,
                     isbn=item.ean_isbn or item.sku,
                     qty=item.quantity,
                     price=item.unit_price
@@ -973,6 +978,8 @@ async def checkout_cart(
             
     # Default local branch
     cart.type_order = payload.type_order
+    if payload.customer_order_ref:
+        cart.customer_order_ref = payload.customer_order_ref
     cart.status = "PROCESSING"
     from datetime import datetime
     cart.confirmed_at = datetime.utcnow()
@@ -1054,12 +1061,13 @@ async def get_customer_order_detail(
             horus_client = HorusOrders(db, current_user.company_id)
             try:
                 # Poll Horus API logic
-                # cod_pedido_origem in Horus is our local order.id for B2B
+                # cod_pedido_origem in Horus is our local order.id for B2B or customer_order_ref if exists
+                origem = order.customer_order_ref if order.customer_order_ref else order.id
                 horus_data = await horus_client.get_order(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
-                    cod_pedido_origem=order.id
+                    cod_pedido_origem=origem
                 )
                 
                 if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:

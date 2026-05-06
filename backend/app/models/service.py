@@ -67,6 +67,8 @@ class ServiceOrder(Base):
     is_recurrent = Column(Boolean, default=False, nullable=False)
     recurrence_end_date = Column(Date, nullable=True)
 
+    invoice_pdf_url = Column(String(500), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

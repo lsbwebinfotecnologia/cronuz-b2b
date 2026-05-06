@@ -1172,6 +1172,17 @@ export default function SettingsPage() {
                         onChange={e => setSettings({ ...settings, smtp_password: e.target.value })}
                       />
                     </div>
+                    <div className="space-y-1.5 md:col-span-2">
+                      <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">E-mail para Cópia Oculta Fixa (BCC)</label>
+                      <input
+                        type="email"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-indigo-500/50"
+                        placeholder="financeiro@seudominio.com.br"
+                        value={settings.smtp_bcc_email || ''}
+                        onChange={e => setSettings({ ...settings, smtp_bcc_email: e.target.value })}
+                      />
+                      <p className="text-xs text-slate-500">Se preenchido, todos os envios de O.S (como notas e boletos) enviarão uma cópia oculta para este e-mail automaticamente.</p>
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-3 mt-4 px-1">
