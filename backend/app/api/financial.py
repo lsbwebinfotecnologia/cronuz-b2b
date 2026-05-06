@@ -520,11 +520,11 @@ def send_financial_transaction_email(
             smtp_username=settings.smtp_username,
             smtp_password=settings.smtp_password,
             smtp_from=settings.smtp_from_email or settings.smtp_username,
-            smtp_from_name=settings.smtp_from_name,
-            smtp_bcc=settings.smtp_bcc_email,
-            to_emails=payload.to_emails.split(','),
+            to_email=payload.to_emails,
             subject=payload.subject,
-            html_body=html_body,
+            html_content=html_body,
+            use_ssl=settings.smtp_use_ssl,
+            bcc_email=settings.smtp_bcc_email,
             attachments=attachments
         )
     except Exception as e:
