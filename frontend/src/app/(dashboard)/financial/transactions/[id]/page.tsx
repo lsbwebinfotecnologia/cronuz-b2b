@@ -327,7 +327,17 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                         <div className="p-4 bg-white dark:bg-slate-950 rounded-2xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/30 dark:bg-amber-900/10">
                             <p className="text-xs font-semibold text-amber-600 dark:text-amber-500 uppercase tracking-wider mb-1">Nota Fiscal (NFS-e)</p>
                             {trans.nfse_number && (
-                                <p className="font-bold text-slate-900 dark:text-white mb-2">Nº {trans.nfse_number}</p>
+                                <p className="font-bold text-slate-900 dark:text-white mb-2 max-w-[200px] truncate" title={trans.nfse_number}>
+                                    Nº {(() => {
+                                        const k = trans.nfse_number;
+                                        if (k.startsWith('SUCESS_DUMMY_')) return k.replace('SUCESS_DUMMY_', '');
+                                        if (k.length === 50) {
+                                            const num = parseInt(k.substring(23, 36), 10);
+                                            return num > 0 ? num : k.slice(-9);
+                                        }
+                                        return k;
+                                    })()}
+                                </p>
                             )}
                             {trans.nfse_url ? (
                                 <a href={trans.nfse_url.startsWith('http') ? trans.nfse_url : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${trans.nfse_url}`} target="_blank" rel="noopener noreferrer" className="font-bold text-slate-900 dark:text-white hover:text-amber-600 dark:hover:text-amber-400 flex items-center gap-1">
@@ -407,8 +417,8 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                             className="px-3 py-1.5 ml-1 hover:bg-slate-200 bg-slate-100 dark:hover:bg-slate-700 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg shrink-0 flex items-center gap-1 font-bold text-xs border border-slate-300 dark:border-slate-600 cursor-pointer transition" title="Clique para sincronizar status atual">
                                             <RefreshCw className="w-3 h-3"/> Sincronizar
                                         </button>
-                                    ) : inst.pdf_url || inst.bank_slip_nosso_numero ? (
-                                        <a href={inst.pdf_url || `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/${inst.id}/bank-slip-pdf`} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 ml-1 bg-orange-100 hover:bg-orange-200 dark:bg-orange-900/50 dark:hover:bg-orange-900/70 text-orange-700 dark:text-orange-400 rounded-lg transition shrink-0 flex items-center gap-1 font-bold text-xs border border-orange-200 dark:border-orange-800" title="Ver Boleto (Inter/PDF)">
+                                    ) : inst.bank_slip_pdf_url || inst.bank_slip_nosso_numero ? (
+                                        <a href={inst.bank_slip_pdf_url || `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/${inst.id}/bank-slip-pdf`} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 ml-1 bg-orange-100 hover:bg-orange-200 dark:bg-orange-900/50 dark:hover:bg-orange-900/70 text-orange-700 dark:text-orange-400 rounded-lg transition shrink-0 flex items-center gap-1 font-bold text-xs border border-orange-200 dark:border-orange-800" title="Ver Boleto (Inter/PDF)">
                                             <FileText className="w-3.5 h-3.5"/> Boleto PDF
                                         </a>
                                     ) : (

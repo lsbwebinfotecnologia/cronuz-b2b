@@ -79,6 +79,8 @@ class FinancialInstallment(FinancialInstallmentBase):
     account_id: Optional[int] = None
     is_conciliated: bool = False
     conciliated_at: Optional[datetime] = None
+    bank_slip_pdf_url: Optional[str] = None
+    bank_slip_nosso_numero: Optional[str] = None
     
     class Config:
         from_attributes = True
