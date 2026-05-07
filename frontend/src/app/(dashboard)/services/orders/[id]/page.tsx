@@ -34,6 +34,7 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
 
     // Email Modal States
     const [showEmailModal, setShowEmailModal] = useState(false);
+    const [showEmailHistoryModal, setShowEmailHistoryModal] = useState(false);
     const user = getUser();
     const companyName = user?.company_name || 'Nossa Empresa';
     const [emailSubject, setEmailSubject] = useState(`Faturamento O.S #${orderId} - ${companyName}`);
@@ -240,6 +241,7 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
             
             toast.success("E-mail enviado com sucesso para o cliente!");
             setShowEmailModal(false);
+            fetchDetails();
         } catch (error: any) {
             toast.error(error.message || "Erro ao disparar e-mail.");
         } finally {
@@ -292,6 +294,14 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                         >
                             <Mail className="w-4 h-4"/> Enviar E-mail
                         </button>
+                        {order.email_sent_at && (
+                            <button 
+                                onClick={() => setShowEmailHistoryModal(true)}
+                                className="px-4 py-2 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:bg-slate-900/50 dark:hover:bg-slate-800 rounded-xl transition flex items-center gap-2 text-sm font-semibold border border-slate-200 dark:border-slate-800"
+                            >
+                                <Info className="w-4 h-4 text-emerald-500"/> Histórico
+                            </button>
+                        )}
                         {!isValueLocked && (
                             <button 
                                 onClick={handleDelete}
@@ -562,6 +572,58 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                             <button onClick={handleSendEmail} disabled={sendingEmail || !toEmails.trim()} className="px-5 py-2 text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition disabled:opacity-50 flex items-center gap-2">
                                 {sendingEmail ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Mail className="w-4 h-4"/>}
                                 {sendingEmail ? "Enviando..." : "Enviar E-mail"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal de Histórico de E-mails */}
+            {showEmailHistoryModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
+                    <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowEmailHistoryModal(false)}></div>
+                    <div className="relative w-full max-w-xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-800 flex flex-col max-h-[90vh]">
+                        <div className="px-6 py-5 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-900/50">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-xl">
+                                    <Info className="w-5 h-5"/>
+                                </div>
+                                <h2 className="text-lg font-black text-slate-800 dark:text-white">Histórico de Disparos</h2>
+                            </div>
+                            <button onClick={() => setShowEmailHistoryModal(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors p-2 bg-slate-100 dark:bg-slate-800 rounded-full">
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            </button>
+                        </div>
+                        <div className="p-6 overflow-y-auto">
+                            {order.email_logs && order.email_logs.length > 0 ? (
+                                <div className="space-y-4">
+                                    {[...order.email_logs].reverse().map((log: any, idx: number) => (
+                                        <div key={idx} className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50">
+                                            <div className="flex justify-between items-start mb-2">
+                                                <div className="flex items-center gap-2">
+                                                    <Mail className="w-4 h-4 text-emerald-500" />
+                                                    <span className="font-bold text-sm text-slate-800 dark:text-slate-200">{log.subject}</span>
+                                                </div>
+                                                <span className="text-[10px] font-bold text-slate-500 uppercase px-2 py-1 bg-white dark:bg-slate-900 rounded border border-slate-200 dark:border-slate-700">
+                                                    {new Date(log.sent_at).toLocaleString('pt-BR')}
+                                                </span>
+                                            </div>
+                                            <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
+                                                <p><strong>Para:</strong> {log.to}</p>
+                                                <p><strong>Enviado por:</strong> {log.user || 'Sistema'}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-center py-10 text-slate-500">
+                                    Nenhum histórico encontrado.
+                                </div>
+                            )}
+                        </div>
+                        <div className="p-6 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+                            <button onClick={() => setShowEmailHistoryModal(false)} className="px-6 py-2.5 rounded-xl font-bold text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">
+                                Fechar
                             </button>
                         </div>
                     </div>

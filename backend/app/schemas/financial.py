@@ -150,6 +150,9 @@ class FinancialTransaction(FinancialTransactionBase):
     company_id: int
     created_at: datetime
     
+    email_sent_at: Optional[datetime] = None
+    email_logs: Optional[list] = []
+    
     category: Optional[FinancialCategory] = None
     installments: List[FinancialInstallment] = []
     

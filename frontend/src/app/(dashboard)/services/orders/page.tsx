@@ -835,7 +835,12 @@ export default function ServiceOrdersPage() {
                                                 title="Ver Detalhes completos da O.S"
                                             >
                                                 OS #{order.local_id || order.id}
-                                                {order.is_recurrent && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 text-[9px] rounded-md whitespace-nowrap dark:bg-purple-900/30 no-underline">🔄 RECORRENTE</span>}
+                                                {order.email_sent_at && (
+                                                    <span className="text-emerald-500 dark:text-emerald-400 ml-1" title={`E-mail enviado em: ${new Date(order.email_sent_at).toLocaleString('pt-BR')}`}>
+                                                        <Mail className="w-3 h-3" />
+                                                    </span>
+                                                )}
+                                                {order.is_recurrent && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 text-[9px] rounded-md whitespace-nowrap dark:bg-purple-900/30 no-underline ml-1">🔄 RECORRENTE</span>}
                                             </Link>
                                             <Link href={`/customers/${order.customer_id}`} className="hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-colors cursor-pointer" title="Ver Perfil do Cliente">
                                                 {order.customer_name}

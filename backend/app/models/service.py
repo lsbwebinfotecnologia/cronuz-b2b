@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, Boolean, Date, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, Boolean, Date, Enum as SQLEnum, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -68,6 +68,9 @@ class ServiceOrder(Base):
     recurrence_end_date = Column(Date, nullable=True)
 
     invoice_pdf_url = Column(String(500), nullable=True)
+
+    email_sent_at = Column(DateTime(timezone=True), nullable=True)
+    email_logs = Column(JSON, nullable=True, default=list)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

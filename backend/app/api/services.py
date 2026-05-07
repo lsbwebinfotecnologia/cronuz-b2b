@@ -1294,15 +1294,16 @@ async def send_service_order_email(
         ).all()
         
         if transactions:
-            from app.integrators.inter_v3 import InterBolePixClient
+            from app.integrators.inter_client import BancoInterClient
             inter_client = None
             if settings.inter_enabled and settings.inter_cert_path and settings.inter_key_path:
-                inter_client = InterBolePixClient(
+                inter_client = BancoInterClient(
                     client_id=settings.inter_client_id,
                     client_secret=settings.inter_client_secret,
                     cert_path=settings.inter_cert_path,
                     key_path=settings.inter_key_path,
-                    sandbox=settings.inter_sandbox
+                    sandbox=settings.inter_sandbox,
+                    api_version=settings.inter_api_version
                 )
                 
             for tx in transactions:
@@ -1346,5 +1347,25 @@ async def send_service_order_email(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao enviar o e-mail: {str(e)}")
+        
+    from datetime import datetime
+    import copy
+    
+    now = datetime.utcnow()
+    order.email_sent_at = now
+    
+    current_logs = copy.deepcopy(order.email_logs) if order.email_logs else []
+    current_logs.append({
+        "sent_at": now.isoformat(),
+        "to": payload.to_emails,
+        "subject": payload.subject,
+        "user": current_user.name
+    })
+    order.email_logs = current_logs
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
         
     return {"message": "E-mail enviado com sucesso."}

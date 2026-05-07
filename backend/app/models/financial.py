@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Date, Boolean
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Date, Boolean, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -39,6 +39,9 @@ class FinancialTransaction(Base):
     total_amount = Column(Float, nullable=False)
     issue_date = Column(Date, nullable=False)
     first_due_date = Column(Date, nullable=False)
+    
+    email_sent_at = Column(DateTime(timezone=True), nullable=True)
+    email_logs = Column(JSON, nullable=True, default=list)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

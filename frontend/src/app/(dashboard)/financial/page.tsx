@@ -566,7 +566,14 @@ export default function FinancialPage() {
                                                     </div>
                                                 </td>
                                                 <td className="px-6 py-4 font-bold text-slate-400 dark:text-slate-500 text-xs">
-                                                    #{inst.transaction_id}
+                                                    <div className="flex items-center gap-2">
+                                                        <span>#{inst.transaction_id}</span>
+                                                        {inst.email_sent_at && (
+                                                            <div className="text-emerald-500 dark:text-emerald-400" title={`E-mail enviado em: ${new Date(inst.email_sent_at).toLocaleString('pt-BR')}`}>
+                                                                <Mail className="w-4 h-4" />
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </td>
                                                 <td className="px-6 py-4 font-medium text-slate-900 dark:text-white whitespace-nowrap">
                                                     <div>{new Date(inst.due_date).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</div>

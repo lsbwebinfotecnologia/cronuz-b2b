@@ -72,6 +72,9 @@ class ServiceOrderResponse(ServiceOrderBase):
     pdf_url: Optional[str] = None
     invoice_pdf_url: Optional[str] = None
     
+    email_sent_at: Optional[datetime] = None
+    email_logs: Optional[list] = []
+    
     class Config:
         from_attributes = True
 

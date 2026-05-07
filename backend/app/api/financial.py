@@ -305,7 +305,8 @@ def list_generic_installments(
             "is_fixed": trans.is_fixed,
             "bank_slip_pdf": inst.bank_slip_pdf_url,
             "bank_slip_nosso_numero": inst.bank_slip_nosso_numero,
-            "inter_enabled": inter_enabled or False
+            "inter_enabled": inter_enabled or False,
+            "email_sent_at": trans.email_sent_at
         })
     return {
         "items": items,
@@ -529,6 +530,27 @@ def send_financial_transaction_email(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro no envio de e-mail: {str(e)}")
+        
+    from datetime import datetime
+    import copy
+    
+    now = datetime.utcnow()
+    trans.email_sent_at = now
+    
+    current_logs = copy.deepcopy(trans.email_logs) if trans.email_logs else []
+    current_logs.append({
+        "sent_at": now.isoformat(),
+        "to": payload.to_emails,
+        "subject": payload.subject,
+        "user": current_user.name
+    })
+    trans.email_logs = current_logs
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # We don't fail the request if just the DB update fails, since the email was sent successfully.
         
     return {"message": "E-mail enviado com sucesso", "attachments_count": len(attachments)}
 
