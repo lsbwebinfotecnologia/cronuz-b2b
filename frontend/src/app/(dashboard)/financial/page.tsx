@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { DollarSign, CheckCircle, Search, Clock, AlertCircle, Plus, X, ArrowUpCircle, ArrowDownCircle, BarChart3, TrendingUp, Building2, CreditCard, Wallet, Pencil, Eye, ChevronLeft, ChevronRight, Hash, Trash2, AlertTriangle, FileText, QrCode } from 'lucide-react';
+import { DollarSign, CheckCircle, Search, Clock, AlertCircle, Plus, X, ArrowUpCircle, ArrowDownCircle, BarChart3, TrendingUp, Building2, CreditCard, Wallet, Pencil, Eye, ChevronLeft, ChevronRight, Hash, Trash2, AlertTriangle, FileText, QrCode, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
