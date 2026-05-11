@@ -579,7 +579,10 @@ def pay_generic_installment(
 
     inst.status = "PAID"
     inst.account_id = account.id
-    inst.payment_date = pay_data.payment_date or datetime.now()
+    inst.payment_date = pay_data.payment_date or inst.payment_date
+    if pay_data.amount is not None:
+        inst.amount = pay_data.amount
+        
     inst.is_conciliated = False
     
     if pay_data.category_id:
@@ -658,9 +661,16 @@ def conciliate_generic_installment(
         if move_type == "+": account.current_balance += amount
         else: account.current_balance -= amount
             
+    m_date = inst.payment_date.date() if inst.payment_date else datetime.now().date()
+            
     log = FinancialCashFlowLog(
-        account_id=account.id, installment_id=inst.id, description=desc,
-        movement_type=move_type, amount=amount, progressive_balance=account.current_balance
+        account_id=account.id,
+        installment_id=inst.id,
+        description=desc,
+        movement_type=move_type,
+        amount=amount,
+        progressive_balance=account.current_balance,
+        movement_date=m_date
     )
     db.add(log)
     
@@ -742,9 +752,11 @@ def bulk_conciliate_generic_installments(
             if move_type == "+": account.current_balance += amount
             else: account.current_balance -= amount
                 
+        m_date = inst.payment_date.date() if inst.payment_date else datetime.now().date()
         log = FinancialCashFlowLog(
             account_id=account.id, installment_id=inst.id, description=desc,
-            movement_type=move_type, amount=amount, progressive_balance=account.current_balance
+            movement_type=move_type, amount=amount, progressive_balance=account.current_balance,
+            movement_date=m_date
         )
         db.add(log)
         
@@ -925,16 +937,14 @@ def get_statement(
     query = db.query(FinancialCashFlowLog).filter(FinancialCashFlowLog.account_id == acc_id)
     if start_date:
         try:
-            query = query.filter(FinancialCashFlowLog.created_at >= datetime.strptime(start_date, "%Y-%m-%d"))
+            query = query.filter(FinancialCashFlowLog.movement_date >= datetime.strptime(start_date, "%Y-%m-%d").date())
         except: pass
     if end_date:
         try:
-            # Append 23:59:59 to include the whole end day
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
-            query = query.filter(FinancialCashFlowLog.created_at <= end_dt)
+            query = query.filter(FinancialCashFlowLog.movement_date <= datetime.strptime(end_date, "%Y-%m-%d").date())
         except: pass
         
-    return query.order_by(FinancialCashFlowLog.created_at.desc()).limit(300).all()
+    return query.order_by(FinancialCashFlowLog.movement_date.desc(), FinancialCashFlowLog.id.desc()).limit(300).all()
 
 @router.patch("/financial/accounts/{acc_id}")
 def update_account(acc_id: int, account: FinancialAccountUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -1031,7 +1041,8 @@ def transfer_account(data: BankTransferRequest, db: Session = Depends(get_db), c
     src.current_balance -= data.amount
     log_out = FinancialCashFlowLog(
         account_id=src.id, installment_id=i_out.id, description=f"Transf. p/ {dst.name}",
-        movement_type="-", amount=data.amount, progressive_balance=src.current_balance
+        movement_type="-", amount=data.amount, progressive_balance=src.current_balance,
+        movement_date=datetime.now().date()
     )
     db.add(log_out)
     
@@ -1053,7 +1064,8 @@ def transfer_account(data: BankTransferRequest, db: Session = Depends(get_db), c
     dst.current_balance += data.amount
     log_in = FinancialCashFlowLog(
         account_id=dst.id, installment_id=i_in.id, description=f"Transf. de {src.name}",
-        movement_type="+", amount=data.amount, progressive_balance=dst.current_balance
+        movement_type="+", amount=data.amount, progressive_balance=dst.current_balance,
+        movement_date=datetime.now().date()
     )
     db.add(log_in)
     

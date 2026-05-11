@@ -109,4 +109,5 @@ class FinancialCashFlowLog(Base):
     amount = Column(Float, nullable=False)
     progressive_balance = Column(Float, nullable=False)
     
+    movement_date = Column(Date, nullable=False, server_default=func.current_date())
     created_at = Column(DateTime(timezone=True), server_default=func.now())

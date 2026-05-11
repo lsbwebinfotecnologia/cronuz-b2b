@@ -145,7 +145,7 @@ function StatementPageContent() {
                                 <table className="w-full text-sm text-left">
                                      <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200 dark:bg-slate-900/50 dark:border-slate-800 dark:text-slate-400">
                                          <tr>
-                                             <th className="px-6 py-4 font-semibold">Data/Hora</th>
+                                             <th className="px-6 py-4 font-semibold">Data da Operação</th>
                                              <th className="px-6 py-4 font-semibold">Descrição do Título</th>
                                              <th className="px-6 py-4 font-semibold text-right">Valor Operação</th>
                                              <th className="px-6 py-4 font-semibold text-right">Saldo Logo Após</th>
@@ -156,7 +156,7 @@ function StatementPageContent() {
                                          {statements.map((log: any) => (
                                               <tr key={log.id} className="border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800/30">
                                                  <td className="px-6 py-4 font-medium text-slate-900 dark:text-white whitespace-nowrap">
-                                                     {new Date(log.created_at).toLocaleString('pt-BR')}
+                                                     {new Date(log.movement_date + "T12:00:00").toLocaleDateString('pt-BR')}
                                                  </td>
                                                  <td className="px-6 py-4 font-bold text-slate-800 dark:text-slate-200 flex items-center gap-3">
                                                     <div className={`p-1.5 rounded-full flex-shrink-0 ${log.movement_type === '+' ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400' : 'bg-rose-100 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400'}`}>

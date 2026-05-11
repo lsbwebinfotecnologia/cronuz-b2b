@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 const getCategoryHierarchyName = (cat: any, categories: any[]) => {
     let current = cat;
@@ -329,6 +330,7 @@ export default function FinancialPage() {
                 status: 'PAID', 
                 account_id: parseInt(payData.account_id), 
                 payment_date: payData.payment_date ? new Date(payData.payment_date + "T12:00:00").toISOString() : new Date().toISOString(),
+                amount: payData.amount,
                 ...(payData.category_id && { category_id: parseInt(payData.category_id) })
             };
             const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/generic_installments/${payData.inst_id}/${endpoint}`, {
@@ -942,9 +944,12 @@ export default function FinancialPage() {
                         <form onSubmit={confirmPay} className="p-6 space-y-4">
                             <div className="text-center mb-6">
                                 <p className="text-sm font-semibold text-slate-500 mb-1">Valor do Título/Parcela</p>
-                                <h3 className="text-3xl font-black text-slate-900 dark:text-white">
-                                    {new Intl.NumberFormat('pt-BR', {style: 'currency', currency: 'BRL'}).format(payData.amount)}
-                                </h3>
+                                <CurrencyInput
+                                    value={payData.amount}
+                                    onChangeValue={(val) => setPayData({...payData, amount: val})}
+                                    className="w-full text-center text-3xl font-black text-slate-900 dark:text-white bg-transparent border-0 border-b-2 border-slate-200 focus:border-indigo-500 focus:ring-0 dark:border-slate-800 dark:focus:border-indigo-400 p-2 mb-2"
+                                    prefixStr="R$ "
+                                />
                             </div>
                             <div>
                                 <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Data do Pagamento / Baixa</label>

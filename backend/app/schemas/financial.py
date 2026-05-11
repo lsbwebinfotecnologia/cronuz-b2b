@@ -68,6 +68,7 @@ class FinancialInstallmentUpdate(BaseModel):
     payment_date: Optional[datetime] = None
     account_id: Optional[int] = None
     category_id: Optional[int] = None
+    amount: Optional[float] = None
 
 class FinancialBulkConciliate(BaseModel):
     installment_ids: List[int]
@@ -111,7 +112,7 @@ class FinancialAccount(FinancialAccountBase):
     class Config:
         from_attributes = True
 
-class FinancialCashFlowLog(BaseModel):
+class FinancialCashFlowLogSchema(BaseModel):
     id: int
     account_id: int
     installment_id: Optional[int] = None
@@ -119,6 +120,7 @@ class FinancialCashFlowLog(BaseModel):
     movement_type: str
     amount: float
     progressive_balance: float
+    movement_date: date
     created_at: datetime
     
     class Config:
