@@ -76,7 +76,17 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                     const u = getUser();
                     if(u?.company_id) fetchSettings(u.company_id);
                 }
-                
+                // Set initial emails
+                if (data.customer) {
+                    const em = [];
+                    if (data.customer.email) em.push(data.customer.email);
+                    if (data.customer.billing_emails) {
+                        const splitted = data.customer.billing_emails.split(',').map((e:string) => e.trim()).filter((e:string) => e);
+                        em.push(...splitted);
+                    }
+                    setToEmails([...new Set(em)].join(', '));
+                }
+
                 // Set initial template after fetch
                 if ((window as any).__loadedTemplates) {
                     applyTemplate((window as any).__loadedTemplates, 'FINANCIAL_INVOICE', data);

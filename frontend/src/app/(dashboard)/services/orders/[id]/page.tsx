@@ -56,6 +56,17 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
             const data = await res.json();
             setOrder(data.data);
             
+            // Set initial emails
+            if (data.data.customer) {
+                const em = [];
+                if (data.data.customer.email) em.push(data.data.customer.email);
+                if (data.data.customer.billing_emails) {
+                    const splitted = data.data.customer.billing_emails.split(',').map((e:string) => e.trim()).filter((e:string) => e);
+                    em.push(...splitted);
+                }
+                setToEmails([...new Set(em)].join(', '));
+            }
+
             // Init form
             setNegotiatedValue(data.data.negotiated_value || 0);
             setExecutionDate(data.data.execution_date || '');
