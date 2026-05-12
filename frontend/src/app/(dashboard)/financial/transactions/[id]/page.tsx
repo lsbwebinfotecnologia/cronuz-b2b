@@ -78,8 +78,8 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                 }
                 
                 // Set initial template after fetch
-                if (window.__loadedTemplates) {
-                    applyTemplate(window.__loadedTemplates, 'FINANCIAL_INVOICE', data);
+                if ((window as any).__loadedTemplates) {
+                    applyTemplate((window as any).__loadedTemplates, 'FINANCIAL_INVOICE', data);
                 }
             }
             else toast.error("Transação não encontrada");
