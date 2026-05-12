@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<NFSe xmlns="http://www.sped.fazenda.gov.br/nfse">
+  <infNFSe Id="NFS12345678901234567890123456789012345678901234567890">
+    <xLocEmi>3504107</xLocEmi>
+    <xLocPrestacao>3504107</xLocPrestacao>
+    <nNFSe>81</nNFSe>
+    <cSitNFSe>1</cSitNFSe>
+    <dhEmi>2026-04-23T12:29:03-03:00</dhEmi>
+    <dhFatoGerador>2026-04-23T12:29:03-03:00</dhFatoGerador>
+    
+    <emit>
+      <CNPJ>17026001000108</CNPJ>
+      <IM>123456</IM>
+      <xNome>LSBWEBINFO SERVICOS EM TECNOLOGIA LTDA</xNome>
+      <end>
+        <xLgr>RUA DOS HIBISCUS</xLgr>
+        <nro>80</nro>
+        <xCpl></xCpl>
+        <xBairro>JARDIM ESTANCIA BRASIL</xBairro>
+        <cMun>3504107</cMun>
+        <xMun>Atibaia</xMun>
+        <CEP>12949020</CEP>
+        <UF>SP</UF>
+      </end>
+      <email>FINANCEIRO@LSBWEBINFO.COM.BR</email>
+      <fone>1148146533</fone>
+      <regTrib>
+        <opSimpNac>1</opSimpNac>
+        <regApuracaoSN>1</regApuracaoSN>
+      </regTrib>
+    </emit>
+
+    <toma>
+      <CNPJ>26597766000199</CNPJ>
+      <xNome>HISTORIA SEM FIM LIVRARIA DE AUTORA</xNome>
+      <end>
+        <xLgr>DOUTOR JANUARIO MIRAGLIA</xLgr>
+        <nro>3260</nro>
+        <xBairro>VILA EVEREST</xBairro>
+        <cMun>3509700</cMun>
+        <xMun>Campos do Jordao</xMun>
+        <CEP>12460001</CEP>
+        <UF>SP</UF>
+      </end>
+      <email>contato@historia.com.br</email>
+    </toma>
+
+    <serv>
+      <cTribNac>01.07.01</cTribNac>
+      <cTribMun>010701</cTribMun>
+      <xDescSrv>01.07.01 - Suporte tecnico em informatica, inclusive instalacao, configuracao e manutencao.
+Implantacao Sistema Horus</xDescSrv>
+      <cMunPrestacao>3504107</cMunPrestacao>
+      <xMunPrestacao>Atibaia</xMunPrestacao>
+    </serv>
+
+    <valores>
+      <vServPrest>550.00</vServPrest>
+      <vDeducao>0.00</vDeducao>
+      <vBCISS>550.00</vBCISS>
+      <pISS>0.00</pISS>
+      <vISS>0.00</vISS>
+      <vISSRet>0.00</vISSRet>
+      <vDescIncond>0.00</vDescIncond>
+      <vDescCond>0.00</vDescCond>
+      <vLiq>550.00</vLiq>
+      
+      <tribFed>
+        <vPIS>0.00</vPIS>
+        <vCOFINS>0.00</vCOFINS>
+        <vINSS>0.00</vINSS>
+        <vIR>0.00</vIR>
+        <vCSLL>0.00</vCSLL>
+        <vRetCP>0.00</vRetCP>
+      </tribFed>
+    </valores>
+  </infNFSe>
+</NFSe>

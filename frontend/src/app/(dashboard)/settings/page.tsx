@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { PrintPointsTab } from './PrintPointsTab';
+import { EmailTemplatesTab } from './EmailTemplatesTab';
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -413,6 +414,7 @@ export default function SettingsPage() {
     { id: 'pagamentos', label: 'Pagamentos', icon: CreditCard },
     { id: 'frete', label: 'Frete e Logística', icon: Truck },
     { id: 'email', label: 'E-mails (SMTP)', icon: Mail },
+    { id: 'templates', label: 'Modelos de E-mail', icon: FileText },
   ];
 
   return (
@@ -1229,11 +1231,18 @@ export default function SettingsPage() {
                   </div>
                 </div>
               )}
+              {/* Tab: TEMPLATES DE EMAIL */}
+              {activeTab === 'templates' && (
+                <div className="animate-in fade-in">
+                  <EmailTemplatesTab />
+                </div>
+              )}
 
             </div>
 
-            <div className="p-6 bg-slate-50 border-t border-slate-200 dark:bg-slate-900/60 dark:border-slate-800/60 flex items-center justify-end">
-              <button
+            {activeTab !== 'templates' && (
+              <div className="p-6 bg-slate-50 border-t border-slate-200 dark:bg-slate-900/60 dark:border-slate-800/60 flex items-center justify-end">
+                <button
                 type="submit"
                 disabled={saving}
                 className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-semibold py-3 px-8 rounded-xl transition-all shadow-lg shadow-[var(--color-primary-base)]/20 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none flex items-center gap-2"
@@ -1242,6 +1251,7 @@ export default function SettingsPage() {
                 Salvar Configurações ({tabs.find(t => t.id === activeTab)?.label})
               </button>
             </div>
+            )}
           </form>
         </motion.div>
       </div>

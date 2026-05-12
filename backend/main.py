@@ -19,6 +19,7 @@ from app.models import order as order_models
 from app.models import commercial_policy as commercial_models
 from app.models import print_point as print_point_models
 from app.models import consignment_draft as consignment_draft_models
+from app.models import email_template as email_template_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -48,6 +49,7 @@ from app.api import bookinfo_purchases
 from app.api import services
 from app.api import print_points
 from app.api import bank_slips
+from app.api import email_templates
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -69,6 +71,7 @@ system_integrator_models.Base.metadata.create_all(bind=engine)
 marketing_nav_models.Base.metadata.create_all(bind=engine)
 order_models.Base.metadata.create_all(bind=engine)
 consignment_draft_models.Base.metadata.create_all(bind=engine)
+email_template_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -132,6 +135,7 @@ app.include_router(print_points.router, prefix="/print-points", tags=["print-poi
 app.include_router(bank_slips.router, tags=["financial"])
 app.include_router(commercial_policies.router, tags=["commercial-policies"])
 app.include_router(financial.router, tags=["financial"])
+app.include_router(email_templates.router, prefix="/settings/email-templates", tags=["settings"])
 app.include_router(customer_portal.router)
 app.include_router(customer_auth.router)
 

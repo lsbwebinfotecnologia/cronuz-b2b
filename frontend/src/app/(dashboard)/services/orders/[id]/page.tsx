@@ -37,8 +37,10 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
     const [showEmailHistoryModal, setShowEmailHistoryModal] = useState(false);
     const user = getUser();
     const companyName = user?.company_name || 'Nossa Empresa';
-    const [emailSubject, setEmailSubject] = useState(`Faturamento O.S #${orderId} - ${companyName}`);
+    const [emailSubject, setEmailSubject] = useState('');
     const [emailBody, setEmailBody] = useState('');
+    const [templates, setTemplates] = useState<any[]>([]);
+    const [selectedTemplateType, setSelectedTemplateType] = useState('SERVICE_ORDER');
     const [toEmails, setToEmails] = useState('');
     const [attachInvoice, setAttachInvoice] = useState(true);
     const [attachBoletos, setAttachBoletos] = useState(true);
@@ -87,9 +89,67 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
         }
     }, [token, orderId, router]);
 
+    const fetchTemplates = useCallback(async () => {
+        if (!token) return;
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/settings/email-templates`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setTemplates(data);
+                (window as any).__loadedTemplates = data;
+                if (order) {
+                    applyTemplate(data, 'SERVICE_ORDER', order);
+                }
+            }
+        } catch (e) {}
+    }, [token, order]);
+
+    const applyTemplate = (tpls: any[], type: string, transaction: any) => {
+        const tpl = tpls.find(t => t.type === type);
+        if (!tpl) return;
+        
+        const currentMonth = new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(new Date());
+        const cname = getUser()?.company_name || 'Nossa Empresa';
+        const c_customer = transaction.customer ? transaction.customer.name : 'Cliente';
+        const totalAmt = new Intl.NumberFormat('pt-BR', {style: 'currency', currency: 'BRL'}).format(transaction.negotiated_value || 0);
+        
+        const replacements: Record<string, string> = {
+            '{month}': currentMonth,
+            '{description}': transaction.custom_description || transaction.service?.name || 'Serviço',
+            '{company_name}': cname,
+            '{customer_name}': c_customer,
+            '{total_amount}': totalAmt,
+            '{service_id}': transaction.id?.toString() || '',
+            '{status}': transaction.status || ''
+        };
+
+        let sub = tpl.subject;
+        let bdy = tpl.body_template;
+        for (const [key, val] of Object.entries(replacements)) {
+            sub = sub.replaceAll(key, val);
+            bdy = bdy.replaceAll(key, val);
+        }
+
+        setEmailSubject(sub);
+        setEmailBody(bdy);
+        setSelectedTemplateType(type);
+    };
+
+    useEffect(() => {
+        if (order && templates.length === 0 && (window as any).__loadedTemplates) {
+            setTemplates((window as any).__loadedTemplates);
+            applyTemplate((window as any).__loadedTemplates, 'SERVICE_ORDER', order);
+        } else if (order && templates.length > 0) {
+            applyTemplate(templates, 'SERVICE_ORDER', order);
+        }
+    }, [order]);
+
     useEffect(() => {
         fetchDetails();
-    }, [fetchDetails]);
+        fetchTemplates();
+    }, [fetchDetails, fetchTemplates]);
 
     // Lógica para bloquear Inputs
     const isLockedByNFSe = order?.status_nfse === 'Emitida' || order?.status_nfse === 'Em Processamento';
@@ -540,6 +600,19 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Para (Destinatários)</label>
                                 <input type="text" value={toEmails} onChange={e => setToEmails(e.target.value)} className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 dark:text-slate-300 text-sm" placeholder="email1@exemplo.com, email2@exemplo.com" />
+                            </div>
+                            
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Modelo da Mensagem (Template)</label>
+                                <select 
+                                    value={selectedTemplateType} 
+                                    onChange={e => applyTemplate(templates, e.target.value, order)}
+                                    className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 dark:text-slate-300 text-sm mb-4"
+                                >
+                                    <option value="SERVICE_ORDER">Abertura / Atualização de O.S</option>
+                                    <option value="FINANCIAL_INVOICE">Faturamento Padrão</option>
+                                    <option value="FINANCIAL_LATE">Cobrança de Atraso</option>
+                                </select>
                             </div>
                             
                             <div>

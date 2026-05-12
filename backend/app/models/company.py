@@ -14,6 +14,7 @@ class Company(Base):
     # Relationships
     users = relationship("User", back_populates="company")
     print_points = relationship("PrintPoint", back_populates="company", foreign_keys="PrintPoint.company_id")
+    email_templates = relationship("SysEmailTemplate", backref="company")
 
     # B2B Configs
     domain = Column(String(255), unique=True, index=True, nullable=False)

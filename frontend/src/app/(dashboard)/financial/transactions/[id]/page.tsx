@@ -40,6 +40,8 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
     const [showEmailHistoryModal, setShowEmailHistoryModal] = useState(false);
     const [emailSubject, setEmailSubject] = useState('');
     const [emailBody, setEmailBody] = useState('');
+    const [templates, setTemplates] = useState<any[]>([]);
+    const [selectedTemplateType, setSelectedTemplateType] = useState('FINANCIAL_INVOICE');
     const [toEmails, setToEmails] = useState('');
     const [attachInvoice, setAttachInvoice] = useState(true);
     const [attachBoletos, setAttachBoletos] = useState(true);
@@ -74,25 +76,11 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                     const u = getUser();
                     if(u?.company_id) fetchSettings(u.company_id);
                 }
-                const cname = getUser()?.company_name || 'Nossa Empresa';
-                const currentMonth = new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(new Date());
-                setEmailSubject(`Faturamento [${currentMonth}] | ${data.description || 'Integração Loja Virtual e ERP Horus'}`);
-                setEmailBody(`Olá,
-
-Informamos que o faturamento relativo aos serviços de manutenção e
-integração da loja virtual com o sistema Horus referente ao mês de
-[${currentMonth}] já está disponível.
-
-Anexamos a este e-mail os seguintes documentos:
-
-NFS-e (Nota Fiscal de Serviços Eletrônica);
-
-Boleto Bancário para pagamento.
-
-Agradecemos a parceria de sempre.
-
-Atenciosamente,
-Financeiro | Lsbwebinfo Serviços de Tecnologia`);
+                
+                // Set initial template after fetch
+                if (window.__loadedTemplates) {
+                    applyTemplate(window.__loadedTemplates, 'FINANCIAL_INVOICE', data);
+                }
             }
             else toast.error("Transação não encontrada");
         } catch (e) {
@@ -101,6 +89,63 @@ Financeiro | Lsbwebinfo Serviços de Tecnologia`);
             setLoading(false);
         }
     };
+
+    const fetchTemplates = async () => {
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/settings/email-templates`, {
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setTemplates(data);
+                (window as any).__loadedTemplates = data;
+                if (trans) {
+                    applyTemplate(data, 'FINANCIAL_INVOICE', trans);
+                }
+            }
+        } catch (e) {}
+    };
+
+    const applyTemplate = (tpls: any[], type: string, transaction: any) => {
+        const tpl = tpls.find(t => t.type === type);
+        if (!tpl) return;
+        
+        const currentMonth = new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(new Date());
+        const cname = getUser()?.company_name || 'Nossa Empresa';
+        const c_customer = transaction.customer ? transaction.customer.name : 'Cliente';
+        const totalAmt = new Intl.NumberFormat('pt-BR', {style: 'currency', currency: 'BRL'}).format(transaction.total_amount || 0);
+        
+        // Find next due date if any
+        let dueDate = 'Vencimento';
+        if (transaction.installments && transaction.installments.length > 0) {
+            const nextInst = transaction.installments.find((i:any) => i.status !== 'PAID') || transaction.installments[0];
+            dueDate = new Date(nextInst.due_date + "T12:00:00").toLocaleDateString('pt-BR');
+        }
+        
+        const replacements: Record<string, string> = {
+            '{month}': currentMonth,
+            '{description}': transaction.description || 'Faturamento',
+            '{company_name}': cname,
+            '{customer_name}': c_customer,
+            '{total_amount}': totalAmt,
+            '{due_date}': dueDate
+        };
+
+        let sub = tpl.subject;
+        let bdy = tpl.body_template;
+        for (const [key, val] of Object.entries(replacements)) {
+            sub = sub.replaceAll(key, val);
+            bdy = bdy.replaceAll(key, val);
+        }
+
+        setEmailSubject(sub);
+        setEmailBody(bdy);
+        setSelectedTemplateType(type);
+    };
+
+    useEffect(() => {
+        fetchTemplates();
+    }, []);
 
     const fetchCategories = async () => {
         try {
@@ -592,6 +637,17 @@ Financeiro | Lsbwebinfo Serviços de Tecnologia`);
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Para (E-mails separados por vírgula)</label>
                                 <input type="text" value={toEmails} onChange={e=>setToEmails(e.target.value)} placeholder="cliente@email.com, financeiro@email.com" className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-600/20" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Modelo da Mensagem (Template)</label>
+                                <select 
+                                    value={selectedTemplateType} 
+                                    onChange={e => applyTemplate(templates, e.target.value, trans)}
+                                    className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-600/20 mb-3"
+                                >
+                                    <option value="FINANCIAL_INVOICE">Faturamento Padrão</option>
+                                    <option value="FINANCIAL_LATE">Cobrança de Atraso</option>
+                                </select>
                             </div>
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Assunto</label>
