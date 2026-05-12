@@ -88,7 +88,7 @@ export function EmailTemplatesTab() {
           <TemplateEditor 
             key={tpl.id} 
             template={tpl} 
-            onSave={(subject, body) => handleUpdate(tpl.id, subject, body)} 
+            onSave={(subject: string, body: string) => handleUpdate(tpl.id, subject, body)} 
             onRestore={() => handleRestore(tpl.id)}
             saving={saving === tpl.id}
           />
