@@ -593,7 +593,13 @@ export default function FinancialPage() {
                                                 </td>
                                                 <td className="px-6 py-4">
                                                     <div className="font-medium text-slate-700 dark:text-slate-200 max-w-[150px] truncate" title={inst.customer_name || 'N/A'}>
-                                                        {inst.customer_name || <span className="text-slate-400 italic">Sem Entidade</span>}
+                                                        {inst.customer_id ? (
+                                                            <Link href={`/customers/${inst.customer_id}`} className="hover:text-[var(--color-primary-base)] hover:underline">
+                                                                {inst.customer_name}
+                                                            </Link>
+                                                        ) : (
+                                                            inst.customer_name || <span className="text-slate-400 italic">Sem Entidade</span>
+                                                        )}
                                                     </div>
                                                     {inst.status === 'PAID' && inst.payment_date && (
                                                         <div className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mt-1">

@@ -300,6 +300,7 @@ def list_generic_installments(
             "total_installments": db.query(func.count(FinancialInstallment.id)).filter(FinancialInstallment.transaction_id == trans.id).scalar(),
             "category_name": cat.name, "category_id": cat.id, "type": trans.type, "account_id": inst.account_id,
             "customer_name": cust.name if cust else None,
+            "customer_id": cust.id if cust else None,
             "is_conciliated": inst.is_conciliated,
             "is_fixed": trans.is_fixed,
             "bank_slip_pdf": inst.bank_slip_pdf_url,
