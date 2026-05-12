@@ -390,7 +390,15 @@ def transaction_details(trans_id: int, db: Session = Depends(get_db), current_us
     trans = db.query(FinancialTransaction).filter(FinancialTransaction.id == trans_id, FinancialTransaction.company_id == cid).first()
     if not trans: raise HTTPException(status_code=404)
     
-    customer_name = db.query(Customer.name).filter(Customer.id == trans.customer_id).scalar() if trans.customer_id else None
+    customer_obj = db.query(Customer).filter(Customer.id == trans.customer_id).first() if trans.customer_id else None
+    customer_name = customer_obj.name if customer_obj else None
+    customer_data = None
+    if customer_obj:
+        customer_data = {
+            "name": customer_obj.name,
+            "email": getattr(customer_obj, "email", None),
+            "billing_emails": getattr(customer_obj, "billing_emails", None)
+        }
     category_name = db.query(FinancialCategory.name).filter(FinancialCategory.id == trans.category_id).scalar()
     installments = db.query(FinancialInstallment).filter(FinancialInstallment.transaction_id == trans.id).order_by(FinancialInstallment.number.asc()).all()
     nfse_url = None
@@ -415,7 +423,8 @@ def transaction_details(trans_id: int, db: Session = Depends(get_db), current_us
         "is_fixed": trans.is_fixed, "created_at": trans.created_at, "customer_name": customer_name,
         "category_name": category_name, "installments": installments,
         "customer_id": trans.customer_id, "category_id": trans.category_id, "order_id": trans.order_id,
-        "nfse_url": nfse_url, "nfse_number": nfse_number
+        "nfse_url": nfse_url, "nfse_number": nfse_number,
+        "customer": customer_data
     }
 
 @router.post("/financial/transactions/{trans_id}/send-email", response_model=dict)
