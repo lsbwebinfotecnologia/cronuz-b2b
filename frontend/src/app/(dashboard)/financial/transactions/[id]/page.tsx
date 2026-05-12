@@ -75,7 +75,24 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                     if(u?.company_id) fetchSettings(u.company_id);
                 }
                 const cname = getUser()?.company_name || 'Nossa Empresa';
-                setEmailSubject(`Faturamento Financeiro - ${data.description || ''} - ${cname}`);
+                const currentMonth = new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(new Date());
+                setEmailSubject(`Faturamento [${currentMonth}] | ${data.description || 'Integração Loja Virtual e ERP Horus'}`);
+                setEmailBody(`Olá,
+
+Informamos que o faturamento relativo aos serviços de manutenção e
+integração da loja virtual com o sistema Horus referente ao mês de
+[${currentMonth}] já está disponível.
+
+Anexamos a este e-mail os seguintes documentos:
+
+NFS-e (Nota Fiscal de Serviços Eletrônica);
+
+Boleto Bancário para pagamento.
+
+Agradecemos a parceria de sempre.
+
+Atenciosamente,
+Financeiro | Lsbwebinfo Serviços de Tecnologia`);
             }
             else toast.error("Transação não encontrada");
         } catch (e) {
