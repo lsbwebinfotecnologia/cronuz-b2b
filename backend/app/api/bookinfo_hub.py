@@ -12,6 +12,8 @@ from app.models.company_settings import CompanySettings
 
 from app.models.order import Order, OrderItem
 from app.models.customer import Customer
+from app.models.company import Company
+from app.models.order_log import OrderLog
 from app.integrators.horus_products import HorusProducts
 from app.integrators.horus_clients import HorusClients
 from app.core.security import get_password_hash
@@ -235,11 +237,103 @@ async def get_order_detail(
         try:
             response = await client.get(f"/pedido/{order_id}")
             response.raise_for_status()
-            return response.json()
+            bookinfo_data = response.json()
+            
+            # Fetch local data
+            
+            # First, try to find the local order to get customer and company
+            local_order = db.query(Order).filter(
+                Order.external_id == order_id, 
+                Order.company_id == current_user.company_id,
+                Order.origin == "bookinfo"
+            ).first()
+            
+            customer_data = {}
+            company_data = {}
+            order_internal = {}
+            timeline = []
+            
+            if local_order:
+                order_internal = {
+                    "id": local_order.id,
+                    "status": local_order.status,
+                    "tracking_code": local_order.tracking_code,
+                    "horus_pedido_venda": local_order.horus_pedido_venda,
+                    "created_at": local_order.created_at.isoformat() if local_order.created_at else None,
+                    "bookinfo_nfe_sent": local_order.bookinfo_nfe_sent
+                }
+                
+                customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
+                company = db.query(Company).filter(Company.id == local_order.company_id).first()
+                
+                if customer:
+                    customer_data = {
+                        "name": customer.name or customer.corporate_name,
+                        "document": customer.document,
+                        "credit_limit": customer.credit_limit,
+                        "open_debts": customer.open_debts,
+                        "consignment_status": customer.consignment_status
+                    }
+                
+                if company:
+                    company_data = {
+                        "name": company.name,
+                        "document": company.document
+                    }
+                    
+                logs_q = db.query(OrderLog).filter(OrderLog.order_id == local_order.id).order_by(OrderLog.created_at.asc()).all()
+                timeline = [
+                    {
+                        "id": l.id,
+                        "old_status": l.old_status,
+                        "new_status": l.new_status,
+                        "created_at": l.created_at.isoformat() if l.created_at else None
+                    }
+                    for l in logs_q
+                ]
+            else:
+                # If not locally imported yet, let's at least try to find the customer by CNPJ
+                cnpj_str = bookinfo_data.get("cnpjComprador", "")
+                if cnpj_str:
+                    clean_cnpj = "".join(filter(str.isdigit, str(cnpj_str)))
+                    customer = db.query(Customer).filter(
+                        Customer.document == clean_cnpj,
+                        Customer.company_id == current_user.company_id
+                    ).first()
+                    
+                    if customer:
+                        customer_data = {
+                            "name": customer.name or customer.corporate_name,
+                            "document": customer.document,
+                            "credit_limit": customer.credit_limit,
+                            "open_debts": customer.open_debts,
+                            "consignment_status": customer.consignment_status
+                        }
+                        
+                company = db.query(Company).filter(Company.id == current_user.company_id).first()
+                if company:
+                    company_data = {
+                        "name": company.name,
+                        "document": company.document
+                    }
+
+            return {
+                "order_internal": order_internal,
+                "customer": customer_data,
+                "company": company_data,
+                "timeline": timeline,
+                "bookinfo_api": bookinfo_data,
+                "bookinfo_payload": None
+            }
+
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail="Pedido não encontrado na Bookinfo")
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Erro ao consultar Bookinfo: {str(e)}")
+            import traceback
+            tb = traceback.format_exc()
+            with open("/tmp/bookinfo_error.txt", "w") as f:
+                f.write(tb)
+            raise HTTPException(status_code=502, detail=f"Erro interno: {str(e)}\n\nTraceback: {tb}")
 
 @router.post("/orders/{order_id}/acknowledge")
 async def acknowledge_order(
@@ -1519,6 +1613,29 @@ async def get_bookinfo_order_details(
         except Exception as e:
             bookinfo_data = {"error": str(e)}
 
+    from app.models.customer import Customer
+    from app.models.company import Company
+    
+    customer = db.query(Customer).filter(Customer.id == order.customer_id).first() if order.customer_id else None
+    company = db.query(Company).filter(Company.id == order.company_id).first() if order.company_id else None
+
+    customer_data = None
+    if customer:
+        customer_data = {
+            "name": customer.name or customer.corporate_name,
+            "document": customer.document,
+            "credit_limit": customer.credit_limit,
+            "open_debts": customer.open_debts,
+            "consignment_status": customer.consignment_status
+        }
+        
+    company_data = None
+    if company:
+        company_data = {
+            "name": company.name,
+            "document": company.document
+        }
+
     return {
         "order_internal": {
             "id": order.id,
@@ -1528,6 +1645,8 @@ async def get_bookinfo_order_details(
             "created_at": order.created_at.isoformat() if order.created_at else None,
             "bookinfo_nfe_sent": order.bookinfo_nfe_sent
         },
+        "customer": customer_data,
+        "company": company_data,
         "timeline": timeline,
         "bookinfo_api": bookinfo_data,
         "bookinfo_payload": None
