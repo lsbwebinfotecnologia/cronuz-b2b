@@ -355,7 +355,14 @@ async def acknowledge_order(
     ).first()
     
     if existing_order:
-        return {"error": False, "message": "Pedido já foi espelhado localmente e recebido.", "id": existing_order.id}
+        # Prevent duplicate local save, but still try to notify Bookinfo to ensure sync
+        async with get_bookinfo_client(current_user.company_id, db) as client:
+            try:
+                put_resp = await client.put(f"/pedido/{order_id}/avaliacao/RECEBIDO", json={})
+                put_resp.raise_for_status()
+            except Exception:
+                pass
+        return {"error": False, "message": "Pedido já foi espelhado localmente e marcado como recebido.", "id": existing_order.id}
     
     async with get_bookinfo_client(current_user.company_id, db) as client:
         # Fetch the order from bookinfo
@@ -621,6 +628,10 @@ async def evaluate_submit(
     """
     if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
+        
+    local_order = db.query(Order).filter(Order.company_id == current_user.company_id, Order.external_id == order_id).first()
+    if local_order and local_order.horus_pedido_venda:
+         raise HTTPException(status_code=400, detail="Pedido já integrado ao Horus ERP. Modificações bloqueadas.")
         
     async with get_bookinfo_client(current_user.company_id, db) as client:
         try:

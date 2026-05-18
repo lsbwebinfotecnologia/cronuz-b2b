@@ -22,6 +22,26 @@ export default function BookinfoOrdersPage() {
     return cnpj;
   };
 
+  const parseBookinfoDate = (dateStr: string | null | undefined): Date | null => {
+    if (!dateStr) return null;
+    if (dateStr.includes('/')) {
+      const parts = dateStr.split(' ');
+      const dateParts = parts[0].split('/');
+      if (dateParts.length === 3) {
+        const day = parseInt(dateParts[0], 10);
+        const month = parseInt(dateParts[1], 10) - 1;
+        const year = parseInt(dateParts[2], 10);
+        if (parts[1]) {
+          const timeParts = parts[1].split(':');
+          return new Date(year, month, day, parseInt(timeParts[0]||'0'), parseInt(timeParts[1]||'0'), parseInt(timeParts[2]||'0'));
+        }
+        return new Date(year, month, day);
+      }
+    }
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('AGUARDANDO_PROCESSAMENTO');
 
@@ -314,7 +334,7 @@ export default function BookinfoOrdersPage() {
                         </div>
                         <div className="text-xs text-slate-500 mt-1 flex flex-col gap-1">
                             <span className="inline-flex items-center gap-1"><Layers className="w-3.5 h-3.5" /> {(order.itens || []).length} itens solicitados</span>
-                            <span className="inline-flex items-center gap-1 text-slate-400"><Calendar className="w-3.5 h-3.5" /> {new Date(order.dataCriacao).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                            <span className="inline-flex items-center gap-1 text-slate-400"><Calendar className="w-3.5 h-3.5" /> {parseBookinfoDate(order.dataCriacao) ? parseBookinfoDate(order.dataCriacao)!.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Data inválida'}</span>
                         </div>
                       </td>
 

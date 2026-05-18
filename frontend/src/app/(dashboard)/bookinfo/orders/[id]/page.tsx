@@ -19,6 +19,26 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const [isAcknowledging, setIsAcknowledging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const parseBookinfoDate = (dateStr: string | null | undefined): Date | null => {
+    if (!dateStr) return null;
+    if (dateStr.includes('/')) {
+      const parts = dateStr.split(' ');
+      const dateParts = parts[0].split('/');
+      if (dateParts.length === 3) {
+        const day = parseInt(dateParts[0], 10);
+        const month = parseInt(dateParts[1], 10) - 1;
+        const year = parseInt(dateParts[2], 10);
+        if (parts[1]) {
+          const timeParts = parts[1].split(':');
+          return new Date(year, month, day, parseInt(timeParts[0]||'0'), parseInt(timeParts[1]||'0'), parseInt(timeParts[2]||'0'));
+        }
+        return new Date(year, month, day);
+      }
+    }
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
   const [activeTab, setActiveTab] = useState<'BOOKINFO' | 'HORUS'>('BOOKINFO');
 
   useEffect(() => {
@@ -174,7 +194,6 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
             </div>
           </div>
         </div>
-        {/* Adicionei botão de recusar pedido futuramente */}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
@@ -199,11 +218,11 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                      </p>
                   </div>
                   <div>
-                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Data de Criação</span>
-                     <p className="font-medium text-slate-800 dark:text-slate-200 text-sm">
-                        {order.dataCriacao ? new Date(order.dataCriacao).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : order.dataPedido ? new Date(order.dataPedido).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : orderInternal.created_at ? new Date(orderInternal.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'ND'}
-                     </p>
-                  </div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Data</span>
+                      <p className="font-bold text-slate-900 dark:text-white text-base">
+                         {parseBookinfoDate(order.dataCriacao) ? parseBookinfoDate(order.dataCriacao)!.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : parseBookinfoDate(order.dataPedido) ? parseBookinfoDate(order.dataPedido)!.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : orderInternal.created_at ? new Date(orderInternal.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'ND'}
+                      </p>
+                   </div>
                 </div>
                 
                 <hr className="border-slate-100 dark:border-slate-800" />
@@ -229,10 +248,21 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                 {order.observacao && (
                    <div className="bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800/30 p-4 rounded-xl">
                       <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider block mb-2 flex items-center gap-1">
-                         <Info className="w-3 h-3" /> Observações
+                         <Info className="w-3 h-3" /> Observações do Pedido
                       </span>
-                      <p className="text-sm text-blue-900 dark:text-blue-200 leading-relaxed">
+                      <p className="text-sm text-blue-900 dark:text-blue-200 leading-relaxed whitespace-pre-wrap">
                         {order.observacao}
+                      </p>
+                   </div>
+                )}
+
+                {customer.commercial_notes && (
+                   <div className="bg-amber-50/50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800/30 p-4 rounded-xl">
+                      <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block mb-2 flex items-center gap-1">
+                         <AlertCircle className="w-3 h-3" /> Observações Fixas (Horus)
+                      </span>
+                      <p className="text-[11px] font-mono text-amber-900 dark:text-amber-200 leading-relaxed whitespace-pre-wrap font-medium">
+                        {customer.commercial_notes}
                       </p>
                    </div>
                 )}
@@ -245,39 +275,39 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                     <Wallet className="w-4 h-4 text-indigo-500" /> Resumo Financeiro
                   </h3>
                   
-                  <div className="grid grid-cols-2 gap-3 mb-5">
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700/50 hover:shadow-md transition-shadow">
-                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <div className="flex flex-col gap-3 mb-5">
+                    <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-800/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700/50">
+                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
                         <CreditCard className="w-3 h-3" /> Limite Total
                       </span>
-                      <strong className="text-sm text-slate-800 dark:text-slate-200 font-bold block">
+                      <strong className="text-sm text-slate-800 dark:text-slate-200 font-bold">
                         {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(customer.credit_limit || 0)}
                       </strong>
                     </div>
                     
-                    <div className="bg-rose-50/50 dark:bg-rose-900/10 p-3 rounded-lg border border-rose-100 dark:border-rose-800/30 hover:shadow-md transition-shadow">
-                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-rose-500 uppercase tracking-wider mb-1">
+                    <div className="flex justify-between items-center bg-rose-50/50 dark:bg-rose-900/10 p-3 rounded-lg border border-rose-100 dark:border-rose-800/30">
+                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-rose-500 uppercase tracking-wider">
                         <DollarSign className="w-3 h-3" /> Débitos
                       </span>
-                      <strong className="text-sm text-rose-700 dark:text-rose-400 font-bold block">
+                      <strong className="text-sm text-rose-700 dark:text-rose-400 font-bold">
                         {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(customer.open_debts || 0)}
                       </strong>
                     </div>
                     
-                    <div className="bg-emerald-50/50 dark:bg-emerald-900/10 p-3 rounded-lg border border-emerald-100 dark:border-emerald-800/30 hover:shadow-md transition-shadow">
-                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1">
+                    <div className="flex justify-between items-center bg-emerald-50/50 dark:bg-emerald-900/10 p-3 rounded-lg border border-emerald-100 dark:border-emerald-800/30">
+                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 uppercase tracking-wider">
                         <CheckCircle2 className="w-3 h-3" /> Disponível
                       </span>
-                      <strong className="text-sm text-emerald-700 dark:text-emerald-400 font-bold block">
+                      <strong className="text-sm text-emerald-700 dark:text-emerald-400 font-bold">
                         {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((customer.credit_limit || 0) - (customer.open_debts || 0))}
                       </strong>
                     </div>
                     
-                    <div className="bg-amber-50/50 dark:bg-amber-900/10 p-3 rounded-lg border border-amber-100 dark:border-amber-800/30 hover:shadow-md transition-shadow">
-                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-1">
+                    <div className="flex justify-between items-center bg-amber-50/50 dark:bg-amber-900/10 p-3 rounded-lg border border-amber-100 dark:border-amber-800/30">
+                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-amber-600 uppercase tracking-wider">
                         <Package className="w-3 h-3" /> Consignado
                       </span>
-                      <strong className="text-sm text-amber-700 dark:text-amber-400 font-bold block">
+                      <strong className="text-sm text-amber-700 dark:text-amber-400 font-bold">
                         {customer.consignment_status === 'ACTIVE' ? 'Ativo' : 'Inativo'}
                       </strong>
                     </div>
@@ -299,28 +329,13 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                   </div>
                 </div>
 
-             </div>
-             
-             {/* ACTIONS */}
-             <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 space-y-3">
-                 {order.status === 'NOVO' && (
-                     <button 
-                       onClick={acknowledgeOrder}
-                       disabled={isAcknowledging}
-                       className="w-full flex justify-center items-center gap-2 bg-slate-900 text-white dark:bg-white dark:text-slate-900 px-4 py-3 rounded-xl text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
-                     >
-                        <CheckCircle2 className="w-4 h-4" /> Registrar como Recebido
-                     </button>
-                 )}
-                 {(order.status === 'RECEBIDO' || order.status === 'NOVO') && (
-                     <button 
-                       onClick={runEvaluation}
-                       disabled={isProcessing}
-                       className="w-full flex justify-center items-center gap-2 bg-indigo-600 text-white px-4 py-3 rounded-xl text-sm font-semibold hover:bg-indigo-700 transition disabled:opacity-50 shadow-sm shadow-indigo-500/20"
-                     >
-                        <Play className="w-4 h-4" /> Processar Análise (Horus)
-                     </button>
-                 )}
+                  <div className="mt-3">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Data do Último Acerto</span>
+                      <p className="font-bold text-slate-900 dark:text-white text-sm">
+                         {customer.last_settlement_date ? new Date(customer.last_settlement_date).toLocaleDateString('pt-BR') : 'Não informada'}
+                      </p>
+                  </div>
+
              </div>
           </div>
         </div>
@@ -346,15 +361,35 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                     </button>
                  </div>
 
-                 {activeTab === 'HORUS' && evaluation.length > 0 && (
-                     <button 
-                       onClick={submitEvaluation}
-                       disabled={isSubmitting}
-                       className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 my-2 rounded-lg text-sm font-semibold transition disabled:opacity-50 shadow-sm"
-                     >
-                        <Save className="w-4 h-4" /> Salvar Avaliação
-                     </button>
-                 )}
+                 <div className="flex gap-2 my-2">
+                     {order.status === 'NOVO' && (
+                         <button 
+                           onClick={acknowledgeOrder}
+                           disabled={isAcknowledging}
+                           className="flex items-center gap-2 bg-slate-900 text-white dark:bg-white dark:text-slate-900 px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
+                         >
+                            <CheckCircle2 className="w-4 h-4" /> Receber Pedido
+                         </button>
+                     )}
+                     {(order.status === 'RECEBIDO' || order.status === 'NOVO') && (
+                         <button 
+                           onClick={runEvaluation}
+                           disabled={isProcessing}
+                           className="flex items-center gap-2 bg-slate-100 text-slate-700 border border-slate-300 hover:bg-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700 px-4 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
+                         >
+                            <Play className="w-4 h-4" /> Revalidar Itens (Horus)
+                         </button>
+                     )}
+                     {activeTab === 'HORUS' && evaluation.length > 0 && !orderInternal.horus_pedido_venda && (
+                         <button 
+                           onClick={submitEvaluation}
+                           disabled={isSubmitting}
+                           className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50 shadow-sm"
+                         >
+                            <Save className="w-4 h-4" /> Enviar para o Horus
+                         </button>
+                     )}
+                 </div>
               </div>
 
               <div className="flex-1 overflow-auto p-0">

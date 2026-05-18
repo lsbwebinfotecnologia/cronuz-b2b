@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import { Loader2, Globe, FileText, Image as ImageIcon, Save, CheckCircle2, XCircle, Calendar, AlertTriangle, DollarSign, ChevronDown } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
+import { getImageUrl } from '@/lib/image_helper';
 import { useCompany } from '../layout';
 
 export default function CompanyProfilePage() {
@@ -565,7 +566,7 @@ export default function CompanyProfilePage() {
                 <div className="relative group rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-[var(--color-primary-base)] transition-colors bg-slate-50 dark:bg-slate-900/50 flex flex-col items-center justify-center overflow-hidden" style={{ minHeight: '200px' }}>
                   {formData.logo ? (
                     <>
-                      <img src={formData.logo} alt="Logo Lojista" className="p-4 w-auto h-full max-h-[160px] object-contain group-hover:opacity-40 transition-opacity" />
+                      <img src={getImageUrl(formData.logo)} alt="Logo Lojista" className="p-4 w-auto h-full max-h-[160px] object-contain group-hover:opacity-40 transition-opacity" />
                       <div className="absolute inset-0 z-10 p-4 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                         <span className="text-sm font-medium text-white shadow-sm bg-black/60 px-3 py-1 rounded-full">Clique para alterar</span>
                       </div>
@@ -598,7 +599,7 @@ export default function CompanyProfilePage() {
                 <div className="relative group rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-[var(--color-primary-base)] transition-colors bg-slate-50 dark:bg-slate-900/50 flex flex-col items-center justify-center overflow-hidden" style={{ minHeight: '200px' }}>
                   {formData.login_background_url ? (
                     <>
-                      <img src={formData.login_background_url} alt="Fundo Login" className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-40 transition-opacity" />
+                      <img src={getImageUrl(formData.login_background_url)} alt="Fundo Login" className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-40 transition-opacity" />
                       <div className="relative z-10 p-4 flex flex-col items-center">
                         <ImageIcon className="h-8 w-8 text-white drop-shadow-md mb-2" />
                         <span className="text-sm font-medium text-white drop-shadow-md bg-black/30 px-3 py-1 rounded-full">Clique para alterar a imagem</span>
@@ -632,7 +633,7 @@ export default function CompanyProfilePage() {
                 <div className="relative group rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-[var(--color-primary-base)] transition-colors bg-slate-50 dark:bg-slate-900/50 flex flex-col items-center justify-center overflow-hidden" style={{ minHeight: '200px' }}>
                   {formData.favicon_url ? (
                     <>
-                      <img src={formData.favicon_url} alt="Favicon Lojista" className="object-contain w-16 h-16 group-hover:opacity-40 transition-opacity drop-shadow-sm" />
+                      <img src={getImageUrl(formData.favicon_url)} alt="Favicon Lojista" className="object-contain w-16 h-16 group-hover:opacity-40 transition-opacity drop-shadow-sm" />
                       <div className="absolute inset-0 z-10 p-4 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                         <span className="text-[11px] font-medium text-white shadow-sm bg-black/60 px-3 py-1 rounded-full">Trocar Ícone</span>
                       </div>
