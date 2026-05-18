@@ -127,18 +127,22 @@ export default function CompanyProfilePage() {
       if (companyId) data.append('company_id', companyId);
       
       const token = getToken();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/image`, {
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+      const res = await fetch(`${apiUrl}/upload/image`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
         body: data
       });
       
-      if (!res.ok) throw new Error('Falha no upload');
+      if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `Falha no upload (Status ${res.status})`);
+      }
       const responseData = await res.json();
       setFormData(prev => ({ ...prev, login_background_url: responseData.url }));
       toast.success('Imagem enviada! Lembre-se de clicar em Salvar Alterações.');
-    } catch (err) {
-      toast.error('Erro ao fazer upload da imagem.');
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao fazer upload da imagem.');
     } finally {
       setUploadingBg(false);
     }
@@ -162,18 +166,22 @@ export default function CompanyProfilePage() {
       if (companyId) data.append('company_id', companyId);
       
       const token = getToken();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/image`, {
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+      const res = await fetch(`${apiUrl}/upload/image`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
         body: data
       });
       
-      if (!res.ok) throw new Error('Falha no upload');
+      if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `Falha no upload (Status ${res.status})`);
+      }
       const responseData = await res.json();
       setFormData(prev => ({ ...prev, logo: responseData.url }));
       toast.success('Logo enviada! Lembre-se de clicar em Salvar Alterações.');
-    } catch (err) {
-      toast.error('Erro ao fazer upload da logo.');
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao fazer upload da logo.');
     } finally {
       setUploadingLogo(false);
     }
@@ -197,18 +205,22 @@ export default function CompanyProfilePage() {
       if (companyId) data.append('company_id', companyId);
       
       const token = getToken();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/image`, {
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+      const res = await fetch(`${apiUrl}/upload/image`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
         body: data
       });
       
-      if (!res.ok) throw new Error('Falha no upload');
+      if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `Falha no upload (Status ${res.status})`);
+      }
       const responseData = await res.json();
       setFormData(prev => ({ ...prev, favicon_url: responseData.url }));
       toast.success('Favicon (Ícone) enviado! Lembre-se de clicar em Salvar Alterações.');
-    } catch (err) {
-      toast.error('Erro ao fazer upload do Favicon.');
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao fazer upload do Favicon.');
     } finally {
       setUploadingFavicon(false);
     }
