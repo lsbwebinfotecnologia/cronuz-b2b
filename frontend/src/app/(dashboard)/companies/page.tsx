@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Building2, Plus, Users, ShieldAlert, Loader2, Globe, Building } from 'lucide-react';
 import Link from 'next/link';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import { getImageUrl } from '@/lib/image_helper';
 
 interface Company {
   id: string | number;
@@ -16,6 +17,8 @@ interface Company {
   login_background_url?: string | null;
   active: boolean;
   created_at: string;
+  module_horus_erp?: boolean;
+  tenant_id?: string;
 }
 
 export default function CompaniesPage() {
@@ -33,7 +36,13 @@ export default function CompaniesPage() {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {
-          const data = await res.json();
+          let data = await res.json();
+          const user = getUser();
+          
+          if (user?.tenant_id === 'horus') {
+            data = data.filter((c: any) => c.module_horus_erp === true || c.tenant_id === 'horus' || c.domain?.includes('horus'));
+          }
+          
           setCompanies(data);
         }
       } catch (error: any) {
@@ -131,7 +140,7 @@ export default function CompaniesPage() {
                     <td className="px-6 py-4">
                       <Link href={`/companies/${company.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer group">
                         {company.logo ? (
-                          <img src={company.logo} alt={company.name} className="h-8 w-8 rounded-lg object-contain bg-slate-100 p-1 dark:bg-white/5" />
+                          <img src={getImageUrl(company.logo)} alt={company.name} className="h-8 w-8 rounded-lg object-contain bg-slate-100 p-1 dark:bg-white/5" />
                         ) : (
                           <div className="h-8 w-8 rounded-lg bg-slate-100 flex items-center justify-center group-hover:bg-slate-200 transition-colors dark:bg-slate-800 dark:group-hover:bg-slate-700">
                             <Building2 className="h-4 w-4 text-slate-400 group-hover:text-slate-600 transition-colors dark:group-hover:text-white" />
