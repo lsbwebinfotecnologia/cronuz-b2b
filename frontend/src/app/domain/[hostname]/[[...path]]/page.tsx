@@ -6,6 +6,7 @@ import { Loader2, AlertCircle, ArrowRight, BookOpen } from 'lucide-react';
 import Link from 'next/link';
 import 'react-quill-new/dist/quill.snow.css';
 import CommerceStorefront from '../_components/CommerceStorefront';
+import { getImageUrl } from '@/lib/image_helper';
 
 export default function DomainRouter() {
     const params = useParams();
@@ -108,7 +109,7 @@ function StorefrontHub({ hostname }: { hostname: string }) {
             <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm">
                 <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
                     {hubData.logo_url || domainInfo?.logo ? (
-                        <img src={hubData.logo_url || domainInfo?.logo} alt={domainInfo?.name || hubData.company_name} className="h-12 object-contain" />
+                        <img src={getImageUrl(hubData.logo_url || domainInfo?.logo)} alt={domainInfo?.name || hubData.company_name} className="h-12 object-contain" />
                     ) : (
                         <div className="flex items-center gap-3">
                             <BookOpen className={`h-8 w-8 ${t.text}`} />
@@ -141,7 +142,7 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                     <div className="absolute inset-0 bg-[#0f172a] mix-blend-multiply opacity-60 z-10"></div>
                     {(hubData.banner_url || domainInfo?.login_background_url) && (
                         <div className="absolute inset-0 z-0">
-                            <img src={hubData.banner_url || domainInfo?.login_background_url} alt="Banner" className="w-full h-full object-cover opacity-40 mix-blend-overlay" />
+                            <img src={getImageUrl(hubData.banner_url || domainInfo?.login_background_url)} alt="Banner" className="w-full h-full object-cover opacity-40 mix-blend-overlay" />
                         </div>
                     )}
                     <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-slate-50 to-transparent z-10"></div>

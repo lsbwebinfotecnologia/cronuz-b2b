@@ -7,6 +7,7 @@ import { ArrowRight, Lock, Mail, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { setToken } from '@/lib/auth';
 import { toast } from 'sonner';
+import { getImageUrl } from '@/lib/image_helper';
 
 export default function StorefrontLoginPage() {
   const params = useParams();
@@ -107,7 +108,7 @@ export default function StorefrontLoginPage() {
           <div className="flex flex-col items-center mb-10">
             {storeInfo?.logo ? (
               <img 
-                src={storeInfo.logo} 
+                src={getImageUrl(storeInfo.logo)} 
                 alt={storeInfo.name} 
                 className="h-24 w-auto object-contain mb-8 origin-center hover:scale-105 transition-transform" 
               />
@@ -186,7 +187,7 @@ export default function StorefrontLoginPage() {
         {storeInfo?.login_background_url ? (
           <>
             <img 
-              src={storeInfo.login_background_url} 
+              src={getImageUrl(storeInfo.login_background_url)} 
               alt="Background" 
               className="absolute inset-0 w-full h-full object-cover" 
             />

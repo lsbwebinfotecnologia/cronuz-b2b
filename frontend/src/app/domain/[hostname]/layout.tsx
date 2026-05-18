@@ -1,4 +1,5 @@
 import type { Metadata, ResolvingMetadata } from 'next';
+import { getImageUrl } from '@/lib/image_helper';
 
 type Props = {
   params: Promise<{ hostname: string }>;
@@ -22,7 +23,7 @@ export async function generateMetadata(
       return {
         title: data.seo_title || data.name || 'Portal B2B',
         description: data.seo_description || `Acesse o portal B2B exclusivo da ${data.name || 'nossa empresa'}.`,
-        icons: data.favicon_url ? { icon: data.favicon_url } : undefined,
+        icons: data.favicon_url ? { icon: getImageUrl(data.favicon_url) } : undefined,
       };
     }
   } catch (e) {

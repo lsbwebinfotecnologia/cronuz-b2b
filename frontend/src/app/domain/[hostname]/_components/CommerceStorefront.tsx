@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Search, ShoppingCart, User, Menu, ChevronRight, Loader2, Star } from 'lucide-react';
+import { getImageUrl } from '@/lib/image_helper';
 
 export default function CommerceStorefront({ hostname, domainInfo }: { hostname: string, domainInfo: any }) {
     const [loading, setLoading] = useState(true);
@@ -68,7 +69,7 @@ export default function CommerceStorefront({ hostname, domainInfo }: { hostname:
                         <div className="flex-shrink-0 flex items-center">
                             <Link href="/">
                                 {domainInfo?.logo ? (
-                                    <img src={domainInfo.logo} alt={domainInfo.name} className="h-12 w-auto object-contain" />
+                                    <img src={getImageUrl(domainInfo.logo)} alt={domainInfo.name} className="h-12 w-auto object-contain" />
                                 ) : (
                                     <span className="text-2xl font-black text-slate-900 tracking-tight">{domainInfo?.name}</span>
                                 )}
@@ -144,7 +145,7 @@ export default function CommerceStorefront({ hostname, domainInfo }: { hostname:
                 {domainInfo?.login_background_url && (
                     <div className="w-full bg-slate-900 relative h-[400px] overflow-hidden">
                         <img 
-                            src={domainInfo.login_background_url} 
+                            src={getImageUrl(domainInfo.login_background_url)} 
                             alt="Banner Principal" 
                             className="w-full h-full object-cover opacity-80" 
                         />
@@ -253,7 +254,7 @@ export default function CommerceStorefront({ hostname, domainInfo }: { hostname:
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-4 gap-12">
                     <div>
                         {domainInfo?.logo ? (
-                            <img src={domainInfo.logo} alt={domainInfo.name} className="h-8 object-contain brightness-0 invert opacity-80 mb-6" />
+                            <img src={getImageUrl(domainInfo.logo)} alt={domainInfo.name} className="h-8 object-contain brightness-0 invert opacity-80 mb-6" />
                         ) : (
                             <h4 className="text-white text-xl font-black mb-6 uppercase tracking-widest">{domainInfo?.name}</h4>
                         )}
