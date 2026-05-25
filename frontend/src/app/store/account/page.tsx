@@ -100,8 +100,8 @@ export default function CustomerProfilePage() {
       const today = new Date();
       const thirtyDaysAgo = new Date(today.getTime() - (30 * 24 * 60 * 60 * 1000));
       const pad = (n: number) => n < 10 ? '0'+n : n;
-      const dataIni = `${pad(thirtyDaysAgo.getDate())}/${pad(thirtyDaysAgo.getMonth()+1)}/${thirtyDaysAgo.getFullYear()}`;
-      const dataFim = `${pad(today.getDate())}/${pad(today.getMonth()+1)}/${today.getFullYear()}`;
+      const dataIni = `${pad(thirtyDaysAgo.getDate())}/${pad(thirtyDaysAgo.getMonth()+1)}/${thirtyDaysAgo.getFullYear()}%2000:00:00`;
+      const dataFim = `${pad(today.getDate())}/${pad(today.getMonth()+1)}/${today.getFullYear()}%2023:59:59`;
       
       const res = await fetch(`${apiUrl}/me/invoices?data_ini=${dataIni}&data_fim=${dataFim}&xml_base64=N`, {
         headers: { 'Authorization': `Bearer ${token}` }

@@ -150,7 +150,7 @@ class HorusClients(HorusClient):
             
         return []
 
-    async def get_consignment_summary(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, cod_ctr: Optional[str] = None) -> Any:
+    async def get_consignment_summary(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, cod_ctr: Optional[str] = None, limit: int = 50) -> Any:
         cnpj_destino = re.sub(r'\D', '', cnpj_destino)
         cnpj_cliente = re.sub(r'\D', '', cnpj_cliente)
         params = {
@@ -161,16 +161,24 @@ class HorusClients(HorusClient):
         if cod_ctr:
             params["COD_CTR"] = cod_ctr
             
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = 0
+            params["LIMIT"] = limit
+            
         result = await self.get("Busca_Contrato_Cliente_Sintetico", params=params)
         return result
 
-    async def get_consignment_details(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, cod_ctr: Optional[str] = None) -> Any:
+    async def get_consignment_details(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, cod_ctr: Optional[str] = None, limit: int = 500) -> Any:
         params = {
             "ID_GUID": id_guid,
             "CNPJ_DESTINO": cnpj_destino,
             "ID_DOC": cnpj_cliente
         }
         # COD_CTR is strictly avoided in Analitico according to Horus specs
+            
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = 0
+            params["LIMIT"] = limit
             
         result = await self.get("Busca_Contrato_Cliente_Analitico", params=params)
         return result
