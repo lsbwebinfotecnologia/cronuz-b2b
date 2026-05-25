@@ -826,8 +826,6 @@ async def get_customer_invoices_api(
 @router.get("/customers/{customer_id}/debits")
 async def get_customer_debits_api(
     customer_id: int,
-    data_ini: str,
-    data_fim: str,
     arq_base64: str = "N",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -862,8 +860,6 @@ async def get_customer_debits_api(
             cnpj_destino=company.document,
             cnpj_cliente=customer.document,
             id_guid=id_guid,
-            data_ini=data_ini,
-            data_fim=data_fim,
             arq_base64=arq_base64
         )
         return result

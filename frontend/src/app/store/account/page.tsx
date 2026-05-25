@@ -108,11 +108,15 @@ export default function CustomerProfilePage() {
       });
       
       if (res.ok) {
-        const data = await res.json();
+        let data = await res.json();
+        if (data && !Array.isArray(data) && !data.Falha) data = [data];
+
         if (Array.isArray(data) && !data[0]?.Falha) {
            setInvoices(data);
         } else if (data && data.Falha) {
            toast.error(data.Mensagem || "Erro ao buscar notas fiscais");
+        } else if (Array.isArray(data) && data[0]?.Falha) {
+           toast.error(data[0].Mensagem || "Erro ao buscar notas fiscais");
         }
       }
     } catch(e) {
@@ -127,18 +131,22 @@ export default function CustomerProfilePage() {
     try {
       const token = getToken();
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      // Boletos de um periodo grande para pegar abertos passados e futuros
-      const res = await fetch(`${apiUrl}/me/debits?data_ini=01/01/2020&data_fim=31/12/2030&arq_base64=S`, {
+      // Boletos em aberto
+      const res = await fetch(`${apiUrl}/me/debits?arq_base64=S`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
       if (res.ok) {
-        const data = await res.json();
+        let data = await res.json();
+        if (data && !Array.isArray(data) && !data.Falha) data = [data];
+
         if (Array.isArray(data) && !data[0]?.Falha) {
            // Filtra apenas status AB (Aberto)
            setDebits(data.filter((d: any) => d.STA_LANCTO_CRECEBER === "AB"));
         } else if (data && data.Falha) {
            toast.error(data.Mensagem || "Erro ao buscar boletos");
+        } else if (Array.isArray(data) && data[0]?.Falha) {
+           toast.error(data[0].Mensagem || "Erro ao buscar boletos");
         }
       }
     } catch(e) {
@@ -366,7 +374,7 @@ export default function CustomerProfilePage() {
                                      <div className="text-xs text-slate-500">{d.NOM_FORMA}</div>
                                   </td>
                                   <td className="px-6 py-4 font-mono text-slate-500">{d.NRO_NOTA_FISCAL || '-'}</td>
-                                  <td className="px-6 py-4 font-bold text-rose-600">{d.DAT_VENC_CRECEBER}</td>
+                                  <td className="px-6 py-4 font-bold text-rose-600">{d.DAT_VENC_CRECEBER?.split(' ')[0]}</td>
                                   <td className="px-6 py-4 font-black">R$ {parseFloat(d.VLR_LANCTO_CRECEBER || 0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
                                   <td className="px-6 py-4 flex justify-end">
                                       {d.PDF_Base64 && !d.PDF_Base64.includes('ERRO') ? (

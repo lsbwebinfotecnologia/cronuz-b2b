@@ -231,11 +231,15 @@ export default function CustomerDetailsPage() {
       });
       
       if (res.ok) {
-        const data = await res.json();
+        let data = await res.json();
+        if (data && !Array.isArray(data) && !data.Falha) data = [data];
+
         if (Array.isArray(data) && !data[0]?.Falha) {
            setErpInvoices(data);
         } else if (data && data.Falha) {
-           toast.error(data.Mensagem || "Erro ao buscar notas fiscais no Horus");
+           toast.error(data.Mensagem || "Erro ao buscar notas fiscais");
+        } else if (Array.isArray(data) && data[0]?.Falha) {
+           toast.error(data[0].Mensagem || "Erro ao buscar notas fiscais");
         }
       }
     } catch(e) {
@@ -250,16 +254,20 @@ export default function CustomerDetailsPage() {
     try {
       const token = getToken();
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const res = await fetch(`${apiUrl}/customers/${customerId}/debits?data_ini=01/01/2020&data_fim=31/12/2030&arq_base64=S`, {
+      const res = await fetch(`${apiUrl}/customers/${customerId}/debits?arq_base64=S`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
       if (res.ok) {
-        const data = await res.json();
+        let data = await res.json();
+        if (data && !Array.isArray(data) && !data.Falha) data = [data];
+
         if (Array.isArray(data) && !data[0]?.Falha) {
            setErpDebits(data.filter((d: any) => d.STA_LANCTO_CRECEBER === "AB"));
         } else if (data && data.Falha) {
            toast.error(data.Mensagem || "Erro ao buscar boletos no Horus");
+        } else if (Array.isArray(data) && data[0]?.Falha) {
+           toast.error(data[0].Mensagem || "Erro ao buscar boletos no Horus");
         }
       }
     } catch(e) {
@@ -1127,7 +1135,7 @@ export default function CustomerDetailsPage() {
                                          <div className="text-xs text-slate-500">{d.NOM_FORMA}</div>
                                       </td>
                                       <td className="px-6 py-4 font-mono text-slate-500">{d.NRO_NOTA_FISCAL || '-'}</td>
-                                      <td className="px-6 py-4 font-bold text-rose-600">{d.DAT_VENC_CRECEBER}</td>
+                                      <td className="px-6 py-4 font-bold text-rose-600">{d.DAT_VENC_CRECEBER?.split(' ')[0]}</td>
                                       <td className="px-6 py-4 font-black">R$ {parseFloat(d.VLR_LANCTO_CRECEBER || 0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
                                       <td className="px-6 py-4 flex justify-end">
                                           {d.PDF_Base64 && !d.PDF_Base64.includes('ERRO') ? (

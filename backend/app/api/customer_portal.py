@@ -506,8 +506,6 @@ async def get_my_invoices(
 
 @router.get("/debits")
 async def get_my_debits(
-    data_ini: str,
-    data_fim: str,
     arq_base64: str = "N",
     customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db)
@@ -531,8 +529,6 @@ async def get_my_debits(
             cnpj_destino=cnpj_destino,
             cnpj_cliente=cnpj_cliente,
             id_guid=id_guid,
-            data_ini=data_ini,
-            data_fim=data_fim,
             arq_base64=arq_base64
         )
         await horus_client.close()

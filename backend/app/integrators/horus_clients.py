@@ -189,6 +189,8 @@ class HorusClients(HorusClient):
         return result
 
     async def get_customer_invoices(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, data_ini: str, data_fim: str, xml_base64: str = "N", cod_pedido_origem: Optional[str] = None) -> Any:
+        cnpj_destino = re.sub(r'\D', '', cnpj_destino)
+        cnpj_cliente = re.sub(r'\D', '', cnpj_cliente)
         params = {
             "ID_GUID": id_guid,
             "CNPJ_DESTINO": cnpj_destino,
@@ -203,13 +205,13 @@ class HorusClients(HorusClient):
         result = await self.get("Busca_notafiscal", params=params)
         return result
 
-    async def get_customer_debits(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, data_ini: str, data_fim: str, arq_base64: str = "N") -> Any:
+    async def get_customer_debits(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, arq_base64: str = "N") -> Any:
+        cnpj_destino = re.sub(r'\D', '', cnpj_destino)
+        cnpj_cliente = re.sub(r'\D', '', cnpj_cliente)
         params = {
             "ID_GUID": id_guid,
             "CNPJ_DESTINO": cnpj_destino,
             "ID_DOC": cnpj_cliente,
-            "DATA_INI": data_ini,
-            "DATA_FIM": data_fim,
             "ARQ_BASE64": arq_base64
         }
         
