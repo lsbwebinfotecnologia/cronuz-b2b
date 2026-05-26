@@ -27,11 +27,12 @@ def login_for_access_token(
 ):
     # Prepare search inputs
     username_input = form_data.username.strip()
-    username_clean = re.sub(r"\D", "", username_input)
     
     filters = [User.email == username_input]
-    if username_clean:
-         filters.append(User.document == username_clean)
+    if "@" not in username_input:
+        username_clean = re.sub(r"\D", "", username_input)
+        if username_clean:
+            filters.append(User.document == username_clean)
 
     # Find user
     query = db.query(User).filter(or_(*filters))
@@ -49,20 +50,20 @@ def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
         
-    # Check if user is temporarily locked out
-    now = datetime.now(timezone.utc)
-    if user.locked_until and user.locked_until.replace(tzinfo=timezone.utc) > now:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Sua conta foi temporariamente bloqueada por muitas tentativas falhas. Tente novamente mais tarde.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # Check if user is temporarily locked out (PROVISIONALLY DISABLED)
+    # now = datetime.now(timezone.utc)
+    # if user.locked_until and user.locked_until.replace(tzinfo=timezone.utc) > now:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+    #         detail="Sua conta foi temporariamente bloqueada por muitas tentativas falhas. Tente novamente mais tarde.",
+    #         headers={"WWW-Authenticate": "Bearer"},
+    #     )
 
     # Verify password
     if not security.verify_password(form_data.password, user.password_hash):
         user.failed_login_attempts += 1
-        if user.failed_login_attempts >= 5:
-            user.locked_until = now + timedelta(minutes=15)
+        # if user.failed_login_attempts >= 5:
+        #     user.locked_until = now + timedelta(minutes=15)
         
         db.commit()
         db.refresh(user)
