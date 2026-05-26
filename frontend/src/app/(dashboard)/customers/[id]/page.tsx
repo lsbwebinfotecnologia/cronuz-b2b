@@ -922,6 +922,7 @@ export default function CustomerDetailsPage() {
             {([
               { id: 'overview', label: 'Visão Geral', icon: Building2 },
               { id: 'orders', label: 'Pedidos Recentes', icon: ShoppingCart },
+              { id: 'financial', label: 'Financeiro (Cronuz)', icon: DollarSign },
               { id: 'financial_erp', label: 'Financeiro ERP', icon: Banknote },
               { id: 'contacts', label: 'Contatos & Locais', icon: Users }
             ].filter(tab => {

@@ -527,7 +527,7 @@ export default function FinancialPage() {
                                         value={customerFilter}
                                         onChange={(id) => setCustomerFilter(id)}
                                         placeholder="Cliente / Fornecedor"
-                                        className="h-full [&>div]:h-full [&>div]:py-0 [&>div]:rounded-xl"
+                                        className="h-full [&>div:first-of-type]:h-full [&>div:first-of-type]:py-0 [&>div:first-of-type]:rounded-xl"
                                     />
                                 </div>
                                 
