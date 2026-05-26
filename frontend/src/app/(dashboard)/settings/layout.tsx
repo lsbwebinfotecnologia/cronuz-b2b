@@ -13,11 +13,17 @@ interface Company {
   module_b2b_native: boolean;
   module_horus_erp: boolean;
   module_products: boolean;
+  module_orders: boolean;
   module_customers: boolean;
   module_marketing: boolean;
   module_subscriptions: boolean;
   module_pdv: boolean;
   module_agents: boolean;
+  module_financial: boolean;
+  module_services: boolean;
+  module_commercial: boolean;
+  module_crm: boolean;
+  module_consignment: boolean;
   active: boolean;
 }
 
