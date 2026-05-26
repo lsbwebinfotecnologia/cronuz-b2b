@@ -88,6 +88,10 @@ class ServiceOrderBulkStatusRequest(BaseModel):
     order_ids: List[int]
     status: ServiceOrderStatus
 
+class ServiceOrderBulkDateRequest(BaseModel):
+    order_ids: List[int]
+    execution_date: date
+
 class ServiceOrderBulkBillRequest(BaseModel):
     order_ids: List[int]
     installments_count: int

@@ -1,11 +1,21 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, BookOpen, X, Loader2 } from 'lucide-react';
+import { Plus, Edit2, Trash2, BookOpen, X, Loader2, Search, Calendar, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+const formatCNPJ = (value: string) => {
+  const digits = value.replace(/\D/g, '');
+  return digits
+    .replace(/^(\d{2})(\d)/, '$1.$2')
+    .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/^(\d{2})\.(\d{3})\.(\d{3})(\d)/, '$1.$2.$3/$4')
+    .replace(/^(\d{2})\.(\d{3})\.(\d{3})\/(\d{4})(\d)/, '$1.$2.$3/$4-$5')
+    .substring(0, 18);
+};
 
 export default function BookinfoPurchasesPage() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
@@ -18,8 +28,27 @@ export default function BookinfoPurchasesPage() {
     supplier_name: '',
     document_origin: '',
     document_destination: '',
-    start_date: ''
+    start_date: '',
+    status_pedido_compra: 'AE',
+    integrador_compra: 'BOOKINFO'
   });
+
+  // Horus search state
+  const [isHorusModalOpen, setIsHorusModalOpen] = useState(false);
+  const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
+  const [horusOrders, setHorusOrders] = useState<any[]>([]);
+  const [searchingHorus, setSearchingHorus] = useState(false);
+  const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
+  const [horusFilters, setHorusFilters] = useState({
+    data_ini: '',
+    data_fim: '',
+    status: 'AE'
+  });
+
+  const formatDateInput = (dateVal: any) => {
+    if (!dateVal) return '';
+    return String(dateVal).split('T')[0];
+  };
 
   const fetchSuppliers = useCallback(async () => {
     try {
@@ -47,9 +76,11 @@ export default function BookinfoPurchasesPage() {
       setEditingId(supplier.id);
       setFormData({
         supplier_name: supplier.supplier_name || '',
-        document_origin: supplier.document_origin || '',
-        document_destination: supplier.document_destination || '',
-        start_date: supplier.start_date ? String(supplier.start_date).split('T')[0] : ''
+        document_origin: formatCNPJ(supplier.document_origin || ''),
+        document_destination: formatCNPJ(supplier.document_destination || ''),
+        start_date: supplier.start_date ? String(supplier.start_date).split('T')[0] : '',
+        status_pedido_compra: supplier.status_pedido_compra || 'AE',
+        integrador_compra: supplier.integrador_compra || 'BOOKINFO'
       });
     } else {
       setEditingId(null);
@@ -57,7 +88,9 @@ export default function BookinfoPurchasesPage() {
         supplier_name: '',
         document_origin: '',
         document_destination: '',
-        start_date: ''
+        start_date: '',
+        status_pedido_compra: 'AE',
+        integrador_compra: 'BOOKINFO'
       });
     }
     setIsModalOpen(true);
@@ -88,7 +121,10 @@ export default function BookinfoPurchasesPage() {
           },
           body: JSON.stringify(payload)
         });
-        if (!res.ok) throw new Error('Falha ao atualizar');
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || 'Falha ao atualizar o fornecedor.');
+        }
         toast.success('Fornecedor atualizado com sucesso.');
       } else {
         const res = await fetch(`${API_URL}/bookinfo-purchases/suppliers`, {
@@ -99,14 +135,17 @@ export default function BookinfoPurchasesPage() {
           },
           body: JSON.stringify(payload)
         });
-        if (!res.ok) throw new Error('Falha ao criar');
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || 'Falha ao criar o fornecedor.');
+        }
         toast.success('Fornecedor cadastrado com sucesso.');
       }
       
       handleCloseModal();
       fetchSuppliers();
-    } catch (err) {
-      toast.error('Ocorreu um erro ao salvar o fornecedor.');
+    } catch (err: any) {
+      toast.error(err.message || 'Ocorreu um erro ao salvar o fornecedor.');
     } finally {
       setSubmitting(false);
     }
@@ -125,6 +164,41 @@ export default function BookinfoPurchasesPage() {
       fetchSuppliers();
     } catch (error) {
       toast.error('Houve um erro ao deletar.');
+    }
+  };
+
+  const handleSearchHorus = async (supplierId: number, filters: any = null) => {
+    try {
+      setSearchingHorus(true);
+      setExpandedOrderId(null);
+      const token = getToken();
+      
+      const params = new URLSearchParams();
+      const queryFilters = filters || horusFilters;
+      if (queryFilters.data_ini) params.append('data_ini', queryFilters.data_ini);
+      if (queryFilters.data_fim) params.append('data_fim', queryFilters.data_fim);
+      if (queryFilters.status) params.append('status', queryFilters.status);
+
+      const res = await fetch(`${API_URL}/bookinfo-purchases/suppliers/${supplierId}/search-horus?${params.toString()}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Falha ao buscar pedidos no Horus.');
+      }
+
+      const result = await res.json();
+      setHorusOrders(result.pedidos || []);
+      toast.success(`${result.pedidos?.length || 0} pedidos encontrados.`);
+      fetchSuppliers();
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao buscar pedidos no Horus.');
+    } finally {
+      setSearchingHorus(false);
     }
   };
 
@@ -158,6 +232,8 @@ export default function BookinfoPurchasesPage() {
                 <th className="px-6 py-4 font-semibold text-slate-700 dark:text-slate-300">Fornecedor</th>
                 <th className="px-6 py-4 font-semibold text-slate-700 dark:text-slate-300">CNPJ Emissor</th>
                 <th className="px-6 py-4 font-semibold text-slate-700 dark:text-slate-300">CNPJ Destino</th>
+                <th className="px-6 py-4 font-semibold text-slate-700 dark:text-slate-300">Integrador</th>
+                <th className="px-6 py-4 font-semibold text-slate-700 dark:text-slate-300">Última Busca</th>
                 <th className="px-6 py-4 font-semibold text-slate-700 dark:text-slate-300">Data de Início</th>
                 <th className="px-6 py-4 font-semibold text-slate-700 dark:text-slate-300 text-right">Ações</th>
               </tr>
@@ -165,7 +241,7 @@ export default function BookinfoPurchasesPage() {
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60">
               {loading && (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
                     <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-[var(--color-primary-base)]" />
                     Carregando fornecedores...
                   </td>
@@ -174,7 +250,7 @@ export default function BookinfoPurchasesPage() {
               
               {!loading && suppliers.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
                     Nenhum fornecedor cadastrado ainda.
                   </td>
                 </tr>
@@ -188,13 +264,45 @@ export default function BookinfoPurchasesPage() {
                     </div>
                     {spl.supplier_name || '-'}
                   </td>
-                  <td className="px-6 py-4 text-slate-600 dark:text-slate-400 font-mono text-sm">{spl.document_origin || '-'}</td>
-                  <td className="px-6 py-4 text-slate-600 dark:text-slate-400 font-mono text-sm">{spl.document_destination || '-'}</td>
-                  <td className="px-6 py-4 text-slate-600 dark:text-slate-400">
+                  <td className="px-6 py-4 text-slate-600 dark:text-slate-400 font-mono text-sm">
+                    {spl.document_origin ? formatCNPJ(spl.document_origin) : '-'}
+                  </td>
+                  <td className="px-6 py-4 text-slate-600 dark:text-slate-400 font-mono text-sm">
+                    {spl.document_destination ? formatCNPJ(spl.document_destination) : '-'}
+                  </td>
+                  <td className="px-6 py-4 text-slate-600 dark:text-slate-400 font-mono text-sm">
+                    <span className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800/70 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-semibold animate-pulse-slow">
+                      {spl.integrador_compra || 'HORUS'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-slate-600 dark:text-slate-400 text-sm font-mono">
+                    {spl.last_sync_at ? new Date(spl.last_sync_at).toLocaleString() : '-'}
+                  </td>
+                  <td className="px-6 py-4 text-slate-600 dark:text-slate-400 text-sm">
                     {spl.start_date ? new Date(spl.start_date).toLocaleDateString() : '-'}
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <div className="flex justify-end gap-2">
+                    <div className="flex justify-end gap-1">
+                       <button 
+                          onClick={() => {
+                            setSelectedSupplier(spl);
+                            const iniDate = spl.last_sync_at ? formatDateInput(spl.last_sync_at) : (spl.start_date ? formatDateInput(spl.start_date) : formatDateInput(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)));
+                            const fimDate = formatDateInput(new Date());
+                            const currentFilters = {
+                              data_ini: iniDate,
+                              data_fim: fimDate,
+                              status: spl.status_pedido_compra || 'AE'
+                            };
+                            setHorusFilters(currentFilters);
+                            setHorusOrders([]);
+                            setIsHorusModalOpen(true);
+                            handleSearchHorus(spl.id, currentFilters);
+                          }} 
+                          className="p-2 text-slate-400 hover:text-teal-500 hover:bg-teal-500/10 rounded-lg transition-colors" 
+                          title="Consultar Pedidos Horus"
+                       >
+                         <Search className="h-4 w-4" />
+                       </button>
                        <button onClick={() => handleOpenModal(spl)} className="p-2 text-slate-400 hover:text-[var(--color-primary-base)] hover:bg-[var(--color-primary-base)]/10 rounded-lg transition-colors" title="Editar">
                          <Edit2 className="h-4 w-4" />
                        </button>
@@ -245,8 +353,8 @@ export default function BookinfoPurchasesPage() {
                   type="text"
                   className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white"
                   value={formData.document_origin}
-                  onChange={(e) => setFormData({...formData, document_origin: e.target.value})}
-                  placeholder="Apenas números" 
+                  onChange={(e) => setFormData({...formData, document_origin: formatCNPJ(e.target.value)})}
+                  placeholder="00.000.000/0000-00" 
                 />
               </div>
 
@@ -256,8 +364,8 @@ export default function BookinfoPurchasesPage() {
                   type="text"
                   className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white"
                   value={formData.document_destination}
-                  onChange={(e) => setFormData({...formData, document_destination: e.target.value})}
-                  placeholder="Apenas números" 
+                  onChange={(e) => setFormData({...formData, document_destination: formatCNPJ(e.target.value)})}
+                  placeholder="00.000.000/0000-00" 
                 />
               </div>
 
@@ -269,6 +377,36 @@ export default function BookinfoPurchasesPage() {
                   value={formData.start_date}
                   onChange={(e) => setFormData({...formData, start_date: e.target.value})}
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Integrador Compra</label>
+                  <select
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white"
+                    value={formData.integrador_compra}
+                    onChange={(e) => setFormData({...formData, integrador_compra: e.target.value})}
+                  >
+                    <option value="BOOKINFO">BOOKINFO</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Status Busca</label>
+                  <select
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white"
+                    value={formData.status_pedido_compra}
+                    onChange={(e) => setFormData({...formData, status_pedido_compra: e.target.value})}
+                  >
+                    <option value="AE">AE - Aguardando Entrega</option>
+                    <option value="AB">AB - Aberto</option>
+                    <option value="CA">CA - Cancelado</option>
+                    <option value="AP">AP - Aprovado</option>
+                    <option value="EE">EE - Em Elaboração</option>
+                    <option value="AC">AC - Acordo</option>
+                    <option value="FE">FE - Fechado</option>
+                  </select>
+                </div>
               </div>
 
               <div className="pt-4 flex justify-end gap-3 border-t border-slate-100 dark:border-slate-800/60 mt-6 pt-6">
@@ -289,6 +427,258 @@ export default function BookinfoPurchasesPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {isHorusModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
+            
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-800/60 shrink-0">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Search className="h-5 w-5 text-[var(--color-primary-base)]" />
+                  Consulta de Pedidos Horus: <span className="text-[var(--color-primary-base)]">{selectedSupplier?.supplier_name}</span>
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  CNPJ Emissor: {selectedSupplier?.document_origin ? formatCNPJ(selectedSupplier.document_origin) : '-'} | 
+                  CNPJ Destino: {selectedSupplier?.document_destination ? formatCNPJ(selectedSupplier.document_destination) : '-'}
+                </p>
+              </div>
+              <button 
+                onClick={() => setIsHorusModalOpen(false)}
+                className="text-slate-400 hover:text-slate-500 dark:hover:text-slate-300 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/20 border-b border-slate-200 dark:border-slate-800 flex flex-wrap gap-4 items-end shrink-0">
+              <div className="flex-1 min-w-[150px] space-y-1">
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 block">Data Inicial</label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input 
+                    type="date" 
+                    className="w-full bg-white border border-slate-200 dark:border-slate-700 dark:bg-slate-900/50 dark:text-white rounded-xl pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)]"
+                    value={horusFilters.data_ini}
+                    onChange={(e) => setHorusFilters({...horusFilters, data_ini: e.target.value})}
+                  />
+                </div>
+              </div>
+              
+              <div className="flex-1 min-w-[150px] space-y-1">
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 block">Data Final</label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input 
+                    type="date" 
+                    className="w-full bg-white border border-slate-200 dark:border-slate-700 dark:bg-slate-900/50 dark:text-white rounded-xl pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)]"
+                    value={horusFilters.data_fim}
+                    onChange={(e) => setHorusFilters({...horusFilters, data_fim: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="w-[150px] space-y-1">
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 block">Status Pedido</label>
+                <select
+                  className="w-full bg-white border border-slate-200 dark:border-slate-700 dark:bg-slate-900/50 dark:text-white rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)]"
+                  value={horusFilters.status}
+                  onChange={(e) => setHorusFilters({...horusFilters, status: e.target.value})}
+                >
+                  <option value="AE">AE - Aguardando Entrega</option>
+                  <option value="AB">AB - Aberto</option>
+                  <option value="CA">CA - Cancelado</option>
+                  <option value="AP">AP - Aprovado</option>
+                  <option value="EE">EE - Em Elaboração</option>
+                  <option value="AC">AC - Acordo</option>
+                  <option value="FE">FE - Fechado</option>
+                </select>
+              </div>
+
+              <button
+                onClick={() => handleSearchHorus(selectedSupplier.id)}
+                disabled={searchingHorus}
+                className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-semibold py-2 px-5 rounded-xl transition-all disabled:opacity-50 flex items-center gap-2 h-[38px] shrink-0"
+              >
+                <RefreshCw className={`h-4 w-4 ${searchingHorus ? 'animate-spin' : ''}`} />
+                {searchingHorus ? 'Pesquisando...' : 'Pesquisar'}
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {searchingHorus && (
+                <div className="py-20 text-center text-slate-500">
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-[var(--color-primary-base)]" />
+                  Buscando pedidos de compra no ERP Horus...
+                </div>
+              )}
+
+              {!searchingHorus && horusOrders.length === 0 && (
+                <div className="py-20 text-center text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                  Nenhum pedido de compra localizado para os filtros selecionados.
+                </div>
+              )}
+
+              {!searchingHorus && horusOrders.length > 0 && horusOrders.map((order: any, idx: number) => {
+                const isExpanded = expandedOrderId === order.COD_PEDIDO;
+                
+                const getStatusBadge = (status: string) => {
+                  const statusMap: Record<string, { label: string; class: string }> = {
+                    AE: { label: 'Aguardando Entrega', class: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' },
+                    AB: { label: 'Aberto', class: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' },
+                    CA: { label: 'Cancelado', class: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' },
+                    AP: { label: 'Aprovado', class: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' },
+                    EE: { label: 'Em Elaboração', class: 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300' },
+                    AC: { label: 'Acordo', class: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300' },
+                    FE: { label: 'Fechado', class: 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300' }
+                  };
+                  const config = statusMap[status] || { label: status, class: 'bg-slate-100 text-slate-800' };
+                  return (
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${config.class}`}>
+                      {config.label}
+                    </span>
+                  );
+                };
+
+                return (
+                  <div key={order.COD_PEDIDO || idx} className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900/50 hover:border-slate-300 dark:hover:border-slate-700 transition-colors">
+                    <div 
+                      onClick={() => setExpandedOrderId(isExpanded ? null : order.COD_PEDIDO)}
+                      className="p-4 flex flex-wrap items-center justify-between gap-4 cursor-pointer select-none bg-slate-50/50 dark:bg-slate-800/10"
+                    >
+                      <div className="flex flex-wrap items-center gap-6">
+                        <div>
+                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Código Pedido</p>
+                          <p className="text-sm font-bold text-slate-900 dark:text-white font-mono">#{order.COD_PEDIDO}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Data Inclusão</p>
+                          <p className="text-sm text-slate-700 dark:text-slate-300 font-medium">{order.DAT_PEDIDO}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</p>
+                          <p className="mt-0.5">{getStatusBadge(order.STATUS_PEDIDO_COMPRA)}</p>
+                        </div>
+                        {order.COMPRA_CONSIG === 'S' && (
+                          <div>
+                            <span className="px-2 py-0.5 bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300 rounded text-[10px] font-semibold">Consignado</span>
+                          </div>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-4 text-right ml-auto">
+                        <div>
+                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Valor Total</p>
+                          <p className="text-sm font-bold text-[var(--color-primary-base)]">R$ {order.VLR_TOTAL_PEDIDO}</p>
+                        </div>
+                        <div>
+                          {isExpanded ? <ChevronUp className="h-5 w-5 text-slate-400" /> : <ChevronDown className="h-5 w-5 text-slate-400" />}
+                        </div>
+                      </div>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="p-6 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/40 space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
+                          <div className="bg-slate-50 dark:bg-slate-800/20 p-4 rounded-xl space-y-2">
+                            <p className="font-bold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 pb-1">Metadados do Pedido</p>
+                            <div className="grid grid-cols-2 gap-y-1 text-xs">
+                              <span className="text-slate-400">Total Desconto:</span>
+                              <span className="font-medium text-slate-800 dark:text-slate-200">R$ {order.VLR_TOTAL_DESCONTO || '0,00'}</span>
+                              <span className="text-slate-400">Qtd. Itens:</span>
+                              <span className="font-medium text-slate-800 dark:text-slate-200">{order.QTD_ITENS}</span>
+                              <span className="text-slate-400">Compra Consig.:</span>
+                              <span className="font-medium text-slate-800 dark:text-slate-200">{order.COMPRA_CONSIG === 'S' ? 'Sim' : 'Não'}</span>
+                              <span className="text-slate-400">Gerar Pendência:</span>
+                              <span className="font-medium text-slate-800 dark:text-slate-200">{order.GERAR_PEND === 'S' ? 'Sim' : 'Não'}</span>
+                              <span className="text-slate-400 col-span-2 mt-1 block">Obs:</span>
+                              <span className="col-span-2 text-slate-500 italic mt-0.5">{order.OBS || '(nenhuma)'}</span>
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-50 dark:bg-slate-800/20 p-4 rounded-xl space-y-2">
+                            <p className="font-bold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 pb-1">Filial Origem (Horus)</p>
+                            {order.DADOS_CADASTRAIS_ORIGEM?.[0] ? (
+                              <div className="text-xs space-y-1">
+                                <p className="font-bold text-slate-700 dark:text-slate-300">{order.DADOS_CADASTRAIS_ORIGEM[0].NOM_FILIAL}</p>
+                                <p className="text-slate-500">CNPJ: {formatCNPJ(order.DADOS_CADASTRAIS_ORIGEM[0].CNPJ)}</p>
+                                <p className="text-slate-500">End: {order.DADOS_CADASTRAIS_ORIGEM[0].END_FILIAL}, {order.DADOS_CADASTRAIS_ORIGEM[0].NUM_END}</p>
+                                <p className="text-slate-500">{order.DADOS_CADASTRAIS_ORIGEM[0].MUNICIPIO} - {order.DADOS_CADASTRAIS_ORIGEM[0].UF}</p>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-slate-400">Sem dados cadastrais.</p>
+                            )}
+                          </div>
+
+                          <div className="bg-slate-50 dark:bg-slate-800/20 p-4 rounded-xl space-y-2">
+                            <p className="font-bold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 pb-1">Fornecedor Destino</p>
+                            {order.DADOS_CADASTRAIS_DESTINO?.[0] ? (
+                              <div className="text-xs space-y-1">
+                                <p className="font-bold text-slate-700 dark:text-slate-300">{order.DADOS_CADASTRAIS_DESTINO[0].NOM_FORNECEDOR}</p>
+                                <p className="text-slate-500">CNPJ: {formatCNPJ(order.DADOS_CADASTRAIS_DESTINO[0].CNPJ)}</p>
+                                <p className="text-slate-500">End: {order.DADOS_CADASTRAIS_DESTINO[0].END_FORNECEDOR}, {order.DADOS_CADASTRAIS_DESTINO[0].NUM_END}</p>
+                                <p className="text-slate-500">{order.DADOS_CADASTRAIS_DESTINO[0].MUNICIPIO} - {order.DADOS_CADASTRAIS_DESTINO[0].UF}</p>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-slate-400">Sem dados cadastrais.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <p className="font-bold text-sm text-slate-900 dark:text-white">Itens do Pedido</p>
+                          <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden overflow-x-auto">
+                            <table className="w-full text-xs text-left min-w-[600px]">
+                              <thead className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800">
+                                <tr>
+                                  <th className="px-4 py-2 text-slate-700 dark:text-slate-300">Item / Editora</th>
+                                  <th className="px-4 py-2 text-slate-700 dark:text-slate-300">Cód / ISBN</th>
+                                  <th className="px-4 py-2 text-right text-slate-700 dark:text-slate-300">Qtd Pedida</th>
+                                  <th className="px-4 py-2 text-right text-slate-700 dark:text-slate-300">Preço Unit</th>
+                                  <th className="px-4 py-2 text-right text-slate-700 dark:text-slate-300">Desconto</th>
+                                  <th className="px-4 py-2 text-right text-slate-700 dark:text-slate-300">Valor Líq</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-150 dark:divide-slate-800/40">
+                                {order.ITENS?.map((item: any, itemIdx: number) => (
+                                  <tr key={item.COD_ITEM || itemIdx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/10">
+                                    <td className="px-4 py-2">
+                                      <p className="font-semibold text-slate-900 dark:text-white">{item.NOM_ITEM}</p>
+                                      <p className="text-slate-400 text-[10px]">{item.NOM_EDITORA}</p>
+                                    </td>
+                                    <td className="px-4 py-2 font-mono text-[10px]">
+                                      <p>{item.COD_ITEM}</p>
+                                      <p className="text-slate-400">{item.COD_BARRA_ITEM || item.COD_ISBN_ITEM}</p>
+                                    </td>
+                                    <td className="px-4 py-2 text-right font-medium">{item.QT_PEDIDA}</td>
+                                    <td className="px-4 py-2 text-right text-slate-500">R$ {item.VLR_PRECO}</td>
+                                    <td className="px-4 py-2 text-right text-slate-500">{item.PERC_DESCONTO}%</td>
+                                    <td className="px-4 py-2 text-right font-bold text-slate-800 dark:text-slate-200">R$ {item.VLR_LIQUIDO}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 dark:bg-slate-800/20 border-t border-slate-100 dark:border-slate-800/60 flex justify-end shrink-0">
+              <button 
+                type="button" 
+                onClick={() => setIsHorusModalOpen(false)}
+                className="px-5 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-700"
+              >
+                Fechar
+              </button>
+            </div>
           </div>
         </div>
       )}

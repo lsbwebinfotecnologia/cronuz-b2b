@@ -478,7 +478,7 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                         {inst.number}
                                     </div>
                                     <div>
-                                        <p className="font-bold text-slate-900 dark:text-white">Vencimento: {new Date(inst.due_date).toLocaleDateString('pt-BR')}</p>
+                                        <p className="font-bold text-slate-900 dark:text-white">Vencimento: {new Date(inst.due_date + "T12:00:00").toLocaleDateString('pt-BR')}</p>
                                         <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
                                             Valor: {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(inst.amount)}
                                         </p>

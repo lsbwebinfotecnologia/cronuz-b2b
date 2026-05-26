@@ -89,11 +89,17 @@ export default function CompanyHorusPage() {
       module_b2b_native: company.module_b2b_native,
       module_horus_erp: !currentValue,
       module_products: company.module_products,
+      module_orders: company.module_orders,
       module_customers: company.module_customers,
       module_marketing: company.module_marketing,
       module_subscriptions: company.module_subscriptions,
       module_pdv: company.module_pdv,
-      module_agents: company.module_agents
+      module_agents: company.module_agents,
+      module_financial: company.module_financial,
+      module_services: company.module_services,
+      module_commercial: company.module_commercial,
+      module_crm: company.module_crm,
+      module_consignment: company.module_consignment
     };
 
     if (!currentValue === true) {

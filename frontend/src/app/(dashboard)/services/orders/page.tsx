@@ -82,6 +82,9 @@ export default function ServiceOrdersPage() {
 
     const [selectedPrintPointId, setSelectedPrintPointId] = useState<number | ''>('');
     const [sefazLog, setSefazLog] = useState<{status: number|null, body: string, xml: string} | null>(null);
+    const [isBulkDateModalOpen, setIsBulkDateModalOpen] = useState(false);
+    const [bulkExecutionDate, setBulkExecutionDate] = useState(new Date().toISOString().split('T')[0]);
+    const [updatingBulk, setUpdatingBulk] = useState(false);
 
     useEffect(() => {
         fetchOrders();
@@ -280,6 +283,40 @@ export default function ServiceOrdersPage() {
                 toast.error(error.detail || 'Erro ao excluir lote de O.S.');
             }
         } catch (e) { toast.error('Servidor offline'); }
+    };
+
+    const handleBulkDateUpdate = async () => {
+        if (!bulkExecutionDate) {
+            toast.error("Selecione uma data para continuar!");
+            return;
+        }
+        setUpdatingBulk(true);
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/bulk/execution-date`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${getToken()}`
+                },
+                body: JSON.stringify({
+                    order_ids: selectedOrders,
+                    execution_date: bulkExecutionDate
+                })
+            });
+            if (res.ok) {
+                toast.success(`Data limite de ${selectedOrders.length} O.S. alterada com sucesso!`);
+                setSelectedOrders([]);
+                setIsBulkDateModalOpen(false);
+                fetchOrders();
+            } else {
+                const err = await res.json();
+                toast.error(err.detail || "Erro ao alterar data em lote.");
+            }
+        } catch (error) {
+            toast.error("Erro de rede ao alterar datas.");
+        } finally {
+            setUpdatingBulk(false);
+        }
     };
 
     const prepareBulkBillGrouped = () => {
@@ -736,6 +773,13 @@ export default function ServiceOrdersPage() {
                                 <option value="delete">Excluir Lote (Não Faturadas)</option>
                             </select>
                         </div>
+                        
+                        <button 
+                            onClick={() => setIsBulkDateModalOpen(true)}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition shadow-sm flex items-center gap-2 w-full md:w-auto justify-center"
+                        >
+                            <Calendar className="w-4 h-4"/> Alterar Datas
+                        </button>
                         
                         <div className="hidden md:block w-px h-8 bg-indigo-200 dark:bg-indigo-800/60"></div>
                         
@@ -1420,6 +1464,59 @@ export default function ServiceOrdersPage() {
                             >
                                 Ciente, Fechar
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {/* BULK DATE EDIT MODAL */}
+            {isBulkDateModalOpen && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200">
+                        <div className="flex items-center justify-between p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                                    <Calendar className="w-5 h-5 text-indigo-500" /> Alterar Datas em Lote
+                                </h3>
+                                <p className="text-xs text-slate-500 mt-1">Definir nova data limite para as O.S. selecionadas</p>
+                            </div>
+                            <button onClick={() => setIsBulkDateModalOpen(false)} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-400">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                                    Nova Data Limite de Execução
+                                </label>
+                                <input
+                                    type="date"
+                                    value={bulkExecutionDate}
+                                    onChange={(e) => setBulkExecutionDate(e.target.value)}
+                                    className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 text-slate-700 dark:text-slate-300 font-medium"
+                                />
+                            </div>
+                            
+                            <p className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-lg border border-slate-200/50 dark:border-slate-800">
+                                Nota: Esta alteração atualizará a data limite de execução de todas as <strong>{selectedOrders.length}</strong> ordens de serviço selecionadas.
+                            </p>
+
+                            <div className="flex gap-3 pt-4 border-t border-slate-100 dark:border-slate-800 mt-6">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsBulkDateModalOpen(false)}
+                                    className="flex-1 py-2.5 text-center px-4 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 font-medium rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleBulkDateUpdate}
+                                    disabled={updatingBulk}
+                                    className="flex-1 py-2.5 bg-indigo-600 text-white text-center px-4 font-bold rounded-xl hover:bg-indigo-700 transition shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
+                                >
+                                    {updatingBulk ? 'Processando...' : 'Confirmar'}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

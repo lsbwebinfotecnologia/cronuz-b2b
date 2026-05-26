@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from typing import Optional
 from app.db.session import engine, get_db, SessionLocal
 from app.models import company as company_models
 from app.models import user as user_models
@@ -291,20 +292,20 @@ class StatusUpdate(BaseModel):
     active: bool
 
 class ModuleUpdate(BaseModel):
-    module_b2b_native: bool
-    module_horus_erp: bool
-    module_products: bool
-    module_orders: bool
-    module_customers: bool
-    module_marketing: bool
-    module_subscriptions: bool
-    module_pdv: bool
-    module_agents: bool
-    module_financial: bool
-    module_services: bool
-    module_commercial: bool
-    module_crm: bool
-    module_consignment: bool
+    module_b2b_native: Optional[bool] = None
+    module_horus_erp: Optional[bool] = None
+    module_products: Optional[bool] = None
+    module_orders: Optional[bool] = None
+    module_customers: Optional[bool] = None
+    module_marketing: Optional[bool] = None
+    module_subscriptions: Optional[bool] = None
+    module_pdv: Optional[bool] = None
+    module_agents: Optional[bool] = None
+    module_financial: Optional[bool] = None
+    module_services: Optional[bool] = None
+    module_commercial: Optional[bool] = None
+    module_crm: Optional[bool] = None
+    module_consignment: Optional[bool] = None
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(
@@ -476,20 +477,9 @@ def update_company_modules(
     if company is None:
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
     
-    company.module_b2b_native = module_update.module_b2b_native
-    company.module_horus_erp = module_update.module_horus_erp
-    company.module_products = module_update.module_products
-    company.module_orders = module_update.module_orders
-    company.module_customers = module_update.module_customers
-    company.module_marketing = module_update.module_marketing
-    company.module_subscriptions = module_update.module_subscriptions
-    company.module_pdv = module_update.module_pdv
-    company.module_agents = module_update.module_agents
-    company.module_financial = module_update.module_financial
-    company.module_services = module_update.module_services
-    company.module_commercial = module_update.module_commercial
-    company.module_crm = module_update.module_crm
-    company.module_consignment = module_update.module_consignment
+    update_data = module_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(company, key, value)
     
     db.commit()
     db.refresh(company)

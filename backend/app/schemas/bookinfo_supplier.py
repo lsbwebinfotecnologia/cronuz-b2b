@@ -7,6 +7,9 @@ class SupplierBase(BaseModel):
     document_origin: Optional[str] = None
     document_destination: Optional[str] = None
     start_date: Optional[datetime] = None
+    status_pedido_compra: Optional[str] = 'AE'
+    integrador_compra: Optional[str] = 'BOOKINFO'
+    last_sync_at: Optional[datetime] = None
 
 class SupplierCreate(SupplierBase):
     pass

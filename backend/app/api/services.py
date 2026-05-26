@@ -11,7 +11,8 @@ from app.models.service import Service, ServiceOrder, ServiceOrderStatus
 from app.schemas.service import (
     ServiceCreate, ServiceUpdate, ServiceResponse,
     ServiceOrderCreate, ServiceOrderUpdate, ServiceOrderResponse,
-    ServiceOrderBillRequest, ServiceOrderBulkStatusRequest, ServiceOrderBulkBillRequest, ServiceOrderBulkDeleteRequest
+    ServiceOrderBillRequest, ServiceOrderBulkStatusRequest, ServiceOrderBulkBillRequest, ServiceOrderBulkDeleteRequest,
+    ServiceOrderBulkDateRequest
 )
 
 router = APIRouter(tags=["services"])
@@ -331,7 +332,7 @@ def update_service_order(
         needs_financial_check = True
 
     if ("service_id" in update_data and update_data["service_id"] != order.service_id) or \
-       ("custom_description" in update_data and update_data["custom_description"] != order.custom_description):
+       ("custom_description" in update_data and (update_data["custom_description"] or "") != (order.custom_description or "")):
         # Trava Fiscal
         from app.models.service import ServiceOrderNfseStatus
         if order.status_nfse in [ServiceOrderNfseStatus.ISSUED, ServiceOrderNfseStatus.PROCESSING]:
@@ -373,6 +374,22 @@ def update_bulk_service_order_status(
         order.status = bulk_req.status
     db.commit()
     return {"status": "success", "updated": len(orders)}
+
+@router.patch("/service-orders/bulk/execution-date")
+def update_bulk_service_order_date(
+    bulk_req: ServiceOrderBulkDateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    orders = db.query(ServiceOrder).filter(
+        ServiceOrder.id.in_(bulk_req.order_ids),
+        ServiceOrder.company_id == current_user.company_id
+    ).all()
+    for order in orders:
+        order.execution_date = bulk_req.execution_date
+    db.commit()
+    return {"status": "success", "updated": len(orders)}
+
 
 
 
