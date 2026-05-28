@@ -552,7 +552,7 @@ async def sync_transmission(
         if bi_item:
             status_item = bi_item.get("status")
             t_item.situacao_retorno = status_item
-            t_item.obs_item = f"Bookinfo: {status_item}" if status_item else "Sem status"
+            t_item.obs_item = status_item if status_item else ""
             t_item.synced_at = datetime.utcnow()
             
             if horus_client and status_item:

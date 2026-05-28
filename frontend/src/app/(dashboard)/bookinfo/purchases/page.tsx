@@ -22,14 +22,8 @@ const formatCNPJ = (value: string) => {
 };
 
 const isTransmissionFinalized = (t: any) => {
-  if (!t) return false;
-  if (t.status !== 'SYNCED') return false;
-  if (!t.items || t.items.length === 0) return false;
-  
-  const finalizedStatuses = ['RESERVADO_TOTAL', 'ATENDIDO', 'SEM_ESTOQUE', 'CANCELADO', 'REJEITADO'];
-  return t.items.every((item: any) => 
-    item.situacao_retorno && finalizedStatuses.includes(item.situacao_retorno)
-  );
+  // Provisoriamente desabilitado para testes (sempre permitindo sincronizar)
+  return false;
 };
 
 export default function BookinfoPurchasesPage() {
