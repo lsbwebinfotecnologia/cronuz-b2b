@@ -219,6 +219,10 @@ async def search_horus_orders(
     except HorusConfigurationError as e:
         raise HTTPException(status_code=400, detail=f"Erro de Configuração do Horus: {str(e)}")
 
+    if not getattr(client._settings, 'horus_legacy_pagination', False):
+        params["OFFSET"] = 0
+        params["LIMIT"] = 10000
+
     try:
         result = await client.get("Busca_PedidosCompra", params=params)
         
