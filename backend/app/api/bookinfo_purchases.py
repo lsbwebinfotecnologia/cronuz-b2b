@@ -41,16 +41,17 @@ def create_supplier(
     doc_origin_clean = re.sub(r"\D", "", supplier_in.document_origin) if supplier_in.document_origin else None
     doc_dest_clean = re.sub(r"\D", "", supplier_in.document_destination) if supplier_in.document_destination else None
 
-    # Check for duplicate CNPJ Destino within same company/seller
-    if doc_dest_clean:
+    # Check for duplicate combination of CNPJ Destino + CNPJ Emissor within same company/seller
+    if doc_dest_clean and doc_origin_clean:
         existing = db.query(BookinfoSupplier).filter(
             BookinfoSupplier.company_id == current_user.company_id,
-            BookinfoSupplier.document_destination == doc_dest_clean
+            BookinfoSupplier.document_destination == doc_dest_clean,
+            BookinfoSupplier.document_origin == doc_origin_clean
         ).first()
         if existing:
             raise HTTPException(
                 status_code=400,
-                detail="O CNPJ de Destino já está cadastrado para este seller."
+                detail="O CNPJ de Destino com este Emissor já está cadastrado para este seller."
             )
 
     new_supplier = BookinfoSupplier(
@@ -87,24 +88,30 @@ def update_supplier(
 
     if supplier_in.supplier_name is not None:
         supplier.supplier_name = supplier_in.supplier_name
+    new_doc_origin = supplier.document_origin
     if supplier_in.document_origin is not None:
-        supplier.document_origin = re.sub(r"\D", "", supplier_in.document_origin) if supplier_in.document_origin else None
+        new_doc_origin = re.sub(r"\D", "", supplier_in.document_origin) if supplier_in.document_origin else None
+
+    new_doc_dest = supplier.document_destination
     if supplier_in.document_destination is not None:
-        doc_dest_clean = re.sub(r"\D", "", supplier_in.document_destination) if supplier_in.document_destination else None
-        
-        # Check duplicate CNPJ Destino within same company/seller
-        if doc_dest_clean:
-            existing = db.query(BookinfoSupplier).filter(
-                BookinfoSupplier.company_id == current_user.company_id,
-                BookinfoSupplier.document_destination == doc_dest_clean,
-                BookinfoSupplier.id != supplier_id
-            ).first()
-            if existing:
-                raise HTTPException(
-                    status_code=400,
-                    detail="O CNPJ de Destino já está cadastrado para este seller."
-                )
-        supplier.document_destination = doc_dest_clean
+        new_doc_dest = re.sub(r"\D", "", supplier_in.document_destination) if supplier_in.document_destination else None
+
+    # Check for duplicate combination of CNPJ Destino + CNPJ Emissor within same company/seller
+    if new_doc_dest and new_doc_origin:
+        existing = db.query(BookinfoSupplier).filter(
+            BookinfoSupplier.company_id == current_user.company_id,
+            BookinfoSupplier.document_destination == new_doc_dest,
+            BookinfoSupplier.document_origin == new_doc_origin,
+            BookinfoSupplier.id != supplier_id
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail="O CNPJ de Destino com este Emissor já está cadastrado para este seller."
+            )
+
+    supplier.document_origin = new_doc_origin
+    supplier.document_destination = new_doc_dest
     if supplier_in.start_date is not None:
         supplier.start_date = supplier_in.start_date
     if supplier_in.status_pedido_compra is not None:
