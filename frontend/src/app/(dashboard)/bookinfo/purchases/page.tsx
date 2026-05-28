@@ -100,6 +100,11 @@ export default function BookinfoPurchasesPage() {
 
   const handleSendToBookinfo = async (order: any) => {
     if (!selectedSupplier) return;
+    const compraConsig = (order.COMPRA_CONSIG || '').toString().trim().toUpperCase();
+    if (compraConsig !== 'N' && compraConsig !== 'S') {
+      toast.error(`O pedido não é uma compra normal (N) nem uma consignação (S) (COMPRA_CONSIG=${order.COMPRA_CONSIG || 'vazio'}).`);
+      return;
+    }
     try {
       setSendingOrderId(order.COD_PEDIDO);
       const token = getToken();
@@ -784,6 +789,7 @@ export default function BookinfoPurchasesPage() {
                     );
                   };
 
+                  const isConsigValid = order.COMPRA_CONSIG === 'N' || order.COMPRA_CONSIG === 'S';
                   return (
                     <div key={order.COD_PEDIDO || idx} className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden bg-white dark:bg-slate-900/40 hover:border-slate-300 dark:hover:border-slate-700 transition-all duration-200 p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 shadow-sm">
                       <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
@@ -798,6 +804,12 @@ export default function BookinfoPurchasesPage() {
                         <div>
                           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Status Horus</p>
                           <p className="mt-0.5">{getStatusBadge(order.STATUS_PEDIDO_COMPRA)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Consignado (Horus)</p>
+                          <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 mt-0.5">
+                            {order.COMPRA_CONSIG === 'S' ? 'Sim' : order.COMPRA_CONSIG === 'N' ? 'Não' : `Inválido (${order.COMPRA_CONSIG || 'Nulo'})`}
+                          </p>
                         </div>
                         <div>
                           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Qtd Itens</p>
@@ -819,6 +831,11 @@ export default function BookinfoPurchasesPage() {
                         
                         {t ? (
                           getTransmissionStatusBadge(t.status)
+                        ) : !isConsigValid ? (
+                          <div className="flex items-center gap-1.5 text-red-500 text-xs font-semibold bg-red-500/10 px-3 py-2 rounded-xl border border-red-500/20" title={`Valor de COMPRA_CONSIG (${order.COMPRA_CONSIG || 'Vazio'}) não é N ou S`}>
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                            Não é Compra/Consig
+                          </div>
                         ) : (
                           <button
                             onClick={() => handleSendToBookinfo(order)}
@@ -1152,18 +1169,33 @@ export default function BookinfoPurchasesPage() {
                   </div>
                   
                   {selectedOrder.horusOrder && (
-                    <button
-                      onClick={() => handleSendToBookinfo(selectedOrder.horusOrder)}
-                      disabled={sendingOrderId === selectedOrder.horusOrder.COD_PEDIDO}
-                      className="w-full py-2.5 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-lg shadow-[var(--color-primary-base)]/25"
-                    >
-                      {sendingOrderId === selectedOrder.horusOrder.COD_PEDIDO ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    (() => {
+                      const isConsigValid = selectedOrder.horusOrder.COMPRA_CONSIG === 'N' || selectedOrder.horusOrder.COMPRA_CONSIG === 'S';
+                      return !isConsigValid ? (
+                        <div className="bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 p-3 rounded-xl text-xs space-y-1.5 font-semibold">
+                          <p className="flex items-center gap-1.5 font-bold text-red-700 dark:text-red-300">
+                            <AlertTriangle className="h-4 w-4 shrink-0" />
+                            Pedido Não Enviável
+                          </p>
+                          <p className="font-normal text-slate-600 dark:text-slate-450">
+                            O campo COMPRA_CONSIG deste pedido é "{selectedOrder.horusOrder.COMPRA_CONSIG || 'vazio'}". Apenas pedidos de compra normal (N) ou consignação (S) podem ser integrados à Bookinfo.
+                          </p>
+                        </div>
                       ) : (
-                        <RefreshCw className="h-3.5 w-3.5 rotate-45" />
-                      )}
-                      Enviar para Bookinfo
-                    </button>
+                        <button
+                          onClick={() => handleSendToBookinfo(selectedOrder.horusOrder)}
+                          disabled={sendingOrderId === selectedOrder.horusOrder.COD_PEDIDO}
+                          className="w-full py-2.5 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-lg shadow-[var(--color-primary-base)]/25"
+                        >
+                          {sendingOrderId === selectedOrder.horusOrder.COD_PEDIDO ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-3.5 w-3.5 rotate-45" />
+                          )}
+                          Enviar para Bookinfo
+                        </button>
+                      );
+                    })()
                   )}
                 </div>
               )}

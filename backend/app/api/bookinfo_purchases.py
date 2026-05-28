@@ -332,6 +332,14 @@ async def send_transmission(
     cod_pedido = req_body.cod_pedido
     order_data = req_body.order_data
 
+    # Validate COMPRA_CONSIG to only allow 'N' or 'S'
+    compra_consig_val = str(order_data.get("COMPRA_CONSIG") or "").strip().upper()
+    if compra_consig_val not in ["N", "S"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"O pedido não é uma compra normal (N) nem uma consignação (S) no Horus (COMPRA_CONSIG={compra_consig_val or 'vazio'})."
+        )
+
     # Check duplicate SENT transmissions to prevent duplicate posting
     existing = db.query(BookinfoTransmission).filter(
         BookinfoTransmission.company_id == current_user.company_id,
@@ -378,7 +386,7 @@ async def send_transmission(
             "preco_capa": preco
         })
 
-    compra_consig = "S" if order_data.get("COMPRA_CONSIG") == "S" else "C"
+    compra_consig = "S" if compra_consig_val == "S" else "C"
 
     bookinfo_payload = {
         "formatoEncomenda": "MODELO_1",
