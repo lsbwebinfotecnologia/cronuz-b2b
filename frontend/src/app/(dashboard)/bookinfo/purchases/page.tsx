@@ -42,8 +42,94 @@ export default function BookinfoPurchasesPage() {
   const [horusFilters, setHorusFilters] = useState({
     data_ini: '',
     data_fim: '',
-    status: 'AE'
+    status: 'AE',
+    transmitido: 'N'
   });
+
+  const [transmissions, setTransmissions] = useState<any[]>([]);
+  const [loadingTransmissions, setLoadingTransmissions] = useState(false);
+  const [sendingOrderId, setSendingOrderId] = useState<number | null>(null);
+  const [syncingTransmissionId, setSyncingTransmissionId] = useState<number | null>(null);
+
+  const fetchTransmissions = useCallback(async (supplierId: number) => {
+    try {
+      setLoadingTransmissions(true);
+      const token = getToken();
+      const res = await fetch(`${API_URL}/bookinfo-purchases/suppliers/${supplierId}/transmissions`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Falha ao buscar transmissões.');
+      const data = await res.json();
+      setTransmissions(data);
+    } catch (error) {
+      console.error('Erro ao buscar transmissões:', error);
+    } finally {
+      setLoadingTransmissions(false);
+    }
+  }, []);
+
+  const handleSendToBookinfo = async (order: any) => {
+    if (!selectedSupplier) return;
+    try {
+      setSendingOrderId(order.COD_PEDIDO);
+      const token = getToken();
+      const res = await fetch(`${API_URL}/bookinfo-purchases/suppliers/${selectedSupplier.id}/transmissions/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          cod_pedido: order.COD_PEDIDO,
+          order_data: order
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Falha ao enviar pedido.');
+      }
+
+      toast.success(data.message || 'Pedido enviado com sucesso para a Bookinfo.');
+      
+      // Refresh transmissions and search
+      await fetchTransmissions(selectedSupplier.id);
+      handleSearchHorus(selectedSupplier.id);
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao enviar pedido para Bookinfo.');
+      if (selectedSupplier) {
+        fetchTransmissions(selectedSupplier.id);
+      }
+    } finally {
+      setSendingOrderId(null);
+    }
+  };
+
+  const handleSyncTransmission = async (transmissionId: number) => {
+    if (!selectedSupplier) return;
+    try {
+      setSyncingTransmissionId(transmissionId);
+      const token = getToken();
+      const res = await fetch(`${API_URL}/bookinfo-purchases/suppliers/${selectedSupplier.id}/transmissions/${transmissionId}/sync`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Falha ao sincronizar.');
+      }
+
+      toast.success(data.message || 'Retorno sincronizado com sucesso.');
+      await fetchTransmissions(selectedSupplier.id);
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao sincronizar retorno.');
+    } finally {
+      setSyncingTransmissionId(null);
+    }
+  };
 
   const formatDateInput = (dateVal: any) => {
     if (!dateVal) return '';
@@ -178,6 +264,7 @@ export default function BookinfoPurchasesPage() {
       if (queryFilters.data_ini) params.append('data_ini', queryFilters.data_ini);
       if (queryFilters.data_fim) params.append('data_fim', queryFilters.data_fim);
       if (queryFilters.status) params.append('status', queryFilters.status);
+      if (queryFilters.transmitido) params.append('transmitido', queryFilters.transmitido);
 
       const res = await fetch(`${API_URL}/bookinfo-purchases/suppliers/${supplierId}/search-horus?${params.toString()}`, {
         method: 'POST',
@@ -291,11 +378,13 @@ export default function BookinfoPurchasesPage() {
                             const currentFilters = {
                               data_ini: iniDate,
                               data_fim: fimDate,
-                              status: spl.status_pedido_compra || 'AE'
+                              status: spl.status_pedido_compra || 'AE',
+                              transmitido: 'N'
                             };
                             setHorusFilters(currentFilters);
                             setHorusOrders([]);
                             setIsHorusModalOpen(true);
+                            fetchTransmissions(spl.id);
                             handleSearchHorus(spl.id, currentFilters);
                           }} 
                           className="p-2 text-slate-400 hover:text-teal-500 hover:bg-teal-500/10 rounded-lg transition-colors" 
@@ -498,6 +587,19 @@ export default function BookinfoPurchasesPage() {
                 </select>
               </div>
 
+              <div className="w-[150px] space-y-1">
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 block">Transmitido</label>
+                <select
+                  className="w-full bg-white border border-slate-200 dark:border-slate-700 dark:bg-slate-900/50 dark:text-white rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)]"
+                  value={horusFilters.transmitido}
+                  onChange={(e) => setHorusFilters({...horusFilters, transmitido: e.target.value})}
+                >
+                  <option value="N">Não Transmitidos</option>
+                  <option value="S">Transmitidos</option>
+                  <option value="T">Todos</option>
+                </select>
+              </div>
+
               <button
                 onClick={() => handleSearchHorus(selectedSupplier.id)}
                 disabled={searchingHorus}
@@ -569,8 +671,90 @@ export default function BookinfoPurchasesPage() {
                         )}
                       </div>
                       
-                      <div className="flex items-center gap-4 text-right ml-auto">
-                        <div>
+                      <div className="flex items-center gap-4 text-right ml-auto flex-wrap sm:flex-nowrap">
+                        {(() => {
+                          const t = transmissions.find((tx: any) => tx.cod_pedido === order.COD_PEDIDO);
+                          if (t) {
+                            if (t.status === 'SENT') {
+                              return (
+                                <span className="px-2.5 py-1 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 text-xs font-semibold">
+                                  Enviado
+                                </span>
+                              );
+                            }
+                            if (t.status === 'SYNCED') {
+                              return (
+                                <span className="px-2.5 py-1 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 text-xs font-semibold">
+                                  Sincronizado
+                                </span>
+                              );
+                            }
+                            if (t.status === 'ERROR') {
+                              return (
+                                <span className="px-2.5 py-1 rounded bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300 text-xs font-semibold" title={t.error_message}>
+                                  Erro Envio
+                                </span>
+                              );
+                            }
+                          }
+                          if (order.TRANSMITIDO === 'S') {
+                            return (
+                              <span className="px-2.5 py-1 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 text-xs font-semibold">
+                                Transmitido (ERP)
+                              </span>
+                            );
+                          }
+                          return (
+                            <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-350 text-xs font-semibold">
+                              Pendente
+                            </span>
+                          );
+                        })()}
+
+                        {(() => {
+                          const t = transmissions.find((tx: any) => tx.cod_pedido === order.COD_PEDIDO);
+                          const isSentOrSynced = t && (t.status === 'SENT' || t.status === 'SYNCED');
+                          
+                          if (isSentOrSynced) {
+                            return (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSyncTransmission(t.id);
+                                }}
+                                disabled={syncingTransmissionId === t.id}
+                                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors disabled:opacity-50"
+                              >
+                                {syncingTransmissionId === t.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3 w-3" />
+                                )}
+                                Sincronizar
+                              </button>
+                            );
+                          } else {
+                            return (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSendToBookinfo(order);
+                                }}
+                                disabled={sendingOrderId === order.COD_PEDIDO}
+                                className="px-3 py-1.5 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors disabled:opacity-50"
+                              >
+                                {sendingOrderId === order.COD_PEDIDO ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3 w-3 rotate-45" />
+                                )}
+                                Enviar
+                              </button>
+                            );
+                          }
+                        })()}
+
+                        <div className="text-left border-l border-slate-200 dark:border-slate-850 pl-4 hidden sm:block">
                           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Valor Total</p>
                           <p className="text-sm font-bold text-[var(--color-primary-base)]">R$ {order.VLR_TOTAL_PEDIDO}</p>
                         </div>
@@ -626,9 +810,50 @@ export default function BookinfoPurchasesPage() {
                               <p className="text-xs text-slate-400">Sem dados cadastrais.</p>
                             )}
                           </div>
+
+                          {(() => {
+                            const t = transmissions.find((tx: any) => tx.cod_pedido === order.COD_PEDIDO);
+                            if (!t) return null;
+                            return (
+                              <div className="bg-slate-50 dark:bg-slate-800/20 p-4 rounded-xl space-y-2 col-span-1 md:col-span-3">
+                                <p className="font-bold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 pb-1.5 flex items-center justify-between">
+                                  <span>Integração Bookinfo</span>
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    t.status === 'SYNCED' ? 'bg-emerald-105 text-emerald-800 dark:bg-emerald-900/30' :
+                                    t.status === 'SENT' ? 'bg-amber-105 text-amber-800 dark:bg-amber-900/30' : 'bg-red-105 text-red-800 dark:bg-red-900/30'
+                                  }`}>
+                                    {t.status}
+                                  </span>
+                                </p>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                                  <div>
+                                    <p className="text-slate-450">ID Pedido Bookinfo:</p>
+                                    <p className="font-semibold text-slate-800 dark:text-slate-200">{t.bookinfo_pedido_id || '-'}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-slate-455">Enviado em:</p>
+                                    <p className="font-semibold text-slate-800 dark:text-slate-200">
+                                      {t.sent_at ? new Date(t.sent_at).toLocaleString() : '-'}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-slate-455">Última Sincronização:</p>
+                                    <p className="font-semibold text-slate-800 dark:text-slate-200">
+                                      {t.last_sync_at ? new Date(t.last_sync_at).toLocaleString() : '-'}
+                                    </p>
+                                  </div>
+                                  {t.status === 'ERROR' && t.error_message && (
+                                    <div className="col-span-2 md:col-span-4 mt-1 bg-red-50 dark:bg-red-950/20 p-2.5 rounded text-red-600 dark:text-red-400 font-mono">
+                                      <strong>Mensagem de Erro:</strong> {t.error_message}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
 
-                        <div className="space-y-2">
+                             <div className="space-y-2">
                           <p className="font-bold text-sm text-slate-900 dark:text-white">Itens do Pedido</p>
                           <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden overflow-x-auto">
                             <table className="w-full text-xs text-left min-w-[600px]">
@@ -640,25 +865,45 @@ export default function BookinfoPurchasesPage() {
                                   <th className="px-4 py-2 text-right text-slate-700 dark:text-slate-300">Preço Unit</th>
                                   <th className="px-4 py-2 text-right text-slate-700 dark:text-slate-300">Desconto</th>
                                   <th className="px-4 py-2 text-right text-slate-700 dark:text-slate-300">Valor Líq</th>
+                                  <th className="px-4 py-2 text-slate-700 dark:text-slate-300">Situação Bookinfo</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-150 dark:divide-slate-800/40">
-                                {order.ITENS?.map((item: any, itemIdx: number) => (
-                                  <tr key={item.COD_ITEM || itemIdx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/10">
-                                    <td className="px-4 py-2">
-                                      <p className="font-semibold text-slate-900 dark:text-white">{item.NOM_ITEM}</p>
-                                      <p className="text-slate-400 text-[10px]">{item.NOM_EDITORA}</p>
-                                    </td>
-                                    <td className="px-4 py-2 font-mono text-[10px]">
-                                      <p>{item.COD_ITEM}</p>
-                                      <p className="text-slate-400">{item.COD_BARRA_ITEM || item.COD_ISBN_ITEM}</p>
-                                    </td>
-                                    <td className="px-4 py-2 text-right font-medium">{item.QT_PEDIDA}</td>
-                                    <td className="px-4 py-2 text-right text-slate-500">R$ {item.VLR_PRECO}</td>
-                                    <td className="px-4 py-2 text-right text-slate-500">{item.PERC_DESCONTO}%</td>
-                                    <td className="px-4 py-2 text-right font-bold text-slate-800 dark:text-slate-200">R$ {item.VLR_LIQUIDO}</td>
-                                  </tr>
-                                ))}
+                                {order.ITENS?.map((item: any, itemIdx: number) => {
+                                  const t = transmissions.find((tx: any) => tx.cod_pedido === order.COD_PEDIDO);
+                                  const transItem = t?.items?.find((ti: any) => ti.cod_item === item.COD_ITEM);
+                                  return (
+                                    <tr key={item.COD_ITEM || itemIdx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/10">
+                                      <td className="px-4 py-2">
+                                        <p className="font-semibold text-slate-900 dark:text-white">{item.NOM_ITEM}</p>
+                                        <p className="text-slate-400 text-[10px]">{item.NOM_EDITORA}</p>
+                                      </td>
+                                      <td className="px-4 py-2 font-mono text-[10px]">
+                                        <p>{item.COD_ITEM}</p>
+                                        <p className="text-slate-400">{item.COD_BARRA_ITEM || item.COD_ISBN_ITEM}</p>
+                                      </td>
+                                      <td className="px-4 py-2 text-right font-medium">{item.QT_PEDIDA}</td>
+                                      <td className="px-4 py-2 text-right text-slate-500 font-mono">R$ {item.VLR_PRECO}</td>
+                                      <td className="px-4 py-2 text-right text-slate-500 font-mono">{item.PERC_DESCONTO}%</td>
+                                      <td className="px-4 py-2 text-right font-bold text-slate-800 dark:text-slate-200 font-mono">R$ {item.VLR_LIQUIDO}</td>
+                                      <td className="px-4 py-2 font-semibold">
+                                        {transItem ? (
+                                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                            transItem.situacao_retorno === 'RESERVADO_TOTAL' || transItem.situacao_retorno === 'ATENDIDO'
+                                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                              : transItem.situacao_retorno === 'SEM_ESTOQUE' || transItem.situacao_retorno === 'CANCELADO'
+                                              ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
+                                              : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+                                          }`}>
+                                            {transItem.situacao_retorno || 'Enviado'}
+                                          </span>
+                                        ) : (
+                                          <span className="text-slate-400 font-normal">-</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>

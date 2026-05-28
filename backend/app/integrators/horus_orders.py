@@ -130,3 +130,33 @@ class HorusOrders(HorusClient):
             params["LIMIT"] = limit if limit > 0 else 10000
             
         return await self.get("Busca_ItensPedidosVenda", params=params)
+
+    async def sta_transmitido_pedido_compra(self, cod_empresa: int, cod_filial: int, cod_fornecedor: int, cod_grp_fornecedor: int, cod_pedido: int, transmitido: str) -> Any:
+        """
+        Altera indicação de transmitido para o pedido de compra no Horus (S ou N)
+        """
+        params = {
+            "COD_EMPRESA": cod_empresa,
+            "COD_FILIAL": cod_filial,
+            "COD_FORNECEDOR": cod_fornecedor,
+            "COD_GRP_FORNECEDOR": cod_grp_fornecedor,
+            "COD_PEDIDO": cod_pedido,
+            "TRANSMITIDO": transmitido
+        }
+        return await self.get("StaTransmitido_PedidoCompra", params=params)
+
+    async def obs_item_pedido_compra(self, cod_empresa: int, cod_filial: int, cod_fornecedor: int, cod_grp_fornecedor: int, cod_pedido: int, cod_item: int, obs_item: str) -> Any:
+        """
+        Grava observação do item de pedido de compra no Horus
+        """
+        params = {
+            "COD_EMPRESA": cod_empresa,
+            "COD_FILIAL": cod_filial,
+            "COD_FORNECEDOR": cod_fornecedor,
+            "COD_GRP_FORNECEDOR": cod_grp_fornecedor,
+            "COD_PEDIDO": cod_pedido,
+            "COD_ITEM": cod_item,
+            "OBS_ITEM": obs_item
+        }
+        return await self.get("ObsItem_PedidoCompra", params=params)
+

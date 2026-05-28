@@ -1,4 +1,5 @@
 import asyncio
+import main
 from app.db.session import SessionLocal
 from app.integrators.horus_orders import HorusOrders
 from app.models.company import Company
