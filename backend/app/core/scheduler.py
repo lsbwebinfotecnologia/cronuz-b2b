@@ -70,8 +70,7 @@ def sync_horus_order_status():
                 continue
                 
             async def _fetch_horus_status():
-                horus_client = HorusOrders(settings, db=db, company_id=order.company_id)
-                await horus_client.authenticate()
+                horus_client = HorusOrders(db, order.company_id)
                 
                 horus_data = await horus_client.get_order(
                     id_doc=customer.document if customer else None,
