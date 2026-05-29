@@ -60,8 +60,15 @@ type UserData = {
 
 const masterNavigation: NavItem[] = [
   { name: 'Parceiros', href: '/companies', icon: Users },
-  { name: 'Hub Sync Bookinfo', href: '/settings/bookinfo-sync', icon: RefreshCw },
-  { name: 'Automação Compras', href: '/bookinfo/purchases/automation', icon: Zap },
+  {
+    name: 'Hub Sync Bookinfo',
+    href: '/settings/bookinfo-sync',
+    icon: RefreshCw,
+    subItems: [
+      { name: 'Automação Vendas', href: '/settings/bookinfo-sync' },
+      { name: 'Automação Compras', href: '/bookinfo/purchases/automation' },
+    ]
+  },
   { name: 'Integradores', href: '/system-integrators', icon: Layers },
   { name: 'Leads', href: '/leads', icon: Inbox },
   { name: 'Atualizações', href: '/changelog', icon: FileText },
