@@ -17,6 +17,7 @@ from app.models.bookinfo_purchase_log import BookinfoPurchaseJobLog
 from app.models.company_settings import CompanySettings
 from app.models.company import Company
 from app.models.bookinfo_supplier import BookinfoSupplier
+from app.models.integrator import Integrator
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/bookinfo-purchases/job-logs", tags=["bookinfo_purchase_logs"])
@@ -77,30 +78,55 @@ def get_job_logs_summary(
 ):
     """
     Retorna um resumo consolidado por seller.
-    MASTER vê todos os sellers. SELLER vê apenas a própria empresa.
+    MASTER vê todos os sellers com Bookinfo configurado.
+    SELLER vê apenas a própria empresa.
+    A verificação de "API Key" usa a tabela Integrator (platform=BOOKINFO, active=True).
     """
     _require_master_or_seller(current_user)
 
-    # Monta filtro base
-    query = db.query(CompanySettings).filter(
-        (CompanySettings.bookinfo_api_key.isnot(None)) |
-        (CompanySettings.bookinfo_purchase_auto == True)  # noqa: E712
+    # Busca todos os sellers que tem integrador Bookinfo ativo
+    bookinfo_integrators = db.query(Integrator).filter(
+        Integrator.platform == "BOOKINFO",
+        Integrator.active == True,  # noqa: E712
     )
-    # SELLER so ve sua propria empresa
     if current_user.type == "SELLER":
-        query = query.filter(CompanySettings.company_id == current_user.company_id)
+        bookinfo_integrators = bookinfo_integrators.filter(
+            Integrator.company_id == current_user.company_id
+        )
+    bookinfo_integrators = bookinfo_integrators.all()
 
-    all_settings = query.all()
+    # Monta set de company_ids com Bookinfo configurado
+    bookinfo_company_ids = {i.company_id for i in bookinfo_integrators}
+
+    # Também inclui sellers que tenham bookinfo_purchase_auto ativo (mesmo sem integrador ativo)
+    auto_settings = db.query(CompanySettings).filter(
+        CompanySettings.bookinfo_purchase_auto == True  # noqa: E712
+    )
+    if current_user.type == "SELLER":
+        auto_settings = auto_settings.filter(
+            CompanySettings.company_id == current_user.company_id
+        )
+    for s in auto_settings.all():
+        bookinfo_company_ids.add(s.company_id)
+
+    if not bookinfo_company_ids:
+        return []
 
     result = []
-    for s in all_settings:
-        company = db.query(Company).filter(Company.id == s.company_id).first()
+    for company_id in sorted(bookinfo_company_ids):
+        company = db.query(Company).filter(Company.id == company_id).first()
         if not company:
             continue
 
+        settings = db.query(CompanySettings).filter(
+            CompanySettings.company_id == company_id
+        ).first()
+
+        has_bookinfo_active = company_id in {i.company_id for i in bookinfo_integrators}
+
         # Ultimo log desse seller
         last_log = db.query(BookinfoPurchaseJobLog).filter(
-            BookinfoPurchaseJobLog.company_id == s.company_id
+            BookinfoPurchaseJobLog.company_id == company_id
         ).order_by(BookinfoPurchaseJobLog.run_at.desc()).first()
 
         # Contadores acumulados (ultimos 30 dias)
@@ -112,20 +138,19 @@ def get_job_logs_summary(
             sqlfunc.sum(BookinfoPurchaseJobLog.orders_error).label("total_error"),
             sqlfunc.sum(BookinfoPurchaseJobLog.syncs_done).label("total_syncs"),
         ).filter(
-            BookinfoPurchaseJobLog.company_id == s.company_id,
+            BookinfoPurchaseJobLog.company_id == company_id,
             BookinfoPurchaseJobLog.run_at >= cutoff,
         ).first()
 
-        # Conta suppliers cadastrados
         supplier_count = db.query(BookinfoSupplier).filter(
-            BookinfoSupplier.company_id == s.company_id
+            BookinfoSupplier.company_id == company_id
         ).count()
 
         result.append({
-            "company_id": s.company_id,
+            "company_id": company_id,
             "company_name": company.name,
-            "bookinfo_purchase_auto": s.bookinfo_purchase_auto,
-            "bookinfo_api_key_set": bool(s.bookinfo_api_key),
+            "bookinfo_purchase_auto": settings.bookinfo_purchase_auto if settings else False,
+            "bookinfo_api_key_set": has_bookinfo_active,
             "supplier_count": supplier_count,
             "last_run_at": last_log.run_at.isoformat() if last_log else None,
             "last_status": last_log.status if last_log else None,
