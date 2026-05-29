@@ -190,6 +190,31 @@ def send_nfe_to_bookinfo():
 
 
 # -----------------
+# JOB CLEANUP: Limpeza de logs antigos (> 30 dias)
+# -----------------
+def cleanup_old_purchase_logs():
+    """
+    Deleta registros de spl_purchase_job_log com mais de 30 dias.
+    Roda 1x por dia às 03:00 (horário de Brasília).
+    """
+    from app.models.bookinfo_purchase_log import BookinfoPurchaseJobLog
+    from datetime import timedelta
+    db = get_db_session()
+    try:
+        cutoff = __import__("datetime").datetime.utcnow() - timedelta(days=30)
+        deleted = db.query(BookinfoPurchaseJobLog).filter(
+            BookinfoPurchaseJobLog.run_at < cutoff
+        ).delete(synchronize_session=False)
+        db.commit()
+        logger.info(f"[Cleanup] Logs antigos de compras removidos: {deleted} registros.")
+    except Exception as e:
+        logger.error(f"[Cleanup] Erro ao limpar logs antigos: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+# -----------------
 # Schedulers init
 # -----------------
 scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
@@ -204,15 +229,25 @@ def start_scheduler():
     # NFSe Queue every 5 minutes
     scheduler.add_job(process_nfse_queue_jobs, IntervalTrigger(minutes=5), id="job_nfse_queue")
 
-    # Pedidos de Compra Bookinfo — busca no Horus, envia, sincroniza retornos (a cada 15 min)
+    # Pedidos de Compra Bookinfo — busca no Horus, envia, sincroniza retornos (a cada 5 min para checar intervalos por seller)
     scheduler.add_job(
         run_bookinfo_purchase_job,
-        IntervalTrigger(minutes=15),
+        IntervalTrigger(minutes=5),
         id="job_bookinfo_purchase",
         max_instances=1,        # garante que uma execucao nao se sobreponha a anterior
         coalesce=True,          # se atrasar, roda apenas uma vez ao retomar
         misfire_grace_time=300, # tolera ate 5 minutos de atraso
     )
-    
+
+    # Limpeza diária de logs de compras com mais de 30 dias (todo dia às 03:00)
+    from apscheduler.triggers.cron import CronTrigger
+    scheduler.add_job(
+        cleanup_old_purchase_logs,
+        CronTrigger(hour=3, minute=0, timezone="America/Sao_Paulo"),
+        id="job_cleanup_purchase_logs",
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
-    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders")
+    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Log Cleanup")

@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   RefreshCw, Play, Pause, CheckCircle2, AlertTriangle, AlertCircle,
   Clock, Package, Send, RotateCw, ChevronDown, ChevronUp, ArrowLeft,
-  Info, Zap, Building2, Activity, X
+  Info, Zap, Building2, Activity, X, Timer
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
@@ -55,6 +55,7 @@ interface SellerSummary {
   company_id: number;
   company_name: string;
   bookinfo_purchase_auto: boolean;
+  bookinfo_purchase_interval_minutes: number;
   bookinfo_api_key_set: boolean;
   supplier_count: number;
   last_run_at: string | null;
@@ -97,6 +98,10 @@ export default function BookinfoPurchaseAutomationPage() {
   const [sellers, setSellers] = useState<SellerSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [togglingId, setTogglingId] = useState<number | null>(null);
+  // intervalEdits: { [company_id]: value being edited }
+  const [intervalEdits, setIntervalEdits] = useState<Record<number, number>>({});
+  const [savingIntervalId, setSavingIntervalId] = useState<number | null>(null);
+  const debounceTimers = useRef<Record<number, NodeJS.Timeout>>({});
 
   const [expandedSeller, setExpandedSeller] = useState<number | null>(null);
   const [sellerLogs, setSellerLogs] = useState<JobLog[]>([]);
@@ -128,10 +133,12 @@ export default function BookinfoPurchaseAutomationPage() {
     setTogglingId(companyId);
     try {
       const token = getToken();
+      const seller = sellers.find(s => s.company_id === companyId);
+      const interval = intervalEdits[companyId] ?? seller?.bookinfo_purchase_interval_minutes ?? 15;
       const res = await fetch(`${API_URL}/bookinfo-purchases/job-logs/settings/${companyId}/auto`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookinfo_purchase_auto: !current }),
+        body: JSON.stringify({ bookinfo_purchase_auto: !current, bookinfo_purchase_interval_minutes: interval }),
       });
       if (!res.ok) throw new Error('Falha ao atualizar configuração');
       toast.success(!current ? 'Automação ativada com sucesso!' : 'Automação desativada.');
@@ -141,6 +148,39 @@ export default function BookinfoPurchaseAutomationPage() {
     } finally {
       setTogglingId(null);
     }
+  };
+
+  const saveInterval = async (companyId: number, minutes: number) => {
+    setSavingIntervalId(companyId);
+    try {
+      const token = getToken();
+      const seller = sellers.find(s => s.company_id === companyId);
+      const res = await fetch(`${API_URL}/bookinfo-purchases/job-logs/settings/${companyId}/auto`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bookinfo_purchase_auto: seller?.bookinfo_purchase_auto ?? false,
+          bookinfo_purchase_interval_minutes: minutes,
+        }),
+      });
+      if (!res.ok) throw new Error('Falha ao salvar intervalo');
+      toast.success(`Intervalo atualizado para ${minutes} minutos.`);
+      await fetchSummary();
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao salvar intervalo');
+    } finally {
+      setSavingIntervalId(null);
+    }
+  };
+
+  const handleIntervalChange = (companyId: number, value: number) => {
+    setIntervalEdits(prev => ({ ...prev, [companyId]: value }));
+    // Debounce: salva após 1.2s sem digitar
+    if (debounceTimers.current[companyId]) clearTimeout(debounceTimers.current[companyId]);
+    debounceTimers.current[companyId] = setTimeout(() => {
+      const clamped = Math.max(5, Math.min(1440, value));
+      saveInterval(companyId, clamped);
+    }, 1200);
   };
 
   const loadLogs = async (companyId: number, page = 1) => {
@@ -287,6 +327,32 @@ export default function BookinfoPurchaseAutomationPage() {
                       <span>Último ciclo: {fmtDate(seller.last_run_at)}</span>
                       {seller.last_status && <span>·</span>}
                       {statusBadge(seller.last_status)}
+                    </div>
+                  </div>
+
+                  {/* Intervalo do job */}
+                  <div className="hidden md:flex items-center gap-2 shrink-0">
+                    <Timer className="w-3.5 h-3.5" style={{ color: 'var(--color-text-muted)' }} />
+                    <div className="flex items-center gap-1">
+                      <input
+                        id={`interval-${seller.company_id}`}
+                        type="number"
+                        min={5}
+                        max={1440}
+                        value={intervalEdits[seller.company_id] ?? seller.bookinfo_purchase_interval_minutes ?? 15}
+                        onChange={(e) => handleIntervalChange(seller.company_id, parseInt(e.target.value) || 15)}
+                        className="w-16 text-center text-sm rounded-lg px-2 py-1 transition-colors"
+                        style={{
+                          background: 'var(--color-bg-tertiary)',
+                          border: '1px solid var(--color-border)',
+                          color: 'var(--color-text-primary)',
+                        }}
+                        title="Intervalo de execução do job em minutos (mín. 5, máx. 1440)"
+                      />
+                      <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>min</span>
+                      {savingIntervalId === seller.company_id && (
+                        <RefreshCw className="w-3 h-3 animate-spin" style={{ color: 'var(--color-primary-base)' }} />
+                      )}
                     </div>
                   </div>
 

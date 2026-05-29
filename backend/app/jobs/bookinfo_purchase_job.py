@@ -525,6 +525,29 @@ async def _run_job_async():
             return
 
         for company_id in valid_company_ids:
+            # Verifica o intervalo configurado para este seller
+            seller_settings = next((s for s in active_settings if s.company_id == company_id), None)
+            interval_minutes = getattr(seller_settings, "bookinfo_purchase_interval_minutes", 15) or 15
+            interval_minutes = max(5, interval_minutes)  # garante mínimo de 5 min
+
+            # Checa o último log registrado para este seller
+            last_log_entry = db.query(BookinfoPurchaseJobLog).filter(
+                BookinfoPurchaseJobLog.company_id == company_id
+            ).order_by(BookinfoPurchaseJobLog.run_at.desc()).first()
+
+            if last_log_entry and last_log_entry.run_at:
+                from datetime import timezone
+                last_run = last_log_entry.run_at
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                elapsed = (datetime.now(TZ_BRASILIA) - last_run.astimezone(TZ_BRASILIA)).total_seconds() / 60
+                if elapsed < interval_minutes:
+                    logger.info(
+                        f"[PurchaseJob] company={company_id} aguardando intervalo "
+                        f"({elapsed:.1f}min < {interval_minutes}min configurados) — pulando."
+                    )
+                    continue
+
             suppliers = db.query(BookinfoSupplier).filter(
                 BookinfoSupplier.company_id == company_id
             ).all()
@@ -550,6 +573,7 @@ async def _run_job_async():
                     )
     finally:
         db.close()
+
 
 
 def run_bookinfo_purchase_job():

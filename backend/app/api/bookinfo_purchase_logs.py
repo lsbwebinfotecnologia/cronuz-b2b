@@ -35,6 +35,7 @@ def _require_master_or_seller(current_user: User):
 
 class AutoToggleRequest(BaseModel):
     bookinfo_purchase_auto: bool
+    bookinfo_purchase_interval_minutes: Optional[int] = None
 
 
 # -------------------------------------------------------------------
@@ -47,7 +48,7 @@ def toggle_purchase_auto(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Ativa ou desativa o job automatico de pedidos de compra para um seller."""
+    """Ativa ou desativa o job automatico de pedidos de compra para um seller e atualiza o intervalo em minutos."""
     _require_master(current_user)
 
     settings = db.query(CompanySettings).filter(
@@ -59,12 +60,17 @@ def toggle_purchase_auto(
         db.add(settings)
 
     settings.bookinfo_purchase_auto = body.bookinfo_purchase_auto
+    if body.bookinfo_purchase_interval_minutes is not None:
+        # Garante intervalo valido: minimo 5, maximo 1440 (1 dia)
+        interval = max(5, min(1440, body.bookinfo_purchase_interval_minutes))
+        settings.bookinfo_purchase_interval_minutes = interval
     db.commit()
     db.refresh(settings)
 
     return {
         "company_id": company_id,
         "bookinfo_purchase_auto": settings.bookinfo_purchase_auto,
+        "bookinfo_purchase_interval_minutes": settings.bookinfo_purchase_interval_minutes,
     }
 
 
@@ -150,6 +156,7 @@ def get_job_logs_summary(
             "company_id": company_id,
             "company_name": company.name,
             "bookinfo_purchase_auto": settings.bookinfo_purchase_auto if settings else False,
+            "bookinfo_purchase_interval_minutes": getattr(settings, "bookinfo_purchase_interval_minutes", 15) if settings else 15,
             "bookinfo_api_key_set": has_bookinfo_active,
             "supplier_count": supplier_count,
             "last_run_at": last_log.run_at.isoformat() if last_log else None,
