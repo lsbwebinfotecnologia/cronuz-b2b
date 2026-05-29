@@ -36,6 +36,20 @@ const fmtDate = (iso: string | null) => {
   });
 };
 
+const getLogErrorMessage = (log: JobLog) => {
+  if (log.status === 'ERROR' && log.details && Array.isArray(log.details)) {
+    const fetchError = log.details.find(d => d.step || d.error);
+    if (fetchError && fetchError.error) {
+      return fetchError.error;
+    }
+    const detailError = log.details.find(d => d.status === 'error');
+    if (detailError && detailError.detail) {
+      return detailError.detail;
+    }
+  }
+  return null;
+};
+
 /* ─────────────────── types ─────────────────── */
 interface SellerSummary {
   company_id: number;
@@ -360,13 +374,18 @@ export default function BookinfoPurchaseAutomationPage() {
                               color: 'var(--color-text-secondary)',
                             }}
                           >
-                            <div className="col-span-2">
+                            <div className="col-span-2 pr-2">
                               <p className="text-xs font-medium" style={{ color: 'var(--color-text-primary)' }}>
                                 {fmtDate(log.run_at)}
                               </p>
-                              <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                              <p className="text-xs truncate font-semibold" style={{ color: 'var(--color-text-muted)' }}>
                                 {log.supplier_name || `Supplier #${log.supplier_id}`}
                               </p>
+                              {getLogErrorMessage(log) && (
+                                <p className="text-[10px] text-red-400 mt-0.5 truncate font-mono" title={getLogErrorMessage(log)!}>
+                                  Erro: {getLogErrorMessage(log)}
+                                </p>
+                              )}
                             </div>
                             <span className="text-center self-center font-semibold">
                               {log.orders_found}
@@ -471,8 +490,9 @@ export default function BookinfoPurchaseAutomationPage() {
                   Sem detalhes registrados para este ciclo.
                 </p>
               ) : (
-                (selectedLog.details as LogDetail[]).map((d, i) => {
-                  const isError = d.status === 'error';
+                (selectedLog.details as any[]).map((d, i) => {
+                  const isErrorStep = d.error !== undefined || d.step !== undefined;
+                  const isError = d.status === 'error' || isErrorStep;
                   const isSkipped = d.status === 'skipped' || d.status === 'duplicate';
                   const isOk = d.status === 'sent' || d.status === 'synced';
                   const isPartial = d.status === 'partial';
@@ -490,11 +510,24 @@ export default function BookinfoPurchaseAutomationPage() {
                       {isOk && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />}
                       {isPartial && <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" />}
                       <div className="flex-1">
-                        <span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                          {d.acao === 'send' ? `Pedido ${d.pedido}` : `Transmissão #${d.transmission_id}`}
-                        </span>
-                        {' — '}
-                        <span>{d.detail}</span>
+                        {isErrorStep ? (
+                          <div>
+                            <span className="font-semibold text-red-400">
+                              Erro no passo: {d.step === 'fetch_horus' ? 'Buscar Pedidos no Horus' : d.step}
+                            </span>
+                            <p className="mt-1 font-mono text-[11px] whitespace-pre-wrap bg-slate-950/80 p-2.5 rounded border border-red-900/30 text-red-300">
+                              {d.error}
+                            </p>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                              {d.acao === 'send' ? `Pedido ${d.pedido}` : `Transmissão #${d.transmission_id}`}
+                            </span>
+                            {' — '}
+                            <span>{d.detail || d.message || 'Sem detalhes'}</span>
+                          </>
+                        )}
                       </div>
                     </div>
                   );

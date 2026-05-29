@@ -88,11 +88,25 @@ async def _fetch_horus_orders(db: Session, company_id: int, supplier: BookinfoSu
 
     dt_fim = now_brasilia
     if supplier.last_sync_at:
-        dt_ini = supplier.last_sync_at
+        if supplier.last_sync_at.tzinfo is not None:
+            dt_ini = supplier.last_sync_at.astimezone(TZ_BRASILIA)
+        else:
+            dt_ini = supplier.last_sync_at.replace(tzinfo=TZ_BRASILIA)
     elif supplier.start_date:
-        dt_ini = supplier.start_date
+        if supplier.start_date.tzinfo is not None:
+            dt_ini = supplier.start_date.astimezone(TZ_BRASILIA)
+        else:
+            dt_ini = supplier.start_date.replace(tzinfo=TZ_BRASILIA)
     else:
         dt_ini = now_brasilia - timedelta(days=30)
+
+    # Garante que dt_ini não seja maior que dt_fim por discrepância de segundos
+    if dt_ini > dt_fim:
+        logger.warning(
+            f"[PurchaseJob] Ajustando dt_ini ({dt_ini}) pois era maior que dt_fim ({dt_fim}) "
+            f"para supplier={supplier.id}"
+        )
+        dt_ini = dt_fim - timedelta(minutes=15)
 
     horus_data_ini = dt_ini.strftime("%d/%m/%Y %H:%M:%S")
     horus_data_fim = dt_fim.strftime("%d/%m/%Y %H:%M:%S")
