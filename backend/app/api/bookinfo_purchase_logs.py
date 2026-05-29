@@ -83,8 +83,21 @@ def clear_company_logs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Remove todos os registros de log do job de compras para um seller específico."""
-    _require_master(current_user)
+    """Remove todos os registros de log do job de compras para um seller.
+    MASTER pode limpar qualquer seller.
+    SELLER só pode limpar seus próprios logs.
+    """
+    is_master = current_user.type == "MASTER"
+    is_own_company = (
+        current_user.type == "SELLER"
+        and current_user.company_id == company_id
+    )
+
+    if not is_master and not is_own_company:
+        raise HTTPException(
+            status_code=403,
+            detail="Acesso não autorizado para limpar logs deste seller."
+        )
 
     deleted = db.query(BookinfoPurchaseJobLog).filter(
         BookinfoPurchaseJobLog.company_id == company_id
