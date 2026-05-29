@@ -21,6 +21,7 @@ from app.models import commercial_policy as commercial_models
 from app.models import print_point as print_point_models
 from app.models import consignment_draft as consignment_draft_models
 from app.models import email_template as email_template_models
+from app.models import bookinfo_purchase_log as purchase_log_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -47,6 +48,7 @@ from app.api import customer_portal
 from app.api import system_integrators
 from app.api import bookinfo_hub
 from app.api import bookinfo_purchases
+from app.api import bookinfo_purchase_logs
 from app.api import services
 from app.api import print_points
 from app.api import bank_slips
@@ -73,6 +75,7 @@ marketing_nav_models.Base.metadata.create_all(bind=engine)
 order_models.Base.metadata.create_all(bind=engine)
 consignment_draft_models.Base.metadata.create_all(bind=engine)
 email_template_models.Base.metadata.create_all(bind=engine)
+purchase_log_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -131,6 +134,7 @@ app.include_router(integrators.router, prefix="/integrators", tags=["integrators
 app.include_router(system_integrators.router, prefix="/system-integrators", tags=["system-integrators"])
 app.include_router(bookinfo_hub.router, tags=["bookinfo"])
 app.include_router(bookinfo_purchases.router, tags=["bookinfo_purchases"])
+app.include_router(bookinfo_purchase_logs.router, tags=["bookinfo_purchase_logs"])
 app.include_router(services.router, tags=["services"])
 app.include_router(print_points.router, prefix="/print-points", tags=["print-points"])
 app.include_router(bank_slips.router, tags=["financial"])

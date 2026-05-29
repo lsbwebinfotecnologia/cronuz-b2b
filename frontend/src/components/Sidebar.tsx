@@ -31,7 +31,8 @@ import {
   UserCheck,
   Briefcase,
   ClipboardList,
-  Receipt
+  Receipt,
+  Zap
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -60,6 +61,7 @@ type UserData = {
 const masterNavigation: NavItem[] = [
   { name: 'Parceiros', href: '/companies', icon: Users },
   { name: 'Hub Sync Bookinfo', href: '/settings/bookinfo-sync', icon: RefreshCw },
+  { name: 'Automação Compras', href: '/bookinfo/purchases/automation', icon: Zap },
   { name: 'Integradores', href: '/system-integrators', icon: Layers },
   { name: 'Leads', href: '/leads', icon: Inbox },
   { name: 'Atualizações', href: '/changelog', icon: FileText },
@@ -112,7 +114,8 @@ const sellerNavigation: NavItem[] = [
     icon: Layers,
     subItems: [
        { name: 'Bookinfo (Pedidos Venda)', href: '/bookinfo/orders' },
-       { name: 'Bookinfo (Pedidos Compra)', href: '/bookinfo/purchases' }
+       { name: 'Bookinfo (Pedidos Compra)', href: '/bookinfo/purchases' },
+       { name: 'Automação de Compras', href: '/bookinfo/purchases/automation' }
     ]
   },
   { name: 'Vendedores/Rep', href: '/agents', icon: MonitorSmartphone },

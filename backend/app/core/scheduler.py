@@ -13,6 +13,7 @@ import json
 import logging
 import os
 from app.tasks.nfse_worker import process_nfse_queue_jobs
+from app.jobs.bookinfo_purchase_job import run_bookinfo_purchase_job
 
 logger = logging.getLogger("background_jobs")
 logger.setLevel(logging.INFO)
@@ -202,6 +203,16 @@ def start_scheduler():
     
     # NFSe Queue every 5 minutes
     scheduler.add_job(process_nfse_queue_jobs, IntervalTrigger(minutes=5), id="job_nfse_queue")
+
+    # Pedidos de Compra Bookinfo — busca no Horus, envia, sincroniza retornos (a cada 15 min)
+    scheduler.add_job(
+        run_bookinfo_purchase_job,
+        IntervalTrigger(minutes=15),
+        id="job_bookinfo_purchase",
+        max_instances=1,        # garante que uma execucao nao se sobreponha a anterior
+        coalesce=True,          # se atrasar, roda apenas uma vez ao retomar
+        misfire_grace_time=300, # tolera ate 5 minutos de atraso
+    )
     
     scheduler.start()
-    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue")
+    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders")

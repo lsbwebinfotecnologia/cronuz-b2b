@@ -18,6 +18,7 @@ class CompanySettingsBase(BaseModel):
     horus_hide_zero_balance: Optional[bool] = False
     bookinfo_api_key: Optional[str] = None
     bookinfo_sync_enabled: Optional[bool] = False
+    bookinfo_purchase_auto: Optional[bool] = False
     bookinfo_notify_processing_early: Optional[bool] = False
     metabooks_api_key: Optional[str] = None
     cover_image_base_url: Optional[str] = None
