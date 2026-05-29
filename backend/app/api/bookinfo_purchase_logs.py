@@ -75,6 +75,26 @@ def toggle_purchase_auto(
 
 
 # -------------------------------------------------------------------
+# Limpar logs de um seller
+# -------------------------------------------------------------------
+@router.delete("/clear/{company_id}")
+def clear_company_logs(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove todos os registros de log do job de compras para um seller específico."""
+    _require_master(current_user)
+
+    deleted = db.query(BookinfoPurchaseJobLog).filter(
+        BookinfoPurchaseJobLog.company_id == company_id
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    return {"company_id": company_id, "deleted": deleted}
+
+
+# -------------------------------------------------------------------
 # Resumo consolidado por seller (ultimo run, totais)
 # -------------------------------------------------------------------
 @router.get("/summary")

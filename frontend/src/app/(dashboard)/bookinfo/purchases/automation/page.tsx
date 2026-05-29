@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   RefreshCw, Play, Pause, CheckCircle2, AlertTriangle, AlertCircle,
   Clock, Package, Send, RotateCw, ChevronDown, ChevronUp, ArrowLeft,
-  Info, Zap, Building2, Activity, X, Timer
+  Info, Zap, Building2, Activity, X, Timer, Trash2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
@@ -102,6 +102,7 @@ export default function BookinfoPurchaseAutomationPage() {
   const [intervalEdits, setIntervalEdits] = useState<Record<number, number>>({});
   const [savingIntervalId, setSavingIntervalId] = useState<number | null>(null);
   const debounceTimers = useRef<Record<number, NodeJS.Timeout>>({});
+  const [clearingId, setClearingId] = useState<number | null>(null);
 
   const [expandedSeller, setExpandedSeller] = useState<number | null>(null);
   const [sellerLogs, setSellerLogs] = useState<JobLog[]>([]);
@@ -175,12 +176,33 @@ export default function BookinfoPurchaseAutomationPage() {
 
   const handleIntervalChange = (companyId: number, value: number) => {
     setIntervalEdits(prev => ({ ...prev, [companyId]: value }));
-    // Debounce: salva após 1.2s sem digitar
     if (debounceTimers.current[companyId]) clearTimeout(debounceTimers.current[companyId]);
     debounceTimers.current[companyId] = setTimeout(() => {
       const clamped = Math.max(5, Math.min(1440, value));
       saveInterval(companyId, clamped);
     }, 1200);
+  };
+
+  const clearLogs = async (companyId: number, companyName: string) => {
+    if (!confirm(`Tem certeza que deseja limpar todo o histórico de execuções de "${companyName}"? Esta ação não pode ser desfeita.`)) return;
+    setClearingId(companyId);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/bookinfo-purchases/job-logs/clear/${companyId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('Falha ao limpar histórico');
+      const data = await res.json();
+      toast.success(`${data.deleted} registro(s) removido(s) com sucesso.`);
+      setSellerLogs([]);
+      setLogsTotal(0);
+      await fetchSummary();
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao limpar histórico');
+    } finally {
+      setClearingId(null);
+    }
   };
 
   const loadLogs = async (companyId: number, page = 1) => {
@@ -396,15 +418,30 @@ export default function BookinfoPurchaseAutomationPage() {
                       <p className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>
                         Histórico de execuções
                       </p>
-                      <button
-                        onClick={() => loadLogs(seller.company_id, logsPage)}
-                        disabled={loadingLogs}
-                        className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg transition-colors"
-                        style={{ color: 'var(--color-text-muted)', background: 'var(--color-bg-tertiary)' }}
-                      >
-                        <RefreshCw className={`w-3 h-3 ${loadingLogs ? 'animate-spin' : ''}`} />
-                        Atualizar
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          id={`clear-logs-${seller.company_id}`}
+                          onClick={() => clearLogs(seller.company_id, seller.company_name)}
+                          disabled={clearingId === seller.company_id || loadingLogs}
+                          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                          style={{ color: '#f87171', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)' }}
+                          title="Limpar todo o histórico de execuções deste seller"
+                        >
+                          {clearingId === seller.company_id
+                            ? <RefreshCw className="w-3 h-3 animate-spin" />
+                            : <Trash2 className="w-3 h-3" />}
+                          Limpar histórico
+                        </button>
+                        <button
+                          onClick={() => loadLogs(seller.company_id, logsPage)}
+                          disabled={loadingLogs}
+                          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg transition-colors"
+                          style={{ color: 'var(--color-text-muted)', background: 'var(--color-bg-tertiary)' }}
+                        >
+                          <RefreshCw className={`w-3 h-3 ${loadingLogs ? 'animate-spin' : ''}`} />
+                          Atualizar
+                        </button>
+                      </div>
                     </div>
 
                     {loadingLogs ? (
