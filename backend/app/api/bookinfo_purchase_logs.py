@@ -27,6 +27,11 @@ def _require_master(current_user: User):
         raise HTTPException(status_code=403, detail="Acesso restrito ao MASTER.")
 
 
+def _require_master_or_seller(current_user: User):
+    if current_user.type not in ("MASTER", "SELLER"):
+        raise HTTPException(status_code=403, detail="Acesso não autorizado.")
+
+
 class AutoToggleRequest(BaseModel):
     bookinfo_purchase_auto: bool
 
@@ -71,19 +76,21 @@ def get_job_logs_summary(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Retorna um resumo consolidado por seller:
-    - dados da empresa
-    - configuracao de automacao (bookinfo_purchase_auto)
-    - data e status do ultimo ciclo
-    - totais acumulados (enviados, erros)
+    Retorna um resumo consolidado por seller.
+    MASTER vê todos os sellers. SELLER vê apenas a própria empresa.
     """
-    _require_master(current_user)
+    _require_master_or_seller(current_user)
 
-    # Sellers que tem bookinfo_api_key ou bookinfo_purchase_auto configurados
-    all_settings = db.query(CompanySettings).filter(
+    # Monta filtro base
+    query = db.query(CompanySettings).filter(
         (CompanySettings.bookinfo_api_key.isnot(None)) |
         (CompanySettings.bookinfo_purchase_auto == True)  # noqa: E712
-    ).all()
+    )
+    # SELLER so ve sua propria empresa
+    if current_user.type == "SELLER":
+        query = query.filter(CompanySettings.company_id == current_user.company_id)
+
+    all_settings = query.all()
 
     result = []
     for s in all_settings:
@@ -146,12 +153,16 @@ def list_job_logs(
     current_user: User = Depends(get_current_user),
 ):
     """Lista o historico de execucoes do job, paginado."""
-    _require_master(current_user)
+    _require_master_or_seller(current_user)
 
     query = db.query(BookinfoPurchaseJobLog).order_by(
         BookinfoPurchaseJobLog.run_at.desc()
     )
-    if company_id:
+
+    # SELLER so pode ver sua propria empresa
+    if current_user.type == "SELLER":
+        query = query.filter(BookinfoPurchaseJobLog.company_id == current_user.company_id)
+    elif company_id:
         query = query.filter(BookinfoPurchaseJobLog.company_id == company_id)
 
     total = query.count()
@@ -201,11 +212,14 @@ def get_job_log_detail(
     current_user: User = Depends(get_current_user),
 ):
     """Retorna os detalhes completos de uma execucao especifica do job."""
-    _require_master(current_user)
+    _require_master_or_seller(current_user)
 
-    log = db.query(BookinfoPurchaseJobLog).filter(
-        BookinfoPurchaseJobLog.id == log_id
-    ).first()
+    q = db.query(BookinfoPurchaseJobLog).filter(BookinfoPurchaseJobLog.id == log_id)
+    # SELLER so pode ver sua propria empresa
+    if current_user.type == "SELLER":
+        q = q.filter(BookinfoPurchaseJobLog.company_id == current_user.company_id)
+
+    log = q.first()
     if not log:
         raise HTTPException(status_code=404, detail="Log nao encontrado.")
 
