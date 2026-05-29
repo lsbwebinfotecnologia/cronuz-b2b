@@ -173,23 +173,26 @@ def seed_master_user():
     finally:
         db.close()
         
-    # Start Background Jobs — guarda via arquivo de lock para evitar múltiplos schedulers
-    # em ambientes multi-worker (gunicorn -w 4) sem --preload
-    import os, fcntl
-    SCHEDULER_LOCK_FILE = "/tmp/cronuz_scheduler.lock"
+    # Start Background Jobs — apenas 1 worker inicia o scheduler.
+    # Estratégia: usa arquivo de lock atômico com O_EXCL para garantir
+    # que somente o PRIMEIRO worker que conseguir criar o arquivo sobe o scheduler.
+    # O arquivo é apagado quando o processo dono morrer (via systemd restart).
+    import os
+    SCHEDULER_LOCK_FILE = "/tmp/cronuz_scheduler_{ppid}.lock".format(ppid=os.getppid())
     try:
-        lock_fd = open(SCHEDULER_LOCK_FILE, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        # Conseguiu o lock exclusivo: este é o único worker que iniciará o scheduler
-        lock_fd.write(str(os.getpid()))
-        lock_fd.flush()
+        # O_CREAT | O_EXCL garante criação atômica — falha se já existir
+        fd = os.open(SCHEDULER_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        # Este worker foi o primeiro: inicia o scheduler
         from app.core.scheduler import start_scheduler
         start_scheduler()
-    except BlockingIOError:
-        # Outro worker já tem o lock e iniciou o scheduler — apenas ignora
+    except FileExistsError:
+        # Outro worker já criou o arquivo — scheduler já está rodando
         import logging
         logging.getLogger("background_jobs").info(
-            f"[Scheduler] Worker PID {os.getpid()} ignorou start_scheduler (lock já obtido por outro worker)."
+            f"[Scheduler] Worker PID {os.getpid()} ignorou start_scheduler "
+            f"(lock {SCHEDULER_LOCK_FILE} já existe)."
         )
 
 @app.get("/")
