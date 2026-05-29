@@ -483,19 +483,31 @@ async def _run_job_async():
     """Funcao assincrona principal do job — itera por todos os sellers habilitados."""
     db: Session = SessionLocal()
     try:
-        # Busca todos os sellers com automacao habilitada E com bookinfo_api_key
+        # Busca sellers com bookinfo_purchase_auto=True E que tenham integrador Bookinfo ativo
+        from app.models.integrator import Integrator
+
         active_settings = db.query(CompanySettings).filter(
             CompanySettings.bookinfo_purchase_auto == True,  # noqa: E712
-            CompanySettings.bookinfo_api_key.isnot(None),
-            CompanySettings.bookinfo_api_key != "",
         ).all()
 
         if not active_settings:
             logger.info("[PurchaseJob] Nenhum seller com bookinfo_purchase_auto ativo.")
             return
 
-        for settings in active_settings:
-            company_id = settings.company_id
+        # Filtra apenas sellers que também têm integrador Bookinfo ativo
+        company_ids_with_auto = [s.company_id for s in active_settings]
+        active_integrators = db.query(Integrator).filter(
+            Integrator.platform == "BOOKINFO",
+            Integrator.active == True,  # noqa: E712
+            Integrator.company_id.in_(company_ids_with_auto),
+        ).all()
+        valid_company_ids = {i.company_id for i in active_integrators}
+
+        if not valid_company_ids:
+            logger.info("[PurchaseJob] Sellers com auto ativo mas sem integrador Bookinfo configurado.")
+            return
+
+        for company_id in valid_company_ids:
             suppliers = db.query(BookinfoSupplier).filter(
                 BookinfoSupplier.company_id == company_id
             ).all()
