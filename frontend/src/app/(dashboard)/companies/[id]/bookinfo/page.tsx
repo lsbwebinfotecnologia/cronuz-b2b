@@ -17,7 +17,8 @@ export default function CompanyBookinfoPage() {
     environment: 'HOMOL',
     token: '',
     bookinfo_sync_enabled: false,
-    bookinfo_notify_processing_early: false
+    bookinfo_notify_processing_early: false,
+    bookinfo_purchase_auto: false
   });
 
 
@@ -59,13 +60,15 @@ export default function CompanyBookinfoPage() {
               environment: (creds as any).Ambiente || 'HOMOL',
               token: (creds as any).Token || '',
               bookinfo_sync_enabled: settings.bookinfo_sync_enabled || false,
-              bookinfo_notify_processing_early: settings.bookinfo_notify_processing_early || false
+              bookinfo_notify_processing_early: settings.bookinfo_notify_processing_early || false,
+              bookinfo_purchase_auto: settings.bookinfo_purchase_auto || false
             });
           } else {
             setFormData(prev => ({
               ...prev,
               bookinfo_sync_enabled: settings.bookinfo_sync_enabled || false,
-              bookinfo_notify_processing_early: settings.bookinfo_notify_processing_early || false
+              bookinfo_notify_processing_early: settings.bookinfo_notify_processing_early || false,
+              bookinfo_purchase_auto: settings.bookinfo_purchase_auto || false
             }));
           }
         }
@@ -122,7 +125,8 @@ export default function CompanyBookinfoPage() {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
         body: JSON.stringify({
            bookinfo_sync_enabled: formData.bookinfo_sync_enabled,
-           bookinfo_notify_processing_early: formData.bookinfo_notify_processing_early
+           bookinfo_notify_processing_early: formData.bookinfo_notify_processing_early,
+           bookinfo_purchase_auto: formData.bookinfo_purchase_auto
         })
       });
 
@@ -216,6 +220,26 @@ export default function CompanyBookinfoPage() {
                       className="sr-only peer" 
                       checked={formData.bookinfo_notify_processing_early} 
                       onChange={handleInputChange} 
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                  </div>
+                </label>
+              </div>
+
+              {/* Toggle: Sincronização Automática de Pedidos de Compra */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800/60 pb-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Sincronização Automática — Pedidos de Compra</h3>
+                  <p className="text-xs text-slate-500">Ativa a cron de pedidos de compra Bookinfo a cada 15 minutos: busca no Horus, envia e sincroniza retornos automaticamente.</p>
+                </div>
+                <label className="relative flex items-center cursor-pointer shrink-0">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      name="bookinfo_purchase_auto"
+                      className="sr-only peer"
+                      checked={formData.bookinfo_purchase_auto}
+                      onChange={handleInputChange}
                     />
                     <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
                   </div>
