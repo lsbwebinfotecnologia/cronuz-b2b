@@ -87,12 +87,7 @@ async def _fetch_horus_orders(db: Session, company_id: int, supplier: BookinfoSu
     now_brasilia = datetime.now(TZ_BRASILIA)
 
     dt_fim = now_brasilia
-    if supplier.last_sync_at:
-        if supplier.last_sync_at.tzinfo is not None:
-            dt_ini = supplier.last_sync_at.astimezone(TZ_BRASILIA)
-        else:
-            dt_ini = supplier.last_sync_at.replace(tzinfo=TZ_BRASILIA)
-    elif supplier.start_date:
+    if supplier.start_date:
         if supplier.start_date.tzinfo is not None:
             dt_ini = supplier.start_date.astimezone(TZ_BRASILIA)
         else:

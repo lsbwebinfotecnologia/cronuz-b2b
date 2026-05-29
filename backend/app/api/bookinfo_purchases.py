@@ -194,9 +194,7 @@ async def search_horus_orders(
         if data_ini:
             dt_ini = parse_input_date(data_ini)
         else:
-            if supplier.last_sync_at:
-                dt_ini = supplier.last_sync_at
-            elif supplier.start_date:
+            if supplier.start_date:
                 dt_ini = supplier.start_date
             else:
                 dt_ini = now - timedelta(days=30)

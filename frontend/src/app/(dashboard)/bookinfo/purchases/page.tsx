@@ -361,7 +361,7 @@ export default function BookinfoPurchasesPage() {
 
   const handleSelectSupplier = (spl: any) => {
     setSelectedSupplier(spl);
-    const iniDate = spl.last_sync_at ? formatDateInput(spl.last_sync_at) : (spl.start_date ? formatDateInput(spl.start_date) : formatDateInput(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)));
+    const iniDate = spl.start_date ? formatDateInput(spl.start_date) : formatDateInput(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
     const fimDate = formatDateInput(new Date());
     const currentFilters = {
       data_ini: iniDate,
