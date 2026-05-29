@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import re
+import traceback
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -406,6 +407,13 @@ async def _process_supplier(
         company_id=company_id,
         supplier_id=supplier.id,
         supplier_name=supplier.supplier_name or "",
+        orders_found=0,
+        orders_sent=0,
+        orders_skipped=0,
+        orders_error=0,
+        syncs_done=0,
+        syncs_error=0,
+        status="SUCCESS",
     )
     details = []
 
@@ -526,9 +534,10 @@ async def _run_job_async():
                 try:
                     await _process_supplier(db, company_id, supplier)
                 except Exception as e:
+                    tb = traceback.format_exc()
                     logger.error(
                         f"[PurchaseJob] Erro inesperado company={company_id} "
-                        f"supplier={supplier.id}: {e}"
+                        f"supplier={supplier.id}: {e}\n{tb}"
                     )
     finally:
         db.close()
