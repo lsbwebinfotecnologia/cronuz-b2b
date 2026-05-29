@@ -173,9 +173,24 @@ def seed_master_user():
     finally:
         db.close()
         
-    # Start Background Jobs
-    from app.core.scheduler import start_scheduler
-    start_scheduler()
+    # Start Background Jobs — guarda via arquivo de lock para evitar múltiplos schedulers
+    # em ambientes multi-worker (gunicorn -w 4) sem --preload
+    import os, fcntl
+    SCHEDULER_LOCK_FILE = "/tmp/cronuz_scheduler.lock"
+    try:
+        lock_fd = open(SCHEDULER_LOCK_FILE, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Conseguiu o lock exclusivo: este é o único worker que iniciará o scheduler
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+        from app.core.scheduler import start_scheduler
+        start_scheduler()
+    except BlockingIOError:
+        # Outro worker já tem o lock e iniciou o scheduler — apenas ignora
+        import logging
+        logging.getLogger("background_jobs").info(
+            f"[Scheduler] Worker PID {os.getpid()} ignorou start_scheduler (lock já obtido por outro worker)."
+        )
 
 @app.get("/")
 def read_root():
