@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation';
 import {
   Layers, ArrowLeft, CheckCircle2, Play, Save, Info, AlertTriangle,
   AlertCircle, ShoppingCart, DollarSign, Wallet, CreditCard, Package,
-  Sparkles, RefreshCw, RotateCcw, Lock, Clock
+  Sparkles, RefreshCw, RotateCcw, Lock, Clock, ArrowUpDown,
+  Search, ArrowUp, ArrowDown, SlidersHorizontal
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -35,13 +36,23 @@ const SITUATION_STYLE: Record<string, string> = {
   item_rejeitado: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-700',
 };
 
+const SITUATION_BORDER: Record<string, string> = {
+  reservado_total: 'border-l-4 border-l-emerald-500 dark:border-l-emerald-600',
+  atendimento_parcial_sem_reserva: 'border-l-4 border-l-amber-500 dark:border-l-amber-600',
+  sem_estoque: 'border-l-4 border-l-rose-500 dark:border-l-rose-600',
+  esgotado: 'border-l-4 border-l-rose-500 dark:border-l-rose-600',
+  fora_catalogo: 'border-l-4 border-l-orange-500 dark:border-l-orange-600',
+  item_nao_comercializado: 'border-l-4 border-l-slate-400 dark:border-l-slate-600',
+  item_rejeitado: 'border-l-4 border-l-red-600 dark:border-l-red-700',
+};
+
 function SituationBadge({ situation, manual }: { situation: string; manual?: boolean }) {
   const label = SITUATION_LABELS[situation] || situation;
   const style = SITUATION_STYLE[situation] || 'bg-slate-100 text-slate-600 border-slate-200';
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${style}`}>
+    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border shadow-sm ${style}`}>
       {label}
-      {manual && <span className="ml-0.5 text-[9px] opacity-70">(manual)</span>}
+      {manual && <span className="ml-0.5 text-[9px] opacity-75">(manual)</span>}
     </span>
   );
 }
@@ -50,9 +61,9 @@ function SummaryPill({ situation, count }: { situation: string; count: number })
   const label = SITUATION_LABELS[situation] || situation;
   const style = SITUATION_STYLE[situation] || 'bg-slate-100 text-slate-600 border-slate-200';
   return (
-    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold ${style}`}>
+    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all shadow-sm ${style}`}>
       <span>{label}</span>
-      <span className="font-bold text-sm">{count}</span>
+      <span className="font-extrabold text-sm px-1.5 py-0.2 bg-white/40 dark:bg-black/20 rounded-md">{count}</span>
     </div>
   );
 }
@@ -71,6 +82,18 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const [analysedItems, setAnalysedItems] = useState<any[]>([]);
   const [summary, setSummary]             = useState<Record<string, number>>({});
   const [lastAnalysedAt, setLastAnalysedAt] = useState<string | null>(null);
+
+  // Filtros/Ordenação dos itens analisados
+  const [sortBy, setSortBy]       = useState<'title' | 'qty' | 'situation' | 'default'>('default');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const handleTabChange = (tab: 'BOOKINFO' | 'HORUS') => {
+    setActiveTab(tab);
+    if (tab === 'BOOKINFO' && sortBy === 'situation') {
+      setSortBy('default');
+    }
+  };
 
   // Estados de loading por ação
   const [isAnalysing,     setIsAnalysing]     = useState(false);
@@ -266,6 +289,60 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const company       = orderData.company || {};
   const bookinfoItems = order.itens || [];
 
+  // Ordena os itens analisados se houver ordenação ativa
+  const sortedItems = [...analysedItems].sort((a, b) => {
+    if (sortBy === 'title') {
+      const nameA = a.name || '';
+      const nameB = b.name || '';
+      return sortOrder === 'asc' ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
+    }
+    if (sortBy === 'qty') {
+      const qtyA = a.qty_requested ?? a.quantity_requested ?? 0;
+      const qtyB = b.qty_requested ?? b.quantity_requested ?? 0;
+      return sortOrder === 'asc' ? qtyA - qtyB : qtyB - qtyA;
+    }
+    if (sortBy === 'situation') {
+      const sitA = a.partner_situation || '';
+      const sitB = b.partner_situation || '';
+      return sortOrder === 'asc' ? sitA.localeCompare(sitB) : sitB.localeCompare(sitA);
+    }
+    return 0;
+  });
+
+  // Ordena os itens originais do pedido
+  const sortedBookinfoItems = [...bookinfoItems].sort((a, b) => {
+    if (sortBy === 'title') {
+      const nameA = a.titulo || a.nome || '';
+      const nameB = b.titulo || b.nome || '';
+      return sortOrder === 'asc' ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
+    }
+    if (sortBy === 'qty') {
+      const qtyA = a.quantidade ?? 0;
+      const qtyB = b.quantidade ?? 0;
+      return sortOrder === 'asc' ? qtyA - qtyB : qtyB - qtyA;
+    }
+    return 0;
+  });
+
+  // Filtragem dos itens originais por busca (título ou ISBN)
+  const filteredBookinfoItems = sortedBookinfoItems.filter((item: any) => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return true;
+    const title = (item.titulo || item.nome || '').toLowerCase();
+    const isbn = (item.isbn13 || '').toLowerCase();
+    return title.includes(q) || isbn.includes(q);
+  });
+
+  // Filtragem dos itens analisados por busca (título, ISBN ou editora)
+  const filteredSortedItems = sortedItems.filter((ev: any) => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return true;
+    const title = (ev.name || '').toLowerCase();
+    const isbn = (ev.isbn13 || ev.ean_isbn || '').toLowerCase();
+    const brand = (ev.brand || '').toLowerCase();
+    return title.includes(q) || isbn.includes(q) || brand.includes(q);
+  });
+
   const isBlocked         = !!orderInternal.horus_pedido_venda;
   const isAlreadyAnalysed = orderInternal.validated_items_erp === true || analysedItems.length > 0;
   const canAnalyse        = !isBlocked && !!orderInternal.id;
@@ -448,7 +525,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
             <div className="px-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/20 flex-wrap gap-2">
               <div className="flex gap-4">
                 <button
-                  onClick={() => setActiveTab('HORUS')}
+                  onClick={() => handleTabChange('HORUS')}
                   className={`py-4 font-semibold text-sm border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'HORUS' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
                 >
                   <Layers className="w-4 h-4" />
@@ -458,7 +535,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                   )}
                 </button>
                 <button
-                  onClick={() => setActiveTab('BOOKINFO')}
+                  onClick={() => handleTabChange('BOOKINFO')}
                   className={`py-4 font-semibold text-sm border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'BOOKINFO' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
                 >
                   <ShoppingCart className="w-4 h-4" />
@@ -522,51 +599,150 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
 
             {/* Resumo por situação (somente na aba HORUS, quando há itens analisados) */}
             {activeTab === 'HORUS' && analysedItems.length > 0 && (
-              <div className="px-6 py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/10 flex flex-wrap gap-2 items-center">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Resumo:</span>
-                {Object.entries(summary).map(([sit, count]) => (
-                  <SummaryPill key={sit} situation={sit} count={count as number} />
-                ))}
+              <div className="px-6 py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/10 flex flex-wrap gap-3 items-center justify-between">
+                <div className="flex flex-wrap gap-2 items-center">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Resumo:</span>
+                  {Object.entries(summary).map(([sit, count]) => (
+                    <SummaryPill key={sit} situation={sit} count={count as number} />
+                  ))}
+                </div>
                 {lastAnalysedAt && (
-                  <span className="ml-auto flex items-center gap-1 text-[10px] text-slate-400">
-                    <Clock className="w-3 h-3" />
+                  <span className="flex items-center gap-1 text-[10px] text-slate-400 font-medium">
+                    <Clock className="w-3.5 h-3.5" />
                     Última análise: {new Date(lastAnalysedAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
                   </span>
                 )}
               </div>
             )}
 
+            {/* Filtros e Ordenação */}
+            {((activeTab === 'HORUS' && analysedItems.length > 0) || (activeTab === 'BOOKINFO' && bookinfoItems.length > 0)) && (
+              <div className="px-6 py-3 bg-slate-50/50 dark:bg-slate-800/10 border-b border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                
+                {/* Busca */}
+                <div className="relative flex-1 max-w-md">
+                  <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
+                    <Search className="w-4 h-4" />
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="Buscar por título, ISBN ou editora..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-9 pr-4 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-colors shadow-sm"
+                  />
+                </div>
+
+                {/* Ordenação */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                    <SlidersHorizontal className="w-3.5 h-3.5" /> Ordenar por:
+                  </span>
+                  <div className="flex rounded-lg bg-slate-100/80 dark:bg-slate-800/80 p-0.5 border border-slate-200/60 dark:border-slate-700/60 shadow-inner">
+                    <button
+                      onClick={() => {
+                        if (sortBy === 'title') setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                        else { setSortBy('title'); setSortOrder('asc'); }
+                      }}
+                      className={`px-3 py-1 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${sortBy === 'title' ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                    >
+                      Título
+                      {sortBy === 'title' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="w-3 h-3 text-indigo-500" /> : <ArrowDown className="w-3 h-3 text-indigo-500" />
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-50" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (sortBy === 'qty') setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                        else { setSortBy('qty'); setSortOrder('asc'); }
+                      }}
+                      className={`px-3 py-1 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${sortBy === 'qty' ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                    >
+                      Quantidade
+                      {sortBy === 'qty' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="w-3 h-3 text-indigo-500" /> : <ArrowDown className="w-3 h-3 text-indigo-500" />
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-50" />
+                      )}
+                    </button>
+                    {activeTab === 'HORUS' && (
+                      <button
+                        onClick={() => {
+                          if (sortBy === 'situation') setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                          else { setSortBy('situation'); setSortOrder('asc'); }
+                        }}
+                        className={`px-3 py-1 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${sortBy === 'situation' ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                      >
+                        Situação
+                        {sortBy === 'situation' ? (
+                          sortOrder === 'asc' ? <ArrowUp className="w-3 h-3 text-indigo-500" /> : <ArrowDown className="w-3 h-3 text-indigo-500" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-50" />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                  {sortBy !== 'default' && (
+                    <button
+                      onClick={() => { setSortBy('default'); setSortOrder('asc'); }}
+                      className="text-xs font-bold text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 transition"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Conteúdo das tabs */}
-            <div className="flex-1 overflow-auto p-0">
+            <div className="flex-1 overflow-auto p-0 bg-slate-50/30 dark:bg-slate-950/20">
 
               {/* ── Tab Bookinfo Original ── */}
               {activeTab === 'BOOKINFO' ? (
-                <table className="w-full text-left text-sm">
-                  <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 shadow-sm z-10">
-                    <tr>
-                      <th className="px-5 py-3 font-semibold text-slate-600 dark:text-slate-300">ISBN / Título</th>
-                      <th className="px-5 py-3 font-semibold text-slate-600 dark:text-slate-300 text-center">Qtd.</th>
-                      <th className="px-5 py-3 font-semibold text-slate-600 dark:text-slate-300 text-right">Desconto (%)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/50">
-                    {bookinfoItems.map((item: any, idx: number) => (
-                      <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
-                        <td className="px-5 py-4">
-                          <p className="font-semibold text-slate-800 dark:text-white max-w-xs truncate">{item.titulo || item.nome || 'Não Informado'}</p>
-                          <p className="font-mono text-xs text-slate-500 mt-1">{item.isbn13}</p>
-                        </td>
-                        <td className="px-5 py-4 text-center font-medium">{item.quantidade}</td>
-                        <td className="px-5 py-4 text-right font-medium text-slate-700 dark:text-slate-300">
-                          {Number(item.descontoProposto || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
-                        </td>
-                      </tr>
-                    ))}
-                    {bookinfoItems.length === 0 && (
-                      <tr><td colSpan={3} className="text-center p-8 text-slate-400">Nenhum item encontrado no pedido original.</td></tr>
-                    )}
-                  </tbody>
-                </table>
+                <div className="space-y-3 p-6">
+                  {filteredBookinfoItems.map((item: any, idx: number) => {
+                    const qty = item.quantidade ?? 0;
+                    const proposedDiscount = Number(item.descontoProposto || 0);
+                    
+                    return (
+                      <div key={idx} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-indigo-400 dark:hover:border-indigo-800 hover:shadow-lg transition-all duration-200 border-l-4 border-l-indigo-500/80 hover:scale-[1.005]">
+                        {/* Detalhes do Item */}
+                        <div className="flex-1 space-y-2">
+                          <h4 className="font-bold text-slate-800 dark:text-white text-sm leading-snug">
+                            {item.titulo || item.nome || 'Não Informado'}
+                          </h4>
+                          <span className="inline-block font-mono text-[11px] text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800/85 px-2.5 py-0.5 rounded border border-slate-200/40 dark:border-slate-700/40 shadow-sm">
+                            {item.isbn13}
+                          </span>
+                        </div>
+                        
+                        {/* Grid de Métricas */}
+                        <div className="flex items-center gap-6 shrink-0">
+                          {/* Quantidade */}
+                          <div className="bg-slate-50/50 dark:bg-slate-800/30 px-4 py-2 rounded-lg border border-slate-100 dark:border-slate-800/50 text-center min-w-[90px] shadow-sm">
+                            <span className="text-[9px] text-slate-400 dark:text-slate-500 block font-bold uppercase tracking-wider mb-0.5">Qtd. Pedida</span>
+                            <span className="text-sm font-extrabold text-slate-800 dark:text-slate-200">{qty}</span>
+                          </div>
+                          
+                          {/* Desconto */}
+                          <div className="bg-slate-50/50 dark:bg-slate-800/30 px-4 py-2 rounded-lg border border-slate-100 dark:border-slate-800/50 text-center min-w-[100px] shadow-sm">
+                            <span className="text-[9px] text-slate-400 dark:text-slate-500 block font-bold uppercase tracking-wider mb-0.5">Desconto</span>
+                            <span className="text-sm font-extrabold text-slate-800 dark:text-slate-200">{proposedDiscount.toFixed(2)}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {filteredBookinfoItems.length === 0 && (
+                    <div className="text-center py-12 text-slate-400 dark:text-slate-500 flex flex-col items-center justify-center gap-2">
+                      <Search className="w-8 h-8 opacity-40 mb-2" />
+                      <p className="font-bold text-sm">Nenhum item localizado</p>
+                      <p className="text-xs">Não encontramos nenhum item correspondente à busca "{searchQuery}".</p>
+                    </div>
+                  )}
+                </div>
 
               ) : (
                 /* ── Tab Análise Horus ── */
@@ -588,101 +764,139 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                     </div>
                   </div>
                 ) : (
-                  <table className="w-full text-left text-sm">
-                    <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 shadow-sm z-10">
-                      <tr>
-                        <th className="px-5 py-3 font-semibold text-slate-600 dark:text-slate-300">Item / ISBN</th>
-                        <th className="px-5 py-3 font-semibold text-slate-600 dark:text-slate-300 text-center">Qtd.</th>
-                        <th className="px-5 py-3 font-semibold text-slate-600 dark:text-slate-300 text-center">Desconto</th>
-                        <th className="px-5 py-3 font-semibold text-slate-600 dark:text-slate-300">Situação</th>
-                        {!isBlocked && (
-                          <th className="px-5 py-3 font-semibold text-slate-600 dark:text-slate-300 bg-indigo-50/50 dark:bg-indigo-900/10 min-w-[180px]">Ajuste Manual</th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800/50">
-                      {analysedItems.map((ev: any, idx: number) => (
-                        <tr key={ev.id || idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
-                          {/* Item */}
-                          <td className="px-5 py-4">
-                            <p className="font-semibold text-slate-800 dark:text-white max-w-xs truncate" title={ev.name}>
+                  <div className="space-y-3 p-6">
+                    {filteredSortedItems.map((ev: any, idx: number) => {
+                      const qtyRequested = ev.qty_requested ?? ev.quantity_requested ?? 0;
+                      const qtyAvailable = ev.available_qty ?? 0;
+                      const hasStock = qtyAvailable >= qtyRequested;
+                      const partnerDiscount = Number(ev.partner_discount || 0);
+                      const discountAllowed = Number(ev.discount_allowed || 0);
+                      const discountExceeded = partnerDiscount > discountAllowed;
+                      const borderLeftClass = SITUATION_BORDER[ev.partner_situation] || 'border-l-4 border-l-slate-200 dark:border-l-slate-800';
+
+                      return (
+                        <div key={ev.id || idx} className={`bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-5 hover:shadow-lg transition-all duration-200 relative overflow-hidden hover:scale-[1.005] hover:border-slate-300 dark:hover:border-slate-700 ${borderLeftClass}`}>
+                          
+                          {/* 1. Detalhes do Item */}
+                          <div className="flex-1 min-w-[250px] space-y-2">
+                            <h4 className="font-bold text-slate-800 dark:text-white text-sm leading-snug">
                               {ev.name || 'Item não localizado no Horus'}
-                            </p>
-                            <p className="font-mono text-xs text-slate-500 mt-1">{ev.isbn13 || ev.ean_isbn}</p>
-                            {ev.brand && ev.brand !== 'ND' && (
-                              <p className="text-[10px] text-slate-400 mt-0.5">{ev.brand}</p>
-                            )}
-                          </td>
-                          {/* Quantidades */}
-                          <td className="px-5 py-4 text-center">
-                            <div className="space-y-1 text-xs">
-                              <div className="flex justify-between gap-3">
-                                <span className="text-slate-400">Pedida:</span>
-                                <span className="font-bold">{ev.qty_requested ?? ev.quantity_requested}</span>
+                            </h4>
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              <span className="font-mono text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800/80 px-2.5 py-1 rounded-md border border-slate-200/50 dark:border-slate-700/50 shadow-sm">
+                                {ev.isbn13 || ev.ean_isbn}
+                              </span>
+                              {ev.brand && ev.brand !== 'ND' && (
+                                <span className="text-slate-400 dark:text-slate-500 font-medium bg-slate-50 dark:bg-slate-800/40 px-2 py-0.5 rounded border border-slate-100 dark:border-slate-800/50">
+                                  Editora: <strong className="text-slate-600 dark:text-slate-300 font-semibold">{ev.brand}</strong>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {/* 2. Grid de Métricas */}
+                          <div className="flex flex-wrap items-center gap-4 sm:gap-6 shrink-0">
+                            
+                            {/* Quantidades */}
+                            <div className={`flex items-center gap-3 p-2.5 rounded-lg border min-w-[135px] justify-around transition-all shadow-sm ${
+                              hasStock
+                                ? 'bg-emerald-50/30 border-emerald-100/40 dark:bg-emerald-950/10 dark:border-emerald-900/20'
+                                : 'bg-rose-50/30 border-rose-100/40 dark:bg-rose-950/10 dark:border-rose-900/20'
+                            }`}>
+                              <div className="text-center px-1">
+                                <span className="text-[9px] text-slate-400 dark:text-slate-500 block font-bold uppercase tracking-wider mb-0.5">Pedida</span>
+                                <span className="text-sm font-extrabold text-slate-800 dark:text-slate-200">{qtyRequested}</span>
                               </div>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-slate-400">Saldo:</span>
-                                <span className={`font-bold ${(ev.available_qty || 0) >= (ev.qty_requested || ev.quantity_requested || 0) ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                  {ev.available_qty ?? 0}
+                              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800/80" />
+                              <div className="text-center px-1">
+                                <span className="text-[9px] text-slate-400 dark:text-slate-500 block font-bold uppercase tracking-wider mb-0.5">Saldo</span>
+                                <span className={`text-sm font-extrabold flex items-center gap-1 justify-center ${hasStock ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                                  {qtyAvailable}
                                 </span>
                               </div>
                             </div>
-                          </td>
-                          {/* Descontos */}
-                          <td className="px-5 py-4 text-center">
-                            <div className="space-y-1 text-xs">
-                              <div className="flex justify-between gap-3">
-                                <span className="text-slate-400">Proposto:</span>
-                                <span className="font-bold">{Number(ev.partner_discount || 0).toFixed(2)}%</span>
+                            
+                            {/* Descontos */}
+                            <div className={`flex items-center gap-3 p-2.5 rounded-lg border min-w-[135px] justify-around transition-all shadow-sm ${
+                              discountExceeded
+                                ? 'bg-amber-50/30 border-amber-100/40 dark:bg-amber-950/10 dark:border-amber-900/20'
+                                : 'bg-slate-50/50 border-slate-100/60 dark:bg-slate-800/20 dark:border-slate-800/40'
+                            }`}>
+                              <div className="text-center px-1">
+                                <span className="text-[9px] text-slate-400 dark:text-slate-500 block font-bold uppercase tracking-wider mb-0.5">Prop.</span>
+                                <span className="text-sm font-extrabold text-slate-800 dark:text-slate-200">{partnerDiscount.toFixed(1)}%</span>
                               </div>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-slate-400">Autorizado:</span>
-                                <span className={`font-bold ${Number(ev.partner_discount || 0) > Number(ev.discount_allowed || 0) ? 'text-rose-600' : 'text-emerald-600'}`}>
-                                  {Number(ev.discount_allowed || 0).toFixed(2)}%
+                              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800/80" />
+                              <div className="text-center px-1">
+                                <span className="text-[9px] text-slate-400 dark:text-slate-500 block font-bold uppercase tracking-wider mb-0.5">Autoriz.</span>
+                                <span className={`text-sm font-extrabold ${discountExceeded ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                  {discountAllowed.toFixed(1)}%
                                 </span>
                               </div>
                             </div>
-                          </td>
-                          {/* Situação automática */}
-                          <td className="px-5 py-4">
-                            <SituationBadge situation={ev.partner_situation} manual={ev.sit_manual_change} />
-                            {ev.situation_detail && (
-                              <p className="text-[10px] text-slate-400 mt-1 max-w-[160px]">{ev.situation_detail}</p>
-                            )}
-                          </td>
-                          {/* Select manual */}
+
+                            {/* Situação */}
+                            <div className="min-w-[130px] flex flex-col justify-center">
+                              <span className="text-[9px] text-slate-400 dark:text-slate-500 block font-bold uppercase tracking-wider mb-1">Situação</span>
+                              <div>
+                                <SituationBadge situation={ev.partner_situation} manual={ev.sit_manual_change} />
+                              </div>
+                              {ev.situation_detail && (
+                                <span className="text-[10px] text-slate-400 dark:text-slate-500 block mt-1 leading-tight max-w-[150px] font-medium">
+                                  {ev.situation_detail}
+                                </span>
+                              )}
+                            </div>
+                            
+                          </div>
+                          
+                          {/* 3. Ajuste Manual */}
                           {!isBlocked && (
-                            <td className="px-5 py-4 bg-indigo-50/30 dark:bg-indigo-900/10">
-                              <select
-                                value={ev.partner_situation || ''}
-                                disabled={updatingItem === ev.id || isBlocked}
-                                onChange={(e) => {
-                                  if (ev.id) updateSituation(ev.id, ev.isbn13 || ev.ean_isbn, e.target.value);
-                                }}
-                                className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50 disabled:opacity-50"
-                              >
-                                <option value="reservado_total">Atender Total</option>
-                                <option value="atendimento_parcial_sem_reserva">Atend. Parcial</option>
-                                <option value="sem_estoque">Sem Estoque</option>
-                                <option value="esgotado">Esgotado</option>
-                                <option value="fora_catalogo">Fora de Catálogo</option>
-                                <option value="item_nao_comercializado">Não Comercializado</option>
-                                <option value="item_rejeitado">Rejeitar Item</option>
-                              </select>
+                            <div className="lg:w-[180px] shrink-0 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100 dark:border-slate-800 flex flex-col gap-1 w-full sm:w-auto">
+                              <span className="text-[9px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider block mb-1">Ajuste Manual</span>
+                              <div className="relative">
+                                <select
+                                  value={ev.partner_situation || ''}
+                                  disabled={updatingItem === ev.id || isBlocked}
+                                  onChange={(e) => {
+                                    if (ev.id) updateSituation(ev.id, ev.isbn13 || ev.ean_isbn, e.target.value);
+                                  }}
+                                  className="w-full px-3 py-1.5 bg-slate-50 hover:bg-slate-100/80 dark:bg-slate-800 dark:hover:bg-slate-700/80 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50 transition cursor-pointer appearance-none shadow-sm"
+                                >
+                                  <option value="reservado_total">Atender Total</option>
+                                  <option value="atendimento_parcial_sem_reserva">Atend. Parcial</option>
+                                  <option value="sem_estoque">Sem Estoque</option>
+                                  <option value="esgotado">Esgotado</option>
+                                  <option value="fora_catalogo">Fora de Catálogo</option>
+                                  <option value="item_nao_comercializado">Não Comercializado</option>
+                                  <option value="item_rejeitado">Rejeitar Item</option>
+                                </select>
+                                <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none text-slate-400">
+                                  <span className="text-[10px]">▼</span>
+                                </div>
+                              </div>
                               {ev.sit_manual_change && (
-                                <p className="text-[9px] text-amber-600 mt-1 font-medium flex items-center gap-1">
-                                  <AlertTriangle className="w-2.5 h-2.5" /> Alterado manualmente
-                                </p>
+                                <span className="text-[9px] text-amber-600 dark:text-amber-500 font-semibold flex items-center gap-1 mt-1 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 w-fit">
+                                  <AlertTriangle className="w-3 h-3 shrink-0" /> Editado
+                                </span>
                               )}
                               {updatingItem === ev.id && (
-                                <p className="text-[9px] text-indigo-500 mt-1">Salvando...</p>
+                                <span className="text-[9px] text-indigo-500 dark:text-indigo-400 mt-1 animate-pulse font-medium">Salvando...</span>
                               )}
-                            </td>
+                            </div>
                           )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                          
+                        </div>
+                      );
+                    })}
+                    {filteredSortedItems.length === 0 && (
+                      <div className="text-center py-12 text-slate-400 dark:text-slate-500 flex flex-col items-center justify-center gap-2">
+                        <Search className="w-8 h-8 opacity-40 mb-2" />
+                        <p className="font-bold text-sm">Nenhum item localizado</p>
+                        <p className="text-xs">Não encontramos nenhum item correspondente à busca "{searchQuery}".</p>
+                      </div>
+                    )}
+                  </div>
                 )
               )}
             </div>
