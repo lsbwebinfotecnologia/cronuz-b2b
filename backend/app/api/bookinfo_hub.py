@@ -254,14 +254,46 @@ async def get_order_detail(
             timeline = []
             
             if local_order:
+                # Busca itens analisados (ord_order_item com partner_situation preenchido)
+                analysed_items_db = db.query(OrderItem).filter(
+                    OrderItem.order_id == local_order.id,
+                    OrderItem.partner_situation.isnot(None)
+                ).all()
+
+                analysed_items_list = [
+                    {
+                        "id": it.id,
+                        "ean_isbn": it.ean_isbn,
+                        "isbn13": it.ean_isbn,
+                        "name": it.name,
+                        "brand": it.brand,
+                        "qty_requested": it.quantity_requested,
+                        "quantity_requested": it.quantity_requested,
+                        "available_qty": int(it.available_qty or 0),
+                        "price_gross": float(it.price_gross or 0),
+                        "discount_allowed": float(it.discount_allowed or 0),
+                        "partner_discount": float(it.partner_discount or 0),
+                        "partner_situation": it.partner_situation,
+                        "situation_detail": it.situation_detail,
+                        "sit_manual_change": it.sit_manual_change,
+                        "partner_item_id": it.partner_item_id,
+                        "analysed_at": it.analysed_at.isoformat() if it.analysed_at else None,
+                    }
+                    for it in analysed_items_db
+                ]
+
                 order_internal = {
                     "id": local_order.id,
                     "status": local_order.status,
                     "tracking_code": local_order.tracking_code,
                     "horus_pedido_venda": local_order.horus_pedido_venda,
                     "created_at": local_order.created_at.isoformat() if local_order.created_at else None,
-                    "bookinfo_nfe_sent": local_order.bookinfo_nfe_sent
+                    "bookinfo_nfe_sent": local_order.bookinfo_nfe_sent,
+                    "validated_items_erp": local_order.validated_items_erp,
+                    "validated_items_partner": local_order.validated_items_partner,
+                    "analysed_items": analysed_items_list,
                 }
+
                 
                 customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
                 company = db.query(Company).filter(Company.id == local_order.company_id).first()
@@ -644,8 +676,305 @@ async def evaluate_submit(
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Falha ao contatar servidor Bookinfo: {str(e)}")
 
+# ---------------------------------------------------------------------------
+# ANALYSE ITEMS — persiste resultado da análise Horus no banco local
+# ---------------------------------------------------------------------------
+
+class UpdateSituationRequest(BaseModel):
+    situation: str  # reservado_total, sem_estoque, esgotado, fora_catalogo, item_nao_comercializado, atendimento_parcial_sem_reserva
+
+VALID_SITUATIONS = {
+    "reservado_total",
+    "atendimento_parcial_sem_reserva",
+    "sem_estoque",
+    "esgotado",
+    "fora_catalogo",
+    "item_nao_comercializado",
+    "item_rejeitado",
+}
+
+@router.post("/orders/{order_id}/analyse")
+async def analyse_order_items(
+    order_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analisa os itens do pedido Bookinfo consultando o Horus em bloco
+    e persiste o resultado em ord_order_item (upsert por ean_isbn).
+    Pode ser chamado múltiplas vezes (revalidação) — cada chamada sobrescreve
+    a situação automática e registra analysed_at, mas preserva alterações manuais
+    que o usuário tenha feito (sit_manual_change=True).
+    """
+    from datetime import datetime as dt
+
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+
+    # Segurança: se já foi enviado ao Horus ERP, bloqueia
+    local_order = db.query(Order).filter(
+        Order.company_id == current_user.company_id,
+        Order.external_id == order_id,
+        Order.origin == "bookinfo"
+    ).first()
+
+    if local_order and local_order.horus_pedido_venda:
+        raise HTTPException(
+            status_code=400,
+            detail="Pedido já integrado ao Horus ERP. Análise bloqueada."
+        )
+
+    if not local_order:
+        raise HTTPException(
+            status_code=404,
+            detail="Pedido não encontrado localmente. Receba o pedido primeiro."
+        )
+
+    settings = db.query(CompanySettings).filter(
+        CompanySettings.company_id == current_user.company_id
+    ).first()
+    if not settings or not settings.horus_url:
+        raise HTTPException(status_code=400, detail="ERP Horus não configurado.")
+
+    # 1. Busca itens na Bookinfo
+    async with get_bookinfo_client(current_user.company_id, db) as client:
+        try:
+            response = await client.get(f"/pedido/{order_id}")
+            response.raise_for_status()
+            bookinfo_order = response.json()
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Erro ao buscar pedido na Bookinfo: {str(e)}")
+
+    items = bookinfo_order.get("itens", [])
+    if not items:
+        raise HTTPException(status_code=400, detail="Pedido não possui itens.")
+
+    # 2. Consulta em bloco no Horus (Busca_AcervoB2B)
+    horus_client = HorusProducts(settings)
+    cnpj = bookinfo_order.get("cnpjComprador", "0")
+    horus_customer_doc = "".join(filter(str.isdigit, str(cnpj))) if cnpj else "0"
+
+    isbns_payload = [{"BARRAS_ISBN": item.get("isbn13")} for item in items if item.get("isbn13")]
+
+    try:
+        horus_res = await horus_client.busca_acervo_padrao(
+            id_doc=horus_customer_doc,
+            isbns=isbns_payload
+        )
+        horus_items = horus_res if isinstance(horus_res, list) else []
+        if isinstance(horus_res, dict):
+            if "itens" in horus_res:
+                horus_items = horus_res["itens"]
+            elif "COD_ITEM" in horus_res:
+                horus_items = [horus_res]
+    except Exception as e:
+        horus_items = []
+        print(f"[analyse] Horus fetch failed: {e}")
+
+    # Monta dicionário ISBN → produto Horus
+    horus_map: dict = {}
+    for hi in horus_items:
+        isbn_key = str(hi.get("COD_BARRA_ITEM") or hi.get("BARRAS_ISBN") or "")
+        if isbn_key:
+            horus_map[isbn_key] = hi
+
+    # 3. Processa situação e faz upsert em ord_order_item
+    analysed_count = 0
+    results = []
+    now = dt.utcnow()
+
+    for req_item in items:
+        isbn = str(req_item.get("isbn13", "") or "")
+        if not isbn:
+            continue
+
+        req_qty      = int(req_item.get("quantidade", 0))
+        req_discount = float(req_item.get("descontoProposto", 0.0))
+        partner_item_id = str(req_item.get("id") or "")
+
+        hr = horus_map.get(isbn)
+
+        # --- processSituation (replica PHP) ---
+        if hr is None:
+            auto_situation = "item_nao_comercializado"
+            detail         = "não comercializado"
+            avail_qty      = 0
+            price_gross    = 0.0
+            disc_allowed   = 0.0
+        else:
+            avail_qty   = int(hr.get("SALDO_DISPONIVEL", 0))
+            price_gross = float(str(hr.get("VLR_CAPA", 0) or 0).replace(",", "."))
+            disc_allowed = float(str(hr.get("VLR_DESC_CLI", 0) or 0).replace(",", "."))
+            sit_item    = hr.get("SITUACAO_ITEM", "")
+
+            if sit_item == "FE":
+                auto_situation = "esgotado"
+                detail = "esgotado"
+            elif sit_item == "FC":
+                auto_situation = "fora_catalogo"
+                detail = "fora de catálogo"
+            else:
+                details_list = []
+                if req_discount > disc_allowed:
+                    details_list.append("divergência de desconto")
+                if avail_qty >= req_qty:
+                    auto_situation = "reservado_total"
+                    details_list.append("disponível")
+                elif avail_qty > 0:
+                    auto_situation = "atendimento_parcial_sem_reserva"
+                    details_list.append("atendimento parcial")
+                else:
+                    auto_situation = "sem_estoque"
+                    details_list.append("sem estoque")
+                detail = "; ".join(details_list)
+
+        # Upsert: busca pelo isbn + order_id
+        existing_item = db.query(OrderItem).filter(
+            OrderItem.order_id == local_order.id,
+            OrderItem.ean_isbn == isbn
+        ).first()
+
+        if existing_item:
+            # Preserva situação manual — só sobrescreve se não foi alterado manualmente
+            if not existing_item.sit_manual_change:
+                existing_item.partner_situation = auto_situation
+                existing_item.situation_detail  = detail
+            existing_item.available_qty    = avail_qty
+            existing_item.price_gross      = price_gross
+            existing_item.discount_allowed = disc_allowed
+            existing_item.partner_discount = req_discount
+            existing_item.partner_item_id  = partner_item_id
+            existing_item.analysed_at      = now
+            existing_item.quantity_requested = req_qty
+            # Atualiza nome/editora se vier do Horus
+            if hr:
+                existing_item.name  = hr.get("NOM_ITEM") or existing_item.name
+                existing_item.brand = hr.get("NOM_EDITORA") or existing_item.brand
+        else:
+            title = (hr.get("NOM_ITEM") if hr else None) or req_item.get("titulo") or "ND"
+            brand = (hr.get("NOM_EDITORA") if hr else None) or "ND"
+            existing_item = OrderItem(
+                order_id          = local_order.id,
+                ean_isbn          = isbn,
+                name              = title,
+                brand             = brand,
+                quantity          = req_qty,
+                quantity_requested= req_qty,
+                quantity_fulfilled= 0,
+                unit_price        = 0.0,
+                total_price       = 0.0,
+                partner_situation = auto_situation,
+                situation_detail  = detail,
+                available_qty     = avail_qty,
+                price_gross       = price_gross,
+                discount_allowed  = disc_allowed,
+                partner_discount  = req_discount,
+                sit_manual_change = False,
+                partner_item_id   = partner_item_id,
+                analysed_at       = now,
+            )
+            db.add(existing_item)
+
+        analysed_count += 1
+        results.append({
+            "isbn13": isbn,
+            "name": existing_item.name,
+            "brand": existing_item.brand,
+            "qty_requested": req_qty,
+            "available_qty": avail_qty,
+            "price_gross": price_gross,
+            "discount_allowed": float(disc_allowed),
+            "partner_discount": float(req_discount),
+            "partner_situation": existing_item.partner_situation,
+            "situation_detail": detail,
+            "sit_manual_change": existing_item.sit_manual_change,
+            "analysed_at": now.isoformat(),
+        })
+
+    # 4. Marca pedido como analisado e registra log
+    local_order.validated_items_erp = True
+    local_order.updated_at = now
+
+    # Log de análise
+    log_entry = OrderLog(
+        order_id   = local_order.id,
+        old_status = local_order.status,
+        new_status = local_order.status,
+        note       = f"Análise Horus executada: {analysed_count} item(ns) processado(s)."
+    )
+    db.add(log_entry)
+    db.commit()
+
+    # Resumo por situação
+    summary: dict = {}
+    for r in results:
+        sit = r["partner_situation"]
+        summary[sit] = summary.get(sit, 0) + 1
+
+    return {
+        "error": False,
+        "analysed": analysed_count,
+        "summary": summary,
+        "items": results,
+    }
+
+
+@router.patch("/orders/{order_id}/items/{item_id}/situation")
+async def update_item_situation(
+    order_id: str,
+    item_id: int,
+    payload: UpdateSituationRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Permite ao usuário alterar manualmente a situação de um item.
+    Marca sit_manual_change=True para preservar em próximas revalidações.
+    """
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+
+    if payload.situation not in VALID_SITUATIONS:
+        raise HTTPException(status_code=400, detail=f"Situação inválida: {payload.situation}")
+
+    local_order = db.query(Order).filter(
+        Order.company_id == current_user.company_id,
+        Order.external_id == order_id,
+        Order.origin == "bookinfo"
+    ).first()
+
+    if not local_order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+
+    if local_order.horus_pedido_venda:
+        raise HTTPException(status_code=400, detail="Pedido já integrado ao Horus ERP. Alterações bloqueadas.")
+
+    item = db.query(OrderItem).filter(
+        OrderItem.id == item_id,
+        OrderItem.order_id == local_order.id
+    ).first()
+
+    if not item:
+        raise HTTPException(status_code=404, detail="Item não encontrado.")
+
+    old_situation = item.partner_situation
+    item.partner_situation  = payload.situation
+    item.sit_manual_change  = True
+    item.situation_detail   = (item.situation_detail or "") + f"; alterado manualmente de '{old_situation}' para '{payload.situation}'"
+    db.commit()
+
+    return {
+        "error": False,
+        "message": "Situação atualizada com sucesso.",
+        "item_id": item_id,
+        "old_situation": old_situation,
+        "new_situation": payload.situation,
+    }
+
+
 import os
 from fastapi import Header
+
 
 @router.post("/jobs/sync-new-orders")
 async def job_sync_new_orders(

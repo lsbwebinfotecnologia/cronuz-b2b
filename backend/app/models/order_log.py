@@ -10,6 +10,7 @@ class OrderLog(Base):
     order_id = Column(Integer, ForeignKey("ord_order.id"), nullable=False)
     old_status = Column(String(50), nullable=True)
     new_status = Column(String(50), nullable=False)
+    note       = Column(Text, nullable=True)  # Descrição do evento (ex: análise Horus)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
