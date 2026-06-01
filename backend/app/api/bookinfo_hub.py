@@ -541,6 +541,91 @@ async def sync_customer_from_horus(
     
     return {"error": False, "message": f"Cliente '{name}' sincronizado com sucesso!"}
 
+
+async def _get_horus_customer_context(db: Session, company_id: int, cnpj: str, settings: CompanySettings) -> tuple[str, str]:
+    from app.models.customer import Customer
+    from app.models.user import User
+    from app.core.security import get_password_hash
+    from app.models.user import UserRole
+    
+    id_doc = "0"
+    id_guid = ""
+    if not cnpj:
+        return id_doc, id_guid
+        
+    cnpj_clean = "".join(filter(str.isdigit, str(cnpj)))
+    id_doc = cnpj_clean
+    customer = db.query(Customer).filter(
+        Customer.company_id == company_id,
+        Customer.document == cnpj_clean
+    ).first()
+    
+    if customer and customer.id_guid:
+        return customer.document or cnpj_clean, customer.id_guid
+
+    # Tenta sincronizar automaticamente do Horus
+    try:
+        from app.integrators.horus_clients import HorusClients
+        from app.models.company import Company
+        h_client = HorusClients(db, company_id)
+        company = db.query(Company).filter(Company.id == company_id).first()
+        cnpj_destino = company.document if company else (settings.horus_branch or "1")
+        res = await h_client.get_client(cnpj_destino=cnpj_destino, cnpj_cliente=cnpj_clean)
+        if not res.get("error") and res.get("data"):
+            h_data = res.get("data", {})
+            fetched_guid = h_data.get("ID_GUID") or ""
+            fetched_doc = h_data.get("ID_CLIENTE") or cnpj_clean
+            
+            if customer:
+                customer.id_guid = fetched_guid
+                customer.id_doc = fetched_doc
+                db.commit()
+                return customer.document or cnpj_clean, customer.id_guid
+            else:
+                name = h_data.get("NOME_FANTASIA") or h_data.get("RAZAO_SOCIAL") or h_data.get("DESCRICAO") or f"Cliente {cnpj_clean}"
+                razao = h_data.get("RAZAO_SOCIAL") or name
+                email = h_data.get("EMAIL", f"{cnpj_clean}@placeholder.com")
+                
+                new_user = db.query(User).filter(
+                    User.company_id == company_id,
+                    User.document == cnpj_clean,
+                    User.type == UserRole.CUSTOMER
+                ).first()
+                if not new_user:
+                    new_user = User(
+                        company_id=company_id,
+                        type=UserRole.CUSTOMER,
+                        name=name,
+                        document=cnpj_clean,
+                        email=email,
+                        password_hash=get_password_hash(cnpj_clean),
+                        active=True
+                    )
+                    db.add(new_user)
+                    db.commit()
+                    db.refresh(new_user)
+                
+                customer = Customer(
+                    company_id=company_id,
+                    name=name,
+                    corporate_name=razao,
+                    document=cnpj_clean,
+                    email=email,
+                    id_doc=fetched_doc,
+                    id_guid=fetched_guid
+                )
+                db.add(customer)
+                db.commit()
+                db.refresh(customer)
+                return customer.document or cnpj_clean, customer.id_guid
+    except Exception as e:
+        print(f"[analyse] Auto-sync of customer {cnpj_clean} failed: {e}")
+        
+    if customer:
+        return customer.document or cnpj_clean, customer.id_guid or ""
+    return id_doc, id_guid
+
+
 @router.get("/orders/{order_id}/evaluate-preview")
 async def evaluate_preview(
     order_id: str,
@@ -574,22 +659,26 @@ async def evaluate_preview(
     horus_client = HorusProducts(db=db, company_id=current_user.company_id)
     
     # Customer ID Doc for Horus Context (if required)
-    # Bookinfo passes cnpjComprador. Let's send that as id_doc to horus if possible, or leave default.
-    horus_customer_doc = "0"
     cnpj = bookinfo_order.get("cnpjComprador")
-    if cnpj:
-         horus_customer_doc = "".join(filter(str.isdigit, str(cnpj)))
+    id_doc, id_guid = await _get_horus_customer_context(db, current_user.company_id, cnpj, settings)
+    
+    if not id_guid:
+        raise HTTPException(
+            status_code=400,
+            detail="Cliente não possui ID GUID do Horus. Por favor, certifique-se de que o cliente está cadastrado e ativo no Horus ERP antes de analisar."
+        )
          
     evaluation = []
     
-    # In a fully optimized flow, we'd batch-request ISBNs. `busca_acervo_padrao` allows `isbns=[{"BARRAS_ISBN": "..."}]`
+    # In a fully optimized flow, we'd batch-request ISBNs. `busca_acervo_b2b` allows `isbns=[{"BARRAS_ISBN": "..."}]`
     # Let's use batch query for speed!
     isbns_payload = [{"BARRAS_ISBN": item.get("isbn13")} for item in items if item.get("isbn13")]
     
     try:
-         # Uses POST searchInList equivalent to retrieve multiple items
-         horus_res = await horus_client.busca_acervo_padrao(
-              id_doc=horus_customer_doc,
+         # Uses POST searchInList equivalent to retrieve multiple items via Busca_AcervoB2B
+         horus_res = await horus_client.busca_acervo_b2b(
+              id_doc=id_doc,
+              id_guid=id_guid,
               isbns=isbns_payload
          )
          # Format returned payload into a easily searchable dict by ISBN
@@ -776,13 +865,20 @@ async def analyse_order_items(
     # 2. Consulta em bloco no Horus (Busca_AcervoB2B)
     horus_client = HorusProducts(db=db, company_id=current_user.company_id)
     cnpj = bookinfo_order.get("cnpjComprador", "0")
-    horus_customer_doc = "".join(filter(str.isdigit, str(cnpj))) if cnpj else "0"
+    id_doc, id_guid = await _get_horus_customer_context(db, current_user.company_id, cnpj, settings)
+    
+    if not id_guid:
+        raise HTTPException(
+            status_code=400,
+            detail="Cliente não possui ID GUID do Horus. Por favor, certifique-se de que o cliente está cadastrado e ativo no Horus ERP antes de analisar os itens."
+        )
 
     isbns_payload = [{"BARRAS_ISBN": item.get("isbn13")} for item in items if item.get("isbn13")]
 
     try:
-        horus_res = await horus_client.busca_acervo_padrao(
-            id_doc=horus_customer_doc,
+        horus_res = await horus_client.busca_acervo_b2b(
+            id_doc=id_doc,
+            id_guid=id_guid,
             isbns=isbns_payload
         )
         horus_items = horus_res if isinstance(horus_res, list) else []
