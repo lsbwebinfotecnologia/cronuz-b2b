@@ -48,8 +48,21 @@ def toggle_purchase_auto(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Ativa ou desativa o job automatico de pedidos de compra para um seller e atualiza o intervalo em minutos."""
-    _require_master(current_user)
+    """Ativa/desativa o job automático e/ou atualiza o intervalo em minutos.
+    MASTER pode alterar qualquer seller (toggle + intervalo).
+    SELLER pode atualizar apenas o intervalo da própria empresa.
+    """
+    is_master = current_user.type == "MASTER"
+    is_own_company = (
+        current_user.type == "SELLER"
+        and current_user.company_id == company_id
+    )
+
+    if not is_master and not is_own_company:
+        raise HTTPException(
+            status_code=403,
+            detail="Acesso não autorizado para alterar configurações deste seller."
+        )
 
     settings = db.query(CompanySettings).filter(
         CompanySettings.company_id == company_id
@@ -59,11 +72,14 @@ def toggle_purchase_auto(
         settings = CompanySettings(company_id=company_id)
         db.add(settings)
 
-    settings.bookinfo_purchase_auto = body.bookinfo_purchase_auto
+    # Somente MASTER pode ativar/desativar a automação
+    if is_master:
+        settings.bookinfo_purchase_auto = body.bookinfo_purchase_auto
+
     if body.bookinfo_purchase_interval_minutes is not None:
-        # Garante intervalo valido: minimo 5, maximo 1440 (1 dia)
         interval = max(5, min(1440, body.bookinfo_purchase_interval_minutes))
         settings.bookinfo_purchase_interval_minutes = interval
+
     db.commit()
     db.refresh(settings)
 
@@ -72,6 +88,7 @@ def toggle_purchase_auto(
         "bookinfo_purchase_auto": settings.bookinfo_purchase_auto,
         "bookinfo_purchase_interval_minutes": settings.bookinfo_purchase_interval_minutes,
     }
+
 
 
 # -------------------------------------------------------------------

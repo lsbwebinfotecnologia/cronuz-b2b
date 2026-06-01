@@ -202,9 +202,18 @@ export default function BookinfoPurchasesPage() {
     }
   };
 
-  const formatDateInput = (dateVal: any) => {
+  const formatDateInput = (dateVal: any): string => {
     if (!dateVal) return '';
-    return String(dateVal).split('T')[0];
+    // Se for um objeto Date, usa toISOString() para garantir formato ISO
+    if (dateVal instanceof Date) return dateVal.toISOString().split('T')[0];
+    // Se for string no formato dd/mm/yyyy, converte para yyyy-mm-dd
+    const strVal = String(dateVal);
+    if (/^\d{2}\/\d{2}\/\d{4}/.test(strVal)) {
+      const [d, m, y] = strVal.split('/');
+      return `${y}-${m}-${d}`;
+    }
+    // Caso seja ISO string ou qualquer outro formato com T
+    return strVal.split('T')[0];
   };
 
   const fetchSuppliers = useCallback(async () => {
