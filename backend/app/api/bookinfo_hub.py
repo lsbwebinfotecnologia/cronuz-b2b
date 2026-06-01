@@ -571,7 +571,7 @@ async def evaluate_preview(
     if not items:
         return []
         
-    horus_client = HorusProducts(settings)
+    horus_client = HorusProducts(db=db, company_id=current_user.company_id)
     
     # Customer ID Doc for Horus Context (if required)
     # Bookinfo passes cnpjComprador. Let's send that as id_doc to horus if possible, or leave default.
@@ -774,7 +774,7 @@ async def analyse_order_items(
         raise HTTPException(status_code=400, detail="Pedido não possui itens.")
 
     # 2. Consulta em bloco no Horus (Busca_AcervoB2B)
-    horus_client = HorusProducts(settings)
+    horus_client = HorusProducts(db=db, company_id=current_user.company_id)
     cnpj = bookinfo_order.get("cnpjComprador", "0")
     horus_customer_doc = "".join(filter(str.isdigit, str(cnpj))) if cnpj else "0"
 
