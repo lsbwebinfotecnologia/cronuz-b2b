@@ -98,6 +98,7 @@ class PDVOrderItem(BaseModel):
     unit_price: float
 
 class PDVOrderCreate(BaseModel):
+    order_id: Optional[int] = None
     customer_id: int
     items: List[PDVOrderItem]
     total_amount: float

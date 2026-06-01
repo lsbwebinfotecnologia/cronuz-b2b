@@ -256,6 +256,7 @@ export default function NewSellerOrderPage() {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
             
             const payload = {
+                order_id: urlOrderId ? Number(urlOrderId) : null,
                 customer_id: selectedCustomer.id,
                 items: cart.map(i => {
                     const isHorus = typeof i.id === 'string' && i.id.startsWith('horus-');

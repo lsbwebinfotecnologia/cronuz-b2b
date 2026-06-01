@@ -38,25 +38,57 @@ async def create_pdv_order(
     if customer.crm_status == 'BLOCKED':
         raise HTTPException(status_code=403, detail="Cliente encontra-se pendente/bloqueado em nosso CRM. Criação de pedido negada.")
 
-    # Local Order Creation
-    order = Order(
-        company_id=current_user.company_id,
-        customer_id=payload.customer_id,
-        agent_id=current_user.id,
-        status="PROCESSING",
-        origin=payload.source,
-        type_order=payload.type_order or "V",
-        subtotal=sum([i.quantity * i.unit_price for i in payload.items]),
-        discount=payload.discount_amount,
-        total=payload.total_amount,
-        confirmed_at=datetime.utcnow()
-    )
-    db.add(order)
+    # Local Order Creation or Draft Finalization
+    order = None
+    if payload.order_id:
+        order = db.query(Order).filter(
+            Order.id == payload.order_id,
+            Order.company_id == current_user.company_id
+        ).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Rascunho do pedido não encontrado")
+        
+        # Clear existing items for this order to rebuild them
+        db.query(OrderItem).filter(OrderItem.order_id == order.id).delete()
+        
+        # Clean up any existing financial records for this order to avoid duplicates/residues
+        from app.models.financial import FinancialTransaction, FinancialInstallment
+        existing_transactions = db.query(FinancialTransaction).filter(FinancialTransaction.order_id == order.id).all()
+        for tx in existing_transactions:
+            db.query(FinancialInstallment).filter(FinancialInstallment.transaction_id == tx.id).delete()
+            db.delete(tx)
+        
+        # Update attributes
+        order.customer_id = payload.customer_id
+        order.agent_id = current_user.id
+        order.status = "PROCESSING"
+        order.origin = payload.source
+        order.type_order = payload.type_order or "V"
+        order.subtotal = sum([i.quantity * i.unit_price for i in payload.items])
+        order.discount = payload.discount_amount
+        order.total = payload.total_amount
+        order.confirmed_at = datetime.utcnow()
+    else:
+        order = Order(
+            company_id=current_user.company_id,
+            customer_id=payload.customer_id,
+            agent_id=current_user.id,
+            status="PROCESSING",
+            origin=payload.source,
+            type_order=payload.type_order or "V",
+            subtotal=sum([i.quantity * i.unit_price for i in payload.items]),
+            discount=payload.discount_amount,
+            total=payload.total_amount,
+            confirmed_at=datetime.utcnow()
+        )
+        db.add(order)
+        
     db.commit()
     db.refresh(order)
 
-    # Initial Log
-    log_new = OrderLog(order_id=order.id, old_status=None, new_status="NEW")
+    # Initial Log or Transition Log
+    old_status = "NEW" if payload.order_id else None
+    log_new = OrderLog(order_id=order.id, old_status=old_status, new_status="PROCESSING")
     db.add(log_new)
     db.commit()
 
