@@ -253,7 +253,8 @@ export default function BookinfoPurchaseAutomationPage() {
               Automação — Pedidos de Compra Bookinfo
             </h1>
             <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              Job automático · Intervalo: 15 minutos · Timezone: Brasília
+              Job automático · Intervalo configurável por seller · Timezone: Brasília
+
             </p>
           </div>
         </div>
@@ -273,8 +274,9 @@ export default function BookinfoPurchaseAutomationPage() {
            style={{ background: 'rgba(59,130,246,0.08)', borderColor: 'rgba(59,130,246,0.2)' }}>
         <Info className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
         <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-          O job roda automaticamente a cada <strong className="text-blue-400">15 minutos</strong> para cada seller com automação ativada.
+          O job roda automaticamente a cada <strong className="text-blue-400">intervalo configurado por seller</strong> para cada seller com automação ativada.
           Ele busca pedidos <strong>não transmitidos</strong> no Horus, envia para a Bookinfo e sincroniza os retornos.
+          O intervalo padrão é <strong className="text-blue-400">15 minutos</strong> e pode ser ajustado individualmente — mínimo de <strong>5 min</strong> e máximo de <strong>1440 min</strong> (24h).
           Pedidos com <code className="bg-slate-700 px-1 rounded">COMPRA_CONSIG</code> diferente de N ou S são ignorados automaticamente.
         </p>
       </div>
