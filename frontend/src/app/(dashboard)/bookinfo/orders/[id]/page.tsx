@@ -467,8 +467,8 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
               </div>
 
               <div className="flex gap-2 my-2 flex-wrap">
-                {/* Receber pedido */}
-                {order.status === 'NOVO' && !isBlocked && (
+                {/* Receber pedido — aparece quando não há espelho local ainda */}
+                {!orderInternal.id && !isBlocked && (
                   <button
                     onClick={acknowledgeOrder}
                     disabled={isAcknowledging}

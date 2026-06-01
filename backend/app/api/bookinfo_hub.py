@@ -17,6 +17,8 @@ from app.models.order_log import OrderLog
 from app.integrators.horus_products import HorusProducts
 from app.integrators.horus_clients import HorusClients
 from app.core.security import get_password_hash
+import app.models.print_point  # resolve relationship PrintPoint em Company (evita InvalidRequestError 500)
+
 
 router = APIRouter(prefix="/bookinfo", tags=["bookinfo"])
 
@@ -410,28 +412,41 @@ async def acknowledge_order(
             raise HTTPException(status_code=400, detail="CNPJ Comprador não fornecido no payload da parceira")
             
         cnpj_clean = "".join(filter(str.isdigit, str(cnpj)))
-        customer = db.query(User).filter(
-            User.company_id == current_user.company_id,
-            User.document == cnpj_clean,
-            User.type == UserRole.CUSTOMER
+
+        # Busca primeiro no CRM (Customer), depois como fallback em User CUSTOMER
+        crm_customer = db.query(Customer).filter(
+            Customer.company_id == current_user.company_id,
+            Customer.document == cnpj_clean
         ).first()
-        
-        if not customer:
-             raise HTTPException(status_code=400, detail="Cliente não existe ou não está sincronizado no dashboard B2B")
-             
+
+        if crm_customer:
+            customer_id = crm_customer.id
+        else:
+            # Fallback: tenta pelo User de autenticação B2B
+            user_customer = db.query(User).filter(
+                User.company_id == current_user.company_id,
+                User.document == cnpj_clean,
+                User.type == UserRole.CUSTOMER
+            ).first()
+            if not user_customer:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cliente com CNPJ {cnpj_clean} não está sincronizado. Use o botão 'Sincronizar Cliente' primeiro."
+                )
+            customer_id = user_customer.id
+
         # Save local mirror using helper
-        new_order = __upsert_bookinfo_order_local(db, current_user.company_id, customer.id, bookinfo_order)
+        new_order = __upsert_bookinfo_order_local(db, current_user.company_id, customer_id, bookinfo_order)
         
         # Notify Bookhub
         try:
             put_resp = await client.put(f"/pedido/{order_id}/avaliacao/RECEBIDO", json={})
             put_resp.raise_for_status()
-        except Exception as e:
-            # We saved locally but failed to tell bookinfo. Might be a transient error.
-            # In a robust system, we would enqueue a retry. For now just bubble up warning.
+        except Exception:
             pass
             
         return {"error": False, "message": "Pedido recebido com sucesso!", "id": new_order.id}
+
 
 class CustomerSyncRequest(BaseModel):
     cnpj: str
