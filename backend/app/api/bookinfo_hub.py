@@ -17,7 +17,16 @@ from app.models.order_log import OrderLog
 from app.integrators.horus_products import HorusProducts
 from app.integrators.horus_clients import HorusClients
 from app.core.security import get_password_hash
-import app.models.print_point  # resolve relationship PrintPoint em Company (evita InvalidRequestError 500)
+
+# Garante que todos os modelos referenciados por Company estejam carregados
+# (evita SQLAlchemy InvalidRequestError ao resolver relationships como User, PrintPoint, SysEmailTemplate)
+import app.models.print_point
+import app.models.user        # Company.users -> User
+try:
+    import app.models.email_template  # Company.email_templates -> SysEmailTemplate
+except ImportError:
+    pass
+
 
 
 router = APIRouter(prefix="/bookinfo", tags=["bookinfo"])
@@ -783,8 +792,15 @@ async def analyse_order_items(
             elif "COD_ITEM" in horus_res:
                 horus_items = [horus_res]
     except Exception as e:
-        horus_items = []
-        print(f"[analyse] Horus fetch failed: {e}")
+        import traceback as _tb
+        _err_detail = f"Falha ao consultar Horus: {str(e)}"
+        _err_trace  = _tb.format_exc()
+        print(f"[analyse] {_err_detail}\n{_err_trace}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"{_err_detail}\n\nTraceback:\n{_err_trace}"
+        )
+
 
     # Monta dicionário ISBN → produto Horus
     horus_map: dict = {}
