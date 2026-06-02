@@ -82,16 +82,26 @@ def process_nfse_queue_jobs():
                         if job.xml_protocol_id:
                             protocol_id = job.xml_protocol_id
                             logger.info(f"Retrying consulta para o protocolo {protocol_id} já existente...")
-                            consulta_result = await client.consultar_dps_por_protocolo(protocol_id)
-                            
-                            return {
-                                "success": consulta_result.get("success"),
-                                "protocol_id": protocol_id,
-                                "xml": consulta_result.get("xml"),
-                                "response": consulta_result.get("response", {}),
-                                "status_serpro": consulta_result.get("status_serpro"),
-                                "error": consulta_result.get("error")
-                            }
+                            if len(protocol_id) >= 50:
+                                consulta_result = await client.consultar_nota_por_chave(protocol_id)
+                                return {
+                                    "success": consulta_result.get("success"),
+                                    "protocol_id": protocol_id,
+                                    "xml": consulta_result.get("xml_legivel"),
+                                    "response": consulta_result.get("response", {}),
+                                    "status_serpro": "Autorizada" if consulta_result.get("success") else "Erro",
+                                    "error": consulta_result.get("error")
+                                }
+                            else:
+                                consulta_result = await client.consultar_dps_por_protocolo(protocol_id)
+                                return {
+                                    "success": consulta_result.get("success"),
+                                    "protocol_id": protocol_id,
+                                    "xml": consulta_result.get("xml"),
+                                    "response": consulta_result.get("response", {}),
+                                    "status_serpro": consulta_result.get("status_serpro"),
+                                    "error": consulta_result.get("error")
+                                }
                             
                         # Otherwise, emit new DPS
                         emit_result = await client.emitir_nota(order, service, customer, address, job.print_point)
@@ -99,13 +109,20 @@ def process_nfse_queue_jobs():
                             protocol_id = emit_result["protocol_id"]
                             logger.info(f"Aguardando processamento do recibo {protocol_id} na Sefaz...")
                             await asyncio.sleep(2)
-                            consulta_result = await client.consultar_dps_por_protocolo(protocol_id)
-                            
-                            emit_result["xml"] = consulta_result.get("xml")
-                            emit_result["response"]["consult_resp"] = consulta_result.get("response")
-                            emit_result["status_serpro"] = consulta_result.get("status_serpro")
-                            emit_result["error"] = consulta_result.get("error") if not consulta_result.get("success") else emit_result.get("error")
-                            emit_result["success"] = consulta_result.get("success")
+                            if len(protocol_id) >= 50:
+                                consulta_result = await client.consultar_nota_por_chave(protocol_id)
+                                emit_result["xml"] = consulta_result.get("xml_legivel")
+                                emit_result["response"]["consult_resp"] = consulta_result.get("response")
+                                emit_result["status_serpro"] = "Autorizada" if consulta_result.get("success") else "Erro"
+                                emit_result["error"] = consulta_result.get("error") if not consulta_result.get("success") else emit_result.get("error")
+                                emit_result["success"] = consulta_result.get("success")
+                            else:
+                                consulta_result = await client.consultar_dps_por_protocolo(protocol_id)
+                                emit_result["xml"] = consulta_result.get("xml")
+                                emit_result["response"]["consult_resp"] = consulta_result.get("response")
+                                emit_result["status_serpro"] = consulta_result.get("status_serpro")
+                                emit_result["error"] = consulta_result.get("error") if not consulta_result.get("success") else emit_result.get("error")
+                                emit_result["success"] = consulta_result.get("success")
                         return emit_result
                         
                     from app.core.scheduler import run_async
