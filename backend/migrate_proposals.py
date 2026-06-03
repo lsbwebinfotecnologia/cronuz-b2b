@@ -9,6 +9,8 @@ from app.models import proposal as proposal_models
 import app.models.order
 import app.models.service
 import app.models.user
+import app.models.lead
+import app.models.customer
 
 def run_migration():
     print("Iniciando migração de Propostas...")
