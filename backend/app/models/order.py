@@ -43,6 +43,7 @@ class Order(Base):
     discount = Column(Float, nullable=False, default=0.0)
     total = Column(Float, nullable=False, default=0.0)
     payment_condition = Column(String(50), nullable=True)
+    proposal_id = Column(Integer, ForeignKey("crm_proposal.id"), nullable=True, index=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     confirmed_at = Column(DateTime, nullable=True)
@@ -51,6 +52,7 @@ class Order(Base):
     # Relationship to Company and Customer
     company = relationship("Company")
     customer = relationship("Customer")
+    proposal = relationship("Proposal", back_populates="converted_orders", foreign_keys=[proposal_id])
     
     # Relationship to Items
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")

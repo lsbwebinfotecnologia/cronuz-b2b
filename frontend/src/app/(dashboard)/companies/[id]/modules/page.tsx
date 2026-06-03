@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -34,6 +34,7 @@ export default function CompanyModulesPage() {
       module_commercial: company.module_commercial,
       module_crm: company.module_crm,
       module_consignment: company.module_consignment,
+      module_proposals: company.module_proposals,
       [moduleName]: !currentValue
     };
 
@@ -397,6 +398,27 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_consignment', company.module_consignment)} 
                     disabled={togglingModule !== null}
                     colorClass="bg-orange-500"
+                  />
+                </div>
+              </div>
+
+              {/* Gestão de Propostas / Orçamentos */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_proposals ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <FileText className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Gestão de Propostas</p>
+                    <p className="text-xs text-slate-500">Gere propostas e orçamentos comerciais, com fluxo de conversão automática em Pedido e OS.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch 
+                    active={company.module_proposals} 
+                    onClick={() => handleToggleModule('module_proposals', company.module_proposals)} 
+                    disabled={togglingModule !== null}
+                    colorClass="bg-emerald-500"
                   />
                 </div>
               </div>

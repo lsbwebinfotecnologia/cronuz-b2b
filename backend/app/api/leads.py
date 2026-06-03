@@ -6,7 +6,7 @@ from app.schemas.lead import LeadCreate, Lead
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
-@router.post("/", response_model=Lead)
+@router.post("", response_model=Lead)
 def create_lead(lead_in: LeadCreate, db: Session = Depends(get_db)):
     db_lead = LeadModel(**lead_in.model_dump())
     db.add(db_lead)
@@ -14,7 +14,7 @@ def create_lead(lead_in: LeadCreate, db: Session = Depends(get_db)):
     db.refresh(db_lead)
     return db_lead
 
-@router.get("/", response_model=list[Lead])
+@router.get("", response_model=list[Lead])
 def list_leads(status: str = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     # Em produção isso deve ser protegido por authenticação MASTER
     query = db.query(LeadModel)

@@ -96,6 +96,7 @@ const sellerNavigation: NavItem[] = [
     ]
   },
   { name: 'Pedidos', href: '/orders', icon: ShoppingBag },
+  { name: 'Propostas', href: '/proposals', icon: FileText },
   { 
     name: 'Empresas', 
     href: '/customers', 
@@ -133,6 +134,7 @@ const agentNavigation: NavItem[] = [
   { name: 'Ponto de Venda (PDV)', href: '/pdv', icon: MonitorSmartphone },
   { name: 'Empresas', href: '/customers', icon: Users },
   { name: 'Pedidos', href: '/orders', icon: ShoppingBag },
+  { name: 'Propostas', href: '/proposals', icon: FileText },
 ];
 
 export function Sidebar() {
@@ -152,6 +154,7 @@ export function Sidebar() {
   const [moduleFinancial, setModuleFinancial] = useState(false);
   const [moduleServices, setModuleServices] = useState(false);
   const [moduleCommercial, setModuleCommercial] = useState(false);
+  const [moduleProposals, setModuleProposals] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
@@ -193,6 +196,7 @@ export function Sidebar() {
                setModuleFinancial(data.module_financial || false);
                setModuleServices(data.module_services || false);
                setModuleCommercial(data.module_commercial || false);
+               setModuleProposals(data.module_proposals || false);
             }
          } catch (e) {}
        };
@@ -228,6 +232,7 @@ export function Sidebar() {
     if (!usesBookinfo && nav.name === 'Bookinfo') return false;
     if (!moduleAgents && nav.href === '/agents') return false;
     if (!moduleServices && nav.name === 'Serviços') return false;
+    if (!moduleProposals && nav.name === 'Propostas') return false;
     return true;
   })].map(nav => {
     if (nav.name === 'Marketing' && usesHorus) {
@@ -287,9 +292,14 @@ export function Sidebar() {
     return item;
   });
 
+  const filteredAgentNavigation = agentNavigation.filter(nav => {
+    if (!moduleProposals && nav.name === 'Propostas') return false;
+    return true;
+  });
+
   const dynamicNavigation = user?.type === 'MASTER' ? dynamicMasterNavigation : 
                             (user?.type === 'SELLER' ? filteredSellerNavigation : 
-                             (user?.type === 'AGENT' ? agentNavigation : []));
+                             (user?.type === 'AGENT' ? filteredAgentNavigation : []));
 
   const handleLogout = async () => {
     try {

@@ -22,6 +22,7 @@ from app.models import print_point as print_point_models
 from app.models import consignment_draft as consignment_draft_models
 from app.models import email_template as email_template_models
 from app.models import bookinfo_purchase_log as purchase_log_models
+from app.models import proposal as proposal_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -50,6 +51,7 @@ from app.api import bookinfo_hub
 from app.api import bookinfo_purchases
 from app.api import bookinfo_purchase_logs
 from app.api import services
+from app.api import proposals
 from app.api import print_points
 from app.api import bank_slips
 from app.api import email_templates
@@ -76,6 +78,7 @@ order_models.Base.metadata.create_all(bind=engine)
 consignment_draft_models.Base.metadata.create_all(bind=engine)
 email_template_models.Base.metadata.create_all(bind=engine)
 purchase_log_models.Base.metadata.create_all(bind=engine)
+proposal_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -136,6 +139,7 @@ app.include_router(bookinfo_hub.router, tags=["bookinfo"])
 app.include_router(bookinfo_purchases.router, tags=["bookinfo_purchases"])
 app.include_router(bookinfo_purchase_logs.router, tags=["bookinfo_purchase_logs"])
 app.include_router(services.router, tags=["services"])
+app.include_router(proposals.router, tags=["proposals"])
 app.include_router(print_points.router, prefix="/print-points", tags=["print-points"])
 app.include_router(bank_slips.router, tags=["financial"])
 app.include_router(commercial_policies.router, tags=["commercial-policies"])
@@ -328,6 +332,7 @@ class ModuleUpdate(BaseModel):
     module_commercial: Optional[bool] = None
     module_crm: Optional[bool] = None
     module_consignment: Optional[bool] = None
+    module_proposals: Optional[bool] = None
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(

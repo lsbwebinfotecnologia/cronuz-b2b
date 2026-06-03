@@ -63,6 +63,7 @@ class ServiceOrder(Base):
     
     status = Column(SQLEnum(ServiceOrderStatus), default=ServiceOrderStatus.PENDING, nullable=False)
     status_nfse = Column(SQLEnum(ServiceOrderNfseStatus), default=ServiceOrderNfseStatus.NOT_ISSUED, nullable=False)
+    proposal_id = Column(Integer, ForeignKey("crm_proposal.id"), nullable=True, index=True)
 
     is_recurrent = Column(Boolean, default=False, nullable=False)
     recurrence_end_date = Column(Date, nullable=True)
@@ -79,6 +80,7 @@ class ServiceOrder(Base):
     company = relationship("Company")
     customer = relationship("Customer")
     service = relationship("Service")
+    proposal = relationship("Proposal", back_populates="converted_service_orders", foreign_keys=[proposal_id])
 
 import app.models.company
 import app.models.financial

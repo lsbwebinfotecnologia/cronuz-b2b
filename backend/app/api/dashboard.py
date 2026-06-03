@@ -142,6 +142,7 @@ def get_dashboard_metrics(
     module_services = company.module_services if company else False
     module_commercial = company.module_commercial if company else False
     module_crm = getattr(company, "module_crm", False) if company else False
+    module_proposals = company.module_proposals if company else False
 
     # Uses horus is now strongly derived from the company flag
     if current_user and current_user.type == "MASTER" and current_user.tenant_id == "horus":
@@ -235,7 +236,8 @@ def get_dashboard_metrics(
         "module_financial": module_financial,
         "module_services": module_services,
         "module_commercial": module_commercial,
-        "module_crm": module_crm
+        "module_crm": module_crm,
+        "module_proposals": module_proposals
     }
 
 @router.get("/crm-tasks")

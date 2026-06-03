@@ -64,7 +64,7 @@ export function middleware(request: NextRequest) {
   const userCookie = request.cookies.get(`cronuz_b2b_user_${hostKey}`) || request.cookies.get('cronuz_b2b_user');
   const isLoginPage = url.pathname === '/login';
   const isUploads = url.pathname.startsWith('/uploads');
-  const isPublicPage = url.pathname.startsWith('/h/') || url.pathname.startsWith('/marketing');
+  const isPublicPage = url.pathname.startsWith('/h/') || url.pathname.startsWith('/marketing') || url.pathname.startsWith('/public/');
 
   // Skip auth checks for public routes hitting the app domain directly
   if (isUploads || isPublicPage) {
