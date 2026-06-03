@@ -407,6 +407,8 @@ async def _process_supplier(
     db: Session,
     company_id: int,
     supplier: BookinfoSupplier,
+    send_enabled: bool = True,
+    sync_enabled: bool = True,
 ) -> BookinfoPurchaseJobLog:
     """
     Processa um fornecedor completo: busca pedidos, envia, sincroniza.
@@ -427,54 +429,58 @@ async def _process_supplier(
     details = []
 
     # --- PASSO 1: Busca e envio de novos pedidos ---
-    try:
-        orders = await _fetch_horus_orders(db, company_id, supplier)
-    except Exception as e:
-        log.status = "ERROR"
-        log.details = json.dumps([{"step": "fetch_horus", "error": str(e)}], ensure_ascii=False)
-        db.add(log)
-        db.commit()
-        logger.error(f"[PurchaseJob] company={company_id} supplier={supplier.id} fetch error: {e}")
-        return log
+    if send_enabled:
+        try:
+            orders = await _fetch_horus_orders(db, company_id, supplier)
+        except Exception as e:
+            log.status = "ERROR"
+            log.details = json.dumps([{"step": "fetch_horus", "error": str(e)}], ensure_ascii=False)
+            db.add(log)
+            db.commit()
+            logger.error(f"[PurchaseJob] company={company_id} supplier={supplier.id} fetch error: {e}")
+            return log
 
-    log.orders_found = len(orders)
+        log.orders_found = len(orders)
 
-    if not orders:
-        log.status = "NO_ORDERS"
+        if not orders:
+            log.status = "NO_ORDERS"
+        else:
+            for order_data in orders:
+                result = await _send_order_to_bookinfo(db, company_id, supplier, order_data)
+                status = result.get("status")
+                cod = order_data.get("COD_PEDIDO", "?")
+                details.append({"pedido": cod, "acao": "send", **result})
+
+                if status == "sent":
+                    log.orders_sent += 1
+                elif status in ("skipped", "duplicate"):
+                    log.orders_skipped += 1
+                elif status == "error":
+                    log.orders_error += 1
+                elif status == "partial":
+                    log.orders_sent += 1  # chegou na Bookinfo mas houve erro parcial no Horus
     else:
-        for order_data in orders:
-            result = await _send_order_to_bookinfo(db, company_id, supplier, order_data)
-            status = result.get("status")
-            cod = order_data.get("COD_PEDIDO", "?")
-            details.append({"pedido": cod, "acao": "send", **result})
-
-            if status == "sent":
-                log.orders_sent += 1
-            elif status in ("skipped", "duplicate"):
-                log.orders_skipped += 1
-            elif status == "error":
-                log.orders_error += 1
-            elif status == "partial":
-                log.orders_sent += 1  # chegou na Bookinfo mas houve erro parcial no Horus
+        log.orders_found = 0
 
     # --- PASSO 2: Sincronizacao de transmissoes SENT ---
-    pending_syncs = db.query(BookinfoTransmission).filter(
-        BookinfoTransmission.company_id == company_id,
-        BookinfoTransmission.supplier_id == supplier.id,
-        BookinfoTransmission.status == "SENT",
-        BookinfoTransmission.bookinfo_pedido_id.isnot(None),
-    ).all()
+    if sync_enabled:
+        pending_syncs = db.query(BookinfoTransmission).filter(
+            BookinfoTransmission.company_id == company_id,
+            BookinfoTransmission.supplier_id == supplier.id,
+            BookinfoTransmission.status == "SENT",
+            BookinfoTransmission.bookinfo_pedido_id.isnot(None),
+        ).all()
 
-    for tx in pending_syncs:
-        result = await _sync_transmission(db, company_id, tx)
-        status = result.get("status")
-        details.append({"transmission_id": tx.id, "pedido": tx.cod_pedido, "acao": "sync", **result})
+        for tx in pending_syncs:
+            result = await _sync_transmission(db, company_id, tx)
+            status = result.get("status")
+            details.append({"transmission_id": tx.id, "pedido": tx.cod_pedido, "acao": "sync", **result})
 
-        if status in ("synced", "partial"):
-            log.syncs_done += 1
-        elif status == "error":
-            log.syncs_error += 1
-        # "skipped" nao conta como erro
+            if status in ("synced", "partial"):
+                log.syncs_done += 1
+            elif status == "error":
+                log.syncs_error += 1
+            # "skipped" nao conta como erro
 
     # Determina status final do log
     if log.orders_error > 0 or log.syncs_error > 0:
@@ -485,8 +491,9 @@ async def _process_supplier(
         log.status = "SUCCESS"
 
     log.details = json.dumps(details, ensure_ascii=False)
-    db.add(log)
-    db.commit()
+    if log.status != "NO_ORDERS":
+        db.add(log)
+        db.commit()
 
     logger.info(
         f"[PurchaseJob] company={company_id} supplier={supplier.id} "
@@ -500,44 +507,47 @@ async def _run_job_async():
     """Funcao assincrona principal do job — itera por todos os sellers habilitados."""
     db: Session = SessionLocal()
     try:
-        # Busca sellers com bookinfo_purchase_auto=True E que tenham integrador Bookinfo ativo
+        # Busca sellers com bookinfo_purchase_auto=True OU bookinfo_sync_enabled=True E que tenham integrador Bookinfo ativo
         from app.models.integrator import Integrator
+        from sqlalchemy import or_
 
         active_settings = db.query(CompanySettings).filter(
-            CompanySettings.bookinfo_purchase_auto == True,  # noqa: E712
+            or_(
+                CompanySettings.bookinfo_purchase_auto == True,  # noqa: E712
+                CompanySettings.bookinfo_sync_enabled == True,   # noqa: E712
+            )
         ).all()
 
         if not active_settings:
-            logger.info("[PurchaseJob] Nenhum seller com bookinfo_purchase_auto ativo.")
+            logger.info("[PurchaseJob] Nenhum seller com auto envio ou sincronizacao ativos.")
             return
 
         # Filtra apenas sellers que também têm integrador Bookinfo ativo
-        company_ids_with_auto = [s.company_id for s in active_settings]
+        company_ids_active = [s.company_id for s in active_settings]
         active_integrators = db.query(Integrator).filter(
             Integrator.platform == "BOOKINFO",
             Integrator.active == True,  # noqa: E712
-            Integrator.company_id.in_(company_ids_with_auto),
+            Integrator.company_id.in_(company_ids_active),
         ).all()
         valid_company_ids = {i.company_id for i in active_integrators}
 
         if not valid_company_ids:
-            logger.info("[PurchaseJob] Sellers com auto ativo mas sem integrador Bookinfo configurado.")
+            logger.info("[PurchaseJob] Sellers com automacao ativa mas sem integrador Bookinfo configurado.")
             return
 
         for company_id in valid_company_ids:
             # Verifica o intervalo configurado para este seller
             seller_settings = next((s for s in active_settings if s.company_id == company_id), None)
+            if not seller_settings:
+                continue
+
             interval_minutes = getattr(seller_settings, "bookinfo_purchase_interval_minutes", 15) or 15
             interval_minutes = max(5, interval_minutes)  # garante mínimo de 5 min
 
-            # Checa o último log registrado para este seller
-            last_log_entry = db.query(BookinfoPurchaseJobLog).filter(
-                BookinfoPurchaseJobLog.company_id == company_id
-            ).order_by(BookinfoPurchaseJobLog.run_at.desc()).first()
-
-            if last_log_entry and last_log_entry.run_at:
+            # Checa o último run registrado no cmp_settings para este seller
+            if seller_settings.bookinfo_purchase_last_run:
                 from datetime import timezone
-                last_run = last_log_entry.run_at
+                last_run = seller_settings.bookinfo_purchase_last_run
                 if last_run.tzinfo is None:
                     last_run = last_run.replace(tzinfo=timezone.utc)
                 elapsed = (datetime.now(TZ_BRASILIA) - last_run.astimezone(TZ_BRASILIA)).total_seconds() / 60
@@ -548,6 +558,10 @@ async def _run_job_async():
                     )
                     continue
 
+            # Atualiza o last_run antes de processar
+            seller_settings.bookinfo_purchase_last_run = datetime.now(TZ_BRASILIA)
+            db.commit()
+
             suppliers = db.query(BookinfoSupplier).filter(
                 BookinfoSupplier.company_id == company_id
             ).all()
@@ -555,6 +569,9 @@ async def _run_job_async():
             if not suppliers:
                 logger.info(f"[PurchaseJob] company={company_id} sem suppliers cadastrados.")
                 continue
+
+            send_enabled = bool(seller_settings.bookinfo_purchase_auto)
+            sync_enabled = bool(seller_settings.bookinfo_sync_enabled)
 
             for supplier in suppliers:
                 if not supplier.document_origin or not supplier.document_destination:
@@ -564,7 +581,13 @@ async def _run_job_async():
                     )
                     continue
                 try:
-                    await _process_supplier(db, company_id, supplier)
+                    await _process_supplier(
+                        db,
+                        company_id,
+                        supplier,
+                        send_enabled=send_enabled,
+                        sync_enabled=sync_enabled,
+                    )
                 except Exception as e:
                     tb = traceback.format_exc()
                     logger.error(

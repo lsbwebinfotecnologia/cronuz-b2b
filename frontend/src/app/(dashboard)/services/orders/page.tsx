@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2, QrCode, Mail } from 'lucide-react';
+import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2, QrCode, Mail, Scissors } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
@@ -85,6 +85,11 @@ export default function ServiceOrdersPage() {
     const [isBulkDateModalOpen, setIsBulkDateModalOpen] = useState(false);
     const [bulkExecutionDate, setBulkExecutionDate] = useState(new Date().toISOString().split('T')[0]);
     const [updatingBulk, setUpdatingBulk] = useState(false);
+    
+    // Split Service Order Modal
+    const [isSplitOpen, setIsSplitOpen] = useState(false);
+    const [splittingOrder, setSplittingOrder] = useState<any>(null);
+    const [splits, setSplits] = useState<any[]>([]);
 
     useEffect(() => {
         fetchOrders();
@@ -244,6 +249,94 @@ export default function ServiceOrdersPage() {
             }
         } catch (e) {
             toast.error('Erro de conexão ao excluir.');
+        }
+    };
+
+    const addMonths = (dateStr: string, months: number) => {
+        const d = new Date(dateStr + 'T12:00:00');
+        d.setMonth(d.getMonth() + months);
+        return d.toISOString().split('T')[0];
+    };
+
+    const handleOpenSplit = (order: any) => {
+        setSplittingOrder(order);
+        const val1 = Math.round((order.negotiated_value / 2) * 100) / 100;
+        const val2 = Math.round((order.negotiated_value - val1) * 100) / 100;
+        setSplits([
+            { negotiated_value: val1.toString(), execution_date: order.execution_date, custom_description: `${order.custom_description || order.service_name || 'Serviço'} - Parte 1/2` },
+            { negotiated_value: val2.toString(), execution_date: addMonths(order.execution_date, 1), custom_description: `${order.custom_description || order.service_name || 'Serviço'} - Parte 2/2` }
+        ]);
+        setIsSplitOpen(true);
+    };
+
+    const handleChangeSplitsCount = (count: number) => {
+        if (!splittingOrder || count < 2) return;
+        const originalVal = splittingOrder.negotiated_value;
+        const baseVal = Math.round((originalVal / count) * 100) / 100;
+        
+        const newSplits = [];
+        let sum = 0;
+        for (let i = 0; i < count; i++) {
+            let val = baseVal;
+            if (i === count - 1) {
+                val = Math.round((originalVal - sum) * 100) / 100;
+            }
+            sum += val;
+            newSplits.push({
+                negotiated_value: val.toString(),
+                execution_date: addMonths(splittingOrder.execution_date, i),
+                custom_description: `${splittingOrder.custom_description || splittingOrder.service_name || 'Serviço'} - Parte ${i+1}/${count}`
+            });
+        }
+        setSplits(newSplits);
+    };
+
+    const handleUpdateSplitField = (index: number, field: string, value: string) => {
+        const updated = [...splits];
+        updated[index] = { ...updated[index], [field]: value };
+        setSplits(updated);
+    };
+
+    const handleSplitSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (isSubmitting) return;
+        
+        const totalSplitsValue = splits.reduce((acc, curr) => acc + parseFloat(curr.negotiated_value || '0'), 0);
+        if (Math.abs(totalSplitsValue - splittingOrder.negotiated_value) > 0.02) {
+            toast.error(`A soma das parcelas (R$ ${totalSplitsValue.toFixed(2)}) deve ser igual ao valor total da O.S. (R$ ${splittingOrder.negotiated_value.toFixed(2)}).`);
+            return;
+        }
+
+        setIsSubmitting(true);
+        try {
+            const payload = {
+                splits: splits.map(item => ({
+                    negotiated_value: parseFloat(item.negotiated_value),
+                    execution_date: item.execution_date,
+                    custom_description: item.custom_description || null
+                }))
+            };
+
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/${splittingOrder.id}/split`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                toast.success('Serviço desmembrado com sucesso!');
+                setIsSplitOpen(false);
+                setSplittingOrder(null);
+                setSplits([]);
+                fetchOrders();
+            } else {
+                const err = await res.json();
+                toast.error(err.detail || 'Erro ao desmembrar serviço.');
+            }
+        } catch (e) {
+            toast.error('Erro de conexão ao desmembrar.');
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -1047,6 +1140,15 @@ export default function ServiceOrdersPage() {
                                                     </Link>
                                                 )}
                                                 <div className="flex gap-2 items-center ml-2 border-l border-slate-200 dark:border-slate-700 pl-3">
+                                                    {order.status_nfse === 'Nao Emitida' && order.status !== 'Cancelado' && (
+                                                        <button 
+                                                            onClick={() => handleOpenSplit(order)}
+                                                            className="p-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 font-bold rounded-lg transition"
+                                                            title="Desmembrar O.S. (Dividir)"
+                                                        >
+                                                            <Scissors className="w-4 h-4"/>
+                                                        </button>
+                                                    )}
                                                     {order.status_nfse === 'Nao Emitida' && order.status !== 'Cancelado' && order.status !== 'Pendente' && (
                                                         <button 
                                                             onClick={() => handleCancelLocal(order.id)}
@@ -1059,7 +1161,7 @@ export default function ServiceOrdersPage() {
                                                     {order.status_nfse === 'Nao Emitida' && (
                                                         <button 
                                                             onClick={() => handleDeleteOrder(order.id)}
-                                                            className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition ml-2"
+                                                            className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition"
                                                             title="Excluir O.S."
                                                         >
                                                             <Trash2 className="w-4 h-4"/>
@@ -1515,6 +1617,200 @@ export default function ServiceOrdersPage() {
                                     className="flex-1 py-2.5 bg-indigo-600 text-white text-center px-4 font-bold rounded-xl hover:bg-indigo-700 transition shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
                                 >
                                     {updatingBulk ? 'Processando...' : 'Confirmar'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {/* SPLIT SERVICE ORDER MODAL */}
+            {isSplitOpen && splittingOrder && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm overflow-y-auto">
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-4xl overflow-hidden border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200 my-8">
+                        {/* Header */}
+                        <div className="flex items-center justify-between p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                                    <Scissors className="w-5 h-5 text-indigo-500" /> Desmembrar Ordem de Serviço
+                                </h3>
+                                <p className="text-xs text-slate-500 mt-1">
+                                    Divida a O.S. #{splittingOrder.local_id} em múltiplas partes com datas e faturamentos distintos.
+                                </p>
+                            </div>
+                            <button 
+                                onClick={() => {
+                                    setIsSplitOpen(false);
+                                    setSplittingOrder(null);
+                                    setSplits([]);
+                                }} 
+                                className="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-400"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* Content */}
+                        <div className="p-6 space-y-6">
+                            {/* Summary of Original O.S. */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 dark:bg-slate-800/40 p-4 rounded-2xl border border-slate-100 dark:border-slate-800 text-sm">
+                                <div>
+                                    <span className="block text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase">Cliente</span>
+                                    <span className="font-bold text-slate-700 dark:text-slate-300">{splittingOrder.customer_name || 'N/A'}</span>
+                                </div>
+                                <div>
+                                    <span className="block text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase">Valor Total</span>
+                                    <span className="font-black text-indigo-600 dark:text-indigo-400 text-base">
+                                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(splittingOrder.negotiated_value)}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase">Data Original</span>
+                                    <span className="font-bold text-slate-700 dark:text-slate-300">
+                                        {splittingOrder.execution_date ? new Date(splittingOrder.execution_date + 'T12:00:00').toLocaleDateString('pt-BR') : 'N/A'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Quantity selector */}
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
+                                <div>
+                                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
+                                        Quantidade de Divisões
+                                    </label>
+                                    <p className="text-xs text-slate-500">Selecione em quantas partes deseja fracionar o serviço (entre 2 e 12).</p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <select
+                                        value={splits.length}
+                                        onChange={(e) => handleChangeSplitsCount(parseInt(e.target.value))}
+                                        className="px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 text-slate-700 dark:text-slate-300 font-bold text-sm"
+                                    >
+                                        {[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => (
+                                            <option key={num} value={num}>{num} Partes</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Splits List */}
+                            <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2">
+                                {splits.map((item, idx) => (
+                                    <div key={idx} className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-3 relative">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-2.5 py-1 rounded-lg">
+                                                Parte {idx + 1}
+                                            </span>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                                            {/* Value */}
+                                            <div className="md:col-span-2">
+                                                <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">
+                                                    Valor Negociado (R$)
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    required
+                                                    value={item.negotiated_value}
+                                                    onChange={(e) => handleUpdateSplitField(idx, 'negotiated_value', e.target.value)}
+                                                    className="w-full px-3 py-2 border rounded-xl dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-sm focus:ring-2 focus:ring-indigo-500 font-semibold"
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+
+                                            {/* Execution Date */}
+                                            <div className="md:col-span-2">
+                                                <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">
+                                                    Data Base / Execução
+                                                </label>
+                                                <input
+                                                    type="date"
+                                                    required
+                                                    value={item.execution_date}
+                                                    onChange={(e) => handleUpdateSplitField(idx, 'execution_date', e.target.value)}
+                                                    className="w-full px-3 py-2 border rounded-xl dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-sm focus:ring-2 focus:ring-indigo-500"
+                                                />
+                                            </div>
+
+                                            {/* Custom Description */}
+                                            <div className="md:col-span-2">
+                                                <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">
+                                                    Descrição Customizada
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    value={item.custom_description || ''}
+                                                    onChange={(e) => handleUpdateSplitField(idx, 'custom_description', e.target.value)}
+                                                    className="w-full px-3 py-2 border rounded-xl dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-sm focus:ring-2 focus:ring-indigo-500"
+                                                    placeholder="Descrição da parcela"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Validation & Totals Info banner */}
+                            {(() => {
+                                const totalSplitsValue = splits.reduce((acc, curr) => acc + parseFloat(curr.negotiated_value || '0'), 0);
+                                const diff = Math.round((totalSplitsValue - splittingOrder.negotiated_value) * 100) / 100;
+                                const isSumValid = Math.abs(diff) <= 0.02;
+
+                                return (
+                                    <div className={`p-4 rounded-2xl border text-sm flex flex-col md:flex-row md:items-center justify-between gap-3 ${
+                                        isSumValid 
+                                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/20 dark:border-emerald-900/30 dark:text-emerald-400' 
+                                            : 'bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-950/20 dark:border-rose-900/30 dark:text-rose-400'
+                                    }`}>
+                                        <div>
+                                            <div className="font-bold flex items-center gap-1.5">
+                                                {isSumValid ? (
+                                                    <span>✓ Soma Válida</span>
+                                                ) : (
+                                                    <span>⚠ Soma Incompatível</span>
+                                                )}
+                                            </div>
+                                            <p className="text-xs mt-0.5 opacity-90">
+                                                Soma das partes: <strong>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalSplitsValue)}</strong> (Original: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(splittingOrder.negotiated_value)}).
+                                                {!isSumValid && ` Diferença de ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(diff)}.`}
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <span className={`text-xs px-2.5 py-1 rounded-full font-bold uppercase ${
+                                                isSumValid 
+                                                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300' 
+                                                    : 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300'
+                                            }`}>
+                                                {isSumValid ? 'Pronto para salvar' : 'Ajuste os valores'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
+                            {/* Footer Buttons */}
+                            <div className="flex gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsSplitOpen(false);
+                                        setSplittingOrder(null);
+                                        setSplits([]);
+                                    }}
+                                    className="flex-1 py-2.5 text-center px-4 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 font-medium rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleSplitSubmit}
+                                    disabled={
+                                        isSubmitting || 
+                                        Math.abs(Math.round((splits.reduce((acc, curr) => acc + parseFloat(curr.negotiated_value || '0'), 0) - splittingOrder.negotiated_value) * 100) / 100) > 0.02
+                                    }
+                                    className="flex-1 py-2.5 bg-indigo-600 text-white text-center px-4 font-bold rounded-xl hover:bg-indigo-700 transition shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
+                                >
+                                    {isSubmitting ? 'Processando...' : 'Confirmar Divisão'}
                                 </button>
                             </div>
                         </div>

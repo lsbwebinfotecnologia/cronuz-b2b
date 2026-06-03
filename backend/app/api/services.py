@@ -7,12 +7,12 @@ from app.db.session import get_db
 from app.models.user import User
 from app.core.dependencies import get_current_user
 
-from app.models.service import Service, ServiceOrder, ServiceOrderStatus
+from app.models.service import Service, ServiceOrder, ServiceOrderStatus, ServiceOrderNfseStatus
 from app.schemas.service import (
     ServiceCreate, ServiceUpdate, ServiceResponse,
     ServiceOrderCreate, ServiceOrderUpdate, ServiceOrderResponse,
     ServiceOrderBillRequest, ServiceOrderBulkStatusRequest, ServiceOrderBulkBillRequest, ServiceOrderBulkDeleteRequest,
-    ServiceOrderBulkDateRequest
+    ServiceOrderBulkDateRequest, ServiceOrderSplitRequest
 )
 
 router = APIRouter(tags=["services"])
@@ -1386,3 +1386,87 @@ async def send_service_order_email(
         db.rollback()
         
     return {"message": "E-mail enviado com sucesso."}
+
+
+@router.post("/service-orders/{order_id}/split")
+def split_service_order(
+    order_id: int,
+    payload: ServiceOrderSplitRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # 1. Fetch the original service order
+    original = db.query(ServiceOrder).filter(
+        ServiceOrder.id == order_id,
+        ServiceOrder.company_id == current_user.company_id
+    ).first()
+
+    if not original:
+        raise HTTPException(status_code=404, detail="Ordem de Serviço não encontrada.")
+
+    # 2. Check if NFSe has already been issued
+    if original.status_nfse in [ServiceOrderNfseStatus.ISSUED, ServiceOrderNfseStatus.PROCESSING]:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível dividir um serviço que já possui nota fiscal emitida ou em processamento."
+        )
+
+    # 3. Validate split items
+    if len(payload.splits) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="É necessário especificar pelo menos duas divisões para dividir um serviço."
+        )
+
+    # 4. Check the sum of values matches the original (allowing minor delta)
+    total_splits_value = sum(item.negotiated_value for item in payload.splits)
+    if abs(total_splits_value - original.negotiated_value) > 0.02:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A soma dos valores das divisões (R$ {total_splits_value:.2f}) deve ser igual ao valor original do serviço (R$ {original.negotiated_value:.2f})."
+        )
+
+    from sqlalchemy import func
+    # 5. Apply the first split to the original service order
+    first_split = payload.splits[0]
+    original.negotiated_value = first_split.negotiated_value
+    original.execution_date = first_split.execution_date
+    if first_split.custom_description:
+        original.custom_description = first_split.custom_description
+    
+    db.flush()
+
+    new_orders = [original]
+
+    # 6. Insert the remaining splits as new ServiceOrders
+    for split_item in payload.splits[1:]:
+        max_so_local_id = db.query(func.max(ServiceOrder.local_id)).filter(
+            ServiceOrder.company_id == current_user.company_id
+        ).scalar() or 0
+        so_local_id = max_so_local_id + 1
+
+        new_so = ServiceOrder(
+            local_id=so_local_id,
+            company_id=original.company_id,
+            customer_id=original.customer_id,
+            service_id=original.service_id,
+            negotiated_value=split_item.negotiated_value,
+            custom_description=split_item.custom_description or original.custom_description,
+            execution_date=split_item.execution_date,
+            status=original.status,
+            status_nfse=original.status_nfse,
+            proposal_id=original.proposal_id,
+            is_recurrent=original.is_recurrent,
+            recurrence_end_date=original.recurrence_end_date
+        )
+        db.add(new_so)
+        db.flush()
+        new_orders.append(new_so)
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": f"Serviço desmembrado em {len(payload.splits)} partes com sucesso.",
+        "service_order_ids": [o.id for o in new_orders]
+    }

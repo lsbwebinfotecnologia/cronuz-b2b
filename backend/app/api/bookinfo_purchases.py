@@ -268,6 +268,48 @@ class SendTransmissionRequest(BaseModel):
     order_data: Dict[str, Any]
 
 
+@router.get("/transmissions/all")
+def list_all_transmissions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in ["MASTER", "SELLER"]:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    transmissions = db.query(BookinfoTransmission).filter(
+        BookinfoTransmission.company_id == current_user.company_id
+    ).order_by(BookinfoTransmission.created_at.desc()).all()
+
+    result = []
+    for t in transmissions:
+        items = db.query(BookinfoTransmissionItem).filter(BookinfoTransmissionItem.transmission_id == t.id).all()
+        supplier = db.query(BookinfoSupplier).filter(BookinfoSupplier.id == t.supplier_id).first()
+        result.append({
+            "id": t.id,
+            "supplier_id": t.supplier_id,
+            "supplier_name": supplier.supplier_name if supplier else "Fornecedor Removido",
+            "cod_pedido": t.cod_pedido,
+            "bookinfo_pedido_id": t.bookinfo_pedido_id,
+            "status": t.status,
+            "sent_at": t.sent_at.isoformat() if t.sent_at else None,
+            "last_sync_at": t.last_sync_at.isoformat() if t.last_sync_at else None,
+            "error_message": t.error_message,
+            "items": [
+                {
+                    "id": item.id,
+                    "cod_item": item.cod_item,
+                    "cod_barra": item.cod_barra,
+                    "nom_item": item.nom_item,
+                    "qt_pedida": item.qt_pedida,
+                    "situacao_retorno": item.situacao_retorno,
+                    "obs_item": item.obs_item
+                }
+                for item in items
+            ]
+        })
+    return result
+
+
 @router.get("/{supplier_id}/transmissions")
 def list_transmissions(
     supplier_id: int,

@@ -101,3 +101,13 @@ class ServiceOrderBulkBillRequest(BaseModel):
 
 class ServiceOrderBulkDeleteRequest(BaseModel):
     order_ids: List[int]
+
+
+class ServiceOrderSplitItem(BaseModel):
+    negotiated_value: float
+    execution_date: date
+    custom_description: Optional[str] = None
+
+
+class ServiceOrderSplitRequest(BaseModel):
+    splits: List[ServiceOrderSplitItem]
