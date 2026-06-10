@@ -132,6 +132,7 @@ class FinancialTransactionBase(BaseModel):
     type: str
     transaction_status: str = "CONFIRMADO"
     is_fixed: bool = False
+    keep_fixed_day: bool = False
     total_amount: float
     issue_date: date
     first_due_date: date
@@ -167,3 +168,8 @@ class BankTransferRequest(BaseModel):
     amount: float
     transfer_date: date
     description: str = "Transferência entre contas"
+
+class FinancialBulkUpdateDateRequest(BaseModel):
+    installment_ids: List[int]
+    due_date: date
+

@@ -40,11 +40,11 @@ export default function FinancialPage() {
     const [types, setTypes] = useState({ receivable: true, payable: true });
     const [startDate, setStartDate] = useState(() => {
         const d = new Date();
-        return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+        return new Date(d.getFullYear(), 0, 1).toISOString().split('T')[0];
     });
     const [endDate, setEndDate] = useState(() => {
         const d = new Date();
-        return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0];
+        return d.toISOString().split('T')[0];
     });
     const [dateType, setDateType] = useState<'due' | 'payment'>('due');
     const [activeTab, setActiveTab] = useState<'LIST' | 'CASHFLOW'>('LIST');
@@ -56,11 +56,15 @@ export default function FinancialPage() {
         total_amount: '', issue_date: new Date().toISOString().split('T')[0], first_due_date: new Date().toISOString().split('T')[0], 
         installments_count: '1', customer_id: '', account_id: '', order_id: '',
         recurrence_end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0],
-        customer_search_text: ''
+        customer_search_text: '',
+        keep_fixed_day: false
     });
     // Simulation State
     const [isSimulationOpen, setIsSimulationOpen] = useState(false);
-    const [simulationAccountId, setSimulationAccountId] = useState('');
+    const [simulationAccountIds, setSimulationAccountIds] = useState<number[]>([]);
+    const [selectedInstallments, setSelectedInstallments] = useState<number[]>([]);
+    const [isBulkDateModalOpen, setIsBulkDateModalOpen] = useState(false);
+    const [bulkDueDate, setBulkDueDate] = useState('');
 
     const [preview, setPreview] = useState<any[]>([]);
     const [customerOrders, setCustomerOrders] = useState<any[]>([]);
@@ -113,6 +117,18 @@ export default function FinancialPage() {
         else setPage(1);
     };
 
+    const addMonths = (dateStr: string, months: number): string => {
+        const [y, m, d] = dateStr.split('-').map(Number);
+        let targetMonth = (m - 1) + months;
+        let targetYear = y + Math.floor(targetMonth / 12);
+        targetMonth = targetMonth % 12;
+        if (targetMonth < 0) targetMonth += 12;
+        const maxDay = new Date(targetYear, targetMonth + 1, 0).getDate();
+        const day = Math.min(d, maxDay);
+        const targetDate = new Date(targetYear, targetMonth, day, 12, 0, 0);
+        return targetDate.toISOString().split('T')[0];
+    };
+
     useEffect(() => {
         if (!formData.total_amount) {
             setPreview([]);
@@ -148,9 +164,15 @@ export default function FinancialPage() {
 
         const previewArr = [];
         for (let i = 0; i < count; i++) {
-            const due = new Date(issue);
-            due.setDate(due.getDate() + (30 * i));
-            previewArr.push({ number: i + 1, due: due.toISOString().split('T')[0], amount: i === count - 1 ? last : base });
+            let dueStr;
+            if (formData.keep_fixed_day) {
+                dueStr = addMonths(formData.first_due_date || formData.issue_date, i);
+            } else {
+                const due = new Date(issue);
+                due.setDate(due.getDate() + (30 * i));
+                dueStr = due.toISOString().split('T')[0];
+            }
+            previewArr.push({ number: i + 1, due: dueStr, amount: i === count - 1 ? last : base });
         }
         setPreview(previewArr);
     }, [formData]);
@@ -245,12 +267,17 @@ export default function FinancialPage() {
                 const data = await res.json();
                 setInstallments(data.items || []);
                 setTotal(data.total || 0);
+                setSelectedInstallments([]);
             }
         } catch (e) { toast.error("Erro ao puxar financeiro"); } finally { setLoading(false); }
     };
 
     const handleCreateTransaction = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!formData.customer_id) {
+            toast.error("Por favor, informe o Nome Cliente / Fornecedor.");
+            return;
+        }
         try {
             let final_count = 1;
             let final_total = parseFloat(formData.total_amount.replace(/\./g, '').replace(',', '.'));
@@ -297,9 +324,26 @@ export default function FinancialPage() {
             if (res.ok) {
                 toast.success("Lançamento salvo com sucesso!");
                 setIsModalOpen(false);
-                setFormData({ description: '', category_id: '', type: 'PAYABLE', transaction_status: 'CONFIRMADO', is_fixed: false, total_amount: '', issue_date: new Date().toISOString().split('T')[0], first_due_date: new Date().toISOString().split('T')[0], installments_count: '1', customer_id: '', account_id: '', order_id: '', recurrence_end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0], customer_search_text: '' });
+                setFormData({ description: '', category_id: '', type: 'PAYABLE', transaction_status: 'CONFIRMADO', is_fixed: false, total_amount: '', issue_date: new Date().toISOString().split('T')[0], first_due_date: new Date().toISOString().split('T')[0], installments_count: '1', customer_id: '', account_id: '', order_id: '', recurrence_end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0], customer_search_text: '', keep_fixed_day: false });
                 fetchInstallments(); fetchMetrics(); fetchCashflow();
-            } else toast.error("Erro ao validar lançamento financeiro");
+            } else {
+                try {
+                    const errData = await res.json();
+                    if (errData && errData.detail) {
+                        if (typeof errData.detail === 'string') {
+                            toast.error(errData.detail);
+                        } else if (Array.isArray(errData.detail)) {
+                            toast.error(errData.detail.map((d: any) => d.msg).join(', '));
+                        } else {
+                            toast.error("Erro ao validar lançamento financeiro");
+                        }
+                    } else {
+                        toast.error("Erro ao validar lançamento financeiro");
+                    }
+                } catch (jsonErr) {
+                    toast.error("Erro ao validar lançamento financeiro");
+                }
+            }
         } catch(e) { toast.error("Servidor indisponível"); }
     };
 
@@ -382,18 +426,61 @@ export default function FinancialPage() {
         }
     };
 
+    const handleBulkUpdateDate = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!bulkDueDate) {
+            toast.error("Por favor, informe a nova data de vencimento.");
+            return;
+        }
+        const loadingId = toast.loading("Atualizando datas em lote...");
+        try {
+            const token = getToken();
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/bulk-update-date`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    installment_ids: selectedInstallments,
+                    due_date: bulkDueDate
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                toast.success(data.message || "Datas atualizadas com sucesso!", { id: loadingId });
+                setIsBulkDateModalOpen(false);
+                setSelectedInstallments([]);
+                fetchInstallments();
+                fetchMetrics();
+                fetchCashflow();
+            } else {
+                const err = await res.json();
+                toast.error(err.detail || "Erro ao atualizar datas em lote.", { id: loadingId });
+            }
+        } catch (error) {
+            toast.error("Erro ao conectar ao servidor.", { id: loadingId });
+        }
+    };
+
     const maxChartValue = Math.max(...cashflow.map(c => Math.max(c.Receitas, c.Despesas + c.Prospeccoes, 100)));
     const totalConsolidated = accounts.reduce((acc, curr) => acc + (curr.type !== 'CREDIT_CARD' ? curr.current_balance : 0), 0);
     const totalCreditDebt = accounts.reduce((acc, curr) => acc + (curr.type === 'CREDIT_CARD' && curr.current_balance < 0 ? Math.abs(curr.current_balance) : 0), 0);
 
-    const simulationAccount = accounts.find(a => a.id === parseInt(simulationAccountId));
-    const projectedReceivables = installments
+    const selectedAccounts = accounts.filter(a => simulationAccountIds.includes(a.id));
+    const totalSelectedBalance = selectedAccounts.reduce((sum, a) => sum + a.current_balance, 0);
+
+    const activeInstallments = selectedInstallments.length > 0
+        ? installments.filter(inst => selectedInstallments.includes(inst.id))
+        : installments;
+
+    const projectedReceivables = activeInstallments
         .filter(inst => inst.status !== 'PAID' && inst.status !== 'CANCELLED' && inst.type === 'RECEIVABLE')
         .reduce((sum, inst) => sum + inst.amount, 0);
-    const projectedPayables = installments
+    const projectedPayables = activeInstallments
         .filter(inst => inst.status !== 'PAID' && inst.status !== 'CANCELLED' && inst.type === 'PAYABLE')
         .reduce((sum, inst) => sum + inst.amount, 0);
-    const projectedBalance = simulationAccount ? (simulationAccount.current_balance + projectedReceivables - projectedPayables) : 0;
+    const projectedBalance = simulationAccountIds.length > 0 ? (totalSelectedBalance + projectedReceivables - projectedPayables) : 0;
 
     return (
         <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
@@ -415,12 +502,6 @@ export default function FinancialPage() {
                     >
                         <TrendingUp className="w-4 h-4"/> Simular Caixa
                     </button>
-                    <Link href="/financial/accounts" className="px-5 py-2.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 rounded-xl font-bold hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition flex items-center gap-2 text-sm text-center justify-center border border-indigo-100 dark:border-indigo-500/20 whitespace-nowrap">
-                        <Building2 className="w-4 h-4"/> Bancos & Cartões
-                    </Link>
-                    <Link href="/financial/categories" className="px-5 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-100 rounded-xl font-medium hover:bg-slate-200 dark:hover:bg-slate-700 transition flex items-center gap-2 text-sm text-center justify-center whitespace-nowrap">
-                        Categorias
-                    </Link>
                     <button onClick={() => setIsModalOpen(true)} className="px-5 py-2.5 bg-[var(--color-primary-base)] text-white rounded-xl font-semibold hover:opacity-90 shadow-sm transition flex items-center gap-2 text-sm whitespace-nowrap">
                         <Plus className="w-4 h-4"/> Novo Lançamento
                     </button>
@@ -431,36 +512,51 @@ export default function FinancialPage() {
                 <div className="bg-gradient-to-br from-slate-50 to-white dark:from-slate-900 dark:to-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm animate-in fade-in slide-in-from-top-4 duration-300">
                     <div className="flex flex-col md:flex-row gap-6 items-start md:items-center">
                         <div className="w-full md:w-1/3 shrink-0">
-                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Selecione uma conta para simular</label>
-                            <select 
-                                value={simulationAccountId} 
-                                onChange={(e) => setSimulationAccountId(e.target.value)}
-                                className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-700 dark:text-slate-300 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent outline-none transition shadow-sm"
-                            >
-                                <option value="">-- Escolha a Conta Base --</option>
-                                {accounts.map(a => (
-                                    <option key={a.id} value={a.id}>{a.name} (Saldo: {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(a.current_balance)})</option>
-                                ))}
-                            </select>
-                            <p className="text-[10px] text-slate-400 mt-2 font-medium">O cálculo abaixo vai considerar o saldo desta conta e adicionar/subtrair todos os lançamentos que estão exibidos na lista (conforme seu filtro).</p>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Selecione as contas para simular</label>
+                            <div className="flex flex-wrap gap-2">
+                                {accounts.map(a => {
+                                    const selected = simulationAccountIds.includes(a.id);
+                                    return (
+                                        <button
+                                            key={a.id}
+                                            type="button"
+                                            onClick={() => {
+                                                if (selected) {
+                                                    setSimulationAccountIds(simulationAccountIds.filter(id => id !== a.id));
+                                                } else {
+                                                    setSimulationAccountIds([...simulationAccountIds, a.id]);
+                                                }
+                                            }}
+                                            className={`px-3 py-2 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 shadow-sm ${selected ? 'bg-indigo-600 border-indigo-700 text-white dark:bg-indigo-50 dark:border-indigo-600' : 'bg-white border-slate-200 text-slate-700 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                                        >
+                                            {a.type === 'CURRENT' || a.type === 'SAVINGS' ? <Building2 className="w-3.5 h-3.5" /> : a.type === 'CREDIT_CARD' ? <CreditCard className="w-3.5 h-3.5" /> : <Wallet className="w-3.5 h-3.5" />}
+                                            {a.name}
+                                            <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${selected ? 'bg-indigo-700 text-indigo-100 dark:bg-indigo-600 dark:text-indigo-100' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'}`}>
+                                                {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL', maximumFractionDigits: 0}).format(a.current_balance)}
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <p className="text-[10px] text-slate-400 mt-3 font-medium">O cálculo ao lado vai considerar a soma do saldo das contas selecionadas e adicionar/subtrair os lançamentos (ou os marcados se houver seleção).</p>
                         </div>
 
-                        {simulationAccount ? (
+                        {simulationAccountIds.length > 0 ? (
                             <div className="w-full grid grid-cols-1 sm:grid-cols-4 gap-3">
                                 <div className="bg-white dark:bg-slate-950 p-3 rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm">
-                                    <div className="text-[10px] uppercase font-bold text-slate-400 mb-1">Saldo da Conta</div>
-                                    <div className="font-black text-slate-700 dark:text-slate-200 text-lg">{new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(simulationAccount.current_balance)}</div>
+                                    <div className="text-[10px] uppercase font-bold text-slate-400 mb-1">Saldo Consolidado</div>
+                                    <div className="font-black text-slate-700 dark:text-slate-200 text-lg">{new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(totalSelectedBalance)}</div>
                                 </div>
                                 <div className="bg-emerald-50 dark:bg-emerald-900/10 p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/30 shadow-sm">
-                                    <div className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-500 mb-1 flex items-center gap-1"><ArrowUpCircle className="w-3 h-3"/> Entradas Pendentes</div>
+                                    <div className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-500 mb-1 flex items-center gap-1"><ArrowUpCircle className="w-3 h-3"/> {selectedInstallments.length > 0 ? 'Receitas Marcadas' : 'Receitas Pendentes'}</div>
                                     <div className="font-black text-emerald-700 dark:text-emerald-400 text-lg">+ {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(projectedReceivables)}</div>
                                 </div>
                                 <div className="bg-rose-50 dark:bg-rose-900/10 p-3 rounded-xl border border-rose-100 dark:border-rose-900/30 shadow-sm">
-                                    <div className="text-[10px] uppercase font-bold text-rose-600 dark:text-rose-500 mb-1 flex items-center gap-1"><ArrowDownCircle className="w-3 h-3"/> Saídas Pendentes</div>
+                                    <div className="text-[10px] uppercase font-bold text-rose-600 dark:text-rose-500 mb-1 flex items-center gap-1"><ArrowDownCircle className="w-3 h-3"/> {selectedInstallments.length > 0 ? 'Despesas Marcadas' : 'Despesas Pendentes'}</div>
                                     <div className="font-black text-rose-700 dark:text-rose-400 text-lg">- {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(projectedPayables)}</div>
                                 </div>
                                 <div className={`p-3 rounded-xl border shadow-sm ${projectedBalance >= 0 ? 'bg-indigo-50 border-indigo-100 dark:bg-indigo-900/20 dark:border-indigo-800' : 'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800'}`}>
-                                    <div className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 mb-1">Saldo Final Projetado</div>
+                                    <div className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 mb-1">Saldo Projetado</div>
                                     <div className={`font-black text-xl ${projectedBalance >= 0 ? 'text-indigo-700 dark:text-indigo-400' : 'text-red-700 dark:text-red-400'}`}>
                                         {new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(projectedBalance)}
                                     </div>
@@ -468,7 +564,7 @@ export default function FinancialPage() {
                             </div>
                         ) : (
                             <div className="w-full flex items-center justify-center p-6 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50/50 dark:bg-slate-800/30">
-                                <span className="text-sm font-medium text-slate-400">Selecione uma conta para ver a projeção.</span>
+                                <span className="text-sm font-medium text-slate-400">Selecione uma ou mais contas para ver a projeção.</span>
                             </div>
                         )}
                     </div>
@@ -542,6 +638,20 @@ export default function FinancialPage() {
                             <table className="w-full text-sm text-left">
                                 <thead className="bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold uppercase text-xs">
                                     <tr>
+                                        <th className="px-4 py-4 w-10 text-center">
+                                            <input 
+                                                type="checkbox" 
+                                                checked={installments.length > 0 && selectedInstallments.length === installments.length}
+                                                onChange={(e) => {
+                                                    if (e.target.checked) {
+                                                        setSelectedInstallments(installments.map(i => i.id));
+                                                    } else {
+                                                        setSelectedInstallments([]);
+                                                    }
+                                                }}
+                                                className="w-4 h-4 rounded border-slate-350 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                            />
+                                        </th>
                                         <th className="px-6 py-4 w-12"><span className="sr-only">Tipo</span></th>
                                         <th className="px-6 py-4">#ID</th>
                                         <th className="px-6 py-4">Vencimento</th>
@@ -554,14 +664,29 @@ export default function FinancialPage() {
                                 </thead>
                                 <tbody>
                                     {loading ? (
-                                        <tr><td colSpan={8} className="text-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--color-primary-base)] mx-auto"></div></td></tr>
+                                        <tr><td colSpan={9} className="text-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--color-primary-base)] mx-auto"></div></td></tr>
                                     ) : installments.length === 0 ? (
-                                        <tr><td colSpan={8} className="text-center py-12 text-slate-500">Nenhum título encontrado.</td></tr>
+                                        <tr><td colSpan={9} className="text-center py-12 text-slate-500">Nenhum título encontrado.</td></tr>
                                     ) : (
                                         installments.map(inst => {
                                             const isReceivable = inst.type === 'RECEIVABLE';
+                                            const isSelected = selectedInstallments.includes(inst.id);
                                             return (
-                                            <tr key={inst.id} className="border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                                            <tr key={inst.id} className={`border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/10' : ''}`}>
+                                                <td className="px-4 py-4 text-center">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        checked={isSelected}
+                                                        onChange={() => {
+                                                            if (isSelected) {
+                                                                setSelectedInstallments(selectedInstallments.filter(id => id !== inst.id));
+                                                            } else {
+                                                                setSelectedInstallments([...selectedInstallments, inst.id]);
+                                                            }
+                                                        }}
+                                                        className="w-4 h-4 rounded border-slate-355 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                                    />
+                                                </td>
                                                 <td className="px-6 py-4">
                                                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isReceivable ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400' : 'bg-rose-100 text-rose-600 dark:bg-rose-900/50 dark:text-rose-400'}`}>
                                                         {isReceivable ? <ArrowUpCircle className="w-5 h-5" /> : <ArrowDownCircle className="w-5 h-5" />}
@@ -639,7 +764,7 @@ export default function FinancialPage() {
                                                         )}
                                                         {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && (
                                                             <button onClick={()=>{
-                                                                setPayData({inst_id: inst.id, account_id: '', amount: inst.amount, editMode: false, payment_date: new Date().toISOString().split('T')[0], category_id: inst.category_id || ''});
+                                                                setPayData({inst_id: inst.id, account_id: inst.account_id || '', amount: inst.amount, editMode: false, payment_date: new Date().toISOString().split('T')[0], category_id: inst.category_id || ''});
                                                                 setIsPayModalOpen(true);
                                                             }} className="text-xs bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] hover:bg-[var(--color-primary-base)] font-semibold hover:text-white transition px-3 py-1.5 rounded-lg flex items-center gap-1 ml-auto">
                                                                 <CheckCircle className="w-3.5 h-3.5"/> Baixar
@@ -822,11 +947,19 @@ export default function FinancialPage() {
                                         <input required type="text" value={formData.total_amount} onChange={handleCurrencyChange} className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm" placeholder="0,00"/>
                                     </div>
                                     
-                                    <div className="flex flex-col justify-end pb-2">
-                                        <label className="flex items-center gap-3 cursor-pointer p-2.5 border border-slate-200 dark:border-slate-800 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/50 transition">
-                                            <input type="checkbox" className="w-5 h-5 rounded text-[var(--color-primary-base)]" checked={formData.is_fixed} onChange={(e)=>setFormData({...formData, is_fixed: e.target.checked})} />
-                                            <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Recorrente</span>
-                                        </label>
+                                    <div className={`${formData.is_fixed ? 'col-span-full lg:col-span-2' : 'col-span-1'} flex flex-col justify-end pb-2`}>
+                                        <div className="flex flex-col sm:flex-row gap-4 w-full">
+                                            <label className="flex-1 flex items-center gap-3 cursor-pointer p-2.5 border border-slate-200 dark:border-slate-800 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/50 transition">
+                                                <input type="checkbox" className="w-5 h-5 rounded text-[var(--color-primary-base)]" checked={formData.is_fixed} onChange={(e)=>setFormData({...formData, is_fixed: e.target.checked, keep_fixed_day: e.target.checked ? formData.keep_fixed_day : false})} />
+                                                <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Recorrente</span>
+                                            </label>
+                                            {formData.is_fixed && (
+                                                <label className="flex-1 flex items-center gap-3 cursor-pointer p-2.5 border border-slate-200 dark:border-slate-800 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/50 transition animate-fade-in">
+                                                    <input type="checkbox" className="w-5 h-5 rounded text-[var(--color-primary-base)]" checked={formData.keep_fixed_day} onChange={(e)=>setFormData({...formData, keep_fixed_day: e.target.checked})} />
+                                                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Fixar dia do mês</span>
+                                                </label>
+                                            )}
+                                        </div>
                                     </div>
                                     
                                     {(() => {
@@ -916,7 +1049,7 @@ export default function FinancialPage() {
                                                  {preview.map((p, idx) => (
                                                      <tr key={idx} className="border-b border-indigo-50 dark:border-indigo-900/30 bg-indigo-50/20 dark:bg-transparent">
                                                          <td className="px-4 py-2 font-mono text-slate-600 dark:text-slate-300">{p.number}/{preview.length}</td>
-                                                         <td className="px-4 py-2 font-medium text-slate-700 dark:text-slate-200">{new Date(p.due + "T12:00:00").toLocaleDateString('pt-BR')} (Interv: 30d)</td>
+                                                         <td className="px-4 py-2 font-medium text-slate-700 dark:text-slate-200">{new Date(p.due + "T12:00:00").toLocaleDateString('pt-BR')} {formData.keep_fixed_day ? '(Mensal/Dia Fixo)' : '(Interv: 30d)'}</td>
                                                          <td className="px-4 py-2 font-bold text-right text-indigo-700 dark:text-indigo-400">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL'}).format(p.amount)}</td>
                                                      </tr>
                                                  ))}
@@ -1061,6 +1194,83 @@ export default function FinancialPage() {
                                 </button>
                                 <button type="submit" className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-lg shadow-rose-500/20 transition flex items-center justify-center gap-2 text-sm">
                                     <Trash2 className="w-4 h-4" /> Confirmar Exclusão
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+            {/* FLOATING ACTION BAR FOR SELECTED INSTALLMENTS */}
+            {selectedInstallments.length > 0 && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200 dark:border-slate-800 px-6 py-4 rounded-2xl shadow-2xl flex flex-col md:flex-row items-center gap-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                    <span className="text-sm font-bold text-slate-700 dark:text-slate-300">
+                        {selectedInstallments.length} {selectedInstallments.length === 1 ? 'selecionado' : 'selecionados'}
+                    </span>
+                    <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-800 hidden md:block" />
+                    <div className="flex gap-4">
+                        <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                            Entradas: <span className="font-bold text-emerald-600 dark:text-emerald-500">{new Intl.NumberFormat('pt-BR', {style: 'currency', currency: 'BRL'}).format(installments.filter(i => selectedInstallments.includes(i.id) && i.type === 'RECEIVABLE').reduce((sum, i) => sum + i.amount, 0))}</span>
+                        </div>
+                        <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                            Saídas: <span className="font-bold text-rose-600 dark:text-rose-500">{new Intl.NumberFormat('pt-BR', {style: 'currency', currency: 'BRL'}).format(installments.filter(i => selectedInstallments.includes(i.id) && i.type === 'PAYABLE').reduce((sum, i) => sum + i.amount, 0))}</span>
+                        </div>
+                    </div>
+                    <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-800 hidden md:block" />
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setBulkDueDate(new Date().toISOString().split('T')[0]);
+                                setIsBulkDateModalOpen(true);
+                            }}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition-colors shadow-sm flex items-center gap-1.5"
+                        >
+                            Alterar Vencimento
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setSelectedInstallments([])}
+                            className="p-2 text-slate-400 hover:text-slate-650 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-350 rounded-xl transition-colors"
+                            title="Limpar seleção"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* BULK UPDATE DATE MODAL */}
+            {isBulkDateModalOpen && (
+                <div className="fixed inset-0 bg-slate-900/60 dark:bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-850 max-w-md w-full shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="px-6 py-5 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50">
+                            <h3 className="font-bold text-slate-800 dark:text-white">
+                                Alterar Vencimento em Lote
+                            </h3>
+                            <button type="button" onClick={() => setIsBulkDateModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-850 p-2 rounded-full cursor-pointer">
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <form onSubmit={handleBulkUpdateDate} className="p-6 space-y-4">
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                                Você está alterando o vencimento de <strong>{selectedInstallments.length}</strong> parcelas pendentes selecionadas.
+                            </p>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Nova Data de Vencimento</label>
+                                <input
+                                    type="date"
+                                    required
+                                    value={bulkDueDate}
+                                    onChange={(e) => setBulkDueDate(e.target.value)}
+                                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
+                                />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button type="button" onClick={() => setIsBulkDateModalOpen(false)} className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-semibold dark:border-slate-800 dark:text-slate-355 dark:hover:bg-slate-800 transition">
+                                    Cancelar
+                                </button>
+                                <button type="submit" className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition shadow-sm">
+                                    Salvar Alterações
                                 </button>
                             </div>
                         </form>

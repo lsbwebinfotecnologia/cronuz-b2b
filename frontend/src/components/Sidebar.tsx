@@ -30,6 +30,7 @@ import {
   ListTodo,
   UserCheck,
   Briefcase,
+  Building2,
   ClipboardList,
   Receipt,
   Zap
@@ -264,7 +265,8 @@ export function Sidebar() {
        subItems: [
          { name: 'Lançamentos', href: '/financial', icon: Wallet },
          { name: 'Boletos Emitidos', href: '/financial/bank-slips', icon: Receipt },
-         { name: 'Conciliação', href: '/financial/reconciliation', icon: Landmark },
+         { name: 'Bancos & Cartões', href: '/financial/accounts', icon: Building2 },
+         { name: 'Categorias', href: '/financial/categories', icon: FolderTree },
          { name: 'DRE', href: '/financial/reports', icon: BarChart3 }
        ]
     });

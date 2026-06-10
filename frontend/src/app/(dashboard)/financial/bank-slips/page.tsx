@@ -16,6 +16,30 @@ export default function BankSlipsPage() {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [copied, setCopied] = useState<number | null>(null);
+    const [syncingAll, setSyncingAll] = useState(false);
+
+    const handleSyncAll = async () => {
+        setSyncingAll(true);
+        try {
+            const token = getToken();
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/bank-slips/sync-all-pending`, {
+                method: 'PATCH',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                toast.success(data.message || "Sincronização em massa concluída com sucesso!");
+                fetchSlips();
+            } else {
+                const err = await res.json();
+                toast.error(err.detail || "Erro ao sincronizar todos os boletos.");
+            }
+        } catch (e) {
+            toast.error("Erro ao conectar ao servidor para sincronização.");
+        } finally {
+            setSyncingAll(false);
+        }
+    };
 
     const fetchSlips = async () => {
         setLoading(true);
@@ -103,7 +127,15 @@ export default function BankSlipsPage() {
                     </p>
                 </div>
                 
-                <div className="flex gap-2 w-full sm:w-auto">
+                <div className="flex gap-2 w-full sm:w-auto items-center">
+                    <button 
+                        onClick={handleSyncAll}
+                        disabled={syncingAll || loading}
+                        className="px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-semibold rounded-xl text-sm transition-colors shadow-sm flex items-center gap-2 whitespace-nowrap"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${syncingAll ? 'animate-spin' : ''}`} />
+                        {syncingAll ? 'Sincronizando...' : 'Sincronizar Pendentes'}
+                    </button>
                     <div className="relative flex-1 sm:w-64">
                         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input

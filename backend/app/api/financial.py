@@ -15,7 +15,7 @@ from app.schemas.financial import (
     FinancialAccount as FinancialAccountSchema, FinancialAccountCreate, FinancialAccountUpdate,
     FinancialCashFlowLogSchema, FinancialBulkConciliate,
     FinancialTransactionUpdate, FinancialInstallmentEdit,
-    BankTransferRequest
+    BankTransferRequest, FinancialBulkUpdateDateRequest
 )
 from app.models.financial import FinancialCategory, FinancialTransaction, FinancialInstallment, FinancialAccount, FinancialCashFlowLog
 from app.models.company import Company
@@ -209,6 +209,7 @@ def create_transaction(
         type=transaction.type,
         transaction_status=transaction.transaction_status,
         is_fixed=transaction.is_fixed,
+        keep_fixed_day=transaction.keep_fixed_day,
         total_amount=transaction.total_amount,
         issue_date=transaction.issue_date,
         first_due_date=transaction.first_due_date,
@@ -222,8 +223,12 @@ def create_transaction(
     base_amount = round(transaction.total_amount / qnt, 2)
     last_amount = round(transaction.total_amount - (base_amount * (qnt - 1)), 2)
     
+    from dateutil.relativedelta import relativedelta
     for i in range(qnt):
-        due = transaction.first_due_date + timedelta(days=30 * i)
+        if transaction.keep_fixed_day:
+            due = transaction.first_due_date + relativedelta(months=i)
+        else:
+            due = transaction.first_due_date + timedelta(days=30 * i)
         amount = last_amount if i == qnt - 1 else base_amount
         inst = FinancialInstallment(transaction_id=db_trans.id, number=i + 1, due_date=due, amount=amount, status="PENDING", account_id=transaction.account_id)
         db.add(inst)
@@ -303,6 +308,7 @@ def list_generic_installments(
             "customer_id": cust.id if cust else None,
             "is_conciliated": inst.is_conciliated,
             "is_fixed": trans.is_fixed,
+            "keep_fixed_day": trans.keep_fixed_day,
             "bank_slip_pdf": inst.bank_slip_pdf_url,
             "bank_slip_nosso_numero": inst.bank_slip_nosso_numero,
             "inter_enabled": inter_enabled or False,
@@ -421,7 +427,7 @@ def transaction_details(trans_id: int, db: Session = Depends(get_db), current_us
 
     return {
         "id": trans.id, "description": trans.description, "type": trans.type, "total_amount": trans.total_amount,
-        "is_fixed": trans.is_fixed, "created_at": trans.created_at, "customer_name": customer_name,
+        "is_fixed": trans.is_fixed, "keep_fixed_day": trans.keep_fixed_day, "created_at": trans.created_at, "customer_name": customer_name,
         "category_name": category_name, "installments": installments,
         "customer_id": trans.customer_id, "category_id": trans.category_id, "order_id": trans.order_id,
         "nfse_url": nfse_url, "nfse_number": nfse_number,
@@ -1144,6 +1150,40 @@ def edit_financial_transaction(
     db.commit()
     return {"message": "Transação atualizada"}
 
+@router.patch("/financial/installments/bulk-update-date")
+def bulk_update_installment_dates(
+    payload: FinancialBulkUpdateDateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    cid = get_company_id(current_user)
+    installments = db.query(FinancialInstallment).join(FinancialTransaction).filter(
+        FinancialInstallment.id.in_(payload.installment_ids),
+        FinancialTransaction.company_id == cid,
+        FinancialInstallment.status.notin_(["PAID", "CANCELLED"])
+    ).all()
+    
+    if not installments:
+        raise HTTPException(status_code=400, detail="Nenhuma parcela pendente encontrada para atualização.")
+        
+    # Validar se alguma parcela possui boleto ativo
+    installments_with_slips = [
+        inst for inst in installments 
+        if inst.bank_slip_nosso_numero and inst.bank_slip_nosso_numero.strip()
+    ]
+    if installments_with_slips:
+        ids_str = ", ".join([f"#{inst.id}" for inst in installments_with_slips])
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Não é possível alterar o vencimento das parcelas {ids_str} porque elas possuem boleto emitido ativo. Cancele os boletos antes de prosseguir."
+        )
+        
+    for inst in installments:
+        inst.due_date = payload.due_date
+        
+    db.commit()
+    return {"message": f"Data de {len(installments)} parcelas atualizada com sucesso."}
+
 @router.patch("/financial/installments/{installment_id}/edit")
 def edit_financial_installment(
     installment_id: int,
@@ -1162,8 +1202,21 @@ def edit_financial_installment(
     if inst.status == 'PAID':
         raise HTTPException(status_code=400, detail="Não é possível editar uma parcela paga")
         
-    if data.due_date is not None: inst.due_date = data.due_date
-    if data.amount is not None: inst.amount = data.amount
+    if data.due_date is not None:
+        if inst.bank_slip_nosso_numero and inst.bank_slip_nosso_numero.strip():
+            raise HTTPException(
+                status_code=400, 
+                detail="Não é possível alterar o vencimento desta parcela pois ela possui boleto emitido ativo. Cancele o boleto primeiro."
+            )
+        inst.due_date = data.due_date
+        
+    if data.amount is not None:
+        if inst.bank_slip_nosso_numero and inst.bank_slip_nosso_numero.strip():
+            raise HTTPException(
+                status_code=400, 
+                detail="Não é possível alterar o valor desta parcela pois ela possui boleto emitido ativo. Cancele o boleto primeiro."
+            )
+        inst.amount = data.amount
     
     # Recalculate transaction total
     total = sum([i.amount for i in inst.transaction.installments])

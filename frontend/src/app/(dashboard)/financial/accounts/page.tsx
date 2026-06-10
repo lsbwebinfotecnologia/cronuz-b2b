@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { CreditCard, Wallet, Building2, Plus, X, Trash2, ArrowRightLeft, TrendingUp, TrendingDown, DollarSign } from 'lucide-react';
+import { CreditCard, Wallet, Building2, Plus, X, Trash2, ArrowRightLeft, TrendingUp, TrendingDown, DollarSign, Landmark } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
@@ -188,8 +188,11 @@ export default function AccountsPage() {
                 </div>
                 
                 <div className="flex gap-2">
-                    <Link href="/financial" className="px-5 py-2 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 font-semibold rounded-xl text-sm transition hover:bg-slate-200">
+                    <Link href="/financial" className="px-5 py-2 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 font-semibold rounded-xl text-sm transition hover:bg-slate-200 flex items-center">
                         Voltar
+                    </Link>
+                    <Link href="/financial/reconciliation" className="px-5 py-2 bg-emerald-500/10 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300 font-semibold rounded-xl text-sm border border-emerald-500/20 shadow-sm flex items-center gap-2 hover:bg-emerald-500/20 transition">
+                        <Landmark className="w-4 h-4"/> Conciliação Bancária
                     </Link>
                     <button onClick={() => {
                         setIsTransferModalOpen(true);

@@ -36,6 +36,7 @@ class FinancialTransaction(Base):
     type = Column(String(50), nullable=False) # RECEIVABLE, PAYABLE
     transaction_status = Column(String(50), nullable=False, default="CONFIRMADO") # PROSPECCAO, CONFIRMADO, CANCELADO
     is_fixed = Column(Boolean, nullable=False, default=False)
+    keep_fixed_day = Column(Boolean, nullable=False, default=False)
     total_amount = Column(Float, nullable=False)
     issue_date = Column(Date, nullable=False)
     first_due_date = Column(Date, nullable=False)

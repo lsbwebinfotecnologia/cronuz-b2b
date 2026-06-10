@@ -142,6 +142,102 @@ def sync_bank_slip_status(inst_id: int, db: Session = Depends(get_db), current_u
     
     return {"status": inst.status, "situacao_inter": situacao}
 
+@router.patch("/financial/bank-slips/sync-all-pending")
+def sync_all_pending_bank_slips(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models.company_settings import CompanySettings
+    from app.integrators.inter_client import BancoInterClient
+    from datetime import datetime
+    
+    cid = get_company_id(current_user)
+    
+    pending_slips = db.query(FinancialInstallment).join(FinancialTransaction).filter(
+        FinancialTransaction.company_id == cid,
+        FinancialInstallment.bank_slip_provider == "INTER",
+        FinancialInstallment.status.notin_(["PAID", "CANCELLED"]),
+        FinancialInstallment.bank_slip_nosso_numero.like("V3_REQ|%")
+    ).all()
+    
+    if not pending_slips:
+        return {"message": "Sincronização concluída. Nenhum boleto pendente.", "updated_count": 0}
+        
+    settings = db.query(CompanySettings).filter_by(company_id=cid).first()
+    if not settings or not settings.inter_client_id:
+        raise HTTPException(status_code=400, detail="Configurações do Banco Inter não encontradas para esta empresa.")
+        
+    client = BancoInterClient(
+        client_id=settings.inter_client_id,
+        client_secret=settings.inter_client_secret,
+        cert_path=settings.inter_cert_path,
+        key_path=settings.inter_key_path,
+        sandbox=settings.inter_sandbox,
+        account_number=settings.inter_account_number,
+        api_version=settings.inter_api_version
+    )
+    
+    updated_count = 0
+    
+    for inst in pending_slips:
+        parts = inst.bank_slip_nosso_numero.split("|")
+        codigo_solicitacao = parts[1]
+        
+        try:
+            inter_status = client.get_cobranca_v3_status(codigo_solicitacao=codigo_solicitacao)
+            situacao = inter_status.get("status")
+            cobranca_data = inter_status.get("cobranca", {})
+            boleto_data = inter_status.get("boleto", {})
+            
+            if len(parts) == 2 and boleto_data.get("nossoNumero"):
+                inst.bank_slip_nosso_numero = f"V3_REQ|{codigo_solicitacao}|{boleto_data.get('nossoNumero')}"
+                
+            if not situacao and cobranca_data.get("situacao"):
+                situacao = cobranca_data.get("situacao")
+                
+            old_status = inst.status
+            
+            if situacao in ["RECEBIDO", "MARCADO_RECEBIDO"]:
+                inst.status = "PAID"
+                if inst.transaction.transaction_status == "PROSPECCAO":
+                    inst.transaction.transaction_status = "CONFIRMADO"
+                    
+                dt_pgto_str = inter_status.get("dataHoraPagamento") or inter_status.get("dataSituacao")
+                if dt_pgto_str:
+                    try:
+                        if "T" in dt_pgto_str:
+                            inst.payment_date = datetime.fromisoformat(dt_pgto_str.replace("Z", "+00:00"))
+                        else:
+                            inst.payment_date = datetime.strptime(dt_pgto_str, "%Y-%m-%d")
+                    except:
+                        inst.payment_date = datetime.now()
+                else:
+                    inst.payment_date = datetime.now()
+                    
+                valor_pago = inter_status.get("valorPago")
+                if valor_pago:
+                    inst.amount_paid = float(valor_pago)
+                    
+            elif situacao in ["CANCELADO", "EXPIRADO"]:
+                inst.status = "CANCELLED"
+                
+            elif situacao == "ATRASADO":
+                if inst.status != "OVERDUE":
+                    inst.status = "OVERDUE"
+                    
+            elif situacao == "A_RECEBER":
+                inst.status = "OPEN"
+                
+            else:
+                inst.status = "OPEN"
+                
+            if inst.status != old_status:
+                updated_count += 1
+                
+        except Exception as e:
+            print(f"[Bulk Sync] Error syncing bank slip {inst.id}: {e}")
+            continue
+            
+    db.commit()
+    return {"message": f"Sincronização concluída. {updated_count} boletos atualizados.", "updated_count": updated_count}
+
 from fastapi import Request, BackgroundTasks
 
 @router.post("/financial/webhooks/inter/{company_id}")
