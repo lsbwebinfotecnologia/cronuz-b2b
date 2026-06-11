@@ -242,6 +242,16 @@ export function Sidebar() {
         subItems: nav.subItems?.filter(sub => sub.name !== 'Promoções')
       };
     }
+    // Quando o seller usa Horus, Configurações vira submenu com aba Horus
+    if (nav.name === 'Configurações' && usesHorus) {
+      return {
+        ...nav,
+        subItems: [
+          { name: 'Configurações da Loja', href: '/settings', icon: Settings },
+          { name: 'Integração Horus ERP', href: '/settings/horus', icon: Zap },
+        ]
+      };
+    }
     return nav;
   });
   

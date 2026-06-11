@@ -24,6 +24,7 @@ class CompanySettings(Base):
     horus_legacy_pagination = Column(Boolean, default=False, nullable=False) # True = omit OFFSET and LIMIT
     horus_stock_local = Column(String(50), nullable=True)
     horus_hide_zero_balance = Column(Boolean, default=False, nullable=False)
+    horus_use_cronuz_discount = Column(Boolean, default=False, nullable=False)  # Se True (B2B_HORUS): ignora VLR_LIQ_CLI do Horus e aplica customer.discount sobre VLR_CAPA
     
     bookinfo_api_key = Column(String(255), nullable=True)
     bookinfo_sync_enabled = Column(Boolean, default=False, nullable=False) # Ligar/Desligar integracao automatica

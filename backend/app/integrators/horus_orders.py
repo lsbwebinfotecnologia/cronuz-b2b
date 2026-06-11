@@ -93,10 +93,21 @@ class HorusOrders(HorusClient):
             "QTD_PEDIDA": qty,
         }
         
-        # O modelo B2B do Horus calcula seu proprio valor (legacy: typeDiscount == "HORUS")
-        if self._settings.business_model != "B2B_HORUS" and price is not None:
-            # Envia como raw float/numeric (SQL Server / ODBC prefere ponto flutuante padrão)
-            params["VLR_LIQUIDO"] = price
+        # Regra de envio do VLR_LIQUIDO:
+        # - B2B_CRONUZ (ou qualquer modelo != B2B_HORUS): sempre envia VLR_LIQUIDO (Cronuz é quem calcula)
+        # - B2B_HORUS puro: NÃO envia VLR_LIQUIDO (Horus calcula pelo desconto do cliente no ERP)
+        # - B2B_HORUS + horus_use_cronuz_discount=True: envia VLR_LIQUIDO (Cronuz sobrescreve o desconto do Horus)
+        is_b2b_horus = getattr(self._settings, "horus_api_mode", "") == "B2B"
+        use_cronuz_discount = getattr(self._settings, "horus_use_cronuz_discount", False)
+        
+        if price is not None:
+            if not is_b2b_horus:
+                # Modelo Cronuz — sempre envia o valor calculado
+                params["VLR_LIQUIDO"] = price
+            elif is_b2b_horus and use_cronuz_discount:
+                # B2B Horus com desconto Cronuz ativo — força o valor para sobrepor o Horus
+                params["VLR_LIQUIDO"] = price
+            # else: B2B_HORUS puro — Horus calcula, não enviamos VLR_LIQUIDO
         
         return await self.get("InsItensPedidoVenda", params=params)
 

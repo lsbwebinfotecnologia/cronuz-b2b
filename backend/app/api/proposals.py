@@ -130,7 +130,11 @@ def list_proposals(
     query = db.query(Proposal).filter(Proposal.company_id == current_user.company_id)
 
     if status:
-        query = query.filter(Proposal.status == status)
+        if "," in status:
+            status_list = [s.strip() for s in status.split(",") if s.strip()]
+            query = query.filter(Proposal.status.in_(status_list))
+        else:
+            query = query.filter(Proposal.status == status)
     if relation_type:
         query = query.filter(Proposal.relation_type == relation_type)
     if customer_id:

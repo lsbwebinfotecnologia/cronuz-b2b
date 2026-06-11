@@ -13,8 +13,9 @@ export default function AccountsPage() {
     // Modal
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingAccount, setEditingAccount] = useState<any>(null);
+    const [showInactive, setShowInactive] = useState(false);
     const [formData, setFormData] = useState({
-        name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: ''
+        name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '', active: true
     });
     
     // Transfer Modal
@@ -53,7 +54,8 @@ export default function AccountsPage() {
             initial_balance: acc.current_balance || 0, 
             closing_day: acc.closing_day || '', 
             due_day: acc.due_day || '',
-            adjustment_description: ''
+            adjustment_description: '',
+            active: acc.active !== undefined ? acc.active : true
         });
         setIsModalOpen(true);
     };
@@ -69,7 +71,8 @@ export default function AccountsPage() {
             const payload: any = {
                 name: formData.name,
                 type: formData.type,
-                initial_balance: formData.initial_balance ? parseFloat(formData.initial_balance) : 0
+                initial_balance: formData.initial_balance ? parseFloat(formData.initial_balance) : 0,
+                active: formData.active
             };
             if (formData.type === 'CREDIT_CARD') {
                 payload.closing_day = formData.closing_day ? parseInt(formData.closing_day) : 10;
@@ -87,6 +90,7 @@ export default function AccountsPage() {
                     payload.adjustment_description = formData.adjustment_description;
                 }
                 delete payload.initial_balance;
+                payload.active = formData.active;
             }
             
             console.log("Sending to", method, url, payload);
@@ -103,7 +107,7 @@ export default function AccountsPage() {
                 toast.success(editingAccount ? "Conta atualizada!" : "Conta criada!");
                 setIsModalOpen(false);
                 setEditingAccount(null);
-                setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '' });
+                setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '', active: true });
                 fetchAccounts();
             } else {
                 let errText = "Erro desconhecido";
@@ -175,6 +179,8 @@ export default function AccountsPage() {
         'CREDIT_CARD': <CreditCard className="w-6 h-6 text-rose-500" />
     };
 
+    const filteredAccounts = accounts.filter(acc => showInactive || acc.active);
+
     return (
         <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -187,7 +193,10 @@ export default function AccountsPage() {
                     </p>
                 </div>
                 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
+                    <button onClick={() => setShowInactive(!showInactive)} className={`px-5 py-2 font-semibold rounded-xl text-sm shadow flex items-center gap-2 transition ${showInactive ? 'bg-indigo-600 text-white dark:bg-indigo-500' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200'}`}>
+                        {showInactive ? 'Ocultar Inativas' : 'Mostrar Inativas'}
+                    </button>
                     <Link href="/financial" className="px-5 py-2 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 font-semibold rounded-xl text-sm transition hover:bg-slate-200 flex items-center">
                         Voltar
                     </Link>
@@ -201,7 +210,7 @@ export default function AccountsPage() {
                     </button>
                     <button onClick={() => {
                         setEditingAccount(null);
-                        setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '' });
+                        setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '', active: true });
                         setIsModalOpen(true);
                     }} className="px-5 py-2 bg-[var(--color-primary-base)] text-white font-semibold rounded-xl text-sm shadow flex items-center gap-2 hover:opacity-90 transition">
                         <Plus className="w-4 h-4"/> Adicionar Conta
@@ -210,7 +219,7 @@ export default function AccountsPage() {
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
-                {accounts.map(acc => (
+                {filteredAccounts.map(acc => (
                     <div key={acc.id} className="bg-white border text-center border-slate-200 rounded-2xl p-5 shadow-sm dark:bg-slate-900 dark:border-slate-800 flex flex-col items-start text-left relative overflow-hidden">
                         <div className="flex justify-between w-full items-start mb-4">
                             <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl cursor-pointer hover:bg-slate-100 transition" onClick={()=>openEdit(acc)}>
@@ -218,7 +227,12 @@ export default function AccountsPage() {
                             </div>
                             <button onClick={()=>handleDelete(acc.id)} className="text-slate-400 hover:text-rose-500 transition"><Trash2 className="w-4 h-4"/></button>
                         </div>
-                        <h3 className="font-bold text-lg text-slate-800 dark:text-slate-100 cursor-pointer hover:underline" onClick={()=>openEdit(acc)}>{acc.name}</h3>
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                            <h3 className="font-bold text-lg text-slate-800 dark:text-slate-100 cursor-pointer hover:underline" onClick={()=>openEdit(acc)}>{acc.name}</h3>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${acc.active ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>
+                                {acc.active ? 'Ativa' : 'Inativa'}
+                            </span>
+                        </div>
                         <p className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-6">
                             {acc.type === 'CURRENT' ? 'Conta Corrente' : acc.type === 'CREDIT_CARD' ? `Cartão (Vence dia ${acc.due_day})` : acc.type === 'WALLET' ? 'Caixa / Espécie' : 'Poupança'}
                         </p>
@@ -297,8 +311,19 @@ export default function AccountsPage() {
                                     </div>
                                 </div>
                             )}
+
+                            <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                                <input
+                                    type="checkbox"
+                                    id="account_active"
+                                    checked={formData.active}
+                                    onChange={e=>setFormData({...formData, active: e.target.checked})}
+                                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                />
+                                <label htmlFor="account_active" className="text-sm font-semibold text-slate-700 dark:text-slate-300 cursor-pointer select-none">Conta Ativa (Aceita lançamentos e transferências)</label>
+                            </div>
                             
-                            <div className="pt-4 flex justify-end gap-3">
+                            <div className="pt-4 flex justify-end gap-3 border-t border-slate-100 dark:border-slate-800">
                                 <button type="button" onClick={()=>setIsModalOpen(false)} className="px-5 py-2 font-semibold text-slate-600 hover:bg-slate-200 rounded-xl transition dark:text-slate-300">
                                     Cancelar
                                 </button>
@@ -324,14 +349,14 @@ export default function AccountsPage() {
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Conta de Origem (Sai dinheiro) <span className="text-rose-500">*</span></label>
                                 <select value={transferData.source_account_id} onChange={e=>setTransferData({...transferData, source_account_id: e.target.value})} className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm bg-rose-50/50 dark:bg-rose-900/10">
                                     <option value="">Selecione a conta...</option>
-                                    {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} - Saldo: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.current_balance)}</option>)}
+                                    {accounts.filter(acc => acc.active).map(acc => <option key={acc.id} value={acc.id}>{acc.name} - Saldo: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.current_balance)}</option>)}
                                 </select>
                             </div>
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Conta de Destino (Entra dinheiro) <span className="text-rose-500">*</span></label>
                                 <select value={transferData.destination_account_id} onChange={e=>setTransferData({...transferData, destination_account_id: e.target.value})} className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm bg-emerald-50/50 dark:bg-emerald-900/10">
                                     <option value="">Selecione a conta...</option>
-                                    {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} - Saldo: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.current_balance)}</option>)}
+                                    {accounts.filter(acc => acc.active).map(acc => <option key={acc.id} value={acc.id}>{acc.name} - Saldo: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.current_balance)}</option>)}
                                 </select>
                             </div>
                             <div className="grid grid-cols-2 gap-4">

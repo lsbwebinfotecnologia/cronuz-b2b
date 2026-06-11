@@ -28,6 +28,7 @@ export default function CompanyHorusPage() {
     horus_legacy_pagination: false,
     horus_stock_local: '',
     horus_hide_zero_balance: false,
+    horus_use_cronuz_discount: false,
     bookinfo_api_key: ''
   });
 
@@ -56,6 +57,7 @@ export default function CompanyHorusPage() {
              horus_legacy_pagination: data.horus_legacy_pagination || false,
              horus_stock_local: data.horus_stock_local || '',
              horus_hide_zero_balance: data.horus_hide_zero_balance || false,
+             horus_use_cronuz_discount: data.horus_use_cronuz_discount || false,
              allow_backorder: data.allow_backorder || false,
              bookinfo_api_key: data.bookinfo_api_key || ''
           }));
@@ -437,7 +439,35 @@ export default function CompanyHorusPage() {
                 </div>
               </div>
 
-
+              {/* Desconto Cronuz no B2B Horus — visível somente quando modo B2B selecionado */}
+              {formData.horus_api_mode === 'B2B' && (
+                <div className="bg-violet-50/60 dark:bg-violet-900/10 border border-violet-200 dark:border-violet-800/60 rounded-2xl p-6 shadow-sm mt-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-1 flex-1">
+                      <h3 className="text-sm font-bold text-violet-700 dark:text-violet-400 tracking-widest uppercase">DESCONTO CRONUZ NO B2B HORUS</h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Quando ativado, o sistema <strong>ignora o desconto automático do Horus</strong> (VLR_LIQ_CLI) e aplica o percentual de desconto configurado no cadastro do cliente no Cronuz sobre o preço de capa (VLR_CAPA). O valor calculado é enviado ao Horus no campo <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded text-[11px]">VLR_LIQUIDO</code> ao transmitir o pedido.
+                      </p>
+                      {formData.horus_use_cronuz_discount && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400 font-semibold mt-2 flex items-center gap-1">
+                          ⚠️ Ativo — o desconto do Horus será ignorado. Certifique-se de que o campo &quot;Desconto&quot; está preenchido em cada cadastro de cliente.
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="text-sm font-bold text-slate-600 dark:text-slate-300">Desconto B2B</span>
+                      <button
+                        type="button"
+                        id="toggle-horus-use-cronuz-discount"
+                        onClick={() => setFormData(prev => ({ ...prev, horus_use_cronuz_discount: !prev.horus_use_cronuz_discount }))}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 ${formData.horus_use_cronuz_discount ? 'bg-violet-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                      >
+                        <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${formData.horus_use_cronuz_discount ? 'translate-x-5' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
              <div className="flex justify-end gap-3 pt-4 mb-8">
                <button

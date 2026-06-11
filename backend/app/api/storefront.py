@@ -41,14 +41,22 @@ def calculate_product_availability(stock_qty: int, situacao: str = None, is_pre_
             
     return allow_purchase, status_label
 
-def map_horus_product(item: dict, company_id: int, allow_backorder: bool) -> dict:
-    import json
-    with open("horus_dump.json", "a") as f: f.write(json.dumps(item) + "\n")
-    print(json.dumps(item))
-    print("HORUS_ITEM_END")
+def map_horus_product(
+    item: dict,
+    company_id: int,
+    allow_backorder: bool,
+    customer_discount_pct: float = 0.0,
+    use_cronuz_discount: bool = False
+) -> dict:
     from app.core.utils import parse_horus_price
     vlr_capa = parse_horus_price(item.get("VLR_CAPA", "0")) if "VLR_CAPA" in item else 0.0
-    vlr_liq = parse_horus_price(item.get("VLR_LIQ_CLI", item.get("VLR_LIQ_DESCONTO_PDV", "0")))
+
+    # Se o seller usa desconto do Cronuz no B2B Horus, ignora VLR_LIQ_CLI
+    # e calcula o valor líquido aplicando o desconto fixo do customer sobre o preço de capa.
+    if use_cronuz_discount and customer_discount_pct > 0 and vlr_capa > 0:
+        vlr_liq = round(vlr_capa * (1 - customer_discount_pct / 100), 2)
+    else:
+        vlr_liq = parse_horus_price(item.get("VLR_LIQ_CLI", item.get("VLR_LIQ_DESCONTO_PDV", "0")))
     
     stock_quantity = int(item.get("SALDO_DISPONIVEL", 0))
     situacao = item.get("SITUACAO_ITEM", "")
@@ -351,8 +359,26 @@ async def _fetch_from_horus_storefront(
         
         mapped_items = []
         allow_backorder = settings.allow_backorder if settings else False
+
+        # Regra de negócio: desconto Cronuz no B2B Horus
+        # Ativo quando: cliente logado + modo Horus B2B + flag horus_use_cronuz_discount=True
+        use_cronuz_discount = (
+            is_customer
+            and getattr(settings, "horus_api_mode", "") == "B2B"
+            and getattr(settings, "horus_use_cronuz_discount", False)
+        )
+        customer_discount_pct = 0.0
+        if use_cronuz_discount and is_customer:
+            # customer já foi carregado acima para obter id_guid
+            if customer and customer.discount and customer.discount > 0:
+                customer_discount_pct = float(customer.discount)
+
         for item in horus_items:
-            mapped_item = map_horus_product(item, company_id, allow_backorder)
+            mapped_item = map_horus_product(
+                item, company_id, allow_backorder,
+                customer_discount_pct=customer_discount_pct,
+                use_cronuz_discount=use_cronuz_discount
+            )
             mapped_items.append(mapped_item)
             
         return mapped_items

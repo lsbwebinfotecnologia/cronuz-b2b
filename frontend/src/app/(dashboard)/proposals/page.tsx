@@ -52,7 +52,7 @@ export default function ProposalsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
-  const [viewMode, setViewMode] = useState<string>('ALL');
+  const [viewMode, setViewMode] = useState<string>('VIGOR');
 
   // Local metric summaries
   const [metrics, setMetrics] = useState({
@@ -64,6 +64,41 @@ export default function ProposalsPage() {
     total_value: 0,
     converted_value: 0
   });
+
+  const fetchMetrics = async () => {
+    try {
+      const token = getToken();
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/proposals?limit=1000`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const items: Proposal[] = data.items || [];
+        const draft = items.filter(p => p.status === 'DRAFT').length;
+        const sent = items.filter(p => p.status === 'SENT').length;
+        const accepted = items.filter(p => p.status === 'ACCEPTED').length;
+        const converted = items.filter(p => p.status === 'CONVERTED').length;
+        
+        // Em negociação: DRAFT e SENT
+        const totalVal = items.filter(p => p.status === 'DRAFT' || p.status === 'SENT').reduce((acc, p) => acc + p.total, 0);
+        // Efetivadas: CONVERTED e ACCEPTED
+        const convertedVal = items.filter(p => p.status === 'CONVERTED' || p.status === 'ACCEPTED').reduce((acc, p) => acc + p.total, 0);
+
+        setMetrics({
+          total_count: items.length,
+          converted_count: converted,
+          accepted_count: accepted,
+          sent_count: sent,
+          draft_count: draft,
+          total_value: totalVal,
+          converted_value: convertedVal
+        });
+      }
+    } catch (error) {
+      console.error("Error fetching proposal metrics:", error);
+    }
+  };
 
   const fetchProposals = async () => {
     setLoading(true);
@@ -79,7 +114,13 @@ export default function ProposalsPage() {
         params.append('search', searchTerm);
       }
       if (viewMode !== 'ALL') {
-        params.append('status', viewMode);
+        if (viewMode === 'VIGOR') {
+          params.append('status', 'DRAFT,SENT');
+        } else if (viewMode === 'REJECTED_EXPIRED') {
+          params.append('status', 'REJECTED,EXPIRED');
+        } else {
+          params.append('status', viewMode);
+        }
       }
 
       const token = getToken();
@@ -92,25 +133,6 @@ export default function ProposalsPage() {
         const data = await response.json();
         setProposals(data.items || []);
         setTotal(data.total || 0);
-
-        // Calculate simple frontend metrics based on loaded data for immediate design impact
-        const items: Proposal[] = data.items || [];
-        const draft = items.filter(p => p.status === 'DRAFT').length;
-        const sent = items.filter(p => p.status === 'SENT').length;
-        const accepted = items.filter(p => p.status === 'ACCEPTED').length;
-        const converted = items.filter(p => p.status === 'CONVERTED').length;
-        const totalVal = items.reduce((acc, p) => acc + p.total, 0);
-        const convertedVal = items.filter(p => p.status === 'CONVERTED').reduce((acc, p) => acc + p.total, 0);
-
-        setMetrics({
-          total_count: data.total || items.length,
-          converted_count: converted,
-          accepted_count: accepted,
-          sent_count: sent,
-          draft_count: draft,
-          total_value: totalVal,
-          converted_value: convertedVal
-        });
       }
     } catch (error) {
       console.error("Error fetching proposals:", error);
@@ -118,6 +140,10 @@ export default function ProposalsPage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchMetrics();
+  }, []);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -201,13 +227,13 @@ export default function ProposalsPage() {
 
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-indigo-500/10 to-transparent rounded-bl-full pointer-events-none" />
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Convertidos em Pedido</p>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Efetivadas (Aceitas / Convertidas)</p>
           <p className="text-3xl font-black text-indigo-600 dark:text-indigo-400 mt-2">
             R$ {metrics.converted_value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
           </p>
           <div className="mt-4 flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 font-medium">
             <TrendingUp className="w-3.5 h-3.5 animate-pulse" />
-            <span>Faturamento gerado a partir de propostas</span>
+            <span>Faturamento aceito/gerado a partir de propostas</span>
           </div>
         </div>
 
@@ -233,12 +259,13 @@ export default function ProposalsPage() {
         {/* Status Tabs */}
         <div className="flex gap-2 border-b border-slate-200 overflow-x-auto px-4 pt-4 bg-slate-50/50 dark:bg-slate-900/50 dark:border-slate-800">
           {[
+            { id: 'VIGOR', label: 'Em Vigor' },
             { id: 'ALL', label: 'Todas as Propostas' },
             { id: 'DRAFT', label: 'Rascunhos' },
             { id: 'SENT', label: 'Enviadas' },
             { id: 'ACCEPTED', label: 'Aceitas' },
             { id: 'CONVERTED', label: 'Convertidas' },
-            { id: 'REJECTED', label: 'Recusadas' }
+            { id: 'REJECTED_EXPIRED', label: 'Recusadas / Expiradas' }
           ].map(tab => (
             <button
               key={tab.id}

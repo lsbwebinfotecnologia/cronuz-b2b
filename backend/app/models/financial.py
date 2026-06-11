@@ -94,6 +94,7 @@ class FinancialAccount(Base):
     
     closing_day = Column(Integer, nullable=True) # Ex: 10
     due_day = Column(Integer, nullable=True) # Ex: 20
+    active = Column(Boolean, default=True, nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

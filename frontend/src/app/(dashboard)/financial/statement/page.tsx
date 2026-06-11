@@ -92,12 +92,12 @@ function StatementPageContent() {
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm dark:bg-slate-900 dark:border-slate-800 p-5 overflow-hidden flex flex-col md:flex-row gap-4">
                 <div className="flex-1">
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Conta / Caixa</label>
-                    <select value={filters.account_id} onChange={(e) => setFilters({...filters, account_id: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl dark:bg-slate-950 dark:border-slate-800 font-semibold focus:ring-2 focus:ring-indigo-500">
-                        <option value="">Selecione uma conta...</option>
-                        {accounts.map(acc => (
-                            <option key={acc.id} value={acc.id}>{acc.name} — {acc.type === 'CREDIT_CARD' ? 'Cartão' : 'Conta/Caixa'}</option>
-                        ))}
-                    </select>
+                        <select value={filters.account_id} onChange={(e) => setFilters({...filters, account_id: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl dark:bg-slate-950 dark:border-slate-800 font-semibold focus:ring-2 focus:ring-indigo-500">
+                            <option value="">Selecione uma conta...</option>
+                            {accounts.filter(acc => acc.active || acc.id.toString() === filters.account_id).map(acc => (
+                                <option key={acc.id} value={acc.id}>{acc.name} — {acc.type === 'CREDIT_CARD' ? 'Cartão' : 'Conta/Caixa'}</option>
+                            ))}
+                        </select>
                 </div>
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">A Partir De</label>

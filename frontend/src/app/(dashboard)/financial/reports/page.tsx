@@ -27,7 +27,7 @@ export default function DREPage() {
 
     const fetchAccounts = async () => {
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/accounts`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/accounts?active_only=true`, {
                 headers: { 'Authorization': `Bearer ${getToken()}` }
             });
             if (res.ok) setAccounts(await res.json());

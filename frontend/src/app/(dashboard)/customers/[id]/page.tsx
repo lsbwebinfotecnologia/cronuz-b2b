@@ -862,20 +862,35 @@ export default function CustomerDetailsPage() {
                  Configurar Desconto
                </button>
              )}
-          </div>
-          
-          <div className="flex items-center gap-3 mt-1">
-            <p className="text-2xl font-bold text-rose-600 dark:text-rose-400">
-               {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(customer.open_debts || 0)}
-            </p>
-            {customer.discount > 0 && !(usesHorus && customer.id_guid) && !editingFinance && (
-              <span className="px-2 py-0.5 bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] rounded text-xs font-semibold dark:bg-indigo-500/20 dark:text-indigo-400">
-                 -{customer.discount}% Desc. B2B
-              </span>
-            )}
-          </div>
+             {/* Horus B2B: botão abre painel dedicado abaixo dos cards */}
+             {(usesHorus && customer.id_guid) && (
+               <button
+                 onClick={() => setEditingFinance(!editingFinance)}
+                 className={`text-xs font-semibold transition-all flex items-center gap-1 px-2.5 py-1 rounded-full border ${
+                   editingFinance
+                     ? 'bg-violet-600 text-white border-violet-600'
+                     : 'text-violet-600 bg-violet-50 border-violet-200 hover:bg-violet-100 dark:bg-violet-500/10 dark:border-violet-500/30 dark:text-violet-400'
+                 }`}
+               >
+                 {customer.discount > 0 ? `${customer.discount}% Desc. B2B` : 'Definir Desconto B2B'}
+               </button>
+             )}
+           </div>
+           
+           <div className="flex items-center gap-3 mt-1">
+             <p className="text-2xl font-bold text-rose-600 dark:text-rose-400">
+                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(customer.open_debts || 0)}
+             </p>
+           {/* Badge de desconto — apenas para não-Horus (Horus mostra no botão acima) */}
+           {customer.discount > 0 && !editingFinance && !(usesHorus && customer.id_guid) && (
+             <span className="px-2 py-0.5 bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] rounded text-xs font-semibold dark:bg-indigo-500/20 dark:text-indigo-400">
+                -{customer.discount}% Desc. B2B
+             </span>
+           )}
+           </div>
 
-          {editingFinance && !(usesHorus && customer.id_guid) && (
+           {/* Formulário inline — apenas para não-Horus */}
+           {editingFinance && !(usesHorus && customer.id_guid) && (
              <div className="mt-3 pt-3 border-t border-rose-200/50 dark:border-rose-800/30 gap-2 flex flex-col">
                  <div className="flex gap-2 w-full">
                      <select value={newPolicyId} onChange={e=>setNewPolicyId(e.target.value === '' ? '' : parseInt(e.target.value))} className="w-full text-xs font-medium bg-white border border-rose-200 px-2 py-1.5 rounded text-rose-700 outline-none dark:bg-slate-950 dark:border-slate-700 dark:text-white">
@@ -892,10 +907,10 @@ export default function CustomerDetailsPage() {
                  </div>
                  <p className="text-[10px] text-rose-500/80 leading-tight">Preço será recalculado no B2B Nativo independente do produto.</p>
              </div>
-          )}
+           )}
         </div>
-        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-5 flex flex-col justify-center shadow-sm dark:border-emerald-900/30 dark:bg-emerald-950/10">
-          <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400/80">Crédito Disponível (Saldo)</p>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col justify-center shadow-sm dark:border-slate-800 dark:bg-slate-900/40">
+          <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Crédito Disponível (Saldo)</p>
           <p className="text-2xl font-bold text-emerald-600 mt-1 dark:text-emerald-400">
             {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((customer.credit_limit || 0) - (customer.open_debts || 0))}
           </p>
@@ -914,6 +929,53 @@ export default function CustomerDetailsPage() {
         </div>
       </div>
 
+      {/* Painel de Desconto B2B Horus — aparece abaixo dos cards quando editingFinance */}
+      {usesHorus && customer.id_guid && editingFinance && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          className="rounded-2xl border border-violet-200 bg-violet-50/60 dark:bg-violet-900/10 dark:border-violet-800/50 p-6 shadow-sm"
+        >
+          <div className="flex items-start justify-between gap-6 flex-col md:flex-row">
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-violet-700 dark:text-violet-400 flex items-center gap-2">
+                ⚡ Desconto B2B Horus
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md">
+                Percentual fixo aplicado sobre o <strong>preço de capa (VLR_CAPA)</strong> do Horus quando a opção <strong>&quot;Desconto B2B&quot;</strong> está ativa nas configurações da integração. Deixe em <strong>0%</strong> para não aplicar desconto.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="flex flex-col items-end gap-1">
+                <label className="text-xs font-semibold text-violet-700 dark:text-violet-400 uppercase tracking-wider">Desconto do Cliente</label>
+                <div className="flex items-center gap-2">
+                  <CurrencyInput
+                    suffixStr="%"
+                    value={newDiscount}
+                    onChangeValue={setNewDiscount}
+                    className="w-28 bg-white border-2 border-violet-300 focus:border-violet-500 text-lg font-bold px-3 py-2 rounded-xl text-violet-700 placeholder:text-violet-300 dark:bg-slate-900 dark:border-violet-700 dark:text-violet-300 text-center outline-none"
+                    placeholder="0,00"
+                  />
+                  <button
+                    onClick={handleUpdateFinance}
+                    className="px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold rounded-xl transition-colors shadow-sm shadow-violet-500/30"
+                  >
+                    Salvar
+                  </button>
+                  <button
+                    onClick={() => setEditingFinance(false)}
+                    className="px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 text-sm font-medium rounded-xl transition-colors hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       <div className="flex flex-col lg:flex-row gap-8">
         {/* Main Content Area */}
         <div className="lg:w-2/3 space-y-6">
@@ -926,7 +988,7 @@ export default function CustomerDetailsPage() {
               { id: 'financial_erp', label: 'Financeiro ERP', icon: Banknote },
               { id: 'contacts', label: 'Contatos & Locais', icon: Users }
             ].filter(tab => {
-              if (tab.id === 'financial') return moduleFinancial || !usesHorus;
+              if (tab.id === 'financial') return moduleFinancial && !usesHorus;
               if (tab.id === 'financial_erp') return usesHorus && customer.id_guid;
               return true;
             })).map(tab => (

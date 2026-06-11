@@ -16,6 +16,7 @@ class CompanySettingsBase(BaseModel):
     horus_legacy_pagination: Optional[bool] = False
     horus_stock_local: Optional[str] = None
     horus_hide_zero_balance: Optional[bool] = False
+    horus_use_cronuz_discount: Optional[bool] = False  # Aplica customer.discount sobre VLR_CAPA (ignora VLR_LIQ_CLI do Horus)
     bookinfo_api_key: Optional[str] = None
     bookinfo_sync_enabled: Optional[bool] = False
     bookinfo_purchase_auto: Optional[bool] = False

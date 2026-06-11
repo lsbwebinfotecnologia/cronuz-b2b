@@ -15,11 +15,17 @@ export default function BankReconciliationPage() {
     const [previousBalance, setPreviousBalance] = useState<number | null>(null);
     const [startDate, setStartDate] = useState(() => {
         const d = new Date();
-        return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        return `${year}-${month}-01`;
     });
     const [endDate, setEndDate] = useState(() => {
         const d = new Date();
-        return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0];
+        const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+        const year = lastDay.getFullYear();
+        const month = String(lastDay.getMonth() + 1).padStart(2, '0');
+        const day = String(lastDay.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
     });
     const [installmentIdFilter, setInstallmentIdFilter] = useState('');
     const [accountFilter, setAccountFilter] = useState('');
@@ -29,7 +35,7 @@ export default function BankReconciliationPage() {
     useEffect(() => {
         const fetchAccounts = async () => {
             try {
-                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/accounts`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/accounts?active_only=true`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
                 if (res.ok) setAccounts(await res.json());
             } catch (e) {}
         };

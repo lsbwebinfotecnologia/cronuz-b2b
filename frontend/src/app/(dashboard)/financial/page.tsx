@@ -40,11 +40,15 @@ export default function FinancialPage() {
     const [types, setTypes] = useState({ receivable: true, payable: true });
     const [startDate, setStartDate] = useState(() => {
         const d = new Date();
-        return new Date(d.getFullYear(), 0, 1).toISOString().split('T')[0];
+        return `${d.getFullYear()}-01-01`;
     });
     const [endDate, setEndDate] = useState(() => {
         const d = new Date();
-        return d.toISOString().split('T')[0];
+        const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+        const year = lastDay.getFullYear();
+        const month = String(lastDay.getMonth() + 1).padStart(2, '0');
+        const day = String(lastDay.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
     });
     const [dateType, setDateType] = useState<'due' | 'payment'>('due');
     const [activeTab, setActiveTab] = useState<'LIST' | 'CASHFLOW'>('LIST');
@@ -220,7 +224,7 @@ export default function FinancialPage() {
 
     const fetchAccounts = async () => {
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/accounts`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/accounts?active_only=true`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
             if (res.ok) setAccounts(await res.json());
         } catch (e) {}
     };

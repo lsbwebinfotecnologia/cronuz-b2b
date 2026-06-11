@@ -93,6 +93,7 @@ class FinancialAccountBase(BaseModel):
     initial_balance: float = 0.0
     closing_day: Optional[int] = None
     due_day: Optional[int] = None
+    active: bool = True
 
 class FinancialAccountCreate(FinancialAccountBase):
     pass
@@ -103,6 +104,7 @@ class FinancialAccountUpdate(BaseModel):
     due_day: Optional[int] = None
     current_balance: Optional[float] = None
     adjustment_description: Optional[str] = None
+    active: Optional[bool] = None
 
 class FinancialAccount(FinancialAccountBase):
     id: int

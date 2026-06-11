@@ -886,9 +886,16 @@ def get_cashflow_projection(db: Session = Depends(get_db), current_user: User = 
 
 # --- ACCOUNTS API ---
 @router.get("/financial/accounts", response_model=List[FinancialAccountSchema])
-def list_accounts(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def list_accounts(
+    active_only: bool = Query(False),
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
     cid = get_company_id(current_user)
-    return db.query(FinancialAccount).filter(FinancialAccount.company_id == cid).all()
+    query = db.query(FinancialAccount).filter(FinancialAccount.company_id == cid)
+    if active_only:
+        query = query.filter(FinancialAccount.active == True)
+    return query.all()
 
 @router.post("/financial/accounts", response_model=FinancialAccountSchema)
 def create_account(account: FinancialAccountCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -896,7 +903,8 @@ def create_account(account: FinancialAccountCreate, db: Session = Depends(get_db
     db_acc = FinancialAccount(
         company_id=cid, name=account.name, type=account.type, 
         initial_balance=account.initial_balance, current_balance=account.initial_balance,
-        closing_day=account.closing_day, due_day=account.due_day
+        closing_day=account.closing_day, due_day=account.due_day,
+        active=account.active
     )
     db.add(db_acc)
     db.commit()
@@ -973,6 +981,8 @@ def update_account(acc_id: int, account: FinancialAccountUpdate, db: Session = D
         acc.closing_day = account.closing_day
     if account.due_day is not None:
         acc.due_day = account.due_day
+    if account.active is not None:
+        acc.active = account.active
         
     if account.current_balance is not None and account.current_balance != acc.current_balance:
         difference = account.current_balance - acc.current_balance

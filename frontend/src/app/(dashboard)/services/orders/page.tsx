@@ -138,7 +138,7 @@ export default function ServiceOrdersPage() {
             const resSvc = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/services`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
             if (resSvc.ok) setServices((await resSvc.json()).items);
             
-            const resAcc = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/accounts`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
+            const resAcc = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/accounts?active_only=true`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
             if (resAcc.ok) setAccounts(await resAcc.json());
 
             const resPoints = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/print-points`, { headers: { 'Authorization': `Bearer ${getToken()}` }});

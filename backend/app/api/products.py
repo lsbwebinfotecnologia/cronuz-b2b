@@ -166,11 +166,29 @@ def list_products(
                 ))
             
             items = []
+            
+            # Regra de negócio: desconto Cronuz no B2B Horus
+            # Ativo quando: modo B2B + flag horus_use_cronuz_discount=True + cliente com desconto
+            use_cronuz_discount = (
+                api_mode == "B2B"
+                and getattr(settings, "horus_use_cronuz_discount", False)
+                and customer_id is not None
+            )
+            customer_discount_pct = 0.0
+            if use_cronuz_discount and customer_id:
+                # customer já foi carregado acima (modo B2B)
+                if customer and customer.discount and customer.discount > 0:
+                    customer_discount_pct = float(customer.discount)
+
             if isinstance(horus_response, list) and len(horus_response) > 0:
                 # FIX: Check if the dictionary has the key 'Falha' instead of hasattr
                 if not ("Falha" in horus_response[0] or "FALHA" in horus_response[0]):
                     for h_item in horus_response:
-                        mapped = map_horus_product(h_item, target_company_id, allow_backorder)
+                        mapped = map_horus_product(
+                            h_item, target_company_id, allow_backorder,
+                            customer_discount_pct=customer_discount_pct,
+                            use_cronuz_discount=use_cronuz_discount
+                        )
                         # PDV expects 'price' and 'stock' fields directly due to legacy mappings
                         mapped["price"] = mapped.get("promotional_price") if mapped.get("promotional_price") else mapped.get("base_price", 0.0)
                         mapped["stock"] = mapped.get("stock_quantity", 0)
