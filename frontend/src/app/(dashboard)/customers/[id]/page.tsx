@@ -96,6 +96,7 @@ export default function CustomerDetailsPage() {
   const [syncingHorus, setSyncingHorus] = useState(false);
   const [usesHorus, setUsesHorus] = useState(false);
   const [usesHorusB2B, setUsesHorusB2B] = useState(false);
+  const [usesHorusCronuzDiscount, setUsesHorusCronuzDiscount] = useState(false);
   const [moduleFinancial, setModuleFinancial] = useState(false);
   const [moduleOrders, setModuleOrders] = useState(false);
   const [moduleServices, setModuleServices] = useState(false);
@@ -175,6 +176,7 @@ export default function CustomerDetailsPage() {
         const data = await res.json();
         setUsesHorus(!!data.uses_horus);
         setUsesHorusB2B(!!data.uses_horus && data.horus_api_mode === 'B2B');
+        setUsesHorusCronuzDiscount(!!data.horus_use_cronuz_discount);
       }
       const token = getToken();
       if (token) {
@@ -863,7 +865,7 @@ export default function CustomerDetailsPage() {
                </button>
              )}
              {/* Horus B2B: botão abre painel dedicado abaixo dos cards */}
-             {(usesHorus && customer.id_guid) && (
+             {(usesHorus && customer.id_guid && usesHorusCronuzDiscount) && (
                <button
                  onClick={() => setEditingFinance(!editingFinance)}
                  className={`text-xs font-semibold transition-all flex items-center gap-1 px-2.5 py-1 rounded-full border ${
@@ -930,7 +932,7 @@ export default function CustomerDetailsPage() {
       </div>
 
       {/* Painel de Desconto B2B Horus — aparece abaixo dos cards quando editingFinance */}
-      {usesHorus && customer.id_guid && editingFinance && (
+      {usesHorus && customer.id_guid && editingFinance && usesHorusCronuzDiscount && (
         <motion.div
           initial={{ opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}

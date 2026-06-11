@@ -163,7 +163,8 @@ def get_storefront_config(
         "b2b_showcases_config": settings.b2b_showcases_config if settings else None,
         "b2b_show_stock_quantity": settings.b2b_show_stock_quantity if settings else True,
         "logo": company.logo if company else None,
-        "name": company.name if company else None
+        "name": company.name if company else None,
+        "horus_use_cronuz_discount": settings.horus_use_cronuz_discount if settings else False
     }
 
 from pydantic import BaseModel
