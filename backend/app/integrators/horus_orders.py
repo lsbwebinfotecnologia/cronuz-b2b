@@ -123,6 +123,18 @@ class HorusOrders(HorusClient):
         }
         return await self.get("LimpaItensPedidoVenda", params=params)
 
+    async def alt_status_pedido(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int]) -> Any:
+        """
+        Updates the order status in Horus by calling AltStatus_Pedido endpoint
+        """
+        params = {
+            "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
+            "ID_GUID": id_guid,
+            "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
+            "COD_PEDIDO_ORIGEM": cod_pedido_origem,
+        }
+        return await self.get("AltStatus_Pedido", params=params)
+
     async def get_order_items(self, cod_ped_venda: Union[str, int], limit: int = 0) -> Any:
         """
         Translates getItemsOrder from HsOrders.php

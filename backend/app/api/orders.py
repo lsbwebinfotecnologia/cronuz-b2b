@@ -164,6 +164,17 @@ async def create_pdv_order(
                             price=item.unit_price
                         )
                             
+                    # Atualiza status do pedido no Horus
+                    try:
+                        await horus_client.alt_status_pedido(
+                            id_doc=customer.document,
+                            id_guid=customer.id_guid,
+                            cnpj_destino=company.document,
+                            cod_pedido_origem=order.customer_order_ref if order.customer_order_ref else order.id
+                        )
+                    except Exception as e:
+                        print(f"Error calling AltStatus_Pedido in PDV order: {e}")
+
                     order.horus_pedido_venda = str(horus_ped_venda).strip() if horus_ped_venda else None
                     order.status = "SENT_TO_HORUS"
                     log_horus = OrderLog(order_id=order.id, old_status="NEW", new_status="SENT_TO_HORUS")

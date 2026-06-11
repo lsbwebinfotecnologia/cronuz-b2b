@@ -977,6 +977,17 @@ async def checkout_cart(
                         )
                         raise HTTPException(status_code=400, detail=f"Falha ao integrar itens no Horus: {msg}")
                 
+            # Atualiza status do pedido no Horus
+            try:
+                await horus_client.alt_status_pedido(
+                    id_doc=customer.document,
+                    id_guid=customer.id_guid,
+                    cnpj_destino=company.document,
+                    cod_pedido_origem=origem
+                )
+            except Exception as e:
+                print(f"Error calling AltStatus_Pedido in storefront: {e}")
+                
             cart.horus_pedido_venda = str(horus_ped_venda).strip() if horus_ped_venda else None
             cart.status = "SENT_TO_HORUS"
             from datetime import datetime
