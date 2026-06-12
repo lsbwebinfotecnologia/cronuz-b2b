@@ -212,10 +212,20 @@ class SefinNacionalProvider(BaseNfseProvider):
             endpoint = f"{self.base_url}/nfse"
             headers = {"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"}
             
-            logger.info(f"[NFSe] Enviando DPS {order.id} compactado em GZip/B64 via mTLS para {endpoint}...")
-            
-            async with httpx.AsyncClient(cert=(cert_path, key_path), verify=False) as client:
-                response = await client.post(endpoint, json=payload, headers=headers, timeout=30.0)
+            import asyncio
+            response = None
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"[NFSe] Enviando DPS {order.id} compactado (Tentativa {attempt + 1}/{max_retries}) para {endpoint}...")
+                    async with httpx.AsyncClient(cert=(cert_path, key_path), verify=False) as client:
+                        response = await client.post(endpoint, json=payload, headers=headers, timeout=40.0)
+                    break
+                except (httpx.ReadError, httpx.ConnectError, httpx.WriteError, httpx.TimeoutException) as exc:
+                    logger.warning(f"[NFSe] Tentativa {attempt + 1} falhou com {type(exc).__name__}: {exc}")
+                    if attempt == max_retries - 1:
+                        raise
+                    await asyncio.sleep(2.0 * (attempt + 1))
             
             logger.info(f"[NFSe Client POST] Serpro retornou HTTP {response.status_code}")
             logger.info(f"[NFSe Client POST] Resposta Bruta: {response.text}")

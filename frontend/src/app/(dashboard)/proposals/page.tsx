@@ -2,10 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { 
-  FileText, Search, Plus, Filter, Eye, Edit3, Trash2, Calendar, CheckCircle2, AlertTriangle, Play, RefreshCw, TrendingUp, Sparkles, User, Inbox, ArrowRight
+  FileText, Search, Plus, Filter, Eye, Edit3, Trash2, Calendar, CheckCircle2, AlertTriangle, Play, RefreshCw, TrendingUp, Sparkles, User, Inbox, ArrowRight, Loader2
 } from 'lucide-react';
 import Link from 'next/link';
 import { getToken } from '@/lib/auth';
+import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
 interface Proposal {
   id: number;
@@ -54,6 +55,30 @@ export default function ProposalsPage() {
   const [total, setTotal] = useState(0);
   const [viewMode, setViewMode] = useState<string>('VIGOR');
 
+  // Get initial range (current month)
+  const getInitialDates = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const first = new Date(y, m, 1);
+    const last = new Date(y, m + 1, 0);
+    const format = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    return { start: format(first), end: format(last) };
+  };
+
+  const [startDate, setStartDate] = useState<string>(() => getInitialDates().start);
+  const [endDate, setEndDate] = useState<string>(() => getInitialDates().end);
+  const [filterType, setFilterType] = useState<'ALL' | 'CUSTOMER' | 'LEAD'>('ALL');
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [selectedLeadId, setSelectedLeadId] = useState<string>('');
+  const [leadsList, setLeadsList] = useState<any[]>([]);
+  const [loadingLeads, setLoadingLeads] = useState(false);
+
   // Local metric summaries
   const [metrics, setMetrics] = useState({
     total_count: 0,
@@ -65,40 +90,30 @@ export default function ProposalsPage() {
     converted_value: 0
   });
 
-  const fetchMetrics = async () => {
-    try {
-      const token = getToken();
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const response = await fetch(`${apiUrl}/proposals?limit=1000`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const items: Proposal[] = data.items || [];
-        const draft = items.filter(p => p.status === 'DRAFT').length;
-        const sent = items.filter(p => p.status === 'SENT').length;
-        const accepted = items.filter(p => p.status === 'ACCEPTED').length;
-        const converted = items.filter(p => p.status === 'CONVERTED').length;
-        
-        // Em negociação: DRAFT e SENT
-        const totalVal = items.filter(p => p.status === 'DRAFT' || p.status === 'SENT').reduce((acc, p) => acc + p.total, 0);
-        // Efetivadas: CONVERTED e ACCEPTED
-        const convertedVal = items.filter(p => p.status === 'CONVERTED' || p.status === 'ACCEPTED').reduce((acc, p) => acc + p.total, 0);
-
-        setMetrics({
-          total_count: items.length,
-          converted_count: converted,
-          accepted_count: accepted,
-          sent_count: sent,
-          draft_count: draft,
-          total_value: totalVal,
-          converted_value: convertedVal
-        });
-      }
-    } catch (error) {
-      console.error("Error fetching proposal metrics:", error);
+  // Load leads list when filterType === 'LEAD'
+  useEffect(() => {
+    if (filterType === 'LEAD' && leadsList.length === 0) {
+      const fetchLeads = async () => {
+        setLoadingLeads(true);
+        try {
+          const token = getToken();
+          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+          const res = await fetch(`${apiUrl}/leads`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setLeadsList(data || []);
+          }
+        } catch (e) {
+          console.error("Error fetching leads", e);
+        } finally {
+          setLoadingLeads(false);
+        }
+      };
+      fetchLeads();
     }
-  };
+  }, [filterType, leadsList.length]);
 
   const fetchProposals = async () => {
     setLoading(true);
@@ -122,6 +137,18 @@ export default function ProposalsPage() {
           params.append('status', viewMode);
         }
       }
+      if (startDate) {
+        params.append('start_date', startDate);
+      }
+      if (endDate) {
+        params.append('end_date', endDate);
+      }
+      if (filterType === 'CUSTOMER' && selectedCustomerId) {
+        params.append('customer_id', selectedCustomerId);
+      }
+      if (filterType === 'LEAD' && selectedLeadId) {
+        params.append('lead_id', selectedLeadId);
+      }
 
       const token = getToken();
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -133,6 +160,9 @@ export default function ProposalsPage() {
         const data = await response.json();
         setProposals(data.items || []);
         setTotal(data.total || 0);
+        if (data.metrics) {
+          setMetrics(data.metrics);
+        }
       }
     } catch (error) {
       console.error("Error fetching proposals:", error);
@@ -142,15 +172,11 @@ export default function ProposalsPage() {
   };
 
   useEffect(() => {
-    fetchMetrics();
-  }, []);
-
-  useEffect(() => {
     const timeoutId = setTimeout(() => {
       fetchProposals();
     }, 500);
     return () => clearTimeout(timeoutId);
-  }, [searchTerm, page, viewMode]);
+  }, [searchTerm, page, viewMode, startDate, endDate, filterType, selectedCustomerId, selectedLeadId]);
 
   const getRecipientLabel = (proposal: Proposal) => {
     if (proposal.relation_type === 'CUSTOMER') {
@@ -282,19 +308,125 @@ export default function ProposalsPage() {
         </div>
 
         {/* Filters */}
-        <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row gap-4 justify-between bg-white dark:bg-slate-900">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Buscar por título ou contato manual..."
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setPage(0);
-              }}
-              className="w-full pl-10 pr-4 py-2 border border-slate-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all text-sm"
-            />
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
+            
+            {/* Search Input */}
+            <div className="lg:col-span-4 space-y-1">
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide">Buscar</label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4.5 w-4.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar por título ou contato manual..."
+                  value={searchTerm}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setPage(0);
+                  }}
+                  className="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Date Filters */}
+            <div className="lg:col-span-4 grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide">Período De</label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => {
+                      setStartDate(e.target.value);
+                      setPage(0);
+                    }}
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] text-sm"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide">Até</label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => {
+                      setEndDate(e.target.value);
+                      setPage(0);
+                    }}
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Recipient Filter Container */}
+            <div className="lg:col-span-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide">Destinatário</label>
+                  <select
+                    value={filterType}
+                    onChange={(e) => {
+                      const val = e.target.value as 'ALL' | 'CUSTOMER' | 'LEAD';
+                      setFilterType(val);
+                      setSelectedCustomerId('');
+                      setSelectedLeadId('');
+                      setPage(0);
+                    }}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] text-sm"
+                  >
+                    <option value="ALL">Todos</option>
+                    <option value="CUSTOMER">Filtrar por Cliente</option>
+                    <option value="LEAD">Filtrar por Lead</option>
+                  </select>
+                </div>
+
+                {filterType === 'CUSTOMER' && (
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide">Selecionar Cliente</label>
+                    <CustomerAutocomplete
+                      value={selectedCustomerId}
+                      onChange={(id) => {
+                        setSelectedCustomerId(id);
+                        setPage(0);
+                      }}
+                      placeholder="Buscar cliente..."
+                      className="[&>div:first-of-type]:py-1.5 [&>div:first-of-type]:rounded-xl [&>div:first-of-type]:bg-slate-50 dark:[&>div:first-of-type]:bg-slate-950"
+                    />
+                  </div>
+                )}
+
+                {filterType === 'LEAD' && (
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide">Selecionar Lead</label>
+                    {loadingLeads ? (
+                      <div className="flex items-center gap-2 h-9 text-xs text-slate-500"><Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--color-primary-base)]"/> Carregando...</div>
+                    ) : (
+                      <select
+                        value={selectedLeadId}
+                        onChange={(e) => {
+                          setSelectedLeadId(e.target.value);
+                          setPage(0);
+                        }}
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] text-sm"
+                      >
+                        <option value="">-- Selecione o Lead --</option>
+                        {leadsList.map(ld => (
+                          <option key={ld.id} value={ld.id}>
+                            {ld.name} {ld.company_name ? `(${ld.company_name})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
           </div>
         </div>
 

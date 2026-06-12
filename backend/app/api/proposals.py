@@ -122,6 +122,8 @@ def list_proposals(
     customer_id: Optional[int] = None,
     lead_id: Optional[str] = None,
     search: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -146,11 +148,56 @@ def list_proposals(
             Proposal.title.ilike(f"%{search}%") |
             Proposal.manual_name.ilike(f"%{search}%")
         )
+    if start_date:
+        query = query.filter(Proposal.created_at >= datetime.combine(start_date, datetime.min.time()))
+    if end_date:
+        query = query.filter(Proposal.created_at <= datetime.combine(end_date, datetime.max.time()))
 
     total = query.count()
     proposals = query.order_by(Proposal.local_id.desc()).offset(skip).limit(limit).all()
 
-    return {"items": proposals, "total": total}
+    # Highly performant metrics calculation: query only status and total columns
+    metrics_query = db.query(Proposal.status, Proposal.total).filter(
+        Proposal.company_id == current_user.company_id
+    )
+    if relation_type:
+        metrics_query = metrics_query.filter(Proposal.relation_type == relation_type)
+    if customer_id:
+        metrics_query = metrics_query.filter(Proposal.customer_id == customer_id)
+    if lead_id:
+        metrics_query = metrics_query.filter(Proposal.lead_id == lead_id)
+    if search:
+        metrics_query = metrics_query.filter(
+            Proposal.title.ilike(f"%{search}%") |
+            Proposal.manual_name.ilike(f"%{search}%")
+        )
+    if start_date:
+        metrics_query = metrics_query.filter(Proposal.created_at >= datetime.combine(start_date, datetime.min.time()))
+    if end_date:
+        metrics_query = metrics_query.filter(Proposal.created_at <= datetime.combine(end_date, datetime.max.time()))
+
+    all_matching = metrics_query.all()
+    
+    draft_count = sum(1 for p in all_matching if p.status == 'DRAFT')
+    sent_count = sum(1 for p in all_matching if p.status == 'SENT')
+    accepted_count = sum(1 for p in all_matching if p.status == 'ACCEPTED')
+    converted_count = sum(1 for p in all_matching if p.status == 'CONVERTED')
+    total_count = len(all_matching)
+    
+    total_value = sum(p.total for p in all_matching if p.status in ['DRAFT', 'SENT'])
+    converted_value = sum(p.total for p in all_matching if p.status in ['CONVERTED', 'ACCEPTED'])
+
+    metrics = {
+        "total_count": total_count,
+        "converted_count": converted_count,
+        "accepted_count": accepted_count,
+        "sent_count": sent_count,
+        "draft_count": draft_count,
+        "total_value": total_value,
+        "converted_value": converted_value
+    }
+
+    return {"items": proposals, "total": total, "metrics": metrics}
 
 
 @router.get("/{proposal_id}", response_model=ProposalResponse)

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2, QrCode, Mail, Scissors } from 'lucide-react';
 import { toast } from 'sonner';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 
@@ -81,6 +81,7 @@ export default function ServiceOrdersPage() {
     const [consultingOrderId, setConsultingOrderId] = useState<number | null>(null);
 
     const [selectedPrintPointId, setSelectedPrintPointId] = useState<number | ''>('');
+    const [companyDefaultPrintPointId, setCompanyDefaultPrintPointId] = useState<number | ''>('');
     const [sefazLog, setSefazLog] = useState<{status: number|null, body: string, xml: string} | null>(null);
     const [isBulkDateModalOpen, setIsBulkDateModalOpen] = useState(false);
     const [bulkExecutionDate, setBulkExecutionDate] = useState(new Date().toISOString().split('T')[0]);
@@ -145,6 +146,18 @@ export default function ServiceOrdersPage() {
             if (resPoints.ok) {
                 const points = await resPoints.json();
                 setPrintPoints(points.filter((p: any) => p.is_active && p.is_electronic));
+            }
+
+            const freshUser = getUser();
+            if (freshUser?.company_id) {
+                const resComp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${freshUser.company_id}`, { headers: { 'Authorization': `Bearer ${getToken()}` }});
+                if (resComp.ok) {
+                    const compData = await resComp.json();
+                    if (compData.nfse_default_print_point_id) {
+                        setCompanyDefaultPrintPointId(compData.nfse_default_print_point_id);
+                        setSelectedPrintPointId(compData.nfse_default_print_point_id);
+                    }
+                }
             }
         } catch (e) {}
     };
@@ -430,7 +443,7 @@ export default function ServiceOrdersPage() {
             return;
         }
         const sum = selectedObj.reduce((acc, curr) => acc + curr.negotiated_value, 0);
-        setBillData({ order_id: 0, order_ids: selectedOrders, bulk_sum: sum, installments_count: '1', first_due_date: new Date().toISOString().split('T')[0], account_id: '', print_point_id: '', is_grouped: true });
+        setBillData({ order_id: 0, order_ids: selectedOrders, bulk_sum: sum, installments_count: '1', first_due_date: new Date().toISOString().split('T')[0], account_id: '', print_point_id: companyDefaultPrintPointId || '', is_grouped: true });
         setIsBillOpen(true);
     };
 
@@ -447,7 +460,7 @@ export default function ServiceOrdersPage() {
             return;
         }
         const sum = selectedObj.reduce((acc, curr) => acc + curr.negotiated_value, 0);
-        setBillData({ order_id: 0, order_ids: selectedOrders, bulk_sum: sum, installments_count: '1', first_due_date: new Date().toISOString().split('T')[0], account_id: '', print_point_id: '', is_grouped: false });
+        setBillData({ order_id: 0, order_ids: selectedOrders, bulk_sum: sum, installments_count: '1', first_due_date: new Date().toISOString().split('T')[0], account_id: '', print_point_id: companyDefaultPrintPointId || '', is_grouped: false });
         setIsBillOpen(true);
     };
 
@@ -656,6 +669,11 @@ export default function ServiceOrdersPage() {
 
     const handleIssueNFClick = (orderId: number) => {
         setSelectedOrderIdForNF(orderId);
+        if (companyDefaultPrintPointId) {
+            setSelectedPrintPointId(companyDefaultPrintPointId);
+        } else {
+            setSelectedPrintPointId('');
+        }
         setIsPrintPointModalOpen(true);
     };
 
@@ -1064,7 +1082,7 @@ export default function ServiceOrdersPage() {
                                                         <div className="flex items-center gap-2">
                                                             <button 
                                                                 onClick={() => {
-                                                                    setBillData({ order_id: order.id, installments_count: '1', first_due_date: order.execution_date, account_id: '', print_point_id: '' });
+                                                                    setBillData({ order_id: order.id, installments_count: '1', first_due_date: order.execution_date, account_id: '', print_point_id: companyDefaultPrintPointId || '' });
                                                                     setIsBillOpen(true);
                                                                 }}
                                                                 className="px-4 py-2 bg-[var(--color-primary-base)] hover:opacity-90 text-white font-bold rounded-xl shadow-md text-xs inline-flex items-center gap-2 whitespace-nowrap transition"

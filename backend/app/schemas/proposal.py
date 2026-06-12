@@ -107,9 +107,19 @@ class ProposalResponse(ProposalBase):
     class Config:
         from_attributes = True
 
+class ProposalMetricsSchema(BaseModel):
+    total_count: int
+    converted_count: int
+    accepted_count: int
+    sent_count: int
+    draft_count: int
+    total_value: float
+    converted_value: float
+
 class ProposalListResponse(BaseModel):
     items: List[ProposalResponse]
     total: int
+    metrics: Optional[ProposalMetricsSchema] = None
 
     class Config:
         from_attributes = True

@@ -420,6 +420,9 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
             emails.push(...bEmails);
         }
         setToEmails(emails.join(', '));
+        if (templates.length > 0 && order) {
+            applyTemplate(templates, selectedTemplateType || 'SERVICE_ORDER', order);
+        }
         setShowEmailModal(true);
     };
 

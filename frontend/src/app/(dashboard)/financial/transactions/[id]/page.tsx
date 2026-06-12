@@ -349,6 +349,9 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
     const openEmailModal = () => {
         // Find if we have customer email in trans.customer or we don't have it nested?
         // We might not have nested customer email. Let's just open modal.
+        if (templates.length > 0 && trans) {
+            applyTemplate(templates, selectedTemplateType || 'FINANCIAL_INVOICE', trans);
+        }
         setShowEmailModal(true);
     };
 
