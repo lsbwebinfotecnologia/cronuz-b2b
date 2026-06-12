@@ -138,7 +138,8 @@ export default function CustomerDetailsPage() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (!usesHorus || moduleFinancial) {
+    if (!customer) return;
+    if (!(usesHorus && customer.id_guid) || moduleFinancial) {
       const fetchPolicies = async () => {
         try {
           const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/commercial-policies`, {
@@ -166,7 +167,7 @@ export default function CustomerDetailsPage() {
       fetchPolicies();
       fetchInstallmentsData();
     }
-  }, [customerId, usesHorus]);
+  }, [customerId, usesHorus, customer, moduleFinancial]);
 
   async function checkHorusConfig() {
     try {
@@ -990,7 +991,7 @@ export default function CustomerDetailsPage() {
               { id: 'financial_erp', label: 'Financeiro ERP', icon: Banknote },
               { id: 'contacts', label: 'Contatos & Locais', icon: Users }
             ].filter(tab => {
-              if (tab.id === 'financial') return moduleFinancial && !usesHorus;
+              if (tab.id === 'financial') return moduleFinancial && !(usesHorus && customer.id_guid);
               if (tab.id === 'financial_erp') return usesHorus && customer.id_guid;
               return true;
             })).map(tab => (
