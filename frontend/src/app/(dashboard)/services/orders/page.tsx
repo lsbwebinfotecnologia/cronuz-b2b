@@ -443,7 +443,7 @@ export default function ServiceOrdersPage() {
             return;
         }
         const sum = selectedObj.reduce((acc, curr) => acc + curr.negotiated_value, 0);
-        setBillData({ order_id: 0, order_ids: selectedOrders, bulk_sum: sum, installments_count: '1', first_due_date: new Date().toISOString().split('T')[0], account_id: '', print_point_id: companyDefaultPrintPointId || '', is_grouped: true });
+        setBillData({ order_id: 0, order_ids: selectedOrders, bulk_sum: sum, installments_count: '1', first_due_date: new Date().toISOString().split('T')[0], account_id: '', print_point_id: companyDefaultPrintPointId ? companyDefaultPrintPointId.toString() : '', is_grouped: true });
         setIsBillOpen(true);
     };
 
@@ -460,7 +460,7 @@ export default function ServiceOrdersPage() {
             return;
         }
         const sum = selectedObj.reduce((acc, curr) => acc + curr.negotiated_value, 0);
-        setBillData({ order_id: 0, order_ids: selectedOrders, bulk_sum: sum, installments_count: '1', first_due_date: new Date().toISOString().split('T')[0], account_id: '', print_point_id: companyDefaultPrintPointId || '', is_grouped: false });
+        setBillData({ order_id: 0, order_ids: selectedOrders, bulk_sum: sum, installments_count: '1', first_due_date: new Date().toISOString().split('T')[0], account_id: '', print_point_id: companyDefaultPrintPointId ? companyDefaultPrintPointId.toString() : '', is_grouped: false });
         setIsBillOpen(true);
     };
 
@@ -1079,17 +1079,15 @@ export default function ServiceOrdersPage() {
                                                             <DollarSign className="w-3.5 h-3.5"/> Faturar e Emitir
                                                         </button>
                                                     ) : (
-                                                        <div className="flex items-center gap-2">
-                                                            <button 
-                                                                onClick={() => {
-                                                                    setBillData({ order_id: order.id, installments_count: '1', first_due_date: order.execution_date, account_id: '', print_point_id: companyDefaultPrintPointId || '' });
-                                                                    setIsBillOpen(true);
-                                                                }}
-                                                                className="px-4 py-2 bg-[var(--color-primary-base)] hover:opacity-90 text-white font-bold rounded-xl shadow-md text-xs inline-flex items-center gap-2 whitespace-nowrap transition"
-                                                            >
-                                                                <DollarSign className="w-3.5 h-3.5"/> Faturar
-                                                            </button>
-                                                        </div>
+                                                        <button 
+                                                            onClick={() => {
+                                                                setBillData({ order_id: order.id, installments_count: '1', first_due_date: order.execution_date, account_id: '', print_point_id: companyDefaultPrintPointId ? companyDefaultPrintPointId.toString() : '' });
+                                                                setIsBillOpen(true);
+                                                            }}
+                                                            className="px-4 py-2 bg-[var(--color-primary-base)] hover:opacity-90 text-white font-bold rounded-xl shadow-md text-xs inline-flex items-center gap-2 whitespace-nowrap transition"
+                                                        >
+                                                            <DollarSign className="w-3.5 h-3.5"/> Faturar
+                                                        </button>
                                                     )
                                                 ) : order.status_nfse === 'Processando' ? (
                                                     <>
