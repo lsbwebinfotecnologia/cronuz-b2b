@@ -101,6 +101,7 @@ export default function OrderConferencePage() {
   const [isbnLookupQuery, setIsbnLookupQuery] = useState('');
   const [isMounted, setIsMounted] = useState(false);
   const [viewingVolumeDetails, setViewingVolumeDetails] = useState<Volume | null>(null);
+  const [activeVolumeTab, setActiveVolumeTab] = useState<'current' | 'history'>('current');
 
   // Printing/Label states
   const [printingVolume, setPrintingVolume] = useState<Volume | null>(null);
@@ -166,6 +167,8 @@ export default function OrderConferencePage() {
           STATUS_PEDIDO_VENDA: 'LEX'
         });
         setHorusItems([]);
+        setOpenVolume(null);
+        setActiveVolumeTab('history');
         
         // Reconstruct items list from volume details for completed orders
         const resolvedItemsMap: Record<string, { isbn: string, name: string, quantity: number }> = {};
@@ -189,10 +192,13 @@ export default function OrderConferencePage() {
         setHorusItems(data.horus_items);
         
         const vols = data.session.volumes || [];
-        if (vols.length > 0) {
-          setOpenVolume(vols[vols.length - 1]);
+        const lastVol = vols[vols.length - 1];
+        if (lastVol && !lastVol.weight) {
+          setOpenVolume(lastVol);
+          setActiveVolumeTab('current');
         } else {
           setOpenVolume(null);
+          setActiveVolumeTab('history');
         }
       }
       
@@ -320,16 +326,20 @@ export default function OrderConferencePage() {
           STATUS_PEDIDO_VENDA: 'LEX'
         });
         toast.info('Esta conferência já foi encerrada.');
+        setOpenVolume(null);
+        setActiveVolumeTab('history');
       } else {
         setHorusOrder(data.horus_order);
         setHorusItems(data.horus_items);
         
-        // Find if there is an active volume (last created one, or we can check items)
         const vols = data.session.volumes || [];
-        if (vols.length > 0) {
-          // In our simple flow, we check if the last volume is open, or we let them choose.
-          // By default, let's treat the last volume as the open one.
-          setOpenVolume(vols[vols.length - 1]);
+        const lastVol = vols[vols.length - 1];
+        if (lastVol && !lastVol.weight) {
+          setOpenVolume(lastVol);
+          setActiveVolumeTab('current');
+        } else {
+          setOpenVolume(null);
+          setActiveVolumeTab('history');
         }
       }
       setViewMode('conference');
@@ -368,6 +378,7 @@ export default function OrderConferencePage() {
         };
       });
       setOpenVolume(newVol);
+      setActiveVolumeTab('current');
       toast.success(`Caixa ${newVol.volume_number} aberta!`);
       playBeep('success');
     } catch (err) {
@@ -531,6 +542,7 @@ export default function OrderConferencePage() {
       // Open label dialog
       setPrintingVolume({ ...vol, weight });
       setOpenVolume(null);
+      setActiveVolumeTab('history');
     } catch (err: any) {
       toast.error(err.message || 'Erro ao fechar volume.');
     }
@@ -1211,79 +1223,163 @@ export default function OrderConferencePage() {
                 {(!session.volumes || session.volumes.length === 0) ? (
                   <p className="text-xs text-slate-400 text-center py-4">Nenhum volume registrado para esta conferência.</p>
                 ) : (
-                  <div className="space-y-3">
-                    {[...(session.volumes || [])].sort((a, b) => {
-                      const isAOpen = openVolume?.id === a.id;
-                      const isBOpen = openVolume?.id === b.id;
-                      if (isAOpen && !isBOpen) return -1;
-                      if (!isAOpen && isBOpen) return 1;
-                      return b.volume_number - a.volume_number;
-                    }).map(vol => {
-                      const isOpen = openVolume?.id === vol.id;
-                      const totalItemsCount = vol.items?.reduce((t, i) => t + i.quantity, 0) || 0;
-                      
-                      return (
-                        <div 
-                          key={vol.id} 
-                          className={`p-3 border rounded-xl transition ${
-                            isOpen 
-                              ? 'border-indigo-500 bg-indigo-500/5 shadow-md' 
-                              : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-1.5">
-                            <p className={`text-xs font-bold uppercase ${isOpen ? 'text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5' : 'text-slate-700 dark:text-slate-350'}`}>
-                              {isOpen ? '📦 Caixa Atual (Aberta)' : `Caixa #${vol.volume_number}`}
-                            </p>
-                            <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center">
-                              {vol.weight && (
-                                <span className="text-[10px] text-slate-400 dark:text-slate-500 font-normal mr-1.5">
-                                  ({vol.weight.toFixed(2)} kg)
-                                </span>
-                              )}
-                              {totalItemsCount} {totalItemsCount === 1 ? 'item' : 'itens'}
-                            </span>
-                          </div>
-                          <p className="text-[10px] font-mono text-slate-400 mb-2">{vol.barcode}</p>
-                          
-                          {/* List items inline ONLY for the active open volume */}
-                          {isOpen && vol.items && vol.items.length > 0 && (
-                            <div className="border-t border-slate-100 dark:border-slate-800 pt-2 mb-2 space-y-1 max-h-40 overflow-y-auto">
-                              {vol.items.map(item => (
-                                <div key={item.id} className="flex justify-between text-xxs text-slate-500 dark:text-slate-400">
-                                  <span className="truncate max-w-[150px]">{item.name}</span>
-                                  <span className="font-bold shrink-0">{item.quantity}x</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                  <div className="space-y-4">
+                    {/* Tabs for Volumes selection */}
+                    <div className="flex border-b border-slate-250 dark:border-slate-800 mb-2 bg-slate-100/60 dark:bg-slate-950/40 p-1 rounded-xl gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setActiveVolumeTab('current')}
+                        className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 ${
+                          activeVolumeTab === 'current'
+                            ? 'bg-white dark:bg-slate-800 text-indigo-650 dark:text-indigo-400 shadow-sm'
+                            : 'text-slate-450 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-400'
+                        }`}
+                      >
+                        Caixa Atual {openVolume && <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveVolumeTab('history')}
+                        className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                          activeVolumeTab === 'history'
+                            ? 'bg-white dark:bg-slate-800 text-indigo-650 dark:text-indigo-400 shadow-sm'
+                            : 'text-slate-450 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-400'
+                        }`}
+                      >
+                        Histórico ({session.volumes.filter(v => v.id !== openVolume?.id).length})
+                      </button>
+                    </div>
 
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => triggerPrint(vol)}
-                              className="w-full py-1 text-xs font-semibold text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-750"
-                            >
-                              <Printer className="h-3 w-3" /> Etiqueta
-                            </button>
-                            {isOpen && session.status === 'IN_PROGRESS' ? (
-                              <button
-                                onClick={() => handleCloseVolume(vol)}
-                                className="w-full py-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition flex items-center justify-center gap-1"
+                    {/* Render active Volume Tab */}
+                    {activeVolumeTab === 'current' ? (
+                      openVolume ? (
+                        <div className="space-y-3">
+                          {/* Render active/open volume */}
+                          {(() => {
+                            const vol = openVolume;
+                            const totalItemsCount = vol.items?.reduce((t, i) => t + i.quantity, 0) || 0;
+                            return (
+                              <div 
+                                className="p-3 border border-indigo-500 bg-indigo-500/5 shadow-md rounded-xl transition"
                               >
-                                Fechar Caixa
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => setViewingVolumeDetails(vol)}
-                                className="w-full py-1 text-xs font-semibold text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-750"
-                              >
-                                <Search className="h-3 w-3" /> Ver Itens
-                              </button>
-                            )}
-                          </div>
+                                <div className="flex items-center justify-between mb-1.5">
+                                  <p className="text-xs font-bold uppercase text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                                    📦 Caixa Atual (Aberta)
+                                  </p>
+                                  <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center">
+                                    {vol.weight && (
+                                      <span className="text-[10px] text-slate-400 dark:text-slate-500 font-normal mr-1.5">
+                                        ({vol.weight.toFixed(2)} kg)
+                                      </span>
+                                    )}
+                                    {totalItemsCount} {totalItemsCount === 1 ? 'item' : 'itens'}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] font-mono text-slate-400 mb-2">{vol.barcode}</p>
+                                
+                                {vol.items && vol.items.length > 0 && (
+                                  <div className="border-t border-slate-100 dark:border-slate-800 pt-2 mb-2 space-y-1 max-h-40 overflow-y-auto">
+                                    {[...vol.items].sort((a, b) => b.id - a.id).map(item => (
+                                      <div key={item.id} className="flex justify-between text-xxs text-slate-500 dark:text-slate-400">
+                                        <span className="truncate max-w-[150px]">{item.name}</span>
+                                        <span className="font-bold shrink-0">{item.quantity}x</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => triggerPrint(vol)}
+                                    className="w-full py-1 text-xs font-semibold text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-750"
+                                  >
+                                    <Printer className="h-3 w-3" /> Etiqueta
+                                  </button>
+                                  {session.status === 'IN_PROGRESS' && (
+                                    <button
+                                      onClick={() => handleCloseVolume(vol)}
+                                      className="w-full py-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition flex items-center justify-center gap-1"
+                                    >
+                                      Fechar Caixa
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
-                      );
-                    })}
+                      ) : (
+                        <div className="p-6 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/20">
+                          <p className="text-xs text-slate-500 dark:text-slate-405 font-semibold">Nenhuma caixa aberta.</p>
+                          {session.status === 'IN_PROGRESS' ? (
+                            <>
+                              <p className="text-[10px] text-slate-400 mt-1 mb-3">Abra uma caixa para iniciar os bipes deste volume.</p>
+                              <button
+                                onClick={handleOpenVolume}
+                                className="px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition flex items-center justify-center gap-1 mx-auto"
+                              >
+                                <Plus className="h-3.5 w-3.5" /> Abrir Caixa / Volume
+                              </button>
+                            </>
+                          ) : (
+                            <p className="text-[10px] text-slate-400 mt-1">Esta conferência já está finalizada.</p>
+                          )}
+                        </div>
+                      )
+                    ) : (
+                      /* History Tab (Closed boxes) */
+                      (() => {
+                        const closedVolumes = session.volumes.filter(v => v.id !== openVolume?.id);
+                        if (closedVolumes.length === 0) {
+                          return (
+                            <p className="text-xs text-slate-400 text-center py-6">Nenhuma caixa finalizada neste pedido.</p>
+                          );
+                        }
+                        return (
+                          <div className="space-y-3 max-h-60 overflow-y-auto">
+                            {[...closedVolumes].sort((a, b) => b.volume_number - a.volume_number).map(vol => {
+                              const totalItemsCount = vol.items?.reduce((t, i) => t + i.quantity, 0) || 0;
+                              return (
+                                <div 
+                                  key={vol.id} 
+                                  className="p-3 border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 rounded-xl transition"
+                                >
+                                  <div className="flex items-center justify-between mb-1.5">
+                                    <p className="text-xs font-bold uppercase text-slate-700 dark:text-slate-350">
+                                      Caixa #{vol.volume_number}
+                                    </p>
+                                    <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center">
+                                      {vol.weight && (
+                                        <span className="text-[10px] text-slate-400 dark:text-slate-500 font-normal mr-1.5">
+                                          ({vol.weight.toFixed(2)} kg)
+                                        </span>
+                                      )}
+                                      {totalItemsCount} {totalItemsCount === 1 ? 'item' : 'itens'}
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] font-mono text-slate-400 mb-2">{vol.barcode}</p>
+
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => triggerPrint(vol)}
+                                      className="w-full py-1 text-xs font-semibold text-slate-605 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-750"
+                                    >
+                                      <Printer className="h-3 w-3" /> Etiqueta
+                                    </button>
+                                    <button
+                                      onClick={() => setViewingVolumeDetails(vol)}
+                                      className="w-full py-1 text-xs font-semibold text-slate-605 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-750"
+                                    >
+                                      <Search className="h-3 w-3" /> Ver Itens
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()
+                    )}
                   </div>
                 )}
               </div>
