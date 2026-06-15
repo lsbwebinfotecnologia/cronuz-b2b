@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Loader2, Search, ClipboardCheck, Box, Package, ShieldCheck, 
@@ -94,14 +95,34 @@ export default function OrderConferencePage() {
   const [barcodeInput, setBarcodeInput] = useState('');
   const scannerRef = useRef<HTMLInputElement>(null);
 
+  // Focus & UI states
+  const [isFocusMode, setIsFocusMode] = useState(false);
+  const [hideCompletedItems, setHideCompletedItems] = useState(false);
+  const [isbnLookupQuery, setIsbnLookupQuery] = useState('');
+  const [isMounted, setIsMounted] = useState(false);
+  const [viewingVolumeDetails, setViewingVolumeDetails] = useState<Volume | null>(null);
+
   // Printing/Label states
   const [printingVolume, setPrintingVolume] = useState<Volume | null>(null);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   useEffect(() => {
+    setIsMounted(true);
     fetchBranches();
     fetchConferences();
+  }, []);
+
+  // Keyboard listener for F2 Focus Mode toggle
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'F2') {
+        e.preventDefault();
+        setIsFocusMode(prev => !prev);
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   async function fetchConferences() {
@@ -712,19 +733,31 @@ export default function OrderConferencePage() {
     return matchesStatus && matchesOrder;
   });
 
-  return (
-    <div className="flex flex-col h-full overflow-y-auto pb-12 bg-slate-50 dark:bg-slate-950">
+  const totalOrdered = horusItems.reduce((acc, item) => acc + parseInt((item.QTD_PEDIDA ?? item.QT_PEDIDA ?? 0).toString()), 0);
+  const totalChecked = session?.volumes?.reduce((total, vol) => total + (vol.items?.reduce((t, i) => t + i.quantity, 0) || 0), 0) || 0;
+  const totalRemaining = Math.max(0, totalOrdered - totalChecked);
+  const percentageChecked = totalOrdered > 0 ? Math.round((totalChecked / totalOrdered) * 100) : 0;
+  const totalBoxes = session?.volumes?.length || 0;
+
+  const pageContent = (
+    <div className={`flex flex-col h-full bg-slate-50 dark:bg-slate-950 ${
+      (isFocusMode && viewMode === 'conference') 
+        ? 'fixed inset-0 z-[60] overflow-y-auto w-screen h-screen p-6 shadow-2xl' 
+        : 'overflow-y-auto pb-12'
+    }`}>
       {/* Header */}
-      <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <ClipboardCheck className="h-5 w-5 text-indigo-500" /> Conferência de Expedição (Horus)
-          </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Pesquise o pedido de expedição, abra uma caixa, bipe o código de barras dos produtos e emita as etiquetas de volume.
-          </p>
+      {!isFocusMode && (
+        <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <ClipboardCheck className="h-5 w-5 text-indigo-500" /> Conferência de Expedição (Horus)
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+              Pesquise o pedido de expedição, abra uma caixa, bipe o código de barras dos produtos e emita as etiquetas de volume.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {viewMode === 'list' && (
         <div className="p-6 max-w-6xl space-y-6">
@@ -934,7 +967,69 @@ export default function OrderConferencePage() {
       )}
 
       {viewMode === 'conference' && session && (
-        <div className="p-6 max-w-6xl space-y-6">
+        <div className={`w-full space-y-6 ${isFocusMode ? 'max-w-none' : 'max-w-6xl mx-auto p-6'}`}>
+          {/* Resumo do Pedido e Caixas */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            {/* Progresso Geral */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-xxs font-bold uppercase tracking-wider text-slate-400">Progresso Geral</p>
+                <p className="text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-1">{percentageChecked}%</p>
+              </div>
+              <div className="w-12 h-12 rounded-full border-4 border-slate-100 dark:border-slate-800 flex items-center justify-center relative overflow-hidden shrink-0">
+                <div 
+                  className="absolute bottom-0 left-0 right-0 bg-indigo-500 transition-all duration-500" 
+                  style={{ height: `${percentageChecked}%`, opacity: 0.15 }}
+                />
+                <CheckCircle2 className="h-5 w-5 text-indigo-500 z-10" />
+              </div>
+            </div>
+
+            {/* Itens Pedidos */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-xxs font-bold uppercase tracking-wider text-slate-400">Itens Pedidos</p>
+                <p className="text-2xl font-black text-slate-800 dark:text-slate-200 mt-1">{totalOrdered}</p>
+              </div>
+              <div className="p-2.5 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                <ClipboardCheck className="h-5 w-5 text-slate-500 dark:text-slate-400" />
+              </div>
+            </div>
+
+            {/* Itens Conferidos */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-xxs font-bold uppercase tracking-wider text-slate-400">Itens Conferidos</p>
+                <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{totalChecked}</p>
+              </div>
+              <div className="p-2.5 bg-emerald-50/50 dark:bg-emerald-500/5 rounded-xl">
+                <Check className="h-5 w-5 text-emerald-500" />
+              </div>
+            </div>
+
+            {/* Itens Pendentes */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-xxs font-bold uppercase tracking-wider text-slate-400">Itens Pendentes</p>
+                <p className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">{totalRemaining}</p>
+              </div>
+              <div className="p-2.5 bg-amber-50/50 dark:bg-amber-500/5 rounded-xl">
+                <AlertTriangle className="h-5 w-5 text-amber-500" />
+              </div>
+            </div>
+
+            {/* Caixas Criadas */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-xxs font-bold uppercase tracking-wider text-slate-400">Caixas Criadas</p>
+                <p className="text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-1">{totalBoxes}</p>
+              </div>
+              <div className="p-2.5 bg-indigo-50/50 dark:bg-indigo-500/5 rounded-xl">
+                <Box className="h-5 w-5 text-indigo-500" />
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             
             {/* Left Column: Order details & scanning */}
@@ -952,6 +1047,17 @@ export default function OrderConferencePage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsFocusMode(prev => !prev)}
+                      title="Atalho: F2"
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
+                        isFocusMode 
+                          ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
+                          : 'text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750'
+                      }`}
+                    >
+                      {isFocusMode ? 'Desativar Foco' : 'Modo Foco (F2)'}
+                    </button>
                     <button
                       onClick={handleSaveAndExit}
                       className="px-3 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 rounded-lg transition mr-1"
@@ -1085,18 +1191,214 @@ export default function OrderConferencePage() {
                 )}
               </div>
 
-              {/* Items List */}
-              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    Itens do Pedido ({horusItems.length})
-                  </h3>
+            </div> {/* Fechamento da coluna esquerda */}
+
+            {/* Right Column: Active boxes / volumes list */}
+            <div className="space-y-6">
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">Volumes / Caixas ({totalBoxes})</h3>
+                  {session.status === 'IN_PROGRESS' && (
+                    <button
+                      onClick={handleFinalizeSession}
+                      className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-sm"
+                    >
+                      Finalizar Conferência
+                    </button>
+                  )}
                 </div>
-                {horusItems.length === 0 && session.status !== 'COMPLETED' ? (
-                  <div className="p-8 text-center text-slate-400 text-sm">
-                    Carregando itens...
-                  </div>
+
+                {(!session.volumes || session.volumes.length === 0) ? (
+                  <p className="text-xs text-slate-400 text-center py-4">Nenhum volume registrado para esta conferência.</p>
                 ) : (
+                  <div className="space-y-3">
+                    {[...(session.volumes || [])].sort((a, b) => {
+                      const isAOpen = openVolume?.id === a.id;
+                      const isBOpen = openVolume?.id === b.id;
+                      if (isAOpen && !isBOpen) return -1;
+                      if (!isAOpen && isBOpen) return 1;
+                      return b.volume_number - a.volume_number;
+                    }).map(vol => {
+                      const isOpen = openVolume?.id === vol.id;
+                      const totalItemsCount = vol.items?.reduce((t, i) => t + i.quantity, 0) || 0;
+                      
+                      return (
+                        <div 
+                          key={vol.id} 
+                          className={`p-3 border rounded-xl transition ${
+                            isOpen 
+                              ? 'border-indigo-500 bg-indigo-500/5 shadow-md' 
+                              : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1.5">
+                            <p className={`text-xs font-bold uppercase ${isOpen ? 'text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5' : 'text-slate-700 dark:text-slate-350'}`}>
+                              {isOpen ? '📦 Caixa Atual (Aberta)' : `Caixa #${vol.volume_number}`}
+                            </p>
+                            <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center">
+                              {vol.weight && (
+                                <span className="text-[10px] text-slate-400 dark:text-slate-500 font-normal mr-1.5">
+                                  ({vol.weight.toFixed(2)} kg)
+                                </span>
+                              )}
+                              {totalItemsCount} {totalItemsCount === 1 ? 'item' : 'itens'}
+                            </span>
+                          </div>
+                          <p className="text-[10px] font-mono text-slate-400 mb-2">{vol.barcode}</p>
+                          
+                          {/* List items inline ONLY for the active open volume */}
+                          {isOpen && vol.items && vol.items.length > 0 && (
+                            <div className="border-t border-slate-100 dark:border-slate-800 pt-2 mb-2 space-y-1 max-h-40 overflow-y-auto">
+                              {vol.items.map(item => (
+                                <div key={item.id} className="flex justify-between text-xxs text-slate-500 dark:text-slate-400">
+                                  <span className="truncate max-w-[150px]">{item.name}</span>
+                                  <span className="font-bold shrink-0">{item.quantity}x</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => triggerPrint(vol)}
+                              className="w-full py-1 text-xs font-semibold text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-750"
+                            >
+                              <Printer className="h-3 w-3" /> Etiqueta
+                            </button>
+                            {isOpen && session.status === 'IN_PROGRESS' ? (
+                              <button
+                                onClick={() => handleCloseVolume(vol)}
+                                className="w-full py-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition flex items-center justify-center gap-1"
+                              >
+                                Fechar Caixa
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => setViewingVolumeDetails(vol)}
+                                className="w-full py-1 text-xs font-semibold text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-750"
+                              >
+                                <Search className="h-3 w-3" /> Ver Itens
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div> {/* Fechamento da coluna direita */}
+          </div> {/* Fechamento do Grid */}
+
+          {/* Full-width Items List Section */}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+            <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Itens do Pedido ({horusItems.length})
+              </h3>
+              
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+                {/* ISBN/Item Locator */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Localizar item nas caixas..."
+                    value={isbnLookupQuery}
+                    onChange={e => setIsbnLookupQuery(e.target.value)}
+                    className="pl-9 pr-8 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-950 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 w-full sm:w-60"
+                  />
+                  {isbnLookupQuery && (
+                    <button 
+                      onClick={() => setIsbnLookupQuery('')}
+                      className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Hide Completed Toggle */}
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-650 dark:text-slate-450 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={hideCompletedItems}
+                    onChange={e => setHideCompletedItems(e.target.checked)}
+                    className="rounded border-slate-350 text-indigo-650 focus:ring-indigo-500"
+                  />
+                  Ocultar itens já conferidos
+                </label>
+              </div>
+            </div>
+
+            {/* Lookup results banner */}
+            {(() => {
+              if (isbnLookupQuery.trim().length < 3) return null;
+              
+              const results: { volNum: number; qty: number; barcode: string }[] = [];
+              session.volumes.forEach(vol => {
+                vol.items?.forEach(item => {
+                  const matchIsbn = item.isbn.toLowerCase().includes(isbnLookupQuery.trim().toLowerCase());
+                  const matchName = item.name.toLowerCase().includes(isbnLookupQuery.trim().toLowerCase());
+                  if (matchIsbn || matchName) {
+                    const existing = results.find(r => r.volNum === vol.volume_number);
+                    if (existing) {
+                      existing.qty += item.quantity;
+                    } else {
+                      results.push({
+                        volNum: vol.volume_number,
+                        barcode: vol.barcode,
+                        qty: item.quantity
+                      });
+                    }
+                  }
+                });
+              });
+
+              if (results.length === 0) {
+                return (
+                  <div className="px-6 py-3 bg-amber-50 dark:bg-amber-500/5 text-amber-600 dark:text-amber-400 text-xs font-semibold border-b border-amber-100 dark:border-amber-500/10">
+                    Nenhuma caixa contendo "{isbnLookupQuery}" foi encontrada.
+                  </div>
+                );
+              }
+
+              return (
+                <div className="px-6 py-3 bg-indigo-50 dark:bg-indigo-500/5 text-indigo-650 dark:text-indigo-400 text-xs border-b border-indigo-100 dark:border-indigo-500/10 flex flex-wrap gap-2 items-center">
+                  <span className="font-bold">🔍 Localizado em:</span>
+                  {results.map(r => (
+                    <span key={r.volNum} className="px-2 py-0.5 bg-indigo-100 dark:bg-indigo-500/20 rounded font-semibold text-xxs flex items-center gap-1">
+                      Caixa #{r.volNum} ({r.qty}x) <span className="font-mono text-[9px] text-slate-400">({r.barcode})</span>
+                    </span>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {(() => {
+              const displayedItems = horusItems.filter(item => {
+                const pedQty = parseInt((item.QTD_PEDIDA ?? item.QT_PEDIDA ?? 0).toString());
+                const itemBarcode = item.COD_BARRA_ITEM ?? item.BARRAS_ISBN ?? item.ISBN ?? '';
+                const confQty = getItemCheckedQuantity(itemBarcode);
+                
+                if (hideCompletedItems && confQty >= pedQty) {
+                  return false;
+                }
+                return true;
+              });
+
+              if (displayedItems.length === 0) {
+                return (
+                  <div className="p-12 text-center text-slate-400 text-xs font-semibold">
+                    {horusItems.length === 0 
+                      ? 'Carregando itens...' 
+                      : 'Todos os itens já foram conferidos.'}
+                  </div>
+                );
+              }
+
+              return (
+                <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-bold text-xs uppercase bg-slate-50/10">
@@ -1107,7 +1409,7 @@ export default function OrderConferencePage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {horusItems.map(item => {
+                      {displayedItems.map(item => {
                         const pedQty = parseInt((item.QTD_PEDIDA ?? item.QT_PEDIDA ?? 0).toString());
                         const itemBarcode = item.COD_BARRA_ITEM ?? item.BARRAS_ISBN ?? item.ISBN ?? '';
                         const itemName = item.NOM_ITEM ?? item.DESCRICAO ?? 'Produto Horus';
@@ -1118,7 +1420,32 @@ export default function OrderConferencePage() {
                           <tr key={itemBarcode} className={`border-b border-slate-100 dark:border-slate-800/40 text-sm ${isDone ? 'opacity-50 bg-emerald-500/5' : ''}`}>
                             <td className="px-6 py-3.5">
                               <p className="font-semibold text-slate-800 dark:text-slate-200">{itemName}</p>
-                              <p className="text-xs font-mono text-slate-400 mt-0.5">{itemBarcode}</p>
+                              <div className="flex flex-wrap items-center gap-2 mt-1">
+                                <span className="text-xs font-mono text-slate-400">{itemBarcode}</span>
+                                
+                                {/* Box locations for this item */}
+                                {(() => {
+                                  const locations: { volNum: number; qty: number }[] = [];
+                                  session.volumes.forEach(vol => {
+                                    const match = vol.items?.find(i => i.isbn === itemBarcode);
+                                    if (match) {
+                                      locations.push({ volNum: vol.volume_number, qty: match.quantity });
+                                    }
+                                  });
+                                  
+                                  if (locations.length === 0) return null;
+                                  
+                                  return (
+                                    <div className="flex flex-wrap gap-1 items-center pl-2 border-l border-slate-200 dark:border-slate-800">
+                                      {locations.map(loc => (
+                                        <span key={loc.volNum} className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-650 dark:text-slate-350 text-[10px] rounded flex items-center gap-0.5">
+                                          Caixa #{loc.volNum} ({loc.qty}x)
+                                        </span>
+                                      ))}
+                                    </div>
+                                  );
+                                })()}
+                              </div>
                             </td>
                             <td className="px-6 py-3.5 text-center font-bold text-slate-700 dark:text-slate-300">
                               {pedQty}
@@ -1140,87 +1467,9 @@ export default function OrderConferencePage() {
                       })}
                     </tbody>
                   </table>
-                )}
-              </div>
-            </div>
-
-            {/* Right Column: Active boxes / volumes list */}
-            <div className="space-y-6">
-              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-                  <h3 className="font-bold text-slate-900 dark:text-white text-base">Volumes / Caixas</h3>
-                  {session.status === 'IN_PROGRESS' && (
-                    <button
-                      onClick={handleFinalizeSession}
-                      className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-sm"
-                    >
-                      Finalizar Conferência
-                    </button>
-                  )}
                 </div>
-
-                {(!session.volumes || session.volumes.length === 0) ? (
-                  <p className="text-xs text-slate-400 text-center py-4">Nenhum volume registrado para esta conferência.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {session.volumes.map(vol => {
-                      const isOpen = openVolume?.id === vol.id;
-                      const totalItemsCount = vol.items?.reduce((t, i) => t + i.quantity, 0) || 0;
-                      
-                      return (
-                        <div 
-                          key={vol.id} 
-                          className={`p-4 border rounded-xl transition ${
-                            isOpen 
-                              ? 'border-indigo-500 bg-indigo-500/5' 
-                              : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <p className="text-xs font-bold uppercase text-slate-700 dark:text-slate-350">
-                              Caixa #{vol.volume_number}
-                            </p>
-                            <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                              {totalItemsCount} {totalItemsCount === 1 ? 'item' : 'itens'}
-                            </span>
-                          </div>
-                          <p className="text-xxs font-mono text-slate-400 mb-3">{vol.barcode}</p>
-                          
-                          {/* List items inside this volume */}
-                          {vol.items && vol.items.length > 0 && (
-                            <div className="border-t border-slate-100 dark:border-slate-800 pt-2 mb-3 space-y-1.5 max-h-40 overflow-y-auto">
-                              {vol.items.map(item => (
-                                <div key={item.id} className="flex justify-between text-xxs text-slate-500 dark:text-slate-400">
-                                  <span className="truncate max-w-[150px]">{item.name}</span>
-                                  <span className="font-bold shrink-0">{item.quantity}x</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => triggerPrint(vol)}
-                              className="w-full py-1.5 text-xs font-semibold text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition flex items-center justify-center gap-1"
-                            >
-                              <Printer className="h-3.5 w-3.5" /> Etiqueta
-                            </button>
-                            {isOpen && session.status === 'IN_PROGRESS' && (
-                              <button
-                                onClick={() => handleCloseVolume(vol)}
-                                className="w-full py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition flex items-center justify-center gap-1"
-                              >
-                                Fechar Caixa
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -1270,6 +1519,90 @@ export default function OrderConferencePage() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Volume Details Modal */}
+      <AnimatePresence>
+        {viewingVolumeDetails && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 w-full max-w-lg overflow-hidden shadow-xl"
+            >
+              <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50/50">
+                <h3 className="font-bold text-slate-800 dark:text-white text-sm">
+                  Itens da Caixa #{viewingVolumeDetails.volume_number}
+                </h3>
+                <button onClick={() => setViewingVolumeDetails(null)} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full">
+                  <X className="h-4 w-4 text-slate-500" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="text-xs text-slate-500 dark:text-slate-400 space-y-1">
+                  <p><strong>Código de Barras (Volume):</strong> <span className="font-mono">{viewingVolumeDetails.barcode}</span></p>
+                  <p><strong>Peso Informado:</strong> {viewingVolumeDetails.weight ? `${viewingVolumeDetails.weight.toFixed(3)} KG` : 'Não informado'}</p>
+                  <p><strong>Total de Itens:</strong> {viewingVolumeDetails.items?.reduce((t, i) => t + i.quantity, 0) || 0}</p>
+                </div>
+                
+                <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                        <th className="px-4 py-2">Item</th>
+                        <th className="px-4 py-2 text-center">Quantidade</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewingVolumeDetails.items && viewingVolumeDetails.items.length > 0 ? (
+                        viewingVolumeDetails.items.map(item => (
+                          <tr key={item.id} className="border-b border-slate-100 dark:border-slate-800/40 hover:bg-slate-50/30 text-sm">
+                            <td className="px-4 py-2">
+                              <p className="font-semibold text-slate-800 dark:text-slate-200">{item.name}</p>
+                              <p className="text-[10px] font-mono text-slate-400">{item.isbn}</p>
+                            </td>
+                            <td className="px-4 py-2 text-center font-bold text-slate-700 dark:text-slate-350">
+                              {item.quantity}x
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={2} className="px-4 py-4 text-center text-slate-400">Nenhum item nesta caixa.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setViewingVolumeDetails(null)}
+                    className="w-full py-2.5 text-sm font-semibold text-slate-500 hover:text-slate-700 bg-slate-100 dark:bg-slate-800 rounded-xl transition"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    onClick={() => {
+                      triggerPrint(viewingVolumeDetails);
+                      setViewingVolumeDetails(null);
+                    }}
+                    className="w-full py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition flex items-center justify-center gap-1.5"
+                  >
+                    <Printer className="h-4 w-4" /> Imprimir Etiqueta
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
+
+  if (isFocusMode && viewMode === 'conference' && isMounted) {
+    return createPortal(pageContent, document.body);
+  }
+
+  return pageContent;
 }
