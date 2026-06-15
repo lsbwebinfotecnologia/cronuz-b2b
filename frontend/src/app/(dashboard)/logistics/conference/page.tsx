@@ -183,6 +183,29 @@ export default function OrderConferencePage() {
     }
   }
 
+  async function handleDeleteConference(confId: number) {
+    const confirmDelete = confirm('Tem certeza que deseja excluir esta conferência? Esta ação não pode ser desfeita.');
+    if (!confirmDelete) return;
+
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiUrl}/logistics/orders/conferences/${confId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Erro ao excluir conferência.');
+      }
+      
+      toast.success('Conferência excluída com sucesso!');
+      fetchConferences();
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao excluir conferência.');
+    }
+  }
+
   function handleSaveAndExit() {
     fetchConferences();
     setViewMode('list');
@@ -814,7 +837,7 @@ export default function OrderConferencePage() {
                           <td className="px-6 py-3.5 text-slate-500 dark:text-slate-400">
                             {new Date(conf.updated_at).toLocaleString('pt-BR')}
                           </td>
-                          <td className="px-6 py-3.5 text-right">
+                          <td className="px-6 py-3.5 text-right flex items-center justify-end gap-2">
                             <button
                               onClick={() => handleResumeConference(conf.id)}
                               className={`px-3 py-1.5 text-xs font-bold rounded-xl transition ${
@@ -825,6 +848,14 @@ export default function OrderConferencePage() {
                             >
                               {isCompleted ? 'Ver Detalhes' : 'Continuar'}
                             </button>
+                            {!isCompleted && (
+                              <button
+                                onClick={() => handleDeleteConference(conf.id)}
+                                className="px-3 py-1.5 text-xs font-bold text-red-650 hover:text-white hover:bg-red-600 border border-red-200 dark:border-red-500/20 hover:border-red-600 dark:hover:bg-red-500/10 rounded-xl transition flex items-center gap-1"
+                              >
+                                Excluir
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );

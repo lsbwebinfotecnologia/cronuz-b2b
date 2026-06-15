@@ -618,3 +618,28 @@ async def get_conference_by_id(
         "horus_items": horus_items
     }
 
+@router.delete("/orders/conferences/{conference_id}")
+def delete_conference(
+    conference_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete a conference session. Only allowed if status is not COMPLETED.
+    """
+    session = db.query(OrderConference).filter(
+        OrderConference.id == conference_id,
+        OrderConference.company_id == current_user.company_id
+    ).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessão de conferência não localizada.")
+        
+    if session.status == "COMPLETED":
+        raise HTTPException(status_code=400, detail="Não é permitido excluir uma conferência já encerrada.")
+        
+    db.delete(session)
+    db.commit()
+    
+    return {"status": "success", "message": "Conferência excluída com sucesso."}
+
