@@ -23,10 +23,13 @@ from app.models import consignment_draft as consignment_draft_models
 from app.models import email_template as email_template_models
 from app.models import bookinfo_purchase_log as purchase_log_models
 from app.models import proposal as proposal_models
+from app.models import seller_branch as seller_branch_models
+from app.models import order_conference as order_conference_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
 from app.api import horus
+from app.api import horus_logistics
 from app.api import auth
 from app.api import customers
 from app.api import products
@@ -79,6 +82,8 @@ consignment_draft_models.Base.metadata.create_all(bind=engine)
 email_template_models.Base.metadata.create_all(bind=engine)
 purchase_log_models.Base.metadata.create_all(bind=engine)
 proposal_models.Base.metadata.create_all(bind=engine)
+seller_branch_models.Base.metadata.create_all(bind=engine)
+order_conference_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -120,6 +125,7 @@ app.add_middleware(
 
 app.include_router(auth.router, tags=["authentication"])
 app.include_router(horus.router, tags=["inventory"])
+app.include_router(horus_logistics.router, prefix="/logistics", tags=["logistics"])
 app.include_router(customers.router, tags=["customers"])
 app.include_router(products.router, tags=["products"])
 app.include_router(catalog_support.router, tags=["catalog-metadata"])
@@ -333,6 +339,7 @@ class ModuleUpdate(BaseModel):
     module_crm: Optional[bool] = None
     module_consignment: Optional[bool] = None
     module_proposals: Optional[bool] = None
+    module_logistica_horus: Optional[bool] = None
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(

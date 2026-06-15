@@ -1,6 +1,31 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
+function isTokenExpired(token: string): boolean {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return true;
+    
+    const payload = parts[1];
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    
+    const decoded = JSON.parse(jsonPayload);
+    if (decoded.exp) {
+      const now = Math.floor(Date.now() / 1000);
+      return decoded.exp < now;
+    }
+    return false;
+  } catch (e) {
+    return true; // If decoding fails, treat as expired
+  }
+}
+
 export function middleware(request: NextRequest) {
   const url = request.nextUrl.clone();
   
@@ -60,8 +85,10 @@ export function middleware(request: NextRequest) {
 
   // D. B2B System Application (Auth Protected)
   const hostKey = hostname.split(':')[0];
-  const token = request.cookies.get(`cronuz_b2b_token_${hostKey}`) || request.cookies.get('cronuz_b2b_token');
+  const tokenCookie = request.cookies.get(`cronuz_b2b_token_${hostKey}`) || request.cookies.get('cronuz_b2b_token');
+  const token = tokenCookie?.value;
   const userCookie = request.cookies.get(`cronuz_b2b_user_${hostKey}`) || request.cookies.get('cronuz_b2b_user');
+  
   const isLoginPage = url.pathname === '/login';
   const isUploads = url.pathname.startsWith('/uploads');
   const isPublicPage = url.pathname.startsWith('/h/') || url.pathname.startsWith('/marketing') || url.pathname.startsWith('/public/');
@@ -71,13 +98,21 @@ export function middleware(request: NextRequest) {
      return NextResponse.next({ request: { headers: requestHeaders } });
   }
 
-  // If there's no token and we're not on the login page, redirect to login
-  if (!token && !isLoginPage) {
-    return NextResponse.redirect(new URL('/login', request.url));
+  const hasValidToken = token && !isTokenExpired(token);
+
+  // If there's no valid token and we're not on the login page, redirect to login
+  if (!hasValidToken && !isLoginPage) {
+    const response = NextResponse.redirect(new URL('/login', request.url));
+    // Clear expired cookies
+    response.cookies.delete(`cronuz_b2b_token_${hostKey}`);
+    response.cookies.delete('cronuz_b2b_token');
+    response.cookies.delete(`cronuz_b2b_user_${hostKey}`);
+    response.cookies.delete('cronuz_b2b_user');
+    return response;
   }
 
-  // If there's a token
-  if (token) {
+  // If there's a valid token
+  if (hasValidToken) {
     if (userCookie) {
       try {
         const user = JSON.parse(userCookie.value);
@@ -110,3 +145,4 @@ export function middleware(request: NextRequest) {
 export const config = {
   matcher: ['/((?!api|_next/static|_next/image|images|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
 };
+

@@ -1,0 +1,353 @@
+{
+  "activeVersionTag": "latest",
+  "latestAvailableVersionTag": "latest",
+  "collection": {
+    "info": {
+      "_postman_id": "2966926b-963e-40e3-83e7-abd28fa30831",
+      "name": "Doc API - HORUS S.I.G.A. - v.01.083",
+      "description": "Esta documenta\u00e7\u00e3o tem por finalidade auxiliar no entendimento e usabilidade da API HORUS S.I.G.A no processo de integra\u00e7\u00e3o com diversas plataformas, sejam lojas virtuais, B2B, CRM e tamb\u00e9m outras APIs e integradoras.\n\n\n## Endpoint\nO endpoint de conex\u00e3o com a API REST JSON \u00e9: <code>http://seu_local/Horus/api/TServerB2B/</code>\n\n\n## Recursos dispon\u00edveis\nTemos os seguintes recursos abaixo que voc\u00ea pode manipular SEMPRE atrav\u00e9s do m\u00e9todo GET, POST, PUT e DELETE:\n\n+ Produtos\n+ Clientes\n+ Pedidos de Venda\n\n## Tratamento de dados\nTodos os dados enviados e recebidos pela API est\u00e3o/dever\u00e3o ser em formato JSON (application/json).\n\n## Autentica\u00e7\u00e3o\nPara poder trabalhar com os m\u00e9todos dispon\u00edveis e assim fazer a integra\u00e7\u00e3o voc\u00ea precisa ter acesso a um usu\u00e1rio e senha b\u00e1sico que ser\u00e1 fornecido em momento oportuno pelo cliente que estiver com a API instalada.\n\nQualquer d\u00favida t\u00e9cnica que surgir durante a implanta\u00e7\u00e3o, estamos \u00e0 disposi\u00e7\u00e3o atrav\u00e9s do e-mail tecnologia@fmz.com.br, nosso site [www.fmz.com.br](http://www.fmz.com.br).\n\nSuas sugest\u00f5es e feedbacks de melhorias tamb\u00e9m s\u00e3o muito bem vindas!",
+      "schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json",
+      "isPublicCollection": false,
+      "owner": "9533160",
+      "collectionId": "2966926b-963e-40e3-83e7-abd28fa30831",
+      "publishedId": "SW7ey5A8",
+      "public": true,
+      "publicUrl": "https://documenter-api.postman.tech/view/9533160/SW7ey5A8",
+      "privateUrl": "https://go.postman.co/documentation/9533160-2966926b-963e-40e3-83e7-abd28fa30831",
+      "customColor": {
+        "top-bar": "FFFFFF",
+        "right-sidebar": "303030",
+        "highlight": "EF5B25"
+      },
+      "documentationLayout": "classic-double-column",
+      "version": "8.11.6",
+      "publishDate": "2019-11-26T18:24:02.000Z",
+      "activeVersionTag": "latest",
+      "documentationTheme": "light",
+      "metaTags": {},
+      "logos": {}
+    },
+    "statusCode": 200
+  },
+  "environments": [],
+  "user": {
+    "authenticated": false,
+    "permissions": {
+      "publish": false
+    }
+  },
+  "run": {
+    "button": {
+      "js": "https://run.pstmn.io/button.js",
+      "css": "https://run.pstmn.io/button.css"
+    }
+  },
+  "web": "https://www.getpostman.com/",
+  "team": {
+    "logo": "https://res.cloudinary.com/postman/image/upload/t_team_logo_pubdoc/v1/team/768118b36f06c94b0306958b980558e6915839447e859fe16906e29d683976f0",
+    "favicon": ""
+  },
+  "isEnvFetchError": false,
+  "languages": "[{\"key\":\"csharp\",\"label\":\"C#\",\"variant\":\"HttpClient\"},{\"key\":\"csharp\",\"label\":\"C#\",\"variant\":\"RestSharp\"},{\"key\":\"curl\",\"label\":\"cURL\",\"variant\":\"cURL\"},{\"key\":\"dart\",\"label\":\"Dart\",\"variant\":\"http\"},{\"key\":\"go\",\"label\":\"Go\",\"variant\":\"Native\"},{\"key\":\"http\",\"label\":\"HTTP\",\"variant\":\"HTTP\"},{\"key\":\"java\",\"label\":\"Java\",\"variant\":\"OkHttp\"},{\"key\":\"java\",\"label\":\"Java\",\"variant\":\"Unirest\"},{\"key\":\"javascript\",\"label\":\"JavaScript\",\"variant\":\"Fetch\"},{\"key\":\"javascript\",\"label\":\"JavaScript\",\"variant\":\"jQuery\"},{\"key\":\"javascript\",\"label\":\"JavaScript\",\"variant\":\"XHR\"},{\"key\":\"c\",\"label\":\"C\",\"variant\":\"libcurl\"},{\"key\":\"nodejs\",\"label\":\"NodeJs\",\"variant\":\"Axios\"},{\"key\":\"nodejs\",\"label\":\"NodeJs\",\"variant\":\"Native\"},{\"key\":\"nodejs\",\"label\":\"NodeJs\",\"variant\":\"Request\"},{\"key\":\"nodejs\",\"label\":\"NodeJs\",\"variant\":\"Unirest\"},{\"key\":\"objective-c\",\"label\":\"Objective-C\",\"variant\":\"NSURLSession\"},{\"key\":\"ocaml\",\"label\":\"OCaml\",\"variant\":\"Cohttp\"},{\"key\":\"php\",\"label\":\"PHP\",\"variant\":\"cURL\"},{\"key\":\"php\",\"label\":\"PHP\",\"variant\":\"Guzzle\"},{\"key\":\"php\",\"label\":\"PHP\",\"variant\":\"HTTP_Request2\"},{\"key\":\"php\",\"label\":\"PHP\",\"variant\":\"pecl_http\"},{\"key\":\"powershell\",\"label\":\"PowerShell\",\"variant\":\"RestMethod\"},{\"key\":\"python\",\"label\":\"Python\",\"variant\":\"http.client\"},{\"key\":\"python\",\"label\":\"Python\",\"variant\":\"Requests\"},{\"key\":\"r\",\"label\":\"R\",\"variant\":\"httr\"},{\"key\":\"r\",\"label\":\"R\",\"variant\":\"RCurl\"},{\"key\":\"ruby\",\"label\":\"Ruby\",\"variant\":\"Net::HTTP\"},{\"key\":\"shell\",\"label\":\"Shell\",\"variant\":\"Httpie\"},{\"key\":\"shell\",\"label\":\"Shell\",\"variant\":\"wget\"},{\"key\":\"swift\",\"label\":\"Swift\",\"variant\":\"URLSession\"}]",
+  "languageSettings": [
+    {
+      "key": "csharp",
+      "label": "C#",
+      "variant": "HttpClient"
+    },
+    {
+      "key": "csharp",
+      "label": "C#",
+      "variant": "RestSharp"
+    },
+    {
+      "key": "curl",
+      "label": "cURL",
+      "variant": "cURL"
+    },
+    {
+      "key": "dart",
+      "label": "Dart",
+      "variant": "http"
+    },
+    {
+      "key": "go",
+      "label": "Go",
+      "variant": "Native"
+    },
+    {
+      "key": "http",
+      "label": "HTTP",
+      "variant": "HTTP"
+    },
+    {
+      "key": "java",
+      "label": "Java",
+      "variant": "OkHttp"
+    },
+    {
+      "key": "java",
+      "label": "Java",
+      "variant": "Unirest"
+    },
+    {
+      "key": "javascript",
+      "label": "JavaScript",
+      "variant": "Fetch"
+    },
+    {
+      "key": "javascript",
+      "label": "JavaScript",
+      "variant": "jQuery"
+    },
+    {
+      "key": "javascript",
+      "label": "JavaScript",
+      "variant": "XHR"
+    },
+    {
+      "key": "c",
+      "label": "C",
+      "variant": "libcurl"
+    },
+    {
+      "key": "nodejs",
+      "label": "NodeJs",
+      "variant": "Axios"
+    },
+    {
+      "key": "nodejs",
+      "label": "NodeJs",
+      "variant": "Native"
+    },
+    {
+      "key": "nodejs",
+      "label": "NodeJs",
+      "variant": "Request"
+    },
+    {
+      "key": "nodejs",
+      "label": "NodeJs",
+      "variant": "Unirest"
+    },
+    {
+      "key": "objective-c",
+      "label": "Objective-C",
+      "variant": "NSURLSession"
+    },
+    {
+      "key": "ocaml",
+      "label": "OCaml",
+      "variant": "Cohttp"
+    },
+    {
+      "key": "php",
+      "label": "PHP",
+      "variant": "cURL"
+    },
+    {
+      "key": "php",
+      "label": "PHP",
+      "variant": "Guzzle"
+    },
+    {
+      "key": "php",
+      "label": "PHP",
+      "variant": "HTTP_Request2"
+    },
+    {
+      "key": "php",
+      "label": "PHP",
+      "variant": "pecl_http"
+    },
+    {
+      "key": "powershell",
+      "label": "PowerShell",
+      "variant": "RestMethod"
+    },
+    {
+      "key": "python",
+      "label": "Python",
+      "variant": "http.client"
+    },
+    {
+      "key": "python",
+      "label": "Python",
+      "variant": "Requests"
+    },
+    {
+      "key": "r",
+      "label": "R",
+      "variant": "httr"
+    },
+    {
+      "key": "r",
+      "label": "R",
+      "variant": "RCurl"
+    },
+    {
+      "key": "ruby",
+      "label": "Ruby",
+      "variant": "Net::HTTP"
+    },
+    {
+      "key": "shell",
+      "label": "Shell",
+      "variant": "Httpie"
+    },
+    {
+      "key": "shell",
+      "label": "Shell",
+      "variant": "wget"
+    },
+    {
+      "key": "swift",
+      "label": "Swift",
+      "variant": "URLSession"
+    }
+  ],
+  "languageOptions": [
+    {
+      "label": "C# - HttpClient",
+      "value": "csharp - HttpClient - C#"
+    },
+    {
+      "label": "C# - RestSharp",
+      "value": "csharp - RestSharp - C#"
+    },
+    {
+      "label": "cURL - cURL",
+      "value": "curl - cURL - cURL"
+    },
+    {
+      "label": "Dart - http",
+      "value": "dart - http - Dart"
+    },
+    {
+      "label": "Go - Native",
+      "value": "go - Native - Go"
+    },
+    {
+      "label": "HTTP - HTTP",
+      "value": "http - HTTP - HTTP"
+    },
+    {
+      "label": "Java - OkHttp",
+      "value": "java - OkHttp - Java"
+    },
+    {
+      "label": "Java - Unirest",
+      "value": "java - Unirest - Java"
+    },
+    {
+      "label": "JavaScript - Fetch",
+      "value": "javascript - Fetch - JavaScript"
+    },
+    {
+      "label": "JavaScript - jQuery",
+      "value": "javascript - jQuery - JavaScript"
+    },
+    {
+      "label": "JavaScript - XHR",
+      "value": "javascript - XHR - JavaScript"
+    },
+    {
+      "label": "C - libcurl",
+      "value": "c - libcurl - C"
+    },
+    {
+      "label": "NodeJs - Axios",
+      "value": "nodejs - Axios - NodeJs"
+    },
+    {
+      "label": "NodeJs - Native",
+      "value": "nodejs - Native - NodeJs"
+    },
+    {
+      "label": "NodeJs - Request",
+      "value": "nodejs - Request - NodeJs"
+    },
+    {
+      "label": "NodeJs - Unirest",
+      "value": "nodejs - Unirest - NodeJs"
+    },
+    {
+      "label": "Objective-C - NSURLSession",
+      "value": "objective-c - NSURLSession - Objective-C"
+    },
+    {
+      "label": "OCaml - Cohttp",
+      "value": "ocaml - Cohttp - OCaml"
+    },
+    {
+      "label": "PHP - cURL",
+      "value": "php - cURL - PHP"
+    },
+    {
+      "label": "PHP - Guzzle",
+      "value": "php - Guzzle - PHP"
+    },
+    {
+      "label": "PHP - HTTP_Request2",
+      "value": "php - HTTP_Request2 - PHP"
+    },
+    {
+      "label": "PHP - pecl_http",
+      "value": "php - pecl_http - PHP"
+    },
+    {
+      "label": "PowerShell - RestMethod",
+      "value": "powershell - RestMethod - PowerShell"
+    },
+    {
+      "label": "Python - http.client",
+      "value": "python - http.client - Python"
+    },
+    {
+      "label": "Python - Requests",
+      "value": "python - Requests - Python"
+    },
+    {
+      "label": "R - httr",
+      "value": "r - httr - R"
+    },
+    {
+      "label": "R - RCurl",
+      "value": "r - RCurl - R"
+    },
+    {
+      "label": "Ruby - Net::HTTP",
+      "value": "ruby - Net::HTTP - Ruby"
+    },
+    {
+      "label": "Shell - Httpie",
+      "value": "shell - Httpie - Shell"
+    },
+    {
+      "label": "Shell - wget",
+      "value": "shell - wget - Shell"
+    },
+    {
+      "label": "Swift - URLSession",
+      "value": "swift - URLSession - Swift"
+    }
+  ],
+  "layoutOptions": [
+    {
+      "value": "classic-single-column",
+      "label": "Single Column"
+    },
+    {
+      "value": "classic-double-column",
+      "label": "Double Column"
+    }
+  ],
+  "versionOptions": [],
+  "environmentOptions": [
+    {
+      "value": "0",
+      "label": "No Environment"
+    }
+  ],
+  "canonicalUrl": "https://documenter.gw.postman.com/view/metadata/SW7ey5A8"
+}

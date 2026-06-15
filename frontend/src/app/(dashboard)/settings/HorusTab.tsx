@@ -3,12 +3,14 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Loader2, Save, Database, Key, Activity } from 'lucide-react';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from '../layout';
+import { useCompany } from './layout';
 
-export default function CompanyHorusPage() {
+export function HorusTab() {
   const { company, refreshCompany } = useCompany();
+  const currentUser = getUser();
+  const isMaster = currentUser?.type === 'MASTER';
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [togglingModule, setTogglingModule] = useState(false);
@@ -197,18 +199,25 @@ export default function CompanyHorusPage() {
   }
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full overflow-y-auto">
-      <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-10">
-         <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-           <Database className="w-6 h-6 text-emerald-600" /> Integração Horus ERP
-         </h2>
-         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-           Preencha exatamente as credenciais de banco de dados e APIs do ERP para habilitar a rotina de pedidos.
-         </p>
+    <div className="space-y-4 animate-in fade-in">
+      <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">
+        <div className="p-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-lg">
+          <Database className="h-5 w-5" />
+        </div>
+        <div className="flex-1">
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white flex items-center justify-between">
+            <span>Integração Horus ERP</span>
+            <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${formData.horus_enabled ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>
+              {formData.horus_enabled ? 'Ativo' : 'Inativo'}
+            </span>
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Preencha exatamente as credenciais de banco de dados e APIs do ERP para habilitar a rotina de pedidos.</p>
+        </div>
       </div>
 
-      <div className="p-6 space-y-8">
+      <div className="space-y-8 pt-4">
         {/* Toggle Module Section */}
+        {isMaster && (
         <section>
            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm dark:border-slate-800/60 dark:bg-slate-900/40">
               <div className="p-6 flex items-center justify-between">
@@ -226,6 +235,7 @@ export default function CompanyHorusPage() {
               </div>
            </div>
         </section>
+        )}
 
         {company.module_horus_erp && (
           <form onSubmit={handleSaveSettings} className="space-y-6">
@@ -233,6 +243,7 @@ export default function CompanyHorusPage() {
              {/* API Configurations */}
              <div className="space-y-6 bg-slate-50/50 dark:bg-slate-900/20 p-6 rounded-2xl border border-slate-200 dark:border-slate-800/60 shadow-sm">
                 
+                {isMaster && (
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800/60 pb-4">
                   <div>
                     <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Ativar Processamento via ERP</h3>
@@ -252,7 +263,9 @@ export default function CompanyHorusPage() {
                     </div>
                   </label>
                 </div>
+                )}
 
+                {isMaster && (
                 <div className="space-y-3">
                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Modo de Operação (Catálogo e Preços)</label>
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -299,6 +312,7 @@ export default function CompanyHorusPage() {
                       
                    </div>
                 </div>
+                )}
 
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium text-slate-700 dark:text-slate-300">URL API</label>
@@ -403,7 +417,8 @@ export default function CompanyHorusPage() {
                    </button>
                 </div>
               </div>
-                <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-200 dark:border-slate-800/60 rounded-2xl p-6 shadow-sm flex items-center justify-between">
+              
+              <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-200 dark:border-slate-800/60 rounded-2xl p-6 shadow-sm flex items-center justify-between">
                 <div className="space-y-1">
                    <h3 className="text-sm font-bold text-amber-600 tracking-widest uppercase">PAGINAÇÃO LEGADA (OFFSET/LIMIT)</h3>
                    <p className="text-xs text-slate-500">Marque caso o banco de dados do Oracle deste parceiro seja antigo e não suporte limites na consulta.</p>
@@ -421,7 +436,7 @@ export default function CompanyHorusPage() {
                 </div>
               </div>
 
-              <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-200 dark:border-slate-800/60 rounded-2xl p-6 shadow-sm flex items-center justify-between mt-6">
+              <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-200 dark:border-slate-800/60 rounded-2xl p-6 shadow-sm flex items-center justify-between">
                 <div className="space-y-1">
                    <h3 className="text-sm font-bold text-red-600 tracking-widest uppercase">OCULTAR ESTOQUE ZERADO NO ERP</h3>
                    <p className="text-xs text-slate-500">Marque se deseja que livros sem saldo parametrizado pela Filial/Local fiquem inteiramente invisíveis aos clientes.</p>
@@ -441,7 +456,7 @@ export default function CompanyHorusPage() {
 
               {/* Desconto Cronuz no B2B Horus — visível somente no modo B2B */}
               {formData.horus_api_mode === 'B2B' && (
-                <div className="bg-violet-50/60 dark:bg-violet-900/10 border border-violet-200 dark:border-violet-800/60 rounded-2xl p-6 shadow-sm mt-6">
+                <div className="bg-violet-50/60 dark:bg-violet-900/10 border border-violet-200 dark:border-violet-800/60 rounded-2xl p-6 shadow-sm">
                   <div className="flex items-start justify-between gap-4">
                     <div className="space-y-1 flex-1">
                       <h3 className="text-sm font-bold text-violet-700 dark:text-violet-400 tracking-widest uppercase">DESCONTO CRONUZ NO B2B HORUS</h3>
@@ -469,7 +484,7 @@ export default function CompanyHorusPage() {
                 </div>
               )}
 
-             <div className="flex justify-end gap-3 pt-4 mb-8">
+             <div className="flex justify-end gap-3 pt-4 mb-4">
                <button
                  type="button"
                  onClick={handleTestConnection}
@@ -492,6 +507,6 @@ export default function CompanyHorusPage() {
           </form>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }

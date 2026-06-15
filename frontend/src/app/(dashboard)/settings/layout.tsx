@@ -24,6 +24,7 @@ interface Company {
   module_commercial: boolean;
   module_crm: boolean;
   module_consignment: boolean;
+  module_logistica_horus: boolean;
   active: boolean;
 }
 

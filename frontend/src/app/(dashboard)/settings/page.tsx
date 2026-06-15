@@ -2,14 +2,18 @@
 
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2, CreditCard, Truck, ChevronRight, FileText, Key, CheckCircle } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2, CreditCard, Truck, ChevronRight, FileText, Key, CheckCircle, BookOpen } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { PrintPointsTab } from './PrintPointsTab';
 import { EmailTemplatesTab } from './EmailTemplatesTab';
+import { HorusTab } from './HorusTab';
+import { BookinfoTab } from './BookinfoTab';
+import { useCompany } from './layout';
 
 export default function SettingsPage() {
+  const { company } = useCompany();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingCert, setUploadingCert] = useState(false);
@@ -408,6 +412,8 @@ export default function SettingsPage() {
 
   const tabs = [
     { id: 'geral', label: 'Dados Gerais', icon: Settings2 },
+    ...(company?.module_horus_erp ? [{ id: 'horus', label: 'Integração Horus ERP', icon: Database }] : []),
+    { id: 'bookinfo', label: 'Integração Bookinfo', icon: BookOpen },
     { id: 'fiscal', label: 'Fiscal (NFS-e)', icon: Building2 },
     { id: 'print_points', label: 'Séries e Pontos', icon: FileText },
     { id: 'pdv', label: 'Frente de Caixa (PDV)', icon: Store },
@@ -416,6 +422,9 @@ export default function SettingsPage() {
     { id: 'email', label: 'E-mails (SMTP)', icon: Mail },
     { id: 'templates', label: 'Modelos de E-mail', icon: FileText },
   ];
+
+  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'bookinfo';
+  const FormContainer = isFormTab ? 'form' : 'div';
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -460,7 +469,7 @@ export default function SettingsPage() {
           key={activeTab}
           className="flex-1 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden dark:bg-slate-900/40 dark:border-slate-800 w-full"
         >
-          <form onSubmit={handleSaveSettings}>
+          <FormContainer onSubmit={isFormTab ? handleSaveSettings : undefined}>
             <div className="p-6 md:p-8 space-y-8">
               
 
@@ -1238,9 +1247,23 @@ export default function SettingsPage() {
                 </div>
               )}
 
+              {/* Tab: HORUS ERP */}
+              {activeTab === 'horus' && (
+                <div className="animate-in fade-in">
+                  <HorusTab />
+                </div>
+              )}
+
+              {/* Tab: BOOKINFO */}
+              {activeTab === 'bookinfo' && (
+                <div className="animate-in fade-in">
+                  <BookinfoTab />
+                </div>
+              )}
+
             </div>
 
-            {activeTab !== 'templates' && (
+            {activeTab !== 'templates' && activeTab !== 'horus' && activeTab !== 'bookinfo' && (
               <div className="p-6 bg-slate-50 border-t border-slate-200 dark:bg-slate-900/60 dark:border-slate-800/60 flex items-center justify-end">
                 <button
                 type="submit"
@@ -1252,7 +1275,7 @@ export default function SettingsPage() {
               </button>
             </div>
             )}
-          </form>
+          </FormContainer>
         </motion.div>
       </div>
     </div>

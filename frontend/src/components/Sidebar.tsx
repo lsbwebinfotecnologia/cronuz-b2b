@@ -156,6 +156,7 @@ export function Sidebar() {
   const [moduleServices, setModuleServices] = useState(false);
   const [moduleCommercial, setModuleCommercial] = useState(false);
   const [moduleProposals, setModuleProposals] = useState(false);
+  const [moduleLogisticaHorus, setModuleLogisticaHorus] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
@@ -198,6 +199,7 @@ export function Sidebar() {
                setModuleServices(data.module_services || false);
                setModuleCommercial(data.module_commercial || false);
                setModuleProposals(data.module_proposals || false);
+               setModuleLogisticaHorus(data.module_logistica_horus || false);
             }
          } catch (e) {}
        };
@@ -242,16 +244,7 @@ export function Sidebar() {
         subItems: nav.subItems?.filter(sub => sub.name !== 'Promoções')
       };
     }
-    // Quando o seller usa Horus, Configurações vira submenu com aba Horus
-    if (nav.name === 'Configurações' && usesHorus) {
-      return {
-        ...nav,
-        subItems: [
-          { name: 'Configurações da Loja', href: '/settings', icon: Settings },
-          { name: 'Integração Horus ERP', href: '/settings/horus', icon: Zap },
-        ]
-      };
-    }
+
     return nav;
   });
   
@@ -293,6 +286,21 @@ export function Sidebar() {
        subItems: [
          { name: 'Planos e Landpages', href: '/subscriptions', icon: ListTodo },
          { name: 'Gestão de Assinaturas', href: '/subscribers', icon: UserCheck }
+       ]
+    });
+  }
+
+  if (moduleLogisticaHorus) {
+    // Insert Logística Horus before Configurações
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, { 
+       name: 'Logística Horus', 
+       href: '/logistics/conference', 
+       icon: ClipboardList,
+       subItems: [
+         { name: 'Conferência', href: '/logistics/conference' },
+         { name: 'Filiais do Seller', href: '/logistics/branches' }
        ]
     });
   }

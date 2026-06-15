@@ -15,6 +15,8 @@ class Company(Base):
     users = relationship("User", back_populates="company")
     print_points = relationship("PrintPoint", back_populates="company", foreign_keys="PrintPoint.company_id")
     email_templates = relationship("SysEmailTemplate", backref="company")
+    branches = relationship("SellerBranch", back_populates="company", foreign_keys="SellerBranch.company_id", cascade="all, delete-orphan")
+    conferences = relationship("OrderConference", back_populates="company", foreign_keys="OrderConference.company_id", cascade="all, delete-orphan")
 
     # B2B Configs
     domain = Column(String(255), unique=True, index=True, nullable=False)
@@ -56,6 +58,7 @@ class Company(Base):
     module_crm = Column(Boolean, default=False, nullable=False)
     module_consignment = Column(Boolean, default=False, nullable=False)
     module_proposals = Column(Boolean, default=False, nullable=False)
+    module_logistica_horus = Column(Boolean, default=False, nullable=False)
     
     # Fiscal Configs (NFS-e Padrão Nacional)
     nfse_enabled = Column(Boolean, default=False, nullable=False)
@@ -76,3 +79,7 @@ class Company(Base):
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+# Register relationships classes to avoid name resolution errors
+from app.models.seller_branch import SellerBranch
+from app.models.order_conference import OrderConference

@@ -20,6 +20,7 @@ class CompanySettingsBase(BaseModel):
     bookinfo_api_key: Optional[str] = None
     bookinfo_sync_enabled: Optional[bool] = False
     bookinfo_purchase_auto: Optional[bool] = False
+    bookinfo_purchase_interval_minutes: Optional[int] = 15
     bookinfo_notify_processing_early: Optional[bool] = False
     metabooks_api_key: Optional[str] = None
     cover_image_base_url: Optional[str] = None
