@@ -26,7 +26,7 @@ def list_bank_slips(db: Session = Depends(get_db), current_user: User = Depends(
     ).filter(
         FinancialTransaction.company_id == cid,
         FinancialInstallment.bank_slip_provider.isnot(None)
-    ).order_by(FinancialInstallment.id.desc()).limit(100)
+    ).order_by(FinancialInstallment.due_date.asc()).limit(1000)
     
     results = query.all()
     
@@ -38,6 +38,8 @@ def list_bank_slips(db: Session = Depends(get_db), current_user: User = Depends(
             "provider": inst.bank_slip_provider,
             "amount": float(inst.amount),
             "due_date": inst.due_date,
+            "payment_date": inst.payment_date.isoformat() if inst.payment_date else None,
+            "amount_paid": float(inst.amount_paid) if inst.amount_paid else 0.0,
             "status": inst.status,
             "transaction_id": trans.id,
             "order_id": trans.order_id,

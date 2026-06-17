@@ -17,6 +17,51 @@ export default function BankSlipsPage() {
     const [search, setSearch] = useState('');
     const [copied, setCopied] = useState<number | null>(null);
     const [syncingAll, setSyncingAll] = useState(false);
+    
+    const [statusFilter, setStatusFilter] = useState('OPEN');
+    const [selectedMonth, setSelectedMonth] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    });
+    const [todayStr, setTodayStr] = useState('2026-06-16');
+
+    useEffect(() => {
+        setTodayStr(new Date().toLocaleDateString('en-CA'));
+    }, []);
+
+    const getMonthOptions = () => {
+        const months = new Set<string>();
+        const now = new Date();
+        const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        months.add(currentKey);
+        
+        slips.forEach(s => {
+            if (s.due_date && typeof s.due_date === 'string') {
+                const parts = s.due_date.split('-');
+                if (parts.length >= 2) {
+                    months.add(`${parts[0]}-${parts[1]}`);
+                }
+            }
+            if (s.payment_date && typeof s.payment_date === 'string') {
+                const parts = s.payment_date.split('T')[0].split('-');
+                if (parts.length >= 2) {
+                    months.add(`${parts[0]}-${parts[1]}`);
+                }
+            }
+        });
+        
+        return Array.from(months).sort().reverse();
+    };
+    
+    const formatMonthKey = (key: string) => {
+        if (!key) return '';
+        const [year, month] = key.split('-');
+        const monthNames = [
+            "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+            "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+        ];
+        return `${monthNames[parseInt(month, 10) - 1]} / ${year}`;
+    };
 
     const handleSyncAll = async () => {
         setSyncingAll(true);
@@ -108,11 +153,59 @@ export default function BankSlipsPage() {
         }
     };
 
-    const filtered = slips.filter(s => 
-        (s.customer_name || '').toLowerCase().includes(search.toLowerCase()) ||
-        (s.nosso_numero || '').toLowerCase().includes(search.toLowerCase()) ||
-        (s.id.toString().includes(search))
-    );
+    const filtered = slips.filter(s => {
+        const matchesSearch = 
+            (s.customer_name || '').toLowerCase().includes(search.toLowerCase()) ||
+            (s.nosso_numero || '').toLowerCase().includes(search.toLowerCase()) ||
+            (s.id.toString().includes(search));
+            
+        if (!matchesSearch) return false;
+        
+        const isOverdue = s.status === 'OVERDUE' || (['OPEN', 'PENDING'].includes(s.status) && s.due_date < todayStr);
+        const isOpen = ['OPEN', 'PENDING', 'PROCESSING'].includes(s.status) && s.due_date >= todayStr;
+        const isPaid = s.status === 'PAID';
+        const isCancelled = s.status === 'CANCELLED';
+        
+        const belongsToMonth = s.due_date.startsWith(selectedMonth) || (isPaid && s.payment_date && s.payment_date.startsWith(selectedMonth));
+        
+        if (statusFilter === 'OPEN') {
+            return isOpen && belongsToMonth;
+        } else if (statusFilter === 'OVERDUE') {
+            return isOverdue;
+        } else if (statusFilter === 'PAID') {
+            return isPaid && belongsToMonth;
+        } else if (statusFilter === 'CANCELLED') {
+            return isCancelled && belongsToMonth;
+        } else {
+            return belongsToMonth;
+        }
+    });
+
+    const sorted = [...filtered].sort((a, b) => a.due_date.localeCompare(b.due_date));
+
+    const receivedTotal = slips
+        .filter(s => s.status === 'PAID' && (s.payment_date ? s.payment_date.startsWith(selectedMonth) : s.due_date.startsWith(selectedMonth)))
+        .reduce((acc, s) => acc + s.amount, 0);
+
+    const toReceiveTotal = slips
+        .filter(s => ['OPEN', 'PENDING', 'PROCESSING'].includes(s.status) && s.due_date.startsWith(selectedMonth) && s.due_date >= todayStr)
+        .reduce((acc, s) => acc + s.amount, 0);
+
+    const overdueTotal = slips
+        .filter(s => s.status === 'OVERDUE' || (['OPEN', 'PENDING'].includes(s.status) && s.due_date < todayStr))
+        .reduce((acc, s) => acc + s.amount, 0);
+
+    const cancelledTotal = slips
+        .filter(s => s.status === 'CANCELLED' && s.due_date.startsWith(selectedMonth))
+        .reduce((acc, s) => acc + s.amount, 0);
+
+    const statusOptions = [
+        { value: 'OPEN', label: 'Em Aberto' },
+        { value: 'OVERDUE', label: 'Em Atraso' },
+        { value: 'PAID', label: 'Pagos' },
+        { value: 'CANCELLED', label: 'Cancelados' },
+        { value: 'ALL', label: 'Todos do Mês' }
+    ];
 
     return (
         <div className="space-y-6 max-w-7xl mx-auto">
@@ -156,6 +249,42 @@ export default function BankSlipsPage() {
                 </div>
             </div>
 
+            {/* Filtros */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-slate-900 p-4 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full md:w-auto">
+                    <div className="flex flex-wrap gap-1 bg-slate-50 dark:bg-slate-800/30 p-1 rounded-xl border border-slate-100 dark:border-slate-800/80 w-full sm:w-auto">
+                        {statusOptions.map(opt => (
+                            <button
+                                key={opt.value}
+                                onClick={() => setStatusFilter(opt.value)}
+                                className={`flex-1 sm:flex-initial text-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                                    statusFilter === opt.value
+                                        ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+                                }`}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                
+                <div className="flex items-center gap-2 self-stretch md:self-auto justify-between sm:justify-start">
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Período:</span>
+                    <select
+                        value={selectedMonth}
+                        onChange={e => setSelectedMonth(e.target.value)}
+                        className="px-4 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-orange-500/50 dark:text-white shadow-sm cursor-pointer min-w-[160px]"
+                    >
+                        {getMonthOptions().map(m => (
+                            <option key={m} value={m}>
+                                {formatMonthKey(m)}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            </div>
+
             {/* Metrics Dashboard */}
             {slips.length > 0 && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm">
@@ -164,7 +293,7 @@ export default function BankSlipsPage() {
                             <div className="w-2 h-2 rounded-full bg-emerald-500"></div> Recebido
                         </div>
                         <span className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(slips.filter(s => s.status === 'PAID').reduce((acc, s) => acc + s.amount, 0))}
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(receivedTotal)}
                         </span>
                     </div>
 
@@ -173,7 +302,7 @@ export default function BankSlipsPage() {
                             <div className="w-2 h-2 rounded-full bg-sky-500"></div> A Receber
                         </div>
                         <span className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(slips.filter(s => ['OPEN', 'PENDING', 'PROCESSING'].includes(s.status) && new Date(s.due_date) >= new Date(new Date().setHours(0,0,0,0))).reduce((acc, s) => acc + s.amount, 0))}
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(toReceiveTotal)}
                         </span>
                     </div>
 
@@ -182,7 +311,7 @@ export default function BankSlipsPage() {
                             <div className="w-2 h-2 rounded-full bg-orange-500"></div> Atrasado
                         </div>
                         <span className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(slips.filter(s => s.status === 'OVERDUE' || (['OPEN', 'PENDING'].includes(s.status) && new Date(s.due_date) < new Date(new Date().setHours(0,0,0,0)))).reduce((acc, s) => acc + s.amount, 0))}
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(overdueTotal)}
                         </span>
                     </div>
 
@@ -191,7 +320,7 @@ export default function BankSlipsPage() {
                             <div className="w-2 h-2 rounded-full bg-red-500"></div> Cancelado
                         </div>
                         <span className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(slips.filter(s => s.status === 'CANCELLED').reduce((acc, s) => acc + s.amount, 0))}
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cancelledTotal)}
                         </span>
                     </div>
                 </div>
@@ -220,14 +349,14 @@ export default function BankSlipsPage() {
                                         </div>
                                     </td>
                                 </tr>
-                            ) : filtered.length === 0 ? (
+                            ) : sorted.length === 0 ? (
                                 <tr>
                                     <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
                                         Nenhum boleto encontrado nesta pesquisa.
                                     </td>
                                 </tr>
                             ) : (
-                                filtered.map(slip => {
+                                sorted.map(slip => {
                                     const proc = slip.status === "PROCESSING" || (slip.nosso_numero?.startsWith("V3_REQ|") && slip.nosso_numero.split("|").length === 2);
                                     let displayNumero = slip.nosso_numero || 'Não gerado';
                                     if (displayNumero.startsWith("V3_REQ|") && displayNumero.split("|").length === 3) {
