@@ -117,7 +117,8 @@ export default function BankSlipsPage() {
     };
 
     const StatusBadge = ({ status, provider, nossoNumero }: { status: string, provider: string, nossoNumero: string }) => {
-        if (nossoNumero?.startsWith("V3_REQ|") || status === 'PROCESSING') {
+        const isFinalized = ["PAID", "CANCELLED"].includes(status);
+        if (!isFinalized && (nossoNumero?.startsWith("V3_REQ|") || status === 'PROCESSING')) {
             return (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
                     <div className="w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"/> PROCESSANDO
@@ -357,7 +358,8 @@ export default function BankSlipsPage() {
                                 </tr>
                             ) : (
                                 sorted.map(slip => {
-                                    const proc = slip.status === "PROCESSING" || (slip.nosso_numero?.startsWith("V3_REQ|") && slip.nosso_numero.split("|").length === 2);
+                                    const isFinalized = ["PAID", "CANCELLED"].includes(slip.status);
+                                    const proc = !isFinalized && (slip.status === "PROCESSING" || (slip.nosso_numero?.startsWith("V3_REQ|") && slip.nosso_numero.split("|").length === 2));
                                     let displayNumero = slip.nosso_numero || 'Não gerado';
                                     if (displayNumero.startsWith("V3_REQ|") && displayNumero.split("|").length === 3) {
                                         displayNumero = displayNumero.split("|")[2];
