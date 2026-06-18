@@ -5,7 +5,8 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Loader2, Search, ClipboardCheck, Box, Package, ShieldCheck, 
-  Printer, CheckCircle2, AlertTriangle, Play, Check, ChevronRight, X, Plus
+  Printer, CheckCircle2, AlertTriangle, Play, Check, ChevronRight, X, Plus,
+  Trash2, RotateCcw
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -34,6 +35,7 @@ type Volume = {
   weight?: number;
   created_at: string;
   items: VolumeItem[];
+  status?: 'COMPLETED' | 'CANCELLED';
 };
 
 type ConferenceSession = {
@@ -80,6 +82,7 @@ export default function OrderConferencePage() {
   const [viewMode, setViewMode] = useState<'list' | 'search' | 'conference'>('list');
   const [conferences, setConferences] = useState<any[]>([]);
   const [loadingConferences, setLoadingConferences] = useState(false);
+  const [resumingConfId, setResumingConfId] = useState<number | null>(null);
 
   // Filter states
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -101,7 +104,7 @@ export default function OrderConferencePage() {
   const [isbnLookupQuery, setIsbnLookupQuery] = useState('');
   const [isMounted, setIsMounted] = useState(false);
   const [viewingVolumeDetails, setViewingVolumeDetails] = useState<Volume | null>(null);
-  const [activeVolumeTab, setActiveVolumeTab] = useState<'current' | 'history'>('current');
+  const [activeVolumeTab, setActiveVolumeTab] = useState<'current' | 'history' | 'cancelled'>('current');
 
   // Printing/Label states
   const [printingVolume, setPrintingVolume] = useState<Volume | null>(null);
@@ -145,6 +148,7 @@ export default function OrderConferencePage() {
 
   async function handleResumeConference(confId: number) {
     setSearching(true);
+    setResumingConfId(confId);
     try {
       const token = getToken();
       const res = await fetch(`${apiUrl}/logistics/orders/conferences/${confId}`, {
@@ -172,14 +176,16 @@ export default function OrderConferencePage() {
         
         // Reconstruct items list from volume details for completed orders
         const resolvedItemsMap: Record<string, { isbn: string, name: string, quantity: number }> = {};
-        data.session.volumes.forEach((vol: any) => {
-          vol.items.forEach((item: any) => {
-            if (!resolvedItemsMap[item.isbn]) {
-              resolvedItemsMap[item.isbn] = { isbn: item.isbn, name: item.name, quantity: 0 };
-            }
-            resolvedItemsMap[item.isbn].quantity += item.quantity;
+        data.session.volumes
+          .filter((v: any) => v.status !== 'CANCELLED')
+          .forEach((vol: any) => {
+            vol.items.forEach((item: any) => {
+              if (!resolvedItemsMap[item.isbn]) {
+                resolvedItemsMap[item.isbn] = { isbn: item.isbn, name: item.name, quantity: 0 };
+              }
+              resolvedItemsMap[item.isbn].quantity += item.quantity;
+            });
           });
-        });
         setHorusItems(Object.values(resolvedItemsMap).map(item => ({
           BARRAS_ISBN: item.isbn,
           NOM_ITEM: item.name,
@@ -207,6 +213,7 @@ export default function OrderConferencePage() {
       toast.error(err.message || 'Erro ao retomar conferência.');
     } finally {
       setSearching(false);
+      setResumingConfId(null);
     }
   }
 
@@ -389,10 +396,12 @@ export default function OrderConferencePage() {
   // Get total quantity checked across ALL volumes for this ISBN
   function getItemCheckedQuantity(isbn: string): number {
     if (!session || !session.volumes) return 0;
-    return session.volumes.reduce((total, vol) => {
-      const item = vol.items?.find(i => i.isbn === isbn);
-      return total + (item ? item.quantity : 0);
-    }, 0);
+    return session.volumes
+      .filter(vol => vol.status !== 'CANCELLED')
+      .reduce((total, vol) => {
+        const item = vol.items?.find(i => i.isbn === isbn);
+        return total + (item ? item.quantity : 0);
+      }, 0);
   }
 
   async function handleScanSubmit(e: React.FormEvent) {
@@ -438,8 +447,8 @@ export default function OrderConferencePage() {
     let qtyToCheck = 1;
     if (scanMode === 'manual') {
       const parsedQty = parseInt(quantityInput);
-      if (isNaN(parsedQty) || parsedQty <= 0) {
-        toast.error('Informe uma quantidade válida maior que zero.');
+      if (isNaN(parsedQty) || parsedQty < 0) {
+        toast.error('Informe uma quantidade válida maior ou igual a zero.');
         playBeep('error');
         return;
       }
@@ -545,6 +554,54 @@ export default function OrderConferencePage() {
       setActiveVolumeTab('history');
     } catch (err: any) {
       toast.error(err.message || 'Erro ao fechar volume.');
+    }
+  }
+
+  async function handleCancelVolume(vol: Volume) {
+    if (!window.confirm(`Tem certeza que deseja cancelar a Caixa #${vol.volume_number}? Todos os itens desta caixa serão subtraídos do total conferido.`)) {
+      return;
+    }
+
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiUrl}/logistics/orders/session/volume/${vol.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao cancelar volume.');
+      }
+      
+      toast.success(data.message || `Caixa #${vol.volume_number} cancelada com sucesso.`);
+      setSession(data.session);
+      
+      if (openVolume && openVolume.id === vol.id) {
+        setOpenVolume(null);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao cancelar volume.');
+    }
+  }
+
+  async function handleRestoreVolume(vol: Volume) {
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiUrl}/logistics/orders/session/volume/${vol.id}/restore`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao reativar volume.');
+      }
+      
+      toast.success(data.message || `Caixa #${vol.volume_number} reativada com sucesso.`);
+      setSession(data.session);
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao reativar volume.');
     }
   }
 
@@ -746,10 +803,11 @@ export default function OrderConferencePage() {
   });
 
   const totalOrdered = horusItems.reduce((acc, item) => acc + parseInt((item.QTD_PEDIDA ?? item.QT_PEDIDA ?? 0).toString()), 0);
-  const totalChecked = session?.volumes?.reduce((total, vol) => total + (vol.items?.reduce((t, i) => t + i.quantity, 0) || 0), 0) || 0;
+  const activeVolumes = session?.volumes?.filter(v => v.status !== 'CANCELLED') || [];
+  const totalChecked = activeVolumes.reduce((total, vol) => total + (vol.items?.reduce((t, i) => t + i.quantity, 0) || 0), 0) || 0;
   const totalRemaining = Math.max(0, totalOrdered - totalChecked);
   const percentageChecked = totalOrdered > 0 ? Math.round((totalChecked / totalOrdered) * 100) : 0;
-  const totalBoxes = session?.volumes?.length || 0;
+  const totalBoxes = activeVolumes.length;
 
   const pageContent = (
     <div className={`flex flex-col h-full bg-slate-50 dark:bg-slate-950 ${
@@ -885,13 +943,23 @@ export default function OrderConferencePage() {
                           <td className="px-6 py-3.5 text-right flex items-center justify-end gap-2">
                             <button
                               onClick={() => handleResumeConference(conf.id)}
-                              className={`px-3 py-1.5 text-xs font-bold rounded-xl transition ${
+                              disabled={resumingConfId !== null}
+                              className={`px-3 py-1.5 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 ${
                                 isCompleted 
                                   ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300'
                                   : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm'
-                              }`}
+                              } ${resumingConfId !== null ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
-                              {isCompleted ? 'Ver Detalhes' : 'Continuar'}
+                              {resumingConfId === conf.id ? (
+                                <>
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  Carregando...
+                                </>
+                              ) : isCompleted ? (
+                                'Ver Detalhes'
+                              ) : (
+                                'Continuar'
+                              )}
                             </button>
                             {!isCompleted && (
                               <button
@@ -1246,12 +1314,23 @@ export default function OrderConferencePage() {
                             : 'text-slate-450 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-400'
                         }`}
                       >
-                        Histórico ({session.volumes.filter(v => v.id !== openVolume?.id).length})
+                        Histórico ({session.volumes.filter(v => v.id !== openVolume?.id && v.status !== 'CANCELLED').length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveVolumeTab('cancelled')}
+                        className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                          activeVolumeTab === 'cancelled'
+                            ? 'bg-white dark:bg-slate-800 text-indigo-650 dark:text-indigo-400 shadow-sm'
+                            : 'text-slate-450 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-400'
+                        }`}
+                      >
+                        Canceladas ({session.volumes.filter(v => v.status === 'CANCELLED').length})
                       </button>
                     </div>
 
                     {/* Render active Volume Tab */}
-                    {activeVolumeTab === 'current' ? (
+                    {activeVolumeTab === 'current' && (
                       openVolume ? (
                         <div className="space-y-3">
                           {/* Render active/open volume */}
@@ -1326,10 +1405,11 @@ export default function OrderConferencePage() {
                           )}
                         </div>
                       )
-                    ) : (
-                      /* History Tab (Closed boxes) */
+                    )}
+
+                    {activeVolumeTab === 'history' && (
                       (() => {
-                        const closedVolumes = session.volumes.filter(v => v.id !== openVolume?.id);
+                        const closedVolumes = session.volumes.filter(v => v.id !== openVolume?.id && v.status !== 'CANCELLED');
                         if (closedVolumes.length === 0) {
                           return (
                             <p className="text-xs text-slate-400 text-center py-6">Nenhuma caixa finalizada neste pedido.</p>
@@ -1372,6 +1452,71 @@ export default function OrderConferencePage() {
                                     >
                                       <Search className="h-3 w-3" /> Ver Itens
                                     </button>
+                                    {session.status === 'IN_PROGRESS' && (
+                                      <button
+                                        onClick={() => handleCancelVolume(vol)}
+                                        className="py-1 px-2 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-red-950/20 dark:text-red-400 dark:border-red-900/50 dark:hover:bg-red-950/45"
+                                        title="Cancelar Caixa"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()
+                    )}
+
+                    {activeVolumeTab === 'cancelled' && (
+                      (() => {
+                        const cancelledVolumes = session.volumes.filter(v => v.status === 'CANCELLED');
+                        if (cancelledVolumes.length === 0) {
+                          return (
+                            <p className="text-xs text-slate-400 text-center py-6">Nenhuma caixa cancelada.</p>
+                          );
+                        }
+                        return (
+                          <div className="space-y-3 max-h-60 overflow-y-auto">
+                            {[...cancelledVolumes].sort((a, b) => b.volume_number - a.volume_number).map(vol => {
+                              const totalItemsCount = vol.items?.reduce((t, i) => t + i.quantity, 0) || 0;
+                              return (
+                                <div 
+                                  key={vol.id} 
+                                  className="p-3 border border-red-200 dark:border-red-900/40 bg-red-50/10 dark:bg-red-950/10 rounded-xl transition opacity-75 hover:opacity-100"
+                                >
+                                  <div className="flex items-center justify-between mb-1.5">
+                                    <p className="text-xs font-bold uppercase text-red-700 dark:text-red-450 flex items-center gap-1">
+                                      <span className="w-1.5 h-1.5 bg-red-500 rounded-full" /> Caixa #{vol.volume_number} (Cancelada)
+                                    </p>
+                                    <span className="text-xs font-bold text-slate-550 dark:text-slate-400 flex items-center">
+                                      {vol.weight && (
+                                        <span className="text-[10px] text-slate-400 dark:text-slate-500 font-normal mr-1.5">
+                                          ({vol.weight.toFixed(2)} kg)
+                                        </span>
+                                      )}
+                                      {totalItemsCount} {totalItemsCount === 1 ? 'item' : 'itens'}
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] font-mono text-slate-400 mb-2">{vol.barcode}</p>
+
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => setViewingVolumeDetails(vol)}
+                                      className="w-full py-1 text-xs font-semibold text-slate-605 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 dark:hover:bg-slate-750"
+                                    >
+                                      <Search className="h-3 w-3" /> Ver Itens
+                                    </button>
+                                    {session.status === 'IN_PROGRESS' && (
+                                      <button
+                                        onClick={() => handleRestoreVolume(vol)}
+                                        className="w-full py-1 text-xs font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition flex items-center justify-center gap-1 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50 dark:hover:bg-emerald-950/45"
+                                      >
+                                        <RotateCcw className="h-3.5 w-3.5" /> Restaurar
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               );
@@ -1432,7 +1577,7 @@ export default function OrderConferencePage() {
               if (isbnLookupQuery.trim().length < 3) return null;
               
               const results: { volNum: number; qty: number; barcode: string }[] = [];
-              session.volumes.forEach(vol => {
+              session.volumes.filter(vol => vol.status !== 'CANCELLED').forEach(vol => {
                 vol.items?.forEach(item => {
                   const matchIsbn = item.isbn.toLowerCase().includes(isbnLookupQuery.trim().toLowerCase());
                   const matchName = item.name.toLowerCase().includes(isbnLookupQuery.trim().toLowerCase());
@@ -1522,7 +1667,7 @@ export default function OrderConferencePage() {
                                 {/* Box locations for this item */}
                                 {(() => {
                                   const locations: { volNum: number; qty: number }[] = [];
-                                  session.volumes.forEach(vol => {
+                                  session.volumes.filter(vol => vol.status !== 'CANCELLED').forEach(vol => {
                                     const match = vol.items?.find(i => i.isbn === itemBarcode);
                                     if (match) {
                                       locations.push({ volNum: vol.volume_number, qty: match.quantity });

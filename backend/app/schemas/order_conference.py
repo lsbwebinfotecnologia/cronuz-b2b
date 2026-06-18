@@ -25,6 +25,7 @@ class OrderConferenceVolumeResponse(OrderConferenceVolumeBase):
     id: int
     conference_id: int
     weight: Optional[float] = None
+    status: str
     created_at: datetime
     items: List[OrderConferenceVolumeItemResponse] = []
 

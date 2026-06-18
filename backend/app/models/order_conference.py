@@ -28,6 +28,7 @@ class OrderConferenceVolume(Base):
     volume_number = Column(Integer, nullable=False)
     barcode = Column(String(100), unique=True, index=True, nullable=False)
     weight = Column(Float, nullable=True)
+    status = Column(String(20), default="COMPLETED", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Explicit relationships with foreign_keys as per Rule 1

@@ -315,6 +315,7 @@ async def submit_item_conference(
         join(OrderConferenceVolume, OrderConferenceVolume.id == OrderConferenceVolumeItem.volume_id).\
         filter(
             OrderConferenceVolume.conference_id == session.id,
+            OrderConferenceVolume.status != "CANCELLED",
             OrderConferenceVolumeItem.isbn == item_in.isbn
         ).scalar() or 0
     
@@ -434,7 +435,8 @@ async def finalize_conference_session(
         raise HTTPException(status_code=404, detail="Filial associada à conferência não localizada.")
 
     volumes = db.query(OrderConferenceVolume).filter(
-        OrderConferenceVolume.conference_id == session.id
+        OrderConferenceVolume.conference_id == session.id,
+        OrderConferenceVolume.status != "CANCELLED"
     ).all()
     
     if not volumes:
@@ -479,6 +481,47 @@ async def finalize_conference_session(
                     status_code=400, 
                     detail=f"Erro ao enviar Volume {vol.volume_number} ao Horus: {res.get('Mensagem', 'Erro desconhecido.')}"
                 )
+                
+        # Send 0 for all items in the order that have not been checked
+        items_res = await horus_client.get_order_items(
+            cod_ped_venda=cod_ped_venda,
+            cod_empresa=branch.cod_empresa,
+            cod_filial=branch.cod_filial
+        )
+        horus_items = items_res if isinstance(items_res, list) else []
+        if isinstance(items_res, dict) and "itens" in items_res:
+            horus_items = items_res["itens"]
+            
+        settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+        cod_local = settings.horus_stock_local if (settings and settings.horus_stock_local) else "1"
+        
+        # Normalize items list (filter out failures)
+        horus_items = [i for i in horus_items if not i.get("Falha") and not i.get("FALHA")]
+        
+        for item in horus_items:
+            isbn = item.get("ISBN") or item.get("BARRAS_ISBN") or item.get("COD_BARRA_ITEM")
+            if not isbn:
+                continue
+                
+            total_checked = db.query(func.sum(OrderConferenceVolumeItem.quantity)).\
+                join(OrderConferenceVolume, OrderConferenceVolume.id == OrderConferenceVolumeItem.volume_id).\
+                filter(
+                    OrderConferenceVolume.conference_id == session.id,
+                    OrderConferenceVolume.status != "CANCELLED",
+                    OrderConferenceVolumeItem.isbn == isbn
+                ).scalar() or 0
+                
+            if total_checked == 0:
+                await horus_client.confere_item_pedido(
+                    cod_empresa=branch.cod_empresa,
+                    cod_filial=branch.cod_filial,
+                    cod_cli=session.cod_cli,
+                    cod_ped_venda=cod_ped_venda,
+                    cod_item=item.get("COD_ITEM"),
+                    cod_local=cod_local,
+                    qtd_atendida=0
+                )
+                
     except HTTPException:
         await horus_client.close()
         raise
@@ -642,4 +685,209 @@ def delete_conference(
     db.commit()
     
     return {"status": "success", "message": "Conferência excluída com sucesso."}
+
+@router.post("/orders/session/volume/{volume_id}/cancel")
+async def cancel_volume(
+    volume_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Cancels a completed volume, subtracts its items from Horus checked totals, and updates DB.
+    """
+    volume = db.query(OrderConferenceVolume).filter(OrderConferenceVolume.id == volume_id).first()
+    if not volume:
+        raise HTTPException(status_code=404, detail="Volume não localizado.")
+        
+    session = db.query(OrderConference).filter(
+        OrderConference.id == volume.conference_id,
+        OrderConference.company_id == current_user.company_id,
+        OrderConference.status == "IN_PROGRESS"
+    ).first()
+    
+    if not session:
+        raise HTTPException(status_code=400, detail="Conferência associada não está em andamento.")
+        
+    if volume.status == "CANCELLED":
+        return {"status": "success", "message": "Volume já está cancelado.", "session": OrderConferenceResponse.model_validate(session)}
+        
+    branch = db.query(SellerBranch).filter(SellerBranch.id == session.branch_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    cod_local = settings.horus_stock_local if (settings and settings.horus_stock_local) else "1"
+    
+    old_status = volume.status
+    volume.status = "CANCELLED"
+    db.commit()
+    
+    try:
+        horus_client = HorusLogisticsClient(db, current_user.company_id)
+        # Search the order to find cod_ped_venda
+        order_res = await horus_client.search_orders(
+            cod_empresa=branch.cod_empresa,
+            cod_filial=branch.cod_filial,
+            cod_cli=session.cod_cli,
+            cod_pedido_origem=session.cod_pedido_origem
+        )
+        order_data = order_res[0] if isinstance(order_res, list) else order_res
+        cod_ped_venda = order_data.get("COD_PED_VENDA")
+        
+        # Get items for the order to map ISBN to cod_item
+        items_res = await horus_client.get_order_items(
+            cod_ped_venda=cod_ped_venda,
+            cod_empresa=branch.cod_empresa,
+            cod_filial=branch.cod_filial
+        )
+        horus_items = items_res if isinstance(items_res, list) else []
+        if isinstance(items_res, dict) and "itens" in items_res:
+            horus_items = items_res["itens"]
+            
+        isbn_to_cod_item = {}
+        for i in horus_items:
+            for key in ["ISBN", "BARRAS_ISBN", "COD_BARRA_ITEM"]:
+                val = i.get(key)
+                if val:
+                    isbn_to_cod_item[str(val).strip()] = i.get("COD_ITEM")
+                    
+        for item in volume.items:
+            cod_item = isbn_to_cod_item.get(str(item.isbn).strip())
+            if not cod_item:
+                continue
+                
+            new_qty = db.query(func.sum(OrderConferenceVolumeItem.quantity)).\
+                join(OrderConferenceVolume, OrderConferenceVolume.id == OrderConferenceVolumeItem.volume_id).\
+                filter(
+                    OrderConferenceVolume.conference_id == session.id,
+                    OrderConferenceVolume.status != "CANCELLED",
+                    OrderConferenceVolumeItem.isbn == item.isbn
+                ).scalar() or 0
+                
+            # 1. Reset checked quantity to 0 in Horus ERP first
+            await horus_client.confere_item_pedido(
+                cod_empresa=branch.cod_empresa,
+                cod_filial=branch.cod_filial,
+                cod_cli=session.cod_cli,
+                cod_ped_venda=cod_ped_venda,
+                cod_item=cod_item,
+                cod_local=cod_local,
+                qtd_atendida=0
+            )
+            
+            # 2. Then, if there is a remaining checked quantity from other active volumes, send it
+            if new_qty > 0:
+                await horus_client.confere_item_pedido(
+                    cod_empresa=branch.cod_empresa,
+                    cod_filial=branch.cod_filial,
+                    cod_cli=session.cod_cli,
+                    cod_ped_venda=cod_ped_venda,
+                    cod_item=cod_item,
+                    cod_local=cod_local,
+                    qtd_atendida=new_qty
+                )
+            
+        await horus_client.close()
+    except Exception as e:
+        volume.status = old_status
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Erro ao atualizar quantidades no Horus: {str(e)}")
+        
+    session.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(session)
+    return {"status": "success", "message": f"Volume {volume.volume_number} cancelado com sucesso.", "session": OrderConferenceResponse.model_validate(session)}
+
+@router.post("/orders/session/volume/{volume_id}/restore")
+async def restore_volume(
+    volume_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Restores a cancelled volume, adds back its items to Horus checked totals, and updates DB.
+    """
+    volume = db.query(OrderConferenceVolume).filter(OrderConferenceVolume.id == volume_id).first()
+    if not volume:
+        raise HTTPException(status_code=404, detail="Volume não localizado.")
+        
+    session = db.query(OrderConference).filter(
+        OrderConference.id == volume.conference_id,
+        OrderConference.company_id == current_user.company_id,
+        OrderConference.status == "IN_PROGRESS"
+    ).first()
+    
+    if not session:
+        raise HTTPException(status_code=400, detail="Conferência associada não está em andamento.")
+        
+    if volume.status == "COMPLETED":
+        return {"status": "success", "message": "Volume já está ativo.", "session": OrderConferenceResponse.model_validate(session)}
+        
+    branch = db.query(SellerBranch).filter(SellerBranch.id == session.branch_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    cod_local = settings.horus_stock_local if (settings and settings.horus_stock_local) else "1"
+    
+    old_status = volume.status
+    volume.status = "COMPLETED"
+    db.commit()
+    
+    try:
+        horus_client = HorusLogisticsClient(db, current_user.company_id)
+        # Search the order to find cod_ped_venda
+        order_res = await horus_client.search_orders(
+            cod_empresa=branch.cod_empresa,
+            cod_filial=branch.cod_filial,
+            cod_cli=session.cod_cli,
+            cod_pedido_origem=session.cod_pedido_origem
+        )
+        order_data = order_res[0] if isinstance(order_res, list) else order_res
+        cod_ped_venda = order_data.get("COD_PED_VENDA")
+        
+        # Get items for the order to map ISBN to cod_item
+        items_res = await horus_client.get_order_items(
+            cod_ped_venda=cod_ped_venda,
+            cod_empresa=branch.cod_empresa,
+            cod_filial=branch.cod_filial
+        )
+        horus_items = items_res if isinstance(items_res, list) else []
+        if isinstance(items_res, dict) and "itens" in items_res:
+            horus_items = items_res["itens"]
+            
+        isbn_to_cod_item = {}
+        for i in horus_items:
+            for key in ["ISBN", "BARRAS_ISBN", "COD_BARRA_ITEM"]:
+                val = i.get(key)
+                if val:
+                    isbn_to_cod_item[str(val).strip()] = i.get("COD_ITEM")
+                    
+        for item in volume.items:
+            cod_item = isbn_to_cod_item.get(str(item.isbn).strip())
+            if not cod_item:
+                continue
+                
+            new_qty = db.query(func.sum(OrderConferenceVolumeItem.quantity)).\
+                join(OrderConferenceVolume, OrderConferenceVolume.id == OrderConferenceVolumeItem.volume_id).\
+                filter(
+                    OrderConferenceVolume.conference_id == session.id,
+                    OrderConferenceVolume.status != "CANCELLED",
+                    OrderConferenceVolumeItem.isbn == item.isbn
+                ).scalar() or 0
+                
+            await horus_client.confere_item_pedido(
+                cod_empresa=branch.cod_empresa,
+                cod_filial=branch.cod_filial,
+                cod_cli=session.cod_cli,
+                cod_ped_venda=cod_ped_venda,
+                cod_item=cod_item,
+                cod_local=cod_local,
+                qtd_atendida=new_qty
+            )
+            
+        await horus_client.close()
+    except Exception as e:
+        volume.status = old_status
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Erro ao atualizar quantidades no Horus: {str(e)}")
+        
+    session.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(session)
+    return {"status": "success", "message": f"Volume {volume.volume_number} reativado com sucesso.", "session": OrderConferenceResponse.model_validate(session)}
 
