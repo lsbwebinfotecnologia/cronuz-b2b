@@ -144,6 +144,18 @@ adb shell am start -n com.cronuz.b2b/.MainActivity
 
 ## 📋 Changelog
 
+### v01.021 — 2026-06-22
+**Conferência de Expedição — Regras e Melhorias**
+- Enforçado limite de quantidade conferida (não permite ultrapassar a pedida).
+- Bloqueio de bipes de produtos não pertencentes ao pedido com mensagem de erro.
+- Adicionado campo de busca por descrição/ISBN no topo da lista.
+- Adicionado filtro (funnel) para ocultar itens concluídos (exibir apenas pendentes).
+- Permitido clique em qualquer item da lista para abrir o modal de conferência manual (inclusive permitindo quantidade 0).
+- Implementada visualização de detalhes da caixa e cancelamento/exclusão direta com estorno no Horus.
+- APK: `HorusB2B-v01.021.apk`
+
+---
+
 ### v01.020 — 2026-06-22
 **Conferência de Expedição — Bipe Seguro + Fix Network Error**
 - Reescrita completa de `conferencia/[id].tsx`: scanner → modal de confirmação → submit ao Horus

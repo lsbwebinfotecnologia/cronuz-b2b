@@ -24,6 +24,7 @@ import {
   TextInput,
   Modal,
   Vibration,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -34,6 +35,7 @@ import {
   submitItem,
   closeVolume,
   finalizeConference,
+  cancelVolume,
   HorusItem,
   ConferenceVolume,
   ConferenceSession,
@@ -134,7 +136,7 @@ function ScanConfirmModal({ result, onConfirm, onCancel, submitting }: ScanConfi
   const checked = item ? item.checked : 0;
   const remaining = Math.max(0, pedida - checked);
   const parsedQty = parseInt(qty, 10);
-  const isValid = !isNaN(parsedQty) && parsedQty > 0;
+  const isValid = !isNaN(parsedQty) && parsedQty >= 0 && (checked + parsedQty <= pedida);
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onCancel}>
@@ -178,36 +180,43 @@ function ScanConfirmModal({ result, onConfirm, onCancel, submitting }: ScanConfi
             <View style={sc.notFoundCard}>
               <Ionicons name="warning-outline" size={20} color={Colors.warning} />
               <Text style={sc.notFoundText}>
-                Produto não encontrado neste pedido.{'\n'}Deseja registrar mesmo assim?
+                Produto não encontrado neste pedido.
               </Text>
             </View>
           )}
 
           {/* Qty input */}
-          <View style={sc.qtyRow}>
-            <Text style={sc.qtyLabel}>Quantidade a conferir:</Text>
-            <View style={sc.qtyControls}>
-              <TouchableOpacity
-                style={sc.qtyBtn}
-                onPress={() => setQty(String(Math.max(1, (parsedQty || 1) - 1)))}
-              >
-                <Ionicons name="remove" size={20} color={Colors.textPrimary} />
-              </TouchableOpacity>
-              <TextInput
-                style={sc.qtyInput}
-                value={qty}
-                onChangeText={(v) => setQty(v.replace(/[^0-9]/g, ''))}
-                keyboardType="number-pad"
-                selectTextOnFocus
-              />
-              <TouchableOpacity
-                style={sc.qtyBtn}
-                onPress={() => setQty(String((parsedQty || 0) + 1))}
-              >
-                <Ionicons name="add" size={20} color={Colors.textPrimary} />
-              </TouchableOpacity>
+          {item && (
+            <View style={sc.qtyRow}>
+              <Text style={sc.qtyLabel}>Quantidade a conferir:</Text>
+              <View style={sc.qtyControls}>
+                <TouchableOpacity
+                  style={sc.qtyBtn}
+                  onPress={() => setQty(String(Math.max(0, (parsedQty || 0) - 1)))}
+                >
+                  <Ionicons name="remove" size={20} color={Colors.textPrimary} />
+                </TouchableOpacity>
+                <TextInput
+                  style={sc.qtyInput}
+                  value={qty}
+                  onChangeText={(v) => setQty(v.replace(/[^0-9]/g, ''))}
+                  keyboardType="number-pad"
+                  selectTextOnFocus
+                />
+                <TouchableOpacity
+                  style={sc.qtyBtn}
+                  onPress={() => setQty(String(Math.min(remaining, (parsedQty || 0) + 1)))}
+                >
+                  <Ionicons name="add" size={20} color={Colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+              {checked + parsedQty > pedida && (
+                <Text style={{ color: Colors.error, fontSize: 12, marginTop: 6, textAlign: 'center', fontWeight: 'bold' }}>
+                  Excede a quantidade pedida ({pedida} max).
+                </Text>
+              )}
             </View>
-          </View>
+          )}
 
           {/* Actions */}
           <View style={sc.actions}>
@@ -284,6 +293,14 @@ export default function ConferenciaSessionScreen() {
   // Error modal (instead of crash)
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Busca e Filtros
+  const [searchQuery, setSearchQuery] = useState('');
+  const [hideCompleted, setHideCompleted] = useState(false);
+
+  // Detalhes do Volume / Cancelamento
+  const [viewingVolume, setViewingVolume] = useState<ConferenceVolume | null>(null);
+  const [cancellingVolume, setCancellingVolume] = useState(false);
+
   // ─── Safe error handler ───────────────────────────────────────────────────
   function showError(e: any, fallback = 'Ocorreu um erro inesperado.') {
     const msg: string =
@@ -357,9 +374,10 @@ export default function ConferenciaSessionScreen() {
       const found = items.find((i) => i && getItemIsbn(i) === data) ?? null;
       if (!found) {
         try { Vibration.vibrate([80, 80, 80]); } catch {}
-      } else {
-        try { Vibration.vibrate(60); } catch {}
+        setErrorMsg(`Produto com ISBN/EAN ${data} não pertence ao pedido.`);
+        return;
       }
+      try { Vibration.vibrate(60); } catch {}
       setScanResult({ barcode: data, item: found });
     } catch (e: any) {
       showError(e, 'Erro ao processar código lido.');
@@ -373,6 +391,15 @@ export default function ConferenciaSessionScreen() {
     try {
       const { barcode, item } = scanResult;
       const isbn = item ? getItemIsbn(item) : barcode;
+
+      if (item) {
+        const pedida = Number(item.QTD_PEDIDA ?? 0);
+        if (item.checked + qty > pedida) {
+          setErrorMsg(`A quantidade informada (${qty}) excede a quantidade restante para este item.`);
+          return;
+        }
+      }
+
       await submitItem(activeVolume.id, {
         isbn,
         name: item?.DESCRICAO ?? isbn,
@@ -394,6 +421,8 @@ export default function ConferenciaSessionScreen() {
       }
 
       setScanResult(null);
+      // Recarrega conferência para atualizar volumes e itens de forma segura
+      await loadConference();
     } catch (e: any) {
       showError(e, 'Falha ao registrar bipe. Tente novamente.');
     } finally {
@@ -416,11 +445,42 @@ export default function ConferenciaSessionScreen() {
       setActiveVolume(null);
       setShowWeightModal(false);
       setWeightInput('');
+      await loadConference();
     } catch (e: any) {
       showError(e, 'Erro ao fechar caixa.');
     } finally {
       setClosingVolume(false);
     }
+  }
+
+  // ─── Cancel volume (excluir caixa) ───────────────────────────────────────────
+  async function handleCancelVolume(volId: number) {
+    setCancellingVolume(true);
+    try {
+      await cancelVolume(volId);
+      setViewingVolume(null);
+      await loadConference();
+    } catch (e: any) {
+      showError(e, 'Erro ao cancelar caixa.');
+    } finally {
+      setCancellingVolume(false);
+    }
+  }
+
+  function confirmCancelVolume(vol: ConferenceVolume) {
+    Alert.alert(
+      'Cancelar Caixa',
+      `Tem certeza que deseja cancelar a CAIXA #${vol.volume_number}? Todos os itens desta caixa serão subtraídos do total conferido.`,
+      [
+        { text: 'Não', style: 'cancel' },
+        {
+          text: 'Sim, Cancelar',
+          style: 'destructive',
+          onPress: () => handleCancelVolume(vol.id),
+        },
+      ],
+      { cancelable: true }
+    );
   }
 
   // ─── Finalize ────────────────────────────────────────────────────────────────
@@ -446,6 +506,19 @@ export default function ConferenciaSessionScreen() {
       setFinalizing(false);
     }
   }
+
+  // ─── Filter items ────────────────────────────────────────────────────────────
+  const filteredItems = items.filter((item) => {
+    const isbn = getItemIsbn(item);
+    const matchesSearch =
+      (item.DESCRICAO ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      isbn.includes(searchQuery);
+    
+    if (hideCompleted && item.status === 'ok') {
+      return false;
+    }
+    return matchesSearch;
+  });
 
   // ─── KPIs ────────────────────────────────────────────────────────────────────
   const totalPedidos = items.reduce((s, i) => s + Number(i.QTD_PEDIDA ?? 0), 0);
@@ -549,38 +622,90 @@ export default function ConferenciaSessionScreen() {
       {/* Volumes / Caixas */}
       {activeVols.length > 0 && (
         <View style={s.volumeSection}>
-          <Text style={s.sectionTitle}>Volumes / Caixas ({activeVols.length})</Text>
+          <Text style={s.sectionTitle}>Volumes / Caixas ({activeVols.length}) - Clique para detalhes</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={{ gap: Spacing.sm, paddingHorizontal: Spacing.base }}
           >
             {activeVols.map((vol) => (
-              <View key={vol.id} style={[s.volumeChip, vol.weight === null && s.volumeChipOpen]}>
+              <TouchableOpacity
+                key={vol.id}
+                style={[s.volumeChip, vol.weight === null && s.volumeChipOpen]}
+                onPress={() => setViewingVolume(vol)}
+                activeOpacity={0.7}
+              >
                 <Text style={s.volumeChipNum}>CAIXA #{vol.volume_number}</Text>
                 <Text style={s.volumeChipItems}>{vol.items?.length ?? 0} bipes</Text>
                 <Text style={s.volumeChipWeight}>
                   {vol.weight != null ? `${vol.weight} kg` : '⚡ Aberta'}
                 </Text>
-              </View>
+              </TouchableOpacity>
             ))}
           </ScrollView>
         </View>
       )}
 
+      {/* Search & Filter Bar */}
+      <View style={s.searchFilterContainer}>
+        <View style={s.searchBar}>
+          <Ionicons name="search-outline" size={18} color={Colors.textMuted} style={s.searchIcon} />
+          <TextInput
+            style={s.searchInput}
+            placeholder="Buscar por nome ou ISBN..."
+            placeholderTextColor={Colors.textMuted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery !== '' && (
+            <TouchableOpacity onPress={() => setSearchQuery('')} style={s.searchClear}>
+              <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+          )}
+        </View>
+        <TouchableOpacity
+          style={[s.filterBtn, hideCompleted && s.filterBtnActive]}
+          onPress={() => setHideCompleted(prev => !prev)}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={hideCompleted ? 'funnel' : 'funnel-outline'}
+            size={16}
+            color={hideCompleted ? '#fff' : Colors.primary}
+          />
+          <Text style={[s.filterBtnText, hideCompleted && s.filterBtnTextActive]}>
+            {hideCompleted ? 'Pendentes' : 'Todos'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Items list */}
       <FlatList
-        data={items}
+        data={filteredItems}
         keyExtractor={(_, i) => String(i)}
         contentContainerStyle={{ padding: Spacing.base, paddingBottom: 120 }}
         ListHeaderComponent={
-          <Text style={s.sectionTitle}>Itens do Pedido ({items.length})</Text>
+          <Text style={s.sectionTitle}>Itens do Pedido ({filteredItems.length})</Text>
         }
         renderItem={({ item }) => {
           const isbn = getItemIsbn(item);
           const qtd = Number(item.QTD_PEDIDA ?? 0);
           return (
-            <View style={s.itemRow}>
+            <TouchableOpacity
+              style={s.itemRow}
+              onPress={() => {
+                if (isCompleted) return;
+                if (!activeVolume) {
+                  setErrorMsg('Abra uma caixa antes de conferir o item.');
+                  return;
+                }
+                setScanResult({
+                  barcode: isbn,
+                  item: item,
+                });
+              }}
+              activeOpacity={0.7}
+            >
               <Ionicons
                 name={STATUS_ICONS[item.status] as any}
                 size={20}
@@ -597,7 +722,7 @@ export default function ConferenciaSessionScreen() {
                 </Text>
                 <Text style={s.itemSlash}> / {qtd}</Text>
               </View>
-            </View>
+            </TouchableOpacity>
           );
         }}
         ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: Colors.border }} />}
@@ -665,6 +790,96 @@ export default function ConferenciaSessionScreen() {
                   : <Text style={wm.confirmText}>Fechar Caixa</Text>
                 }
               </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── Modal: Detalhes do Volume/Caixa ─── */}
+      <Modal
+        visible={!!viewingVolume}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setViewingVolume(null)}
+      >
+        <View style={sc.backdrop}>
+          <View style={[sc.box, { maxHeight: '80%' }]}>
+            {/* Header */}
+            <View style={sc.header}>
+              <Ionicons name="cube-outline" size={22} color={Colors.primary} />
+              <Text style={sc.headerTitle}>Detalhes da Caixa #{viewingVolume?.volume_number}</Text>
+            </View>
+
+            {/* Volume Stats */}
+            <View style={sc.itemCard}>
+              <Text style={[sc.qtyLabel, { marginBottom: 4 }]}>Informações do Volume:</Text>
+              <Text style={{ color: Colors.textPrimary, fontSize: 13, marginBottom: 2 }}>
+                Código de Barras: <Text style={{ fontWeight: 'bold', fontFamily: 'monospace' }}>{viewingVolume?.barcode}</Text>
+              </Text>
+              <Text style={{ color: Colors.textPrimary, fontSize: 13, marginBottom: 2 }}>
+                Peso: <Text style={{ fontWeight: 'bold' }}>{viewingVolume?.weight != null ? `${viewingVolume.weight} kg` : '⚡ Aberta'}</Text>
+              </Text>
+              <Text style={{ color: Colors.textPrimary, fontSize: 13 }}>
+                Status: <Text style={{ fontWeight: 'bold', color: viewingVolume?.status === 'CANCELLED' ? Colors.error : Colors.success }}>
+                  {viewingVolume?.status === 'CANCELLED' ? 'Cancelado' : viewingVolume?.weight != null ? 'Fechada' : 'Aberta'}
+                </Text>
+              </Text>
+            </View>
+
+            {/* Items inside Volume */}
+            <Text style={s.sectionTitle}>Itens nesta Caixa ({viewingVolume?.items?.length ?? 0})</Text>
+            <FlatList
+              data={viewingVolume?.items ?? []}
+              keyExtractor={(item) => String(item.id)}
+              style={{ maxHeight: 200, marginBottom: Spacing.base }}
+              renderItem={({ item }) => (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: Spacing.xs }}>
+                  <Text style={{ color: Colors.textPrimary, fontSize: 13, flex: 1, marginRight: Spacing.sm }} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={{ color: Colors.textMuted, fontSize: 13, marginRight: Spacing.md }}>
+                    {item.isbn}
+                  </Text>
+                  <Text style={{ color: Colors.primary, fontWeight: 'bold', fontSize: 13 }}>
+                    {item.quantity}x
+                  </Text>
+                </View>
+              )}
+              ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: Colors.border }} />}
+              ListEmptyComponent={
+                <Text style={{ color: Colors.textMuted, fontSize: 13, textAlign: 'center', padding: Spacing.md }}>
+                  Nenhum item registrado nesta caixa.
+                </Text>
+              }
+            />
+
+            {/* Actions */}
+            <View style={sc.actions}>
+              <TouchableOpacity
+                style={sc.cancelBtn}
+                onPress={() => setViewingVolume(null)}
+                disabled={cancellingVolume}
+              >
+                <Text style={sc.cancelText}>Voltar</Text>
+              </TouchableOpacity>
+              
+              {!isCompleted && viewingVolume?.status !== 'CANCELLED' && (
+                <TouchableOpacity
+                  style={[sc.confirmBtn, { backgroundColor: Colors.error }]}
+                  onPress={() => confirmCancelVolume(viewingVolume!)}
+                  disabled={cancellingVolume}
+                  activeOpacity={0.85}
+                >
+                  {cancellingVolume ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="trash-outline" size={18} color="#fff" />
+                      <Text style={sc.confirmText}>Cancelar Caixa</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         </View>
@@ -758,6 +973,59 @@ const s = StyleSheet.create({
   finalizeBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, backgroundColor: Colors.success, borderRadius: Radius.xl, paddingVertical: 16 },
   finalizeBtnDisabled: { opacity: 0.6 },
   finalizeBtnText: { color: '#fff', fontSize: Typography.size.base, fontWeight: Typography.weight.bold },
+
+  searchFilterContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.base,
+    marginBottom: Spacing.sm,
+  },
+  searchBar: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.bgCard,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: Spacing.sm,
+    height: 40,
+  },
+  searchIcon: {
+    marginRight: 6,
+  },
+  searchInput: {
+    flex: 1,
+    color: Colors.textPrimary,
+    fontSize: Typography.size.sm,
+    padding: 0,
+  },
+  searchClear: {
+    padding: 2,
+  },
+  filterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    height: 40,
+    backgroundColor: 'transparent',
+  },
+  filterBtnActive: {
+    backgroundColor: Colors.primary,
+  },
+  filterBtnText: {
+    color: Colors.primary,
+    fontSize: Typography.size.xs,
+    fontWeight: Typography.weight.semibold,
+  },
+  filterBtnTextActive: {
+    color: '#fff',
+  },
 });
 
 // Weight modal styles
