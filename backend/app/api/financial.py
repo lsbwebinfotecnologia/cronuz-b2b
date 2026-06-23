@@ -834,10 +834,21 @@ def edit_payment_generic_installment(
     if not inst: raise HTTPException(status_code=404)
     if inst.is_conciliated: raise HTTPException(status_code=400, detail="Impossível editar. A parcela já foi conciliada.")
     
-    if pay_data.account_id: inst.account_id = pay_data.account_id
-    if hasattr(pay_data, 'payment_date') and pay_data.payment_date is not None: inst.payment_date = pay_data.payment_date
-    if pay_data.status: inst.status = pay_data.status
-    if pay_data.category_id: 
+    fields = pay_data.model_fields_set
+    
+    if "status" in fields:
+        inst.status = pay_data.status
+        if pay_data.status == "PENDING":
+            inst.payment_date = None
+            inst.account_id = None
+            
+    if "account_id" in fields:
+        inst.account_id = pay_data.account_id
+        
+    if "payment_date" in fields:
+        inst.payment_date = pay_data.payment_date
+        
+    if "category_id" in fields:
         trans = inst.transaction
         trans.category_id = pay_data.category_id
 

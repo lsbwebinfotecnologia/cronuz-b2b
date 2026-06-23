@@ -127,6 +127,45 @@ export default function BankReconciliationPage() {
         }
     };
 
+    const handleUpdateAccount = async (instId: number, accountIdVal: string) => {
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/generic_installments/${instId}/edit_payment`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+                body: JSON.stringify({ account_id: accountIdVal ? parseInt(accountIdVal) : null })
+            });
+            if (res.ok) {
+                toast.success("Conta destino atualizada com sucesso!");
+                fetchInstallments();
+            } else {
+                const js = await res.json();
+                toast.error(js.detail || "Erro ao atualizar conta");
+            }
+        } catch (e) {
+            toast.error("Erro no servidor");
+        }
+    };
+
+    const handleUndoPayment = async (instId: number) => {
+        if (!confirm("Deseja desfazer a baixa deste lançamento e retorná-lo para 'Em Aberto'?")) return;
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/generic_installments/${instId}/edit_payment`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+                body: JSON.stringify({ status: 'PENDING' })
+            });
+            if (res.ok) {
+                toast.success("Baixa desfeita! O lançamento voltou a ficar em aberto.");
+                fetchInstallments();
+            } else {
+                const js = await res.json();
+                toast.error(js.detail || "Erro ao desfazer baixa");
+            }
+        } catch (e) {
+            toast.error("Erro no servidor");
+        }
+    };
+
     const handleBulkConciliate = async () => {
         if (selectedIds.length === 0) return;
         try {
@@ -169,8 +208,15 @@ export default function BankReconciliationPage() {
     };
 
     const toggleAll = () => {
-        if (selectedIds.length === installments.length) setSelectedIds([]);
-        else setSelectedIds(installments.map(i => i.id));
+        const validInstallments = installments.filter(i => i.account_id);
+        const validIds = validInstallments.map(i => i.id);
+        if (validIds.length === 0) return;
+        const allSelected = validIds.every(id => selectedIds.includes(id));
+        if (allSelected) {
+            setSelectedIds(prev => prev.filter(id => !validIds.includes(id)));
+        } else {
+            setSelectedIds(prev => Array.from(new Set([...prev, ...validIds])));
+        }
     };
 
     const exportToCSV = () => {
@@ -282,13 +328,23 @@ export default function BankReconciliationPage() {
                             <tr>
                                 {activeTab === 'PENDING' && (
                                     <th className="px-6 py-4 w-12 text-center">
-                                        <input type="checkbox" checked={installments.length > 0 && selectedIds.length === installments.length} onChange={toggleAll} className="w-4 h-4 rounded border-slate-300 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)] cursor-pointer" />
+                                        <input 
+                                            type="checkbox" 
+                                            checked={
+                                                installments.length > 0 && 
+                                                installments.filter(i => i.account_id).length > 0 &&
+                                                installments.filter(i => i.account_id).every(i => selectedIds.includes(i.id))
+                                            } 
+                                            onChange={toggleAll} 
+                                            className="w-4 h-4 rounded border-slate-300 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)] cursor-pointer" 
+                                        />
                                     </th>
                                 )}
                                 <th className="px-6 py-4">Transação (Origem / Destino)</th>
                                 <th className="px-6 py-4">Vencimento</th>
                                 <th className="px-6 py-4">Pagamento</th>
                                 <th className="px-6 py-4">Descrição</th>
+                                <th className="px-6 py-4">Conta Bancária</th>
                                 <th className="px-6 py-4">Valor</th>
                                 {activeTab === 'CONCILIATED' && accountFilter && (
                                     <th className="px-6 py-4 text-right">Saldo Atualizado</th>
@@ -335,7 +391,14 @@ export default function BankReconciliationPage() {
                                         <tr key={inst.id} className="border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition">
                                             {activeTab === 'PENDING' && (
                                                 <td className="px-6 py-4 text-center">
-                                                    <input type="checkbox" checked={selectedIds.includes(inst.id)} onChange={()=>toggleSelection(inst.id)} className="w-4 h-4 rounded border-slate-300 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)] cursor-pointer" />
+                                                    <input 
+                                                        type="checkbox" 
+                                                        disabled={!inst.account_id}
+                                                        checked={selectedIds.includes(inst.id)} 
+                                                        onChange={()=>toggleSelection(inst.id)} 
+                                                        className={`w-4 h-4 rounded border-slate-300 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)]
+                                                            ${!inst.account_id ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`} 
+                                                    />
                                                 </td>
                                             )}
                                             <td className="px-6 py-4">
@@ -361,6 +424,35 @@ export default function BankReconciliationPage() {
                                                 <p className="font-medium text-slate-900 dark:text-white max-w-[200px] truncate" title={inst.description}>{inst.description}</p>
                                             </td>
                                             <td className="px-6 py-4">
+                                                {activeTab === 'PENDING' ? (
+                                                    <div className="flex items-center gap-1.5 min-w-[170px]">
+                                                        <select
+                                                            value={inst.account_id || ''}
+                                                            onChange={(e) => handleUpdateAccount(inst.id, e.target.value)}
+                                                            className={`px-3 py-1.5 border rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 outline-none transition-colors w-full
+                                                                ${!inst.account_id 
+                                                                    ? 'border-rose-300 ring-2 ring-rose-500/10 text-rose-600 dark:text-rose-400' 
+                                                                    : 'border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 focus:border-[var(--color-primary-base)]'
+                                                                }`}
+                                                        >
+                                                            <option value="">-- Sem Conta (Definir) --</option>
+                                                            {accounts.map(acc => (
+                                                                <option key={acc.id} value={acc.id}>{acc.name}</option>
+                                                            ))}
+                                                        </select>
+                                                        {!inst.account_id && (
+                                                            <span title="Sem conta destino! Defina uma conta para auditar.">
+                                                                <ShieldAlert className="w-4 h-4 text-rose-500 shrink-0 animate-pulse" />
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <span className="font-medium text-slate-700 dark:text-slate-300 text-xs">
+                                                        {accounts.find(a => a.id === inst.account_id)?.name || 'Sem Conta'}
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4">
                                                 <span className={`font-bold ${inst.type === 'RECEIVABLE' ? 'text-emerald-600' : 'text-rose-600'}`}>
                                                     {inst.type === 'RECEIVABLE' ? '+' : '-'} {new Intl.NumberFormat('pt-BR', {style: 'currency', currency:'BRL'}).format(inst.amount)}
                                                 </span>
@@ -372,9 +464,26 @@ export default function BankReconciliationPage() {
                                             )}
                                             <td className="px-6 py-4 text-right">
                                                 {activeTab === 'PENDING' ? (
-                                                    <button onClick={()=>handleConciliate(inst.id)} className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 dark:text-indigo-400 font-bold rounded-lg shadow-sm transition flex items-center gap-1.5 ml-auto text-xs">
-                                                        <RefreshCw className="w-3.5 h-3.5" /> Conciliar
-                                                    </button>
+                                                    <div className="flex gap-2 justify-end">
+                                                        <button 
+                                                            onClick={() => handleUndoPayment(inst.id)} 
+                                                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 font-bold rounded-lg transition text-xs whitespace-nowrap"
+                                                            title="Desfazer a baixa (retornar para pendente/em aberto)"
+                                                        >
+                                                            Desfazer Baixa
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => handleConciliate(inst.id)} 
+                                                            disabled={!inst.account_id}
+                                                            className={`px-3 py-1.5 font-bold rounded-lg shadow-sm transition flex items-center gap-1.5 text-xs whitespace-nowrap
+                                                                ${!inst.account_id 
+                                                                    ? 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-600 cursor-not-allowed' 
+                                                                    : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 dark:text-indigo-400'
+                                                                }`}
+                                                        >
+                                                            <RefreshCw className="w-3.5 h-3.5" /> Conciliar
+                                                        </button>
+                                                    </div>
                                                 ) : (
                                                     <button onClick={()=>handleRevertConciliation(inst.id)} className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:hover:bg-rose-500/20 dark:text-rose-400 font-bold rounded-lg transition flex items-center gap-1.5 ml-auto text-xs">
                                                         Estornar
