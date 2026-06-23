@@ -144,6 +144,14 @@ adb shell am start -n com.cronuz.b2b/.MainActivity
 
 ## 📋 Changelog
 
+### v01.023 — 2026-06-22
+**Conferência de Expedição — Parâmetros Robustos e Prevenção de Crashes**
+- Adicionados fallbacks redundantes para `cod_ped_venda` e `cod_item` (tratando propriedades alternativas e assegurando conversão explícita para string, evitando parâmetros nulos/indefinidos na submissão ao backend).
+- Tratamento defensivo no `showError` para converter objetos/arrays de erro (ex: validações 422 de API do FastAPI) em strings, prevenindo crashes de renderização causados por objetos não escalares passados para componentes de texto React Native.
+- APK: `HorusB2B-v01.023.apk`
+
+---
+
 ### v01.022 — 2026-06-22
 **Conferência de Expedição — Correção de Mapeamento de Campos**
 - Corrigido problema onde o título do item e a quantidade pedida vinham em branco devido a divergências de nomes de campos retornados pela API do Horus (fallbacks mapeados: `NOM_ITEM`/`DESCRICAO` e `QTD_PEDIDA`/`QT_PEDIDA`).

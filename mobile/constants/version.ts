@@ -10,7 +10,7 @@
  * O arquivo CHANGELOG.md em /docs/mobile/ documenta cada release.
  */
 
-export const APP_VERSION = '01.022';
+export const APP_VERSION = '01.023';
 
 /** Data do último build (formato legível) */
 export const APP_BUILD_DATE = '2026-06-22';

@@ -303,12 +303,20 @@ export default function ConferenciaSessionScreen() {
 
   // ─── Safe error handler ───────────────────────────────────────────────────
   function showError(e: any, fallback = 'Ocorreu um erro inesperado.') {
-    const msg: string =
+    let msg: any =
       e?.response?.data?.detail ??
       e?.response?.data?.message ??
       e?.message ??
       fallback;
-    setErrorMsg(msg);
+    
+    if (typeof msg === 'object') {
+      try {
+        msg = JSON.stringify(msg);
+      } catch {
+        msg = String(msg);
+      }
+    }
+    setErrorMsg(String(msg));
   }
 
   // ─── Load conference data ────────────────────────────────────────────────────
@@ -408,12 +416,16 @@ export default function ConferenciaSessionScreen() {
         }
       }
 
+      const pedVenda = String(resolvedCodPedVenda || (session as any)?.cod_ped_venda || codPedVenda || '');
+      const codItem = String(item?.COD_ITEM ?? item?.cod_item ?? item?.COD_ITEM_HORUS ?? item?.cod_item_horus ?? '');
+      const nameStr = String(item?.NOM_ITEM ?? item?.DESCRICAO ?? item?.name ?? isbn);
+
       await submitItem(activeVolume.id, {
         isbn,
-        name: item?.DESCRICAO ?? isbn,
+        name: nameStr,
         quantity: qty,
-        cod_item: item?.COD_ITEM ?? '',
-        cod_ped_venda: resolvedCodPedVenda,
+        cod_item: codItem,
+        cod_ped_venda: pedVenda,
       });
 
       // Update local items list
