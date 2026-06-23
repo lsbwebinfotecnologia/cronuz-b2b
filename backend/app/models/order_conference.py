@@ -11,6 +11,7 @@ class OrderConference(Base):
     branch_id = Column(Integer, ForeignKey("cmp_seller_branch.id"), nullable=False)
     cod_cli = Column(String(50), nullable=False)
     cod_pedido_origem = Column(String(50), nullable=False)
+    cod_ped_venda = Column(String(50), nullable=True)  # COD_PED_VENDA do Horus — persistido na criação
     status = Column(String(20), default="IN_PROGRESS", nullable=False) # IN_PROGRESS, COMPLETED
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

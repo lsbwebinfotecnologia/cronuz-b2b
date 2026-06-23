@@ -223,11 +223,18 @@ async def search_order_for_conference(
             branch_id=branch_id,
             cod_cli=cod_cli,
             cod_pedido_origem=cod_pedido_origem,
+            cod_ped_venda=str(cod_ped_venda),  # persiste para uso em bipes futuros
             status="IN_PROGRESS"
         )
         db.add(local_conf)
         db.commit()
         db.refresh(local_conf)
+    else:
+        # Atualiza cod_ped_venda se estava vazio (sessão criada antes deste fix)
+        if not local_conf.cod_ped_venda and cod_ped_venda:
+            local_conf.cod_ped_venda = str(cod_ped_venda)
+            db.commit()
+            db.refresh(local_conf)
         
     return {
         "session": OrderConferenceResponse.model_validate(local_conf),

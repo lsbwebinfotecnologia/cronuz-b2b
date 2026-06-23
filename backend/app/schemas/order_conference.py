@@ -41,6 +41,7 @@ class OrderConferenceResponse(OrderConferenceBase):
     id: int
     company_id: int
     branch_id: int
+    cod_ped_venda: Optional[str] = None  # persistido na criação da sessão
     created_at: datetime
     updated_at: datetime
     volumes: List[OrderConferenceVolumeResponse] = []
