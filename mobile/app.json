@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "Horus B2B",
+    "slug": "cronuz-b2b",
+    "version": "1.1.0",
+    "scheme": "cronuzb2b",
+    "orientation": "portrait",
+    "icon": "./assets/brands/horus/logo.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/brands/horus/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#a4a1ff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cronuz.b2b",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Necess\u00e1rio para escanear c\u00f3digos de barras na confer\u00eancia de pedidos.",
+        "NSLocationWhenInUseUsageDescription": "Usado para funcionalidades de localiza\u00e7\u00e3o do PDV."
+      }
+    },
+    "android": {
+      "package": "com.cronuz.b2b",
+      "versionCode": 2,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundColor": "#7B74E8"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/brands/horus/logo.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Necess\u00e1rio para escanear c\u00f3digos de barras."
+        }
+      ],
+      "expo-notifications",
+      "expo-sqlite"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
