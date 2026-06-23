@@ -7,11 +7,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 class BancoInterClient:
-    def __init__(self, client_id: str, client_secret: str, cert_path: str, key_path: str, sandbox: bool = True, account_number: str = None, api_version: str = 'V2'):
+    def __init__(self, client_id: str, client_secret: str, cert_path: str = None, key_path: str = None, cert_content: str = None, key_content: str = None, sandbox: bool = True, account_number: str = None, api_version: str = 'V2'):
         self.client_id = client_id
         self.client_secret = client_secret
-        self.cert_path = cert_path
-        self.key_path = key_path
         self.sandbox = sandbox
         self.account_number = account_number
         self.api_version = api_version
@@ -19,6 +17,61 @@ class BancoInterClient:
         
         self.token = None
         self.token_expiry = None
+        
+        self.temp_cert_file = None
+        self.temp_key_file = None
+        
+        if cert_content and key_content:
+            import tempfile
+            self.temp_cert_file = tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False)
+            self.temp_cert_file.write(cert_content)
+            self.temp_cert_file.close()
+            
+            self.temp_key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False)
+            self.temp_key_file.write(key_content)
+            self.temp_key_file.close()
+            
+            self.cert_path = self.temp_cert_file.name
+            self.key_path = self.temp_key_file.name
+        else:
+            self.cert_path = self._resolve_path(cert_path)
+            self.key_path = self._resolve_path(key_path)
+
+    def _resolve_path(self, path: str) -> str:
+        if not path:
+            return path
+        
+        import os
+        from pathlib import Path
+        
+        if os.path.exists(path):
+            return path
+            
+        if "certs/inter/" in path:
+            parts = path.split("certs/inter/")
+            relative_part = "certs/inter/" + parts[-1]
+            project_root = Path(__file__).parent.parent.parent.parent
+            local_path = project_root / relative_part
+            if local_path.exists():
+                return str(local_path.absolute())
+                
+        return path
+
+    def __del__(self):
+        self.cleanup()
+
+    def cleanup(self):
+        import os
+        if hasattr(self, 'temp_cert_file') and self.temp_cert_file and os.path.exists(self.temp_cert_file.name):
+            try:
+                os.remove(self.temp_cert_file.name)
+            except Exception:
+                pass
+        if hasattr(self, 'temp_key_file') and self.temp_key_file and os.path.exists(self.temp_key_file.name):
+            try:
+                os.remove(self.temp_key_file.name)
+            except Exception:
+                pass
 
     def get_token(self):
         if self.token and self.token_expiry and datetime.now() < self.token_expiry:

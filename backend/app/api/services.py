@@ -1313,12 +1313,14 @@ async def send_service_order_email(
         if transactions:
             from app.integrators.inter_client import BancoInterClient
             inter_client = None
-            if settings.inter_enabled and settings.inter_cert_path and settings.inter_key_path:
+            if settings.inter_enabled and ((settings.inter_cert_path and settings.inter_key_path) or (settings.inter_cert_content and settings.inter_key_content)):
                 inter_client = BancoInterClient(
                     client_id=settings.inter_client_id,
                     client_secret=settings.inter_client_secret,
                     cert_path=settings.inter_cert_path,
                     key_path=settings.inter_key_path,
+                    cert_content=settings.inter_cert_content,
+                    key_content=settings.inter_key_content,
                     sandbox=settings.inter_sandbox,
                     api_version=settings.inter_api_version
                 )

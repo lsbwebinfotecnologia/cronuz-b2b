@@ -221,10 +221,18 @@ async def upload_inter_certificates(
     key_path = certs_dir / f"inter_key_{uuid.uuid4().hex}{Path(key_file.filename).suffix}"
     
     try:
+        await cert_file.seek(0)
+        await key_file.seek(0)
+        cert_bytes = await cert_file.read()
+        key_bytes = await key_file.read()
+        
+        cert_content_str = cert_bytes.decode("utf-8", errors="ignore")
+        key_content_str = key_bytes.decode("utf-8", errors="ignore")
+        
         with cert_path.open("wb") as buffer:
-            shutil.copyfileobj(cert_file.file, buffer)
+            buffer.write(cert_bytes)
         with key_path.open("wb") as buffer:
-            shutil.copyfileobj(key_file.file, buffer)
+            buffer.write(key_bytes)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar os certificados: {str(e)}")
         
@@ -236,6 +244,8 @@ async def upload_inter_certificates(
     
     settings.inter_cert_path = str(cert_path.absolute())
     settings.inter_key_path = str(key_path.absolute())
+    settings.inter_cert_content = cert_content_str
+    settings.inter_key_content = key_content_str
     
     try:
         db.commit()

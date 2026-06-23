@@ -58,6 +58,8 @@ class CompanySettings(Base):
     inter_client_secret = Column(String(255), nullable=True)
     inter_cert_path = Column(String(500), nullable=True)
     inter_key_path = Column(String(500), nullable=True)
+    inter_cert_content = Column(String, nullable=True)
+    inter_key_content = Column(String, nullable=True)
     inter_account_number = Column(String(50), nullable=True)
 
     # Gateways de Pagamento (Loja Virtual)

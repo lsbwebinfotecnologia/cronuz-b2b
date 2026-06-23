@@ -41,6 +41,8 @@ class CompanySettingsBase(BaseModel):
     inter_client_secret: Optional[str] = None
     inter_cert_path: Optional[str] = None
     inter_key_path: Optional[str] = None
+    inter_cert_content: Optional[str] = None
+    inter_key_content: Optional[str] = None
     inter_account_number: Optional[str] = None
     
     payment_gateway_active: Optional[str] = "EFI"
