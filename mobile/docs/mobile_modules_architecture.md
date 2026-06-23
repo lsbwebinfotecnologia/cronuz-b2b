@@ -144,6 +144,28 @@ adb shell am start -n com.cronuz.b2b/.MainActivity
 
 ## 📋 Changelog
 
+### v01.025 — 2026-06-23
+**Conferência de Expedição — Mismatch de Código de Cliente (LEX Check)**
+- Resolvido bug onde a conferência em andamento exibia erro de status `LEX` devido a mismatch de zeros à esquerda ou formatação do código do cliente.
+- Passagem do `conference_id` opcional na rota de busca de pedido, garantindo que o backend localize o registro exato por ID físico e ignore o `LEX`.
+- Adicionada busca flexível por zeros à esquerda (`ltrim`) no banco de dados local para buscas no modal "Novo".
+- APK: `HorusB2B-v01.025.apk`
+
+---
+
+### v01.024 — 2026-06-23
+**Conferência de Expedição — Consulta de Finalizadas & Filtros de Busca**
+- Permitida consulta a conferências concluídas de forma read-only (sem exibir botões de bipe/finalizar/cancelar).
+- Bypass de verificação de status LEX no backend caso o pedido já possua conferência local salva no banco de dados.
+- Tratamento de exceção de comunicação com Horus no backend: caso a chamada falhe para um pedido já salvo localmente, retorna os dados locais normalmente em vez de gerar erro 404/400.
+- Fallback local de itens: se a API do Horus não retornar os itens originais do pedido, o mobile reconstrói a lista a partir das quantidades bipadas nos volumes salvos.
+- Filtro padrão na listagem alterado para "Em andamento" (`IN_PROGRESS`).
+- Campo de busca na listagem refinado para filtrar estritamente por número do pedido (`cod_pedido_origem`) ou código do cliente (`cod_cli`).
+- Exibição da data de início formatada (`session.created_at`) na tela de detalhes.
+- APK: `HorusB2B-v01.024.apk`
+
+---
+
 ### v01.023 — 2026-06-22
 **Conferência de Expedição — Parâmetros Robustos e Prevenção de Crashes**
 - Adicionados fallbacks redundantes para `cod_ped_venda` e `cod_item` (tratando propriedades alternativas e assegurando conversão explícita para string, evitando parâmetros nulos/indefinidos na submissão ao backend).

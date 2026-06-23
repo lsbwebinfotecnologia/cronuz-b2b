@@ -127,12 +127,29 @@ def login_for_access_token(
     )
     
     company_name = "Sede Master Cronuz"
+    mobile_modules = None
     if user.company_id:
         company = db.query(Company).filter(Company.id == user.company_id).first()
         if company:
             company_name = company.name
+            # Retorna módulos mobile para sellers
+            if user.type == "SELLER" and hasattr(company, "mobile_modules"):
+                raw = dict(company.mobile_modules or {})
+                # Garante todos os campos padrão
+                defaults = {
+                    "app_enabled": False,
+                    "pdv": False,
+                    "conferencia": False,
+                    "vendas": False,
+                    "pedidos": False,
+                    "catalogo": False,
+                    "clientes": False
+                }
+                for k, v in defaults.items():
+                    raw.setdefault(k, v)
+                mobile_modules = raw
 
-    return {"access_token": access_token, "token_type": "bearer", "user": {
+    response = {"access_token": access_token, "token_type": "bearer", "user": {
         "name": user.name,
         "email": user.email,
         "type": user.type,
@@ -140,6 +157,11 @@ def login_for_access_token(
         "company_name": company_name,
         "tenant_id": user.tenant_id
     }}
+    
+    if mobile_modules is not None:
+        response["mobile_modules"] = mobile_modules
+
+    return response
 
 @router.post("/logout")
 def logout(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):

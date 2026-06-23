@@ -22,6 +22,26 @@ MAJOR.MINOR.PATCH
 
 ---
 
+## v1.1.2 — 2026-06-23
+**versionCode: 4**
+
+### 🐛 Correção Crítica: Mismatch de Código de Cliente (LEX Check)
+- **Fix do Bypass do LEX**: Passagem do `conference_id` como parâmetro opcional na busca de pedido (`/orders/search`), assegurando que a conferência em andamento seja localizada no banco com precisão pelo ID físico, eliminando qualquer risco de falha na consulta por divergências de formatação/zeros à esquerda no código do cliente.
+- **Busca Flexível**: Adicionada busca flexível com limpeza de zeros à esquerda (`ltrim`) no backend para garantir que buscas no modal "Novo" também localizem registros já existentes e evitem a validação `LEX`.
+- APK: `HorusB2B-v01.025.apk`
+
+## v1.1.1 — 2026-06-23
+**versionCode: 3**
+
+### ✅ Consulta de Conferências Finalizadas & Melhorias de Busca
+- **Consulta de finalizadas**: Permitido abrir conferências com status `COMPLETED` na tela mobile para visualização de detalhes e volumes de forma read-only.
+- **Bypass de validação LEX**: Ajustada a busca de pedido no backend (`horus_logistics.py`) para ignorar a validação de status `LEX` quando a conferência já estiver salva no banco.
+- **Resiliência a erros**: Caso o Horus falhe ou não retorne mais o pedido da conferência consultada, o aplicativo mobile reconstrói a listagem de itens a partir dos volumes locais persistidos.
+- **Filtro Padrão**: Definido o filtro padrão da lista de conferências no mobile para exibir inicialmente as conferências `"Em andamento"`.
+- **Busca por Pedido e Cliente**: Refinado o input de busca para filtrar a lista estritamente por número do pedido e código do cliente.
+- **Data de Abertura**: Exibida a data e hora de criação da conferência na visualização de detalhes do mobile.
+- APK: `HorusB2B-v01.024.apk`
+
 ## v1.1.0 — 2026-06-22
 **versionCode: 2**
 

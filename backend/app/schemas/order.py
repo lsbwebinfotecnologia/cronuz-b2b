@@ -103,10 +103,12 @@ class PDVOrderCreate(BaseModel):
     items: List[PDVOrderItem]
     total_amount: float
     payment_condition: Optional[str] = None
-    payment_method: str
-    discount_amount: float
-    status: str
-    source: str
+    payment_method: str = "B2B_STANDARD"
+    discount_amount: float = 0.0
+    status: str = "PROCESSING"
+    source: str = "pdv_mobile"
     type_order: str = "V"
     installments: int = 1
+    customer_order_ref: Optional[str] = None
+    notes: Optional[str] = None
 

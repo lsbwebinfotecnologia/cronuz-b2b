@@ -58,6 +58,9 @@ from app.api import proposals
 from app.api import print_points
 from app.api import bank_slips
 from app.api import email_templates
+from app.api import mobile
+from app.api import mobile_pdv
+from app.api import brand
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -153,6 +156,10 @@ app.include_router(financial.router, tags=["financial"])
 app.include_router(email_templates.router, prefix="/settings/email-templates", tags=["settings"])
 app.include_router(customer_portal.router)
 app.include_router(customer_auth.router)
+app.include_router(mobile.router, prefix="/seller", tags=["mobile"])
+app.include_router(mobile_pdv.router, tags=["mobile-pdv"])
+
+app.include_router(brand.router, tags=["app-brand"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)

@@ -67,6 +67,7 @@ async def create_pdv_order(
         order.subtotal = sum([i.quantity * i.unit_price for i in payload.items])
         order.discount = payload.discount_amount
         order.total = payload.total_amount
+        order.customer_order_ref = getattr(payload, 'customer_order_ref', None) or order.customer_order_ref
         order.confirmed_at = datetime.utcnow()
     else:
         order = Order(
@@ -79,6 +80,7 @@ async def create_pdv_order(
             subtotal=sum([i.quantity * i.unit_price for i in payload.items]),
             discount=payload.discount_amount,
             total=payload.total_amount,
+            customer_order_ref=getattr(payload, 'customer_order_ref', None),
             confirmed_at=datetime.utcnow()
         )
         db.add(order)

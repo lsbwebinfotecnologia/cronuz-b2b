@@ -83,6 +83,7 @@ export default function OrderConferencePage() {
   const [conferences, setConferences] = useState<any[]>([]);
   const [loadingConferences, setLoadingConferences] = useState(false);
   const [resumingConfId, setResumingConfId] = useState<number | null>(null);
+  const [finalizingSession, setFinalizingSession] = useState(false);
 
   // Filter states
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -633,6 +634,7 @@ export default function OrderConferencePage() {
       if (!confirmEnd) return;
     }
 
+    setFinalizingSession(true);
     try {
       const token = getToken();
       const res = await fetch(`${apiUrl}/logistics/orders/session/finalize?conference_id=${session.id}&cod_ped_venda=${codPedVenda}`, {
@@ -657,6 +659,8 @@ export default function OrderConferencePage() {
       fetchConferences();
     } catch (err: any) {
       toast.error(err.message || 'Erro ao finalizar conferência.');
+    } finally {
+      setFinalizingSession(false);
     }
   }
 
@@ -1281,9 +1285,19 @@ export default function OrderConferencePage() {
                   {session.status === 'IN_PROGRESS' && (
                     <button
                       onClick={handleFinalizeSession}
-                      className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-sm"
+                      disabled={finalizingSession}
+                      className={`px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-sm flex items-center justify-center gap-1.5 ${
+                        finalizingSession ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
                     >
-                      Finalizar Conferência
+                      {finalizingSession ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Finalizando...
+                        </>
+                      ) : (
+                        'Finalizar Conferência'
+                      )}
                     </button>
                   )}
                 </div>

@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -59,6 +60,16 @@ class Company(Base):
     module_consignment = Column(Boolean, default=False, nullable=False)
     module_proposals = Column(Boolean, default=False, nullable=False)
     module_logistica_horus = Column(Boolean, default=False, nullable=False)
+    
+    # Mobile App Modules (per-seller, managed by MASTER)
+    mobile_modules = Column(JSONB, nullable=True, default=lambda: {
+        "pdv": False,
+        "conferencia": False,
+        "vendas": False,
+        "pedidos": False,
+        "catalogo": False,
+        "clientes": False,
+    })
     
     # Fiscal Configs (NFS-e Padrão Nacional)
     nfse_enabled = Column(Boolean, default=False, nullable=False)

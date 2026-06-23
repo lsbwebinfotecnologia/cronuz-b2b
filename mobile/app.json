@@ -2,7 +2,7 @@
   "expo": {
     "name": "Horus B2B",
     "slug": "cronuz-b2b",
-    "version": "1.1.0",
+    "version": "1.1.2",
     "scheme": "cronuzb2b",
     "orientation": "portrait",
     "icon": "./assets/brands/horus/logo.png",
@@ -16,13 +16,13 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.cronuz.b2b",
       "infoPlist": {
-        "NSCameraUsageDescription": "Necess\u00e1rio para escanear c\u00f3digos de barras na confer\u00eancia de pedidos.",
-        "NSLocationWhenInUseUsageDescription": "Usado para funcionalidades de localiza\u00e7\u00e3o do PDV."
+        "NSCameraUsageDescription": "Necessário para escanear códigos de barras na conferência de pedidos.",
+        "NSLocationWhenInUseUsageDescription": "Usado para funcionalidades de localização do PDV."
       }
     },
     "android": {
       "package": "com.cronuz.b2b",
-      "versionCode": 2,
+      "versionCode": 4,
       "adaptiveIcon": {
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundColor": "#7B74E8"

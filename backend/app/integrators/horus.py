@@ -66,7 +66,13 @@ class HorusClient:
             base_url=base_url,
             auth=auth,
             headers=headers,
-            timeout=25.0,
+            # Horus ERP pode ser lento — timeout generoso para não perder requisições
+            timeout=httpx.Timeout(
+                connect=10.0,   # conexão TCP
+                read=60.0,      # aguarda resposta do Horus
+                write=10.0,
+                pool=5.0,
+            ),
             follow_redirects=True
         )
     

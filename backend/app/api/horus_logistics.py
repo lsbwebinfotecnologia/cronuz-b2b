@@ -120,6 +120,7 @@ async def search_order_for_conference(
     branch_id: int,
     cod_cli: str,
     cod_pedido_origem: str,
+    conference_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -141,89 +142,118 @@ async def search_order_for_conference(
         raise HTTPException(status_code=404, detail="Filial selecionada é inválida ou inativa.")
         
     # 3. Check for existing local conference
-    local_conf = db.query(OrderConference).filter(
-        OrderConference.company_id == current_user.company_id,
-        OrderConference.branch_id == branch_id,
-        OrderConference.cod_cli == cod_cli,
-        OrderConference.cod_pedido_origem == cod_pedido_origem
-    ).first()
-    
-    # If completed, block and return session data immediately
-    if local_conf and local_conf.status == "COMPLETED":
-        return {
-            "session": OrderConferenceResponse.model_validate(local_conf),
-            "horus_order": None,
-            "horus_items": [],
-            "message": "Este pedido já foi totalmente conferido e encerrado."
-        }
+    local_conf = None
+    if conference_id:
+        local_conf = db.query(OrderConference).filter(
+            OrderConference.id == conference_id,
+            OrderConference.company_id == current_user.company_id
+        ).first()
         
+    if not local_conf:
+        # Flexible match (trim leading zeros)
+        clean_cod_cli = cod_cli.lstrip('0')
+        clean_order = cod_pedido_origem.lstrip('0')
+        
+        # Try exact match first
+        local_conf = db.query(OrderConference).filter(
+            OrderConference.company_id == current_user.company_id,
+            OrderConference.branch_id == branch_id,
+            OrderConference.cod_cli == cod_cli,
+            OrderConference.cod_pedido_origem == cod_pedido_origem
+        ).first()
+        
+        # Fallback to flexible match
+        if not local_conf:
+            local_conf = db.query(OrderConference).filter(
+                OrderConference.company_id == current_user.company_id,
+                OrderConference.branch_id == branch_id,
+                func.ltrim(OrderConference.cod_pedido_origem, '0') == clean_order,
+                func.ltrim(OrderConference.cod_cli, '0') == clean_cod_cli
+            ).first()
+    
     # 4. Query Horus ERP for the order details
+    order_data = None
+    horus_items = []
+    cod_ped_venda = local_conf.cod_ped_venda if local_conf else None
+
     try:
         horus_client = HorusLogisticsClient(db, current_user.company_id)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Erro de configuração do Horus: {str(e)}")
-        
-    try:
-        # Search sales order
-        order_res = await horus_client.search_orders(
-            cod_empresa=branch.cod_empresa,
-            cod_filial=branch.cod_filial,
-            cod_cli=cod_cli,
-            cod_pedido_origem=cod_pedido_origem
-        )
-        
-        if not order_res or (isinstance(order_res, list) and len(order_res) == 0):
-            await horus_client.close()
-            raise HTTPException(status_code=404, detail="Pedido não localizado no Horus ERP.")
-            
-        order_data = order_res[0] if isinstance(order_res, list) else order_res
-        if order_data.get("Falha") or order_data.get("FALHA") == "S":
-            await horus_client.close()
-            raise HTTPException(status_code=400, detail=order_data.get("Mensagem", "Erro ao buscar pedido no Horus."))
-            
-        # 5. Check order status (must be LEX)
-        status_pedido = order_data.get("STATUS_PEDIDO_VENDA", "").strip()
-        if status_pedido != "LEX":
-            await horus_client.close()
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Pedido não está com status de expedição (LEX). Status atual: {status_pedido}."
+        try:
+            # Search sales order
+            order_res = await horus_client.search_orders(
+                cod_empresa=branch.cod_empresa,
+                cod_filial=branch.cod_filial,
+                cod_cli=cod_cli,
+                cod_pedido_origem=cod_pedido_origem
             )
             
-        # 6. Fetch items from Horus
-        cod_ped_venda = order_data.get("COD_PED_VENDA")
-        if not cod_ped_venda:
+            if not order_res or (isinstance(order_res, list) and len(order_res) == 0):
+                if not local_conf:
+                    await horus_client.close()
+                    raise HTTPException(status_code=404, detail="Pedido não localizado no Horus ERP.")
+            else:
+                order_data = order_res[0] if isinstance(order_res, list) else order_res
+                if order_data.get("Falha") or order_data.get("FALHA") == "S":
+                    if not local_conf:
+                        await horus_client.close()
+                        raise HTTPException(status_code=400, detail=order_data.get("Mensagem", "Erro ao buscar pedido no Horus."))
+                    else:
+                        order_data = None
+                
+                if order_data:
+                    # 5. Check order status (must be LEX) - ONLY when opening new conference
+                    status_pedido = order_data.get("STATUS_PEDIDO_VENDA", "").strip()
+                    if status_pedido != "LEX" and not local_conf:
+                        await horus_client.close()
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"Pedido não está com status de expedição (LEX). Status atual: {status_pedido}."
+                        )
+                        
+                    # 6. Fetch items from Horus
+                    cod_ped_venda_api = order_data.get("COD_PED_VENDA")
+                    if not cod_ped_venda_api and not local_conf:
+                        await horus_client.close()
+                        raise HTTPException(status_code=400, detail="Código do pedido de venda (COD_PED_VENDA) ausente no Horus.")
+                    
+                    if cod_ped_venda_api:
+                        cod_ped_venda = str(cod_ped_venda_api)
+                        items_res = await horus_client.get_order_items(
+                            cod_ped_venda=cod_ped_venda,
+                            cod_empresa=branch.cod_empresa,
+                            cod_filial=branch.cod_filial
+                        )
+                        
+                        horus_items = items_res if isinstance(items_res, list) else []
+                        if isinstance(items_res, dict) and "itens" in items_res:
+                            horus_items = items_res["itens"]
+                            
+                        # Normalize items list (filter out failures)
+                        horus_items = [i for i in horus_items if not i.get("Falha") and not i.get("FALHA")]
+            
             await horus_client.close()
-            raise HTTPException(status_code=400, detail="Código do pedido de venda (COD_PED_VENDA) ausente no Horus.")
-            
-        items_res = await horus_client.get_order_items(
-            cod_ped_venda=cod_ped_venda,
-            cod_empresa=branch.cod_empresa,
-            cod_filial=branch.cod_filial
-        )
-        
-        await horus_client.close()
-        
-        horus_items = items_res if isinstance(items_res, list) else []
-        if isinstance(items_res, dict) and "itens" in items_res:
-            horus_items = items_res["itens"]
-            
-        # Normalize items list (filter out failures)
-        horus_items = [i for i in horus_items if not i.get("Falha") and not i.get("FALHA")]
-        
-    except HTTPException:
-        raise
+        except HTTPException:
+            if not local_conf:
+                raise
+        except Exception as e:
+            if not local_conf:
+                raise HTTPException(status_code=500, detail=f"Erro de comunicação com o Horus: {str(e)}")
+            else:
+                print(f"Bypassed Horus communication error for existing conference: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro de comunicação com o Horus: {str(e)}")
-        
-    # 7. Create/Retrieve IN_PROGRESS local session automatically
+        if not local_conf:
+            raise HTTPException(status_code=400, detail=f"Erro de configuração do Horus: {str(e)}")
+        else:
+            print(f"Bypassed Horus client creation error for existing conference: {e}")
+
+    # 7. Create/Retrieve local session automatically
     if not local_conf:
         local_conf = OrderConference(
             company_id=current_user.company_id,
             branch_id=branch_id,
             cod_cli=cod_cli,
             cod_pedido_origem=cod_pedido_origem,
-            cod_ped_venda=str(cod_ped_venda),  # persiste para uso em bipes futuros
+            cod_ped_venda=str(cod_ped_venda) if cod_ped_venda else None,
             status="IN_PROGRESS"
         )
         db.add(local_conf)

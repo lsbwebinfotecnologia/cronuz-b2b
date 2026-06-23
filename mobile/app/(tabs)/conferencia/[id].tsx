@@ -66,6 +66,18 @@ function getItemIsbn(i: HorusItem): string {
   return i.ISBN ?? i.BARRAS_ISBN ?? i.COD_BARRA_ITEM ?? '';
 }
 
+function formatDate(iso: string | undefined): string {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return '';
+  }
+}
+
 const STATUS_COLORS: Record<LocalItem['status'], string> = {
   ok: Colors.success,
   partial: Colors.warning,
@@ -322,7 +334,7 @@ export default function ConferenciaSessionScreen() {
   // ─── Load conference data ────────────────────────────────────────────────────
   const loadConference = useCallback(async () => {
     try {
-      const result = await searchOrderForConference(branchId, codCli, codPedidoOrigem);
+      const result = await searchOrderForConference(branchId, codCli, codPedidoOrigem, conferenceId);
       const sess = result.session;
       setSession(sess);
       setVolumes(sess.volumes ?? []);
@@ -345,20 +357,47 @@ export default function ConferenciaSessionScreen() {
         }
       }
 
-      const mapped: LocalItem[] = (result.horus_items ?? []).map((hi) => {
-        const isbn = hi.ISBN ?? hi.BARRAS_ISBN ?? hi.COD_BARRA_ITEM ?? '';
-        const checked = allCheckedByIsbn[isbn] ?? 0;
-        const pedida = Number(hi.QTD_PEDIDA ?? hi.QT_PEDIDA ?? 0);
-        const descricao = hi.NOM_ITEM ?? hi.DESCRICAO ?? isbn;
-        return {
-          ...hi,
-          ISBN: isbn,
-          QTD_PEDIDA: pedida,
-          DESCRICAO: descricao,
-          checked,
-          status: calcStatus(checked, pedida),
-        };
-      });
+      const horusItems = result.horus_items ?? [];
+      let mapped: LocalItem[] = [];
+      if (horusItems.length > 0) {
+        mapped = horusItems.map((hi) => {
+          const isbn = hi.ISBN ?? hi.BARRAS_ISBN ?? hi.COD_BARRA_ITEM ?? '';
+          const checked = allCheckedByIsbn[isbn] ?? 0;
+          const pedida = Number(hi.QTD_PEDIDA ?? hi.QT_PEDIDA ?? 0);
+          const descricao = hi.NOM_ITEM ?? hi.DESCRICAO ?? isbn;
+          return {
+            ...hi,
+            ISBN: isbn,
+            QTD_PEDIDA: pedida,
+            DESCRICAO: descricao,
+            checked,
+            status: calcStatus(checked, pedida),
+          };
+        });
+      } else {
+        // Fallback: Reconstruct items list from volumes when Horus data is unavailable (e.g. status changed or offline)
+        const reconstructedByIsbn: Record<string, { isbn: string; name: string; quantity: number }> = {};
+        for (const vol of sess.volumes ?? []) {
+          if (vol.status === 'CANCELLED') continue;
+          for (const vi of vol.items ?? []) {
+            if (!reconstructedByIsbn[vi.isbn]) {
+              reconstructedByIsbn[vi.isbn] = { isbn: vi.isbn, name: vi.name, quantity: 0 };
+            }
+            reconstructedByIsbn[vi.isbn].quantity += vi.quantity;
+          }
+        }
+        mapped = Object.values(reconstructedByIsbn).map((ri) => {
+          const checked = ri.quantity;
+          const pedida = checked; // in completed mode fallback, assume pedida is what was checked
+          return {
+            ISBN: ri.isbn,
+            QTD_PEDIDA: pedida,
+            DESCRICAO: ri.name,
+            checked,
+            status: 'ok',
+          } as any;
+        });
+      }
       setItems(mapped);
     } catch (e: any) {
       showError(e, 'Erro ao carregar conferência.');
@@ -568,7 +607,9 @@ export default function ConferenciaSessionScreen() {
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={s.headerTitle} numberOfLines={1}>Pedido #{codPedidoOrigem}</Text>
-          <Text style={s.headerSub} numberOfLines={1}>{nomCli}</Text>
+          <Text style={s.headerSub} numberOfLines={1}>
+            {nomCli}{session?.created_at ? ` · Aberto: ${formatDate(session.created_at)}` : ''}
+          </Text>
         </View>
         {isCompleted && (
           <View style={s.completedBadge}>
