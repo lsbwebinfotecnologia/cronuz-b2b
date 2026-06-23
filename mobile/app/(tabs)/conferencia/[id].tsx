@@ -338,10 +338,18 @@ export default function ConferenciaSessionScreen() {
       }
 
       const mapped: LocalItem[] = (result.horus_items ?? []).map((hi) => {
-        const isbn = getItemIsbn(hi);
+        const isbn = hi.ISBN ?? hi.BARRAS_ISBN ?? hi.COD_BARRA_ITEM ?? '';
         const checked = allCheckedByIsbn[isbn] ?? 0;
-        const pedida = Number(hi.QTD_PEDIDA ?? 0);
-        return { ...hi, checked, status: calcStatus(checked, pedida) };
+        const pedida = Number(hi.QTD_PEDIDA ?? hi.QT_PEDIDA ?? 0);
+        const descricao = hi.NOM_ITEM ?? hi.DESCRICAO ?? isbn;
+        return {
+          ...hi,
+          ISBN: isbn,
+          QTD_PEDIDA: pedida,
+          DESCRICAO: descricao,
+          checked,
+          status: calcStatus(checked, pedida),
+        };
       });
       setItems(mapped);
     } catch (e: any) {

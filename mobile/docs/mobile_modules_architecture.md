@@ -144,6 +144,13 @@ adb shell am start -n com.cronuz.b2b/.MainActivity
 
 ## 📋 Changelog
 
+### v01.022 — 2026-06-22
+**Conferência de Expedição — Correção de Mapeamento de Campos**
+- Corrigido problema onde o título do item e a quantidade pedida vinham em branco devido a divergências de nomes de campos retornados pela API do Horus (fallbacks mapeados: `NOM_ITEM`/`DESCRICAO` e `QTD_PEDIDA`/`QT_PEDIDA`).
+- APK: `HorusB2B-v01.022.apk`
+
+---
+
 ### v01.021 — 2026-06-22
 **Conferência de Expedição — Regras e Melhorias**
 - Enforçado limite de quantidade conferida (não permite ultrapassar a pedida).
