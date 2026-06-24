@@ -16,6 +16,11 @@ Para manter a raiz do projeto limpa e organizada, aplicam-se as seguintes regras
 * Todos os arquivos que controlam ou guiam deploys em produção (como roteiros de deploy `DEPLOY_*.md` ou scripts SQL de alteração de banco de dados `.sql`) devem ser criados dentro da pasta `deploy/` na raiz do projeto.
 * Assim que um deploy for **finalizado e executado com sucesso**, todos os arquivos e instruções correspondentes àquele deploy devem ser movidos para a pasta **`deploy/processed/`**.
 
+### 📦 Pasta de Uploads e Arquivos Dinâmicos (`uploads/`):
+* A pasta `uploads/` localizada na raiz do projeto armazena imagens, capas, boletos e notas fiscais dinamicamente. **Ela NUNCA deve ser removida do servidor de produção**, pois contém arquivos ativos de cada seller/cliente.
+* Essa pasta deve estar obrigatoriamente configurada no `.gitignore` para que limpezas do Git (ex: `git clean -fd`) no servidor não a apaguem acidentalmente.
+* **Criação de Subpastas por Seller**: O backend deve ser robusto e, ao processar qualquer upload (como imagens ou PDFs), deve sempre verificar se a subpasta específica do seller/company existe dentro de `uploads/`. Caso não exista, o código deve criá-la dinamicamente antes de gravar o arquivo (ex: `Path.mkdir(parents=True, exist_ok=True)`).
+
 ---
 
 ## 🔒 2. Segurança e Armazenamento de Credenciais/Certificados

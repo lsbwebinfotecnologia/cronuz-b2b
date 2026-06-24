@@ -38,6 +38,7 @@ credentials*
 *.p12
 
 # Uploads / Dynamic Content
+uploads/
 frontend/public/uploads/
 .local_unreleased_changes.md
 .local_changelog.md
