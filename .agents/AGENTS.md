@@ -35,7 +35,13 @@ Para manter a raiz do projeto limpa e organizada, aplicam-se as seguintes regras
    * Escrever o conteúdo do banco de dados no arquivo temporário.
    * Utilizar o arquivo na requisição.
    * **Destruir/apagar** o arquivo temporário imediatamente após o encerramento do ciclo da requisição (ex: usando blocos `try/finally` ou destrutores de classe `__del__`).
-3. **Controle do Git**: Garanta que a pasta `certs/` e quaisquer extensões de certificados (como `.crt`, `.key`, `.pem`, `.pfx`, `.p12`) estejam permanentemente configuradas no `.gitignore`.
+3. **Certificados NFS-e (`.pfx`) — Arquivos Persistentes em Disco**:
+   * Os certificados digitais para emissão de NFS-e ficam salvos **fisicamente em disco** no servidor de produção, sob o caminho:
+     * `certs/nfse/<company_id>/<nome_do_arquivo>.pfx`
+   * Esses arquivos são exclusivos de cada cliente (seller) e **NUNCA devem ser removidos** por processos de deploy, limpeza de Git (`git clean -fd`) ou qualquer outra operação automática.
+   * A pasta `certs/` e suas subpastas estão no `.gitignore` justamente para proteção, mas isso também significa que o Git **não as rastreia** — portanto, backups manuais ou via scripts de deploy devem ser previstos.
+   * Se um certificado `.pfx` for perdido (ex: após uma limpeza indevida), o sistema retornará erro `REJECTED: Certificado não encontrado em: /var/www/cronuz/certs/nfse/<id>/...`. Nesse caso, o usuário deverá re-enviar o certificado via painel de configurações.
+4. **Controle do Git**: Garanta que a pasta `certs/` e quaisquer extensões de certificados (como `.crt`, `.key`, `.pem`, `.pfx`, `.p12`) estejam permanentemente configuradas no `.gitignore`.
 
 ---
 
