@@ -661,9 +661,9 @@ export default function CustomerDetailsPage() {
 
   async function handleSyncHorus() {
     if (!customer?.document) return;
-    const cleanCnpj = customer.document.replace(/\D/g, '');
-    if (cleanCnpj.length !== 14) {
-      toast.error('CNPJ inválido para buscar no Horus.');
+    const cleanDoc = customer.document.replace(/\D/g, '');
+    if (cleanDoc.length !== 14 && cleanDoc.length !== 11) {
+      toast.error('Documento inv\u00e1lido para buscar no Horus. Informe um CNPJ (14 d\u00edgitos) ou CPF (11 d\u00edgitos) v\u00e1lido.');
       return;
     }
 
@@ -671,7 +671,7 @@ export default function CustomerDetailsPage() {
     try {
       if (!user?.company_id) throw new Error('Falha na autenticação: Empresa não encontrada.');
       
-      const horusRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${user.company_id}/horus/customers/${cleanCnpj}`, {
+      const horusRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${user.company_id}/horus/customers/${cleanDoc}`, {
         headers: { 'Authorization': `Bearer ${getToken()}` }
       });
       

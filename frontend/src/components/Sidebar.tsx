@@ -33,7 +33,8 @@ import {
   Building2,
   ClipboardList,
   Receipt,
-  Zap
+  Zap,
+  PackageCheck
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -302,6 +303,20 @@ export function Sidebar() {
          { name: 'Conferência', href: '/logistics/conference' },
          { name: 'Filiais do Seller', href: '/logistics/branches' }
        ]
+    });
+  }
+
+  if (moduleLogisticaHorus) {
+    // Insert Dropship after Logística Horus
+    const logisticaIndex = filteredSellerNavigation.findIndex(n => n.name === 'Logística Horus');
+    const afterLogistica = logisticaIndex !== -1 ? logisticaIndex + 1 : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(afterLogistica, 0, {
+      name: 'Dropship',
+      href: '/orders/dropship',
+      icon: PackageCheck,
+      subItems: [
+        { name: 'Pedidos Erdos', href: '/orders/dropship' },
+      ]
     });
   }
 

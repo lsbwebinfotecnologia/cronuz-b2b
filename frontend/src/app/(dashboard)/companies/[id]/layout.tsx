@@ -3,7 +3,7 @@
 import { useEffect, useState, createContext, useContext } from 'react';
 import Link from 'next/link';
 import { usePathname, useParams, useRouter } from 'next/navigation';
-import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, Boxes, Settings, BookOpen } from 'lucide-react';
+import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, Boxes, Settings, BookOpen, PackageCheck } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 
 interface Company {
@@ -97,6 +97,7 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
     { name: 'Módulos', path: `/companies/${companyId}/modules`, icon: Boxes },
     { name: 'Horus', path: `/companies/${companyId}/horus`, icon: Database },
     { name: 'Bookinfo', path: `/companies/${companyId}/bookinfo`, icon: BookOpen },
+    { name: 'Dropship', path: `/companies/${companyId}/dropship`, icon: PackageCheck },
     { name: 'Notas', path: `/companies/${companyId}/notes`, icon: FileText },
     { name: 'Propostas', path: `/companies/${companyId}/proposals`, icon: FileSignature },
     { name: 'Contratos', path: `/companies/${companyId}/contracts`, icon: FileSignature, isContract: true },

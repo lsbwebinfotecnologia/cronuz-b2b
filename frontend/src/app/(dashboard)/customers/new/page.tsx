@@ -132,18 +132,25 @@ export default function NewCustomerPage() {
   };
 
   const handleHorusSearch = async () => {
-    if (fiscalData.customer_type !== 'PJ') return;
-    const cleanCnpj = fiscalData.document.replace(/\D/g, '');
-    if (cleanCnpj.length !== 14) {
-      toast.error('Preencha o CNPJ completo antes de buscar no Horus');
+    const cleanDoc = fiscalData.document.replace(/\D/g, '');
+    const isPJ = fiscalData.customer_type === 'PJ';
+    const isPF = fiscalData.customer_type === 'PF';
+
+    if (isPJ && cleanDoc.length !== 14) {
+      toast.error('Preencha o CNPJ completo (14 dígitos) antes de buscar no Horus.');
       return;
     }
+    if (isPF && cleanDoc.length !== 11) {
+      toast.error('Preencha o CPF completo (11 dígitos) antes de buscar no Horus.');
+      return;
+    }
+    if (!isPJ && !isPF) return;
 
     setSearchingHorus(true);
     try {
       if (!user?.company_id) throw new Error('Não foi possível obter dados da Empresa vinculada ao usuário');
-      
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${user.company_id}/horus/customers/${cleanCnpj}`, {
+
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${user.company_id}/horus/customers/${cleanDoc}`, {
         headers: {
           'Authorization': `Bearer ${getToken()}`
         }
@@ -152,7 +159,7 @@ export default function NewCustomerPage() {
       if (res.ok) {
         const payload = await res.json();
         const data = payload.data;
-        
+
         setFiscalData(prev => ({
           ...prev,
           name: data.NOM_CLI || prev.name,
@@ -164,11 +171,11 @@ export default function NewCustomerPage() {
           open_debts: payload.financials?.open_debts || prev.open_debts,
           consignment_status: payload.financials?.consignment_status || prev.consignment_status
         }));
-        
+
         toast.success(payload.msg || 'Cliente localizado no Horus e dados preenchidos!');
       } else {
         const err = await res.json();
-        throw new Error(err.detail || 'Cliente não encontrado no Horus ou api inativa.');
+        throw new Error(err.detail || 'Cliente não encontrado no Horus ou API inativa.');
       }
     } catch (e: any) {
       toast.error(e.message || 'Erro ao conectar com a API Horus. Verifique se ela está habilitada nas configurações.');
@@ -373,7 +380,7 @@ export default function NewCustomerPage() {
                         onChange={e => handleDocumentChange(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent transition-all font-mono dark:bg-slate-950/50 dark:border-slate-800 dark:text-white"
                       />
-                      {fiscalData.customer_type === 'PJ' && usesHorusB2B && (
+                      {usesHorusB2B && (
                         <button
                           type="button"
                           onClick={handleHorusSearch}

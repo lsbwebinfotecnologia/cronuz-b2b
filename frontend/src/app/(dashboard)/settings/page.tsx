@@ -10,6 +10,7 @@ import { PrintPointsTab } from './PrintPointsTab';
 import { EmailTemplatesTab } from './EmailTemplatesTab';
 import { HorusTab } from './HorusTab';
 import { BookinfoTab } from './BookinfoTab';
+import { SefazBranchesTab } from './SefazBranchesTab';
 import { useCompany } from './layout';
 
 export default function SettingsPage() {
@@ -421,9 +422,10 @@ export default function SettingsPage() {
     { id: 'frete', label: 'Frete e Logística', icon: Truck },
     { id: 'email', label: 'E-mails (SMTP)', icon: Mail },
     { id: 'templates', label: 'Modelos de E-mail', icon: FileText },
+    { id: 'sefaz_sp', label: 'Fiscal SEFAZ', icon: Key },
   ];
 
-  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'bookinfo';
+  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp';
   const FormContainer = isFormTab ? 'form' : 'div';
 
   return (
@@ -1261,9 +1263,16 @@ export default function SettingsPage() {
                 </div>
               )}
 
+              {/* Tab: SEFAZ SP */}
+              {activeTab === 'sefaz_sp' && (
+                <div className="animate-in fade-in p-6">
+                  <SefazBranchesTab />
+                </div>
+              )}
+
             </div>
 
-            {activeTab !== 'templates' && activeTab !== 'horus' && activeTab !== 'bookinfo' && (
+            {activeTab !== 'templates' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && (
               <div className="p-6 bg-slate-50 border-t border-slate-200 dark:bg-slate-900/60 dark:border-slate-800/60 flex items-center justify-end">
                 <button
                 type="submit"

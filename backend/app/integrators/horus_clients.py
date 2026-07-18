@@ -7,16 +7,19 @@ class HorusClients(HorusClient):
     async def get_client(self, cnpj_destino: str, cnpj_cliente: str, limit: int = 25) -> Any:
         """
         Translates getClient from HsClients.php
-        Searches for a customer by CNPJ in the Horus B2B API.
-        
+        Searches for a customer by CNPJ or CPF in the Horus B2B API.
+
         Args:
             cnpj_destino (str): Document of the Seller/Company performing the search.
-            cnpj_cliente (str): Document of the Customer to be found.
+            cnpj_cliente (str): Document of the Customer to be found (CNPJ=14 digits, CPF=11 digits).
             limit (int): Pagination limit.
         """
+        # Use "CPF" parameter key for Pessoa Física (11 digits), "CNPJ" for Pessoa Jurídica (14 digits)
+        doc_key = "CPF" if len(cnpj_cliente.strip()) == 11 else "CNPJ"
+
         params = {
             "CNPJ_DESTINO": cnpj_destino,
-            "CNPJ": cnpj_cliente
+            doc_key: cnpj_cliente
         }
         
         if not getattr(self._settings, 'horus_legacy_pagination', False):
@@ -40,10 +43,11 @@ class HorusClients(HorusClient):
             
             # If successfully found, return normalized response similar to original PHP implementation
             email = item.get("EMAIL")
-            
+            doc_label = "CPF" if len(cnpj_cliente.strip()) == 11 else "CNPJ"
+
             return {
                 "error": False,
-                "msg": f"CNPJ localizado! e-mail: {email}" if email else "Cliente localizado.",
+                "msg": f"{doc_label} localizado! e-mail: {email}" if email else f"{doc_label} localizado com sucesso!",
                 "data": item
             }
             

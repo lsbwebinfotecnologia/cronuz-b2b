@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.db.session import Base
@@ -13,6 +14,22 @@ class SellerBranch(Base):
     cod_empresa = Column(String(50), nullable=False)
     cod_filial = Column(String(50), nullable=False)
     active = Column(Boolean, default=True, nullable=False)
+
+    # SEFAZ-SP Integration Config (por filial)
+    # Ambiente de emissão: HOMOLOGACAO ou PRODUCAO
+    sefaz_environment = Column(String(20), default='HOMOLOGACAO', nullable=False)
+    # UF para consulta SEFAZ (ex: SP, RJ, MG...)
+    uf = Column(String(2), default='SP', nullable=False)
+    # Conteúdo do certificado .pfx em base64 (armazenado em DB, nunca em arquivo físico)
+    sefaz_cert_content = Column(Text, nullable=True)
+    # Senha do certificado .pfx
+    sefaz_cert_password = Column(String(255), nullable=True)
+    # Lista de códigos de local de estoque (ex: ["001", "002"])
+    cod_local_estoque = Column(JSONB, nullable=True, default=list)
+    # Último NSU retornado pela SEFAZ — deve ser usado nas consultas subsequentes
+    # para evitar o erro cStat=656 (Consumo Indevido). NUNCA reiniciar do 0.
+    sefaz_ultimo_nsu = Column(String(15), nullable=True, default='0')
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
