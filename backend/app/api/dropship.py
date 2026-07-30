@@ -15,9 +15,12 @@ Fluxo completo:
 import os
 import re
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Any, Dict
+
+log = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -99,8 +102,24 @@ class DropshipConfigCreate(BaseModel):
     api_token: Optional[str] = None
     api_base_url: Optional[str] = "https://wxcapqbtvgttooamglxx.supabase.co/functions/v1/api-fornecedor"
     horus_customer_id: Optional[int] = None
-    horus_fiscal_param_remessa: Optional[str] = None
+    horus_customer_cod_cli: Optional[str] = None
+    # Parâmetros fiscais
+    horus_fiscal_param_remessa_intra: Optional[str] = None
+    horus_fiscal_param_remessa_inter: Optional[str] = None
     horus_fiscal_param_venda: Optional[str] = None
+    # Parâmetros do cliente (InsCliente / InsPedidoVenda)
+    horus_tipo_cliente: Optional[str] = None
+    horus_resp_cliente: Optional[str] = None
+    horus_cod_resp: Optional[str] = None
+    horus_cod_endereco: Optional[str] = None
+    # Parâmetros do pedido
+    horus_cod_metodo: Optional[str] = None
+    horus_cod_endereco_pedido: Optional[str] = None
+    # Parâmetros exclusivos da Remessa B2C
+    horus_cod_transp: Optional[str] = None
+    horus_frete_emit_dest: Optional[str] = None
+    horus_status_envio_erp: Optional[str] = None
+    # Sincronização de estoque
     stock_sync_interval_min: int = 30
     stock_sync_enabled: bool = False
 
@@ -117,8 +136,25 @@ class DropshipConfigResponse(BaseModel):
     horus_customer_document: Optional[str] = None
     horus_customer_id_guid: Optional[str] = None
     horus_customer_id_doc: Optional[str] = None
-    horus_fiscal_param_remessa: Optional[str]
+    horus_customer_cod_cli: Optional[str] = None
+    # Parâmetros fiscais
+    horus_fiscal_param_remessa: Optional[str] = None   # legado
+    horus_fiscal_param_remessa_intra: Optional[str] = None
+    horus_fiscal_param_remessa_inter: Optional[str] = None
     horus_fiscal_param_venda: Optional[str]
+    # Parâmetros do cliente
+    horus_tipo_cliente: Optional[str] = None
+    horus_resp_cliente: Optional[str] = None
+    horus_cod_resp: Optional[str] = None
+    horus_cod_endereco: Optional[str] = None
+    # Parâmetros do pedido
+    horus_cod_metodo: Optional[str] = None
+    horus_cod_endereco_pedido: Optional[str] = None
+    # Parâmetros exclusivos da Remessa B2C
+    horus_cod_transp: Optional[str] = None
+    horus_frete_emit_dest: Optional[str] = None
+    horus_status_envio_erp: Optional[str] = None
+    # Estoque
     stock_sync_interval_min: int
     stock_sync_enabled: bool
     stock_sync_last_run: Optional[datetime]
@@ -144,6 +180,7 @@ class DropshipOrderResponse(BaseModel):
     fiscal_data: Optional[Any]
     horus_pedido_remessa: Optional[str]
     horus_pedido_venda: Optional[str]
+    horus_cod_cli_final: Optional[str] = None   # COD_CLI do cliente final no Hórus
     tracking_code: Optional[str]
     nfe_remessa_key: Optional[str]
     label_path: Optional[str]
@@ -159,6 +196,7 @@ class DropshipOrderResponse(BaseModel):
     erdos_checked_at: Optional[datetime]
     erdos_alert: Optional[bool]
     logs: Optional[Any]  # list[dict]
+    conference: Optional[Any] = None
 
     class Config:
         from_attributes = True
@@ -190,8 +228,8 @@ def get_dropship_config(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Retorna a configuração Dropship do seller. Apenas MASTER."""
-    _require_master(current_user)
+    """Retorna a configuração Dropship do seller. Master ou próprio seller."""
+    _require_seller_or_master(current_user, company_id)
 
     config = db.query(DropshipConfig).filter(
         DropshipConfig.company_id == company_id,
@@ -215,18 +253,19 @@ def get_dropship_config(
         response.horus_customer_document = config.horus_customer.document
         response.horus_customer_id_guid = config.horus_customer.id_guid
         response.horus_customer_id_doc = config.horus_customer.id_doc
+        response.horus_customer_cod_cli = config.horus_customer_cod_cli
     return response
 
 
 @router.post("/config/{company_id}", response_model=DropshipConfigResponse)
-def upsert_dropship_config(
+async def upsert_dropship_config(
     company_id: int,
     payload: DropshipConfigCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Cria ou atualiza configuração Dropship. Apenas MASTER."""
-    _require_master(current_user)
+    """Cria ou atualiza configuração Dropship. Master ou próprio seller."""
+    _require_seller_or_master(current_user, company_id)
 
     config = db.query(DropshipConfig).filter(
         DropshipConfig.company_id == company_id,
@@ -243,12 +282,30 @@ def upsert_dropship_config(
     db.commit()
     db.refresh(config)
 
+    # Tenta buscar e salvar o COD_CLI do Hórus se o customer estiver vinculado e ainda não tiver COD_CLI
+    if config.horus_customer_id and config.horus_customer:
+        doc_clean = re.sub(r"\D", "", str(config.horus_customer.document or ""))
+        if doc_clean:
+            try:
+                from app.integrators.horus_clients import HorusClients
+                horus_clients = HorusClients(db, company_id)
+                busca = await horus_clients.get_client_b2c(cnpj_destino="", cpf=doc_clean)
+                if busca and not busca.get("error") and busca.get("data"):
+                    cod_cli = str(busca["data"].get("COD_CLI") or busca["data"].get("CODIGO") or "").strip()
+                    if cod_cli:
+                        config.horus_customer_cod_cli = cod_cli
+                        db.commit()
+                        db.refresh(config)
+            except Exception as _e_save:
+                log.warning(f"[Dropship] Erro ao buscar COD_CLI do customer vinculado: {_e_save}")
+
     response = DropshipConfigResponse.model_validate(config)
     if config.horus_customer:
         response.horus_customer_name = config.horus_customer.name
         response.horus_customer_document = config.horus_customer.document
         response.horus_customer_id_guid = config.horus_customer.id_guid
         response.horus_customer_id_doc = config.horus_customer.id_doc
+        response.horus_customer_cod_cli = config.horus_customer_cod_cli
     return response
 
 
@@ -259,7 +316,7 @@ async def test_erdos_connection(
     current_user: User = Depends(get_current_user),
 ):
     """Testa conectividade com o Hub-Erdos usando as credenciais configuradas."""
-    _require_master(current_user)
+    _require_seller_or_master(current_user, company_id)
 
     config = _get_config_or_404(db, company_id)
     client = _build_erdos_client(config)
@@ -287,7 +344,7 @@ def search_horus_linked_customers(
     Retorna customers da empresa que possuem id_guid E id_doc configurados
     (necessário para integração Hórus). Usado para vincular o parceiro dropship.
     """
-    _require_master(current_user)
+    _require_seller_or_master(current_user, company_id)
 
     query = db.query(Customer).filter(
         Customer.company_id == company_id,
@@ -462,7 +519,7 @@ def get_dropship_order(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Retorna detalhes de um pedido dropship específico."""
+    """Retorna detalhes de um pedido dropship específico, incluindo dados de conferência se houver."""
     _require_seller_or_master(current_user, company_id)
 
     order = db.query(DropshipOrder).filter(
@@ -471,7 +528,446 @@ def get_dropship_order(
     ).first()
     if not order:
         raise HTTPException(status_code=404, detail="Pedido dropship não encontrado.")
-    return order
+
+    from app.models.order_conference import OrderConference
+
+    # Converter modelo SQLAlchemy em dicionário
+    order_data = {
+        col.name: getattr(order, col.name)
+        for col in order.__table__.columns
+    }
+
+    from sqlalchemy import or_
+
+    rem_raw = str(order.horus_pedido_remessa or '')
+    rem_clean = rem_raw.replace('#', '').strip()
+    ext_ref = str(order.external_reference or '')
+    ext_clean = ext_ref.replace('#', '').strip()
+
+    origins = list(set(filter(None, [
+        rem_raw,
+        rem_clean,
+        f"#{rem_clean}" if rem_clean else None,
+        f"RM-{ext_clean}" if ext_clean else None,
+        f"RM-#{ext_clean}" if ext_clean else None,
+        ext_ref,
+        ext_clean,
+        str(order.external_order_id or ''),
+        str(order.id)
+    ])))
+
+    conf = db.query(OrderConference).filter(
+        OrderConference.company_id == company_id,
+        or_(
+            OrderConference.cod_pedido_origem.in_(origins),
+            OrderConference.cod_ped_venda.in_(origins)
+        )
+    ).order_by(OrderConference.updated_at.desc()).first()
+
+    order_data["conference"] = {
+        "id": conf.id,
+        "branch_id": conf.branch_id,
+        "status": conf.status,
+        "cod_cli": conf.cod_cli,
+        "cod_pedido_origem": conf.cod_pedido_origem,
+        "created_at": conf.created_at.isoformat() if conf.created_at else None
+    } if conf else None
+
+    return order_data
+
+
+# ==============================================================================
+# HELPERS: cache de item e busca/criação de cliente final
+# ==============================================================================
+
+async def _get_horus_item_info(
+    db: Session,
+    company_id: int,
+    isbn: str,
+    horus_orders,
+    cnpj_destino: str,
+    id_doc_erdos: str,
+    id_guid_erdos: str,
+    horus_clients=None,   # opcional: se fornecido, tenta Busca_Acervo (B2C) primeiro
+) -> Dict[str, Any]:
+    """
+    Retorna (horus_cod_item, horus_vlr_capa) para o ISBN dado.
+    Usa cache local (dsp_item_cache) com TTL de 24h.
+
+    Prioridade de busca:
+    1. Cache local (TTL 24h)
+    2. Busca_Acervo via horus_clients (B2C, sem CNPJ_DESTINO) — se horus_clients fornecido
+    3. Busca_ProdutoB2B via horus_orders (B2B, com CNPJ_DESTINO)
+    """
+    from datetime import timezone, timedelta
+    from app.models.dropship import DropshipItemCache
+
+    TTL_HOURS = 24
+    now = datetime.utcnow()
+
+    cached = db.query(DropshipItemCache).filter(
+        DropshipItemCache.company_id == company_id,
+        DropshipItemCache.isbn == isbn,
+    ).first()
+
+    if cached and cached.horus_cod_item:
+        age = now - cached.cached_at.replace(tzinfo=None) if cached.cached_at else timedelta(hours=TTL_HOURS + 1)
+        if age < timedelta(hours=TTL_HOURS):
+            return {"cod_item": cached.horus_cod_item, "vlr_capa": float(cached.horus_vlr_capa or 0)}
+
+    cod_item = None
+    vlr_capa = 0.0
+
+    # 1) Busca_Acervo (B2C) — fonte primária para remessa
+    if horus_clients is not None:
+        try:
+            acervo = await horus_clients.get(  # type: ignore[attr-defined]
+                "Busca_Acervo",
+                params={"BARRAS_ISBN": isbn},
+            )
+            if acervo and isinstance(acervo, list) and len(acervo) > 0:
+                item_data = acervo[0]
+                if not item_data.get("Falha"):
+                    cod_item = str(item_data.get("COD_ITEM") or item_data.get("CODIGO") or "").strip() or None
+                    try:
+                        vlr_raw = item_data.get("VLR_CAPA") or item_data.get("PRECO") or item_data.get("VLR_LIQUIDO") or 0
+                        if isinstance(vlr_raw, str):
+                            vlr_raw = vlr_raw.replace(".", "").replace(",", ".")
+                        vlr_capa = float(vlr_raw)
+                    except (ValueError, TypeError):
+                        vlr_capa = 0.0
+        except Exception:
+            pass
+
+    # 2) Busca_ProdutoB2B (B2B) — fallback
+    if not cod_item:
+        try:
+            result = await horus_orders.get(  # type: ignore[attr-defined]
+                "Busca_ProdutoB2B",
+                params={
+                    "ID_DOC": id_doc_erdos,
+                    "ID_GUID": id_guid_erdos,
+                    "CNPJ_DESTINO": cnpj_destino,
+                    "BARRAS_ISBN": isbn,
+                    "LIMIT": 1,
+                    "OFFSET": 0,
+                }
+            )
+        except Exception:
+            result = None
+
+        if result and isinstance(result, list) and len(result) > 0:
+            item_data = result[0]
+            if not item_data.get("Falha"):
+                cod_item = str(item_data.get("COD_ITEM") or item_data.get("CODIGO") or "").strip() or None
+                try:
+                    vlr_raw = item_data.get("VLR_CAPA") or item_data.get("PRECO") or item_data.get("VLR_LIQUIDO") or 0
+                    if isinstance(vlr_raw, str):
+                        vlr_raw = vlr_raw.replace(".", "").replace(",", ".")
+                    vlr_capa = float(vlr_raw)
+                except (ValueError, TypeError):
+                    vlr_capa = 0.0
+
+
+    # Salvar/atualizar cache
+    if cached:
+        cached.horus_cod_item = cod_item
+        cached.horus_vlr_capa = vlr_capa
+        cached.cached_at = now
+    else:
+        db.add(DropshipItemCache(
+            company_id=company_id,
+            isbn=isbn,
+            horus_cod_item=cod_item,
+            horus_vlr_capa=vlr_capa,
+            cached_at=now,
+        ))
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return {"cod_item": cod_item, "vlr_capa": vlr_capa}
+
+
+async def _get_or_create_horus_customer(
+    horus_clients,
+    customer_data: Dict[str, Any],
+    config,
+    cnpj_destino: str,
+    seller_company=None,         # Company model — usado como fallback de endereço
+) -> Optional[str]:
+    """
+    Busca o cliente final     - CPF ausente → retorna None (quem chama decide o que fazer)
+    - Endereço ausente → usa dados do seller como fallback
+    - Falha no Hórus → levanta exceção com mensagem clara
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    cpf_cnpj = re.sub(r"\D", "", str(customer_data.get("cpf_cnpj") or ""))
+    if not cpf_cnpj:
+        return None  # Chamador deve tratar como erro crítico
+
+    # ── Busca pelo CPF/CNPJ no Hórus ──────────────────────────────────────────
+    busca_erro: Optional[str] = None
+    try:
+        busca = await horus_clients.get_client_b2c(  # type: ignore[attr-defined]
+            cnpj_destino=cnpj_destino,
+            cpf=cpf_cnpj,
+        )
+        if busca and not busca.get("error") and busca.get("data"):
+            data = busca["data"]
+            cod_cli = str(data.get("COD_CLI") or data.get("CODIGO") or "").strip()
+            if cod_cli:
+                log.info(f"[Dropship] Cliente encontrado no Hórus: CPF={cpf_cnpj} COD_CLI={cod_cli}")
+                # Atualiza endereço do cliente encontrado (mesmo fluxo do InsAltEndCliente)
+                # O endereço é atualizado assincronamente — não bloqueia
+                try:
+                    _UF_NOMES_QUICK = {
+                        "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas",
+                        "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
+                        "ES": "Espírito Santo", "GO": "Goiás", "MA": "Maranhão",
+                        "MT": "Mato Grosso", "MS": "Mato Grosso do Sul", "MG": "Minas Gerais",
+                        "PA": "Pará", "PB": "Paraíba", "PR": "Paraná", "PE": "Pernambuco",
+                        "PI": "Piauí", "RJ": "Rio de Janeiro", "RN": "Rio Grande do Norte",
+                        "RS": "Rio Grande do Sul", "RO": "Rondônia", "RR": "Roraima",
+                        "SC": "Santa Catarina", "SP": "São Paulo", "SE": "Sergipe", "TO": "Tocantins",
+                    }
+                    _uf  = str(customer_data.get("uf") or "").strip().upper()
+                    _cep = re.sub(r"\D", "", str(customer_data.get("cep") or ""))
+                    _end_params: Dict[str, Any] = {
+                        "COD_CLI":       cod_cli,
+                        "COD_TPO_END":   config.horus_cod_endereco or "1",
+                        "NOM_PAIS":      "Brasil",
+                        "SIGLA_UF":      _uf,
+                        "NOME_UF":       _UF_NOMES_QUICK.get(_uf, _uf),
+                        "NOM_LOCAL":     str(customer_data.get("cidade") or "")[:60],
+                        "NOM_BAIRRO":    str(customer_data.get("bairro") or "")[:40],
+                        "DESC_ENDERECO": str(customer_data.get("endereco") or "")[:80],
+                        "NUM_END":       str(customer_data.get("numero") or "S/N")[:10],
+                        "CEP":           _cep,
+                    }
+                    await horus_clients.get("InsAltEndCliente", params=_end_params)  # type: ignore[attr-defined]
+                    log.info(f"[Dropship] Endereço atualizado para COD_CLI={cod_cli}")
+                except Exception as _ex:
+                    log.warning(f"[Dropship] InsAltEndCliente (atualização) não bloqueante: {_ex}")
+                return cod_cli
+        # Não encontrado — vai tentar criar
+        busca_erro = busca.get("msg") if busca else None
+        log.info(f"[Dropship] Cliente CPF={cpf_cnpj} não encontrado no Hórus — tentando criar. msg={busca_erro}")
+    except Exception as e:
+        log.warning(f"[Dropship] Busca_ClienteB2B falhou (CPF={cpf_cnpj}): {e}")
+
+    # ── Monta dados para InsAltCliente / InsAltEndCliente ──────────────────────
+    nome     = str(customer_data.get("nome") or "").strip()
+    cep      = re.sub(r"\D", "", str(customer_data.get("cep") or ""))
+    uf       = str(customer_data.get("uf") or "").strip().upper()
+    cidade   = str(customer_data.get("cidade") or "").strip()
+    bairro   = str(customer_data.get("bairro") or "").strip()
+    endereco = str(customer_data.get("endereco") or "").strip()
+    numero   = str(customer_data.get("numero") or "S/N").strip()
+
+    # Fallback de endereço: se o cliente não tem endereço, usa dados do seller
+    if seller_company and (not cep or not uf or not cidade):
+        cep      = cep or re.sub(r"\D", "", str(getattr(seller_company, "zip_code", "") or ""))
+        uf       = uf or str(getattr(seller_company, "state", "") or "").strip().upper()
+        cidade   = cidade or str(getattr(seller_company, "city", "") or "").strip()
+        bairro   = bairro or str(getattr(seller_company, "neighborhood", "") or "").strip()
+        endereco = endereco or str(getattr(seller_company, "address", "") or "").strip()
+
+    doc_key    = "CPF" if len(cpf_cnpj) == 11 else "CNPJ"
+    tpo_pessoa = "F"  if len(cpf_cnpj) == 11 else "J"
+
+    # ── PASSO 1: InsAltCliente — dados cadastrais básicos (SEM endereço) ───────
+    ins_params: Dict[str, Any] = {
+        "COD_CLI":    "NOVO",       # obrigatório para inserção de novo cliente
+        "TPO_PESSOA": tpo_pessoa,   # F=Física, J=Jurídica
+        doc_key:      cpf_cnpj,
+        "NOM_CLI":    nome[:60] if nome else "CLIENTE DROPSHIP",
+    }
+
+    # Parâmetros opcionais da config do seller
+    if config.horus_resp_cliente:
+        ins_params["NOM_RESP"] = config.horus_resp_cliente
+    if config.horus_cod_resp:
+        ins_params["COD_RESPONSAVEL"] = config.horus_cod_resp
+    # TIPO_CLI não é parâmetro do InsAltCliente (B2C) — não enviar
+
+    log.info(f"[Dropship] InsAltCliente params: {ins_params}")
+
+    try:
+        ins_result = await horus_clients.get(  # type: ignore[attr-defined]
+            "InsAltCliente", params=ins_params
+        )
+        log.info(f"[Dropship] InsAltCliente resposta: {ins_result}")
+
+        if ins_result and isinstance(ins_result, list) and len(ins_result) > 0:
+            item = ins_result[0]
+            if item.get("Falha"):
+                msg_horus = item.get("Mensagem") or item.get("MSG") or "Erro desconhecido no Hórus"
+                # Caso especial: duplicação — cliente já existe, tentar buscar o COD_CLI
+                if "duplica" in msg_horus.lower() or "buscar antes" in msg_horus.lower():
+                    log.warning(f"[Dropship] InsAltCliente: cliente já existe no Hórus — buscando COD_CLI existente")
+                    busca_retry = await horus_clients.get_client_b2c(  # type: ignore[attr-defined]
+                        cnpj_destino=cnpj_destino, cpf=cpf_cnpj
+                    )
+                    if busca_retry and not busca_retry.get("error") and busca_retry.get("data"):
+                        cod_cli_retry = str(busca_retry["data"].get("COD_CLI") or busca_retry["data"].get("CODIGO") or "").strip()
+                        if cod_cli_retry:
+                            log.info(f"[Dropship] COD_CLI recuperado após duplicação: {cod_cli_retry}")
+                            return cod_cli_retry
+                raise ValueError(f"InsCliente retornou Falha: {msg_horus}")
+
+            cod_cli = str(item.get("COD_CLI") or item.get("CODIGO") or "").strip()
+            if not cod_cli:
+                raise ValueError(f"InsAltCliente não retornou COD_CLI. Resposta: {item}")
+        else:
+            raise ValueError(f"InsAltCliente retornou resposta vazia ou inválida: {ins_result}")
+
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"Falha na comunicação com Hórus ao criar cliente (InsAltCliente): {e}") from e
+
+    log.info(f"[Dropship] Cliente criado com sucesso: COD_CLI={cod_cli}")
+
+    # ── PASSO 2: InsAltEndCliente — cadastrar endereço do cliente ──────────────
+    # Mapeamento de UF → nome completo do estado (obrigatório pelo Hórus)
+    _UF_NOMES = {
+        "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas",
+        "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
+        "ES": "Espírito Santo", "GO": "Goiás", "MA": "Maranhão",
+        "MT": "Mato Grosso", "MS": "Mato Grosso do Sul", "MG": "Minas Gerais",
+        "PA": "Pará", "PB": "Paraíba", "PR": "Paraná", "PE": "Pernambuco",
+        "PI": "Piauí", "RJ": "Rio de Janeiro", "RN": "Rio Grande do Norte",
+        "RS": "Rio Grande do Sul", "RO": "Rondônia", "RR": "Roraima",
+        "SC": "Santa Catarina", "SP": "São Paulo", "SE": "Sergipe", "TO": "Tocantins",
+    }
+    nome_uf = _UF_NOMES.get(uf, uf)
+
+    end_params: Dict[str, Any] = {
+        "COD_CLI":      cod_cli,
+        "NOM_PAIS":     "Brasil",
+        "SIGLA_UF":     uf,
+        "NOME_UF":      nome_uf,
+        "NOM_LOCAL":    cidade[:60] if cidade else "",
+        "NOM_BAIRRO":   bairro[:40] if bairro else "",
+        "DESC_ENDERECO": endereco[:80] if endereco else "",
+        "NUM_END":      numero[:10],
+        "CEP":          cep,
+    }
+
+    # Tipo de endereço: vem da config ou padrão 1
+    end_params["COD_TPO_END"] = config.horus_cod_endereco or "1"
+
+    if customer_data.get("complemento"):
+        end_params["COM_ENDERECO"] = str(customer_data["complemento"])[:40]
+
+    log.info(f"[Dropship] InsAltEndCliente params: {end_params}")
+
+    try:
+        end_result = await horus_clients.get(  # type: ignore[attr-defined]
+            "InsAltEndCliente", params=end_params
+        )
+        log.info(f"[Dropship] InsAltEndCliente resposta: {end_result}")
+
+        if end_result and isinstance(end_result, list) and len(end_result) > 0:
+            item_end = end_result[0]
+            if item_end.get("Falha"):
+                msg = item_end.get("Mensagem") or "Erro ao cadastrar endereço no Hórus"
+                log.warning(f"[Dropship] InsAltEndCliente Falha (não bloqueante): {msg}")
+                # Endereço não bloqueante — cliente já foi criado, pedido pode continuar
+        else:
+            log.warning(f"[Dropship] InsAltEndCliente retornou vazio: {end_result}")
+
+    except Exception as e:
+        # Endereço não bloqueia o pedido — apenas loga
+        log.warning(f"[Dropship] InsAltEndCliente falhou (não bloqueante): {e}")
+
+    return cod_cli
+
+
+
+def _validate_preflight(
+    order,
+    config,
+    customer_data: Dict[str, Any],
+    fiscal_intra: Optional[str],
+    fiscal_inter: Optional[str],
+) -> List[str]:
+    """
+    Valida todos os dados obrigatórios ANTES de qualquer chamada ao Hórus.
+    Retorna lista de erros (vazia = tudo OK).
+
+    Parâmetros obrigatórios (InsPedidoVenda com TIPO_PEDIDO_V_T_D='L'):
+    - CPF/CNPJ do cliente final (necessário para InsCliente/Busca_ClienteB2B)
+    - COD_PARAM_FISCAL (intra ou inter)
+    - COD_PARAM_FISCAL da Venda
+    - Customer ERDOS vinculado
+    - Pedido deve estar em status PENDING
+    - Pedido não pode já ter sido enviado (idempotência)
+
+    NÃO obrigatórios por definição do fluxo L (Logística):
+    - COD_FORMA, QTD_PARCELAS, CONDICAO_PAGAMENTO
+    """
+    erros: List[str] = []
+
+    # --- Idempotência: já foi enviado? ---
+    if order.horus_pedido_remessa or order.horus_pedido_venda:
+        erros.append(
+            f"Pedido já foi enviado ao Hórus anteriormente "
+            f"(Remessa: {order.horus_pedido_remessa or '-'} | "
+            f"Venda: {order.horus_pedido_venda or '-'}). "
+            f"Não é possível reenviar para evitar duplicidade."
+        )
+        return erros  # retorna imediatamente — sem checar mais nada
+
+    # --- Status do pedido ---
+    if order.status != "PENDING":
+        erros.append(f"Pedido não está pendente (status: {order.status}). Apenas pedidos PENDING podem ser enviados.")
+
+    # --- Itens ---
+    itens = order.items_data or []
+    if not itens:
+        erros.append("Pedido sem itens. É necessário ao menos 1 item para envio.")
+    else:
+        for i, item in enumerate(itens, 1):
+            isbn = (
+                item.get("sku") or item.get("sku_fornecedor")
+                or item.get("isbn") or item.get("barras_isbn") or ""
+            ).strip()
+            if not isbn:
+                erros.append(f"Item #{i} sem SKU/ISBN — campo obrigatório para identificação no Hórus.")
+
+    # --- CPF/CNPJ do cliente final (obrigatório para InsCliente) ---
+    cpf_cnpj = re.sub(r"\D", "", str(customer_data.get("cpf_cnpj") or ""))
+    if not cpf_cnpj:
+        erros.append(
+            "CPF/CNPJ do cliente final é obrigatório para registrar o pedido de Remessa no Hórus. "
+            "O pedido Erdos não contém o documento do consumidor — "
+            "verifique os dados recebidos do Hub-Erdos."
+        )
+
+    # --- Paramétros fiscais da Remessa ---
+    if not fiscal_intra and not fiscal_inter:
+        erros.append(
+            "Parâmetro fiscal de REMESSA não configurado (intraestadual e interestadual). "
+            "Acesse Configurações → Dropship Horus e preencha os campos."
+        )
+
+    # --- Parâmetro fiscal da Venda ---
+    if not config.horus_fiscal_param_venda:
+        erros.append(
+            "Parâmetro fiscal de VENDA não configurado. "
+            "Acesse Configurações → Dropship Horus e preencha o campo COD_PARAM_FISCAL Venda."
+        )
+
+    # --- Customer ERDOS ---
+    if not config.horus_customer_id:
+        erros.append("Customer parceiro (ERDOS) não vinculado na configuração Dropship.")
+
+    return erros
 
 
 # ==============================================================================
@@ -487,12 +983,16 @@ async def send_order_to_horus(
 ):
     """
     Envia o pedido Dropship para o Hórus ERP criando dois pedidos:
-    1. Pedido de Remessa (CFOP 6.923) — com TIPO_PEDIDO_V_T_D='L' e COD_PARAM_FISCAL de remessa
-       → Movimenta estoque físico. Status → LEX.
-    2. Pedido de Venda (CFOP 6.118) — para o customer ERDOS vinculado
-       → Não movimenta estoque. Status → LAP → Pular_expedicao → LFT (pronto para faturar).
 
-    O customer final (dados_cliente) é cadastrado/buscado no Hórus pelo CNPJ via Busca_ClienteB2B.
+    1. Pedido de Remessa (CFOP 6.923) — com dados do cliente CONSUMIDOR FINAL
+       - Busca cliente por CPF no Hórus; se não encontrar, cria via InsCliente
+       - COD_ITEM obtido via Busca_ProdutoB2B (cacheado por 24h por ISBN)
+       - COD_PARAM_FISCAL: intraestadual ou interestadual (por UF)
+
+    2. Pedido de Venda (CFOP 6.118) — com customer ERDOS configurado (inalterado)
+       - COD_ITEM e VLR_CAPA do mesmo cache da remessa
+
+    Ambos terminam em status LEX.
     """
     _require_seller_or_master(current_user, company_id)
 
@@ -504,9 +1004,6 @@ async def send_order_to_horus(
     if not order:
         raise HTTPException(status_code=404, detail="Pedido dropship não encontrado.")
 
-    if order.status != "PENDING":
-        raise HTTPException(status_code=400, detail=f"Pedido não está pendente (status atual: {order.status}).")
-
     # 2. Carregar configuração dropship
     config = db.query(DropshipConfig).filter(
         DropshipConfig.id == order.config_id
@@ -514,175 +1011,407 @@ async def send_order_to_horus(
     if not config:
         raise HTTPException(status_code=400, detail="Configuração Dropship não encontrada.")
 
-    if not config.horus_fiscal_param_remessa:
-        raise HTTPException(status_code=400, detail="COD_PARAM_FISCAL de remessa não configurado. Configure em Dropship → Configurações.")
+    fiscal_intra = config.horus_fiscal_param_remessa_intra or config.horus_fiscal_param_remessa
+    fiscal_inter = config.horus_fiscal_param_remessa_inter or config.horus_fiscal_param_remessa
 
-    if not config.horus_customer_id:
-        raise HTTPException(status_code=400, detail="Customer parceiro (ERDOS) não vinculado na configuração Dropship.")
-
-    # 3. Carregar customer parceiro (ERDOS) — para o pedido de venda
-    customer_erdos = db.query(Customer).filter(Customer.id == config.horus_customer_id).first()
-    if not customer_erdos or not customer_erdos.id_guid or not customer_erdos.id_doc:
-        raise HTTPException(status_code=400, detail="Customer ERDOS não possui id_guid/id_doc configurados.")
-
-    # 4. Carregar configurações Hórus
-    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
-    if not settings or not settings.horus_enabled:
-        raise HTTPException(status_code=400, detail="Integração Hórus não habilitada.")
-
+    # 3. Carregar empresa e customer ERDOS
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Empresa não encontrada.")
 
+    customer_erdos = db.query(Customer).filter(Customer.id == config.horus_customer_id).first() if config.horus_customer_id else None
+    if not customer_erdos or not customer_erdos.id_guid or not customer_erdos.id_doc:
+        raise HTTPException(status_code=400, detail="Customer ERDOS não possui id_guid/id_doc configurados.")
+
+    # 4. Validação Pré-Voo (✅ tudo antes de qualquer chamada ao Hórus)
+    customer_data = order.customer_data or {}
+    preflight_errors = _validate_preflight(
+        order=order,
+        config=config,
+        customer_data=customer_data,
+        fiscal_intra=fiscal_intra,
+        fiscal_inter=fiscal_inter,
+    )
+    if preflight_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "mensagem": "Validação falhou. Corrija os erros abaixo antes de reenviar o pedido ao Hórus.",
+                "erros": preflight_errors,
+            }
+        )
+
+    # 5. Verificar integração Hórus habilitada
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings or not settings.horus_enabled:
+        raise HTTPException(status_code=400, detail="Integração Hórus não habilitada.")
+
     from app.integrators.horus_clients import HorusClients
     from app.integrators.horus_orders import HorusOrders
 
-    # 5. Buscar/registrar o cliente final no Hórus pelo CNPJ
+    # 5. Preparar dados base
     customer_data = order.customer_data or {}
-    cpf_cnpj_final = customer_data.get("cpf_cnpj", "")
-    cpf_cnpj_clean = re.sub(r"\D", "", cpf_cnpj_final)
+    ext_id        = str(order.external_reference or order.external_order_id or order.id)
+    cod_origem_remessa = f"RM-{ext_id[:20]}"
+    cod_origem_venda   = f"VD-{ext_id[:20]}"
+    cnpj_destino       = re.sub(r"\D", "", str(company.document or ""))
+    id_doc_erdos       = re.sub(r"\D", "", str(customer_erdos.id_doc)) if customer_erdos.id_doc else ""
+    id_guid_erdos      = customer_erdos.id_guid or ""
+
+    # 6. Determinar parâmetro fiscal da remessa (intra × inter estado)
+    uf_seller  = str(getattr(settings, "state", "") or getattr(company, "state", "") or "").strip().upper()
+    uf_cliente = str(customer_data.get("uf") or "").strip().upper()
+    if uf_seller and uf_cliente and uf_seller == uf_cliente:
+        fiscal_remessa = fiscal_intra or fiscal_inter
+    else:
+        fiscal_remessa = fiscal_inter or fiscal_intra
 
     horus_clients = HorusClients(db, company_id)
-    horus_orders = HorusOrders(db, company_id)
+    horus_orders  = HorusOrders(db, company_id)
 
-    # COD_PEDIDO_ORIGEM para o pedido de remessa (identificador único baseado no id externo)
-    cod_origem_remessa = f"DSP-REM-{order.external_order_id[:20]}"
-    cod_origem_venda = f"DSP-VND-{order.external_order_id[:20]}"
+    errors: list = []
+    cod_ped_remessa = None
+    cod_ped_venda   = None
+    cod_cli_final   = order.horus_cod_cli_final  # reutiliza se já foi buscado antes
 
-    cnpj_destino = re.sub(r"\D", "", company.document or "")
+    # Buscar COD_CLI do cliente parceiro ERDOS no Hórus (reutiliza salvo em config ou busca e salva)
+    cod_cli_erdos = getattr(config, "horus_customer_cod_cli", None)
+    if not cod_cli_erdos and customer_erdos and customer_erdos.document:
+        doc_erdos_clean = re.sub(r"\D", "", str(customer_erdos.document))
+        try:
+            busca_erdos = await horus_clients.get_client_b2c(cnpj_destino="", cpf=doc_erdos_clean)
+            if busca_erdos and not busca_erdos.get("error") and busca_erdos.get("data"):
+                cod_cli_erdos = str(busca_erdos["data"].get("COD_CLI") or busca_erdos["data"].get("CODIGO") or "").strip()
+                if cod_cli_erdos and config:
+                    config.horus_customer_cod_cli = cod_cli_erdos
+                    db.commit()
+                    log.info(f"[Dropship] COD_CLI do cliente ERDOS no Hórus salvo na config: {cod_cli_erdos}")
+        except Exception as _e_erdos:
+            log.warning(f"[Dropship] Busca_Cliente p/ Erdos falhou: {_e_erdos}")
 
-    errors = []
+    log.info(f"[Dropship] COD_CLI ERDOS confirmado p/ alteração de status B2B: {cod_cli_erdos}")
 
     try:
-        # -----------------------------------------------------------------------
-        # PEDIDO 1 — REMESSA (6.923): cliente final, baixa estoque
-        # -----------------------------------------------------------------------
-        # Buscar cliente final no Hórus (apenas para validação — o Hórus precisa conhecer o CNPJ)
-        # Para dropship a expedição ocorre para o cliente final
-        remessa_params: Dict[str, Any] = {
-            "ID_DOC": customer_erdos.id_doc,
-            "ID_GUID": customer_erdos.id_guid,
-            "CNPJ_DESTINO": cnpj_destino,
-            "TIPO_PEDIDO_V_T_D": "L",
-            "COD_PEDIDO_ORIGEM": cod_origem_remessa,
-            "COD_PARAM_FISCAL": config.horus_fiscal_param_remessa,
-            "OBS_PEDIDO": f"Dropship Erdos | Ref: {order.external_reference or order.external_order_id} | Cliente: {customer_data.get('nome', 'N/A')} | CEP: {customer_data.get('cep', 'N/A')}",
-        }
+        itens = order.items_data or []
 
-        remessa_result = await horus_orders.get(  # type: ignore[attr-defined]
-            "InsPedidoVenda", params=remessa_params
-        )
+        # ───────────────────────────────────────────────────────────────────
+        # STEP A — Pré-buscar COD_ITEM e VLR_CAPA de todos os itens (cache)
+        # ───────────────────────────────────────────────────────────────────
+        item_info_map: Dict[str, Dict[str, Any]] = {}
+        for item in itens:
+            isbn = (
+                item.get("sku")
+                or item.get("sku_fornecedor")
+                or item.get("isbn")
+                or item.get("barras_isbn")
+                or ""
+            ).strip()
+            if isbn and isbn not in item_info_map:
+                info = await _get_horus_item_info(
+                    db=db,
+                    company_id=company_id,
+                    isbn=isbn,
+                    horus_orders=horus_orders,
+                    cnpj_destino=cnpj_destino,
+                    id_doc_erdos=id_doc_erdos,
+                    id_guid_erdos=id_guid_erdos,
+                    horus_clients=horus_clients,   # habilita Busca_Acervo (B2C) como fonte primária
+                )
+                item_info_map[isbn] = info
 
-        cod_ped_remessa = None
-        if remessa_result and isinstance(remessa_result, list):
-            if remessa_result[0].get("Falha"):
-                errors.append(f"Pedido de Remessa: {remessa_result[0].get('Mensagem', 'Erro desconhecido')}")
-            else:
-                cod_ped_remessa = remessa_result[0].get("COD_PED_VENDA")
+        # ───────────────────────────────────────────────────────────────────
+        # STEP B — Buscar/criar cliente final no Hórus
+        # ───────────────────────────────────────────────────────────────────
+        if not cod_cli_final:
+            try:
+                cod_cli_final = await _get_or_create_horus_customer(
+                    horus_clients=horus_clients,
+                    customer_data=customer_data,
+                    config=config,
+                    cnpj_destino=cnpj_destino,
+                    seller_company=company,  # fallback de endereço
+                )
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "mensagem": "Falha ao registrar o cliente no Hórus. Nenhum pedido foi enviado.",
+                        "erros": [str(e)],
+                    }
+                )
 
-        if cod_ped_remessa:
-            # Inserir itens no pedido de remessa
-            itens = order.items_data or []
-            for item in itens:
-                sku = item.get("sku_fornecedor", "")
-                qty = item.get("quantidade", 1)
-                item_params = {
-                    "ID_DOC": customer_erdos.id_doc,
-                    "ID_GUID": customer_erdos.id_guid,
-                    "CNPJ_DESTINO": cnpj_destino,
-                    "COD_PEDIDO_ORIGEM": cod_origem_remessa,
-                    "BARRAS_ISBN": sku,
-                    "QTD_PEDIDA": qty,
-                }
-                await horus_orders.get("InsItensPedidoVenda", params=item_params)  # type: ignore[attr-defined]
-
-            # Mudar status para LEX (expedição)
-            await horus_orders.get(  # type: ignore[attr-defined]
-                "AltStatus_Pedido",
-                params={
-                    "ID_DOC": customer_erdos.id_doc,
-                    "ID_GUID": customer_erdos.id_guid,
-                    "CNPJ_DESTINO": cnpj_destino,
-                    "COD_PEDIDO_ORIGEM": cod_origem_remessa,
+        # Segurança final: se ainda None, CPF ausente (não deve chegar aqui após preflight)
+        if not cod_cli_final:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "mensagem": "Não foi possível registrar ou localizar o cliente no Hórus.",
+                    "erros": [
+                        "CPF/CNPJ não retornou COD_CLI válido. Verifique os dados e tente novamente."
+                    ]
                 }
             )
 
-        # -----------------------------------------------------------------------
-        # PEDIDO 2 — VENDA (6.118): customer ERDOS, não baixa estoque
-        # -----------------------------------------------------------------------
+
+        # ───────────────────────────────────────────────────────────────────
+        # PEDIDO 1 — REMESSA (CFOP 6.923): B2C — entrega ao cliente final
+        # Usa horus_clients (sem CNPJ_DESTINO) + parâmetros B2C obrigatórios
+        # ───────────────────────────────────────────────────────────────────
+        remessa_params: Dict[str, Any] = {
+            "TIPO_PEDIDO_V_T_D":  "L",
+            "COD_PARAM_FISCAL":   fiscal_remessa,
+            "COD_PEDIDO_ORIGEM":  cod_origem_remessa,
+            "OBS_PEDIDO": (
+                f"Dropship Erdos | Pedido Erdos #{order.external_order_id} | Ref: {order.external_reference or order.external_order_id} "
+                f"| Cliente: {customer_data.get('nome', 'N/A')} "
+                f"| CPF: {customer_data.get('cpf_cnpj', 'N/A')} "
+                f"| CEP: {customer_data.get('cep', 'N/A')}"
+            ),
+        }
+        # COD_EMPRESA e COD_FILIAL — obrigatórios B2C
+        if settings.horus_company:
+            remessa_params["COD_EMPRESA"] = settings.horus_company
+        if settings.horus_branch:
+            remessa_params["COD_FILIAL"] = settings.horus_branch
+        # COD_CLI — cliente final encontrado/criado (obrigatório B2C)
+        if cod_cli_final:
+            remessa_params["COD_CLI"] = cod_cli_final
+        # Parâmetros opcionais/obrigatórios B2C da config do seller
+        if config.horus_cod_metodo:
+            remessa_params["COD_METODO"] = config.horus_cod_metodo
+        if config.horus_cod_endereco:
+            remessa_params["COD_TPO_END"] = config.horus_cod_endereco
+        if config.horus_cod_transp:
+            remessa_params["COD_TRANSP"] = config.horus_cod_transp
+        if config.horus_frete_emit_dest:
+            remessa_params["FRETE_EMIT_DEST"] = config.horus_frete_emit_dest
+        # NÃO enviar: COD_FORMA, QTD_PARCELAS, CONDICAO_PAGAMENTO, CNPJ_DESTINO, ID_DOC, ID_GUID
+
+        remessa_result = await horus_clients.get(  # type: ignore[attr-defined]
+            "InsPedidoVenda", params=remessa_params
+        )
+
+        if remessa_result and isinstance(remessa_result, list):
+            if remessa_result[0].get("Falha"):
+                # Remessa falhou — ABORTAR COMPLETAMENTE, não enviar Venda
+                msg_horus = remessa_result[0].get('Mensagem', 'Erro desconhecido no Hórus')
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "mensagem": "Falha ao criar o Pedido de Remessa no Hórus. O Pedido de Venda NÃO foi enviado.",
+                        "erros": [f"Remessa (InsPedidoVenda): {msg_horus}"],
+                    }
+                )
+            else:
+                cod_ped_remessa = remessa_result[0].get("COD_PED_VENDA")
+
+        if not cod_ped_remessa:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "mensagem": "Hórus não retornou o código do Pedido de Remessa. O Pedido de Venda NÃO foi enviado.",
+                    "erros": ["Verifique os parâmetros enviados e tente novamente."],
+                }
+            )
+
+        # Remessa criada — inserir itens (B2C)
+        for item in itens:
+            isbn = (
+                item.get("sku") or item.get("sku_fornecedor")
+                or item.get("isbn") or item.get("barras_isbn") or ""
+            ).strip()
+            qty = int(item.get("quantidade") or item.get("qty") or 1)
+            if not isbn:
+                errors.append(f"Item sem SKU/ISBN: {item}")
+                continue
+
+            info = item_info_map.get(isbn, {})
+            cod_item = info.get("cod_item")
+            vlr_capa = info.get("vlr_capa", 0.0)
+
+            if not cod_item:
+                errors.append(f"COD_ITEM não encontrado para ISBN={isbn} — item não inserido na remessa")
+                continue
+
+            # Parâmetros B2C obrigatórios para InsItensPedidoVenda
+            item_params_remessa: Dict[str, Any] = {
+                "COD_PED_VENDA": cod_ped_remessa,
+                "COD_ITEM":      cod_item,
+                "QTD_PEDIDA":    qty,
+                "VLR_LIQUIDO":   vlr_capa,
+            }
+            if settings.horus_company:
+                item_params_remessa["COD_EMPRESA"] = settings.horus_company
+            if settings.horus_branch:
+                item_params_remessa["COD_FILIAL"] = settings.horus_branch
+            if cod_cli_final:
+                item_params_remessa["COD_CLI"] = cod_cli_final
+
+            await horus_clients.get(  # type: ignore[attr-defined]
+                "InsItensPedidoVenda", params=item_params_remessa
+            )
+
+        # Muda status Remessa — usando a especificação Hórus B2C (AltStatus_Pedido)
+        if cod_ped_remessa:
+            target_status = (config.horus_status_envio_erp or "LEX").strip()
+            alt_status_params: Dict[str, Any] = {
+                "COD_EMPRESA":   settings.horus_company,
+                "COD_FILIAL":    settings.horus_branch,
+                "COD_CLI":       cod_cli_final,
+                "COD_PED_VENDA": cod_ped_remessa,
+                "STA_PEDIDO":    target_status,
+            }
+
+            # Remove chaves None/Vazias
+            alt_status_params = {k: v for k, v in alt_status_params.items() if v is not None and v != ""}
+
+            try:
+                alt_res = await horus_clients.get(  # type: ignore[attr-defined]
+                    "AltStatus_Pedido", params=alt_status_params
+                )
+                log.info(f"[Dropship] AltStatus_Pedido remessa resposta: {alt_res}")
+                if alt_res and isinstance(alt_res, list) and len(alt_res) > 0:
+                    item_alt = alt_res[0]
+                    if item_alt.get("Falha") or item_alt.get("FALHA") == "S":
+                        msg_alt = item_alt.get("Mensagem") or item_alt.get("MENSAGEM") or str(item_alt)
+                        errors.append(f"AltStatus_Pedido Remessa ({target_status}): {msg_alt}")
+                elif alt_res and isinstance(alt_res, dict):
+                    if alt_res.get("Falha") or alt_res.get("FALHA") == "S":
+                        msg_alt = alt_res.get("Mensagem") or alt_res.get("MENSAGEM") or str(alt_res)
+                        errors.append(f"AltStatus_Pedido Remessa ({target_status}): {msg_alt}")
+            except Exception as _e:
+                log.error(f"[Dropship] AltStatus_Pedido remessa falhou: {_e}")
+                errors.append(f"AltStatus_Pedido Remessa ({target_status}): {_e}")
+
+        # ─────────────────────────────────────────────────────────────────────────
+        # PEDIDO 2 — VENDA (CFOP 6.118): customer ERDOS → LAP → LFT
+        # SEGURANÇA: só chegamos aqui se a Remessa foi criada com sucesso.
+        # ─────────────────────────────────────────────────────────────────────────
+        # Enviado como padrão B2B com TIPO_PEDIDO_V_T_D='L' (Logística).
+        # O COD_PARAM_FISCAL é pré-configurado nas settings do cliente ERDOS no Hórus.
+        # NÃO enviar COD_FORMA, QTD_PARCELAS, CONDICAO_PAGAMENTO neste pedido.
+        # Fluxo de status: [criado] → AltStatus (LAP) → Pular_expedicao (LFT)
         venda_params: Dict[str, Any] = {
-            "ID_DOC": customer_erdos.id_doc,
-            "ID_GUID": customer_erdos.id_guid,
-            "CNPJ_DESTINO": cnpj_destino,
+            "ID_DOC":            id_doc_erdos,
+            "ID_GUID":           id_guid_erdos,
+            "CNPJ_DESTINO":      cnpj_destino,
             "TIPO_PEDIDO_V_T_D": "L",
             "COD_PEDIDO_ORIGEM": cod_origem_venda,
-            "OBS_PEDIDO": f"Dropship Venda Erdos | Ref: {order.external_reference or order.external_order_id}",
+            "COD_PARAM_FISCAL":  config.horus_fiscal_param_venda,
+            "OBS_PEDIDO": (
+                f"Dropship Venda Erdos | Pedido Erdos #{order.external_order_id} | Ref: {order.external_reference or order.external_order_id}"
+            ),
+            # NOTA: NÃO enviar COD_FORMA, QTD_PARCELAS, CONDICAO_PAGAMENTO
         }
+        # COD_EMPRESA, COD_FILIAL e COD_METODO NÃO devem ser enviados no pedido de Venda B2B
 
         venda_result = await horus_orders.get(  # type: ignore[attr-defined]
             "InsPedidoVenda", params=venda_params
         )
 
-        cod_ped_venda = None
         if venda_result and isinstance(venda_result, list):
             if venda_result[0].get("Falha"):
-                errors.append(f"Pedido de Venda: {venda_result[0].get('Mensagem', 'Erro desconhecido')}")
+                errors.append(f"Venda: {venda_result[0].get('Mensagem', 'Erro desconhecido')}")
             else:
                 cod_ped_venda = venda_result[0].get("COD_PED_VENDA")
 
         if cod_ped_venda:
-            # Inserir itens no pedido de venda
-            itens = order.items_data or []
             for item in itens:
-                sku = item.get("sku_fornecedor", "")
-                qty = item.get("quantidade", 1)
-                item_params = {
-                    "ID_DOC": customer_erdos.id_doc,
-                    "ID_GUID": customer_erdos.id_guid,
-                    "CNPJ_DESTINO": cnpj_destino,
-                    "COD_PEDIDO_ORIGEM": cod_origem_venda,
-                    "BARRAS_ISBN": sku,
-                    "QTD_PEDIDA": qty,
-                }
-                await horus_orders.get("InsItensPedidoVenda", params=item_params)  # type: ignore[attr-defined]
+                isbn = (
+                    item.get("sku") or item.get("sku_fornecedor")
+                    or item.get("isbn") or item.get("barras_isbn") or ""
+                ).strip()
+                qty = int(item.get("quantidade") or item.get("qty") or 1)
+                if not isbn:
+                    continue
 
-            # Mudar para LAP (evitar expedição)
-            await horus_orders.get(  # type: ignore[attr-defined]
-                "AltStatus_Pedido",
-                params={
-                    "ID_DOC": customer_erdos.id_doc,
-                    "ID_GUID": customer_erdos.id_guid,
-                    "CNPJ_DESTINO": cnpj_destino,
-                    "COD_PEDIDO_ORIGEM": cod_origem_venda,
-                }
-            )
+                info = item_info_map.get(isbn, {})
+                vlr_capa = info.get("vlr_capa", 0.0)
 
-            # Pular expedição → LFT (pronto para faturar)
-            pular_params: Dict[str, Any] = {
-                "COD_EMPRESA": settings.horus_company,
-                "COD_FILIAL": settings.horus_branch,
-                "COD_CLI": customer_erdos.id_doc,
-                "COD_PED_VENDA": cod_ped_venda,
-                "COD_LOCAL": 0,
-            }
-            await horus_orders.get("Pular_expedicao", params=pular_params)  # type: ignore[attr-defined]
+                res_item = await horus_orders.send_order_item(  # type: ignore[attr-defined]
+                    id_doc=id_doc_erdos,
+                    id_guid=id_guid_erdos,
+                    cnpj_destino=cnpj_destino,
+                    cod_pedido_origem=cod_origem_venda,
+                    isbn=isbn,
+                    qty=qty,
+                    price=None,  # NÃO envia VLR_LIQUIDO no pedido de Venda B2B
+                )
+                log.info(f"[Dropship] InsItensPedidoVenda (Venda B2B) resposta p/ ISBN={isbn}: {res_item}")
+                if res_item and isinstance(res_item, list) and len(res_item) > 0:
+                    msg_item = res_item[0].get("Mensagem") or res_item[0].get("MENSAGEM") or ""
+                    if res_item[0].get("Falha") or (msg_item and msg_item != "REGISTRO ENVIADO COM SUCESSO!"):
+                        errors.append(f"Venda item {isbn}: {msg_item or 'Falha ao inserir item'}")
+
+            # STEP 1: AltStatus → LAP (COD_EMPRESA, COD_FILIAL, COD_CLI, COD_PED_VENDA, STA_PEDIDO)
+            try:
+                alt_venda_params: Dict[str, Any] = {
+                    "COD_PED_VENDA": cod_ped_venda,
+                    "STA_PEDIDO":    "LAP",
+                }
+                if settings.horus_company:
+                    alt_venda_params["COD_EMPRESA"] = settings.horus_company
+                if settings.horus_branch:
+                    alt_venda_params["COD_FILIAL"] = settings.horus_branch
+                if cod_cli_erdos:
+                    alt_venda_params["COD_CLI"] = cod_cli_erdos
+
+                res_alt_venda = await horus_clients.get(  # type: ignore[attr-defined]
+                    "AltStatus_Pedido", params=alt_venda_params
+                )
+                log.info(f"[Dropship] AltStatus_Pedido venda B2B resposta: {res_alt_venda}")
+                if res_alt_venda and isinstance(res_alt_venda, list) and len(res_alt_venda) > 0:
+                    item_alt = res_alt_venda[0]
+                    if item_alt.get("Falha") or item_alt.get("FALHA") == "S":
+                        msg_alt = item_alt.get("Mensagem") or item_alt.get("MENSAGEM") or str(item_alt)
+                        errors.append(f"Venda AltStatus (LAP): {msg_alt}")
+            except Exception as e_lap:
+                errors.append(f"Venda AltStatus (LAP): {str(e_lap)}")
+
+            # STEP 2: Pular_expedicao → LFT (COD_EMPRESA, COD_FILIAL, COD_CLI, COD_PED_VENDA, COD_LOCAL=0)
+            try:
+                pular_params: Dict[str, Any] = {
+                    "COD_PED_VENDA": cod_ped_venda,
+                    "COD_LOCAL":     0,
+                }
+                if settings.horus_company:
+                    pular_params["COD_EMPRESA"] = settings.horus_company
+                if settings.horus_branch:
+                    pular_params["COD_FILIAL"] = settings.horus_branch
+                if cod_cli_erdos:
+                    pular_params["COD_CLI"] = cod_cli_erdos
+
+                res_pular = await horus_clients.get(  # type: ignore[attr-defined]
+                    "Pular_expedicao", params=pular_params
+                )
+                log.info(f"[Dropship] Pular_expedicao venda B2B resposta: {res_pular}")
+                if res_pular and isinstance(res_pular, list) and len(res_pular) > 0:
+                    item_p = res_pular[0]
+                    if item_p.get("Falha") or item_p.get("FALHA") == "S":
+                        msg_p = item_p.get("Mensagem") or item_p.get("MENSAGEM") or str(item_p)
+                        errors.append(f"Venda Pular_expedicao (LFT): {msg_p}")
+            except Exception as e_pular:
+                errors.append(f"Venda Pular_expedicao (LFT): {str(e_pular)}")
+
 
     except Exception as e:
         await horus_orders.close()  # type: ignore[attr-defined]
+        await horus_clients.close()  # type: ignore[attr-defined]
         raise HTTPException(status_code=500, detail=f"Erro na integração Hórus: {str(e)}")
 
-    await horus_orders.close()  # type: ignore[attr-defined]
+    await horus_orders.close()   # type: ignore[attr-defined]
+    await horus_clients.close()  # type: ignore[attr-defined]
 
-    # Atualizar status do pedido dropship
+    # Persistir resultados no pedido
     if cod_ped_remessa or cod_ped_venda:
         order.status = "SENT_TO_HORUS"
         order.horus_pedido_remessa = cod_ped_remessa
-        order.horus_pedido_venda = cod_ped_venda
-        order.sent_to_horus_at = datetime.utcnow()
+        order.horus_pedido_venda   = cod_ped_venda
+        order.horus_cod_cli_final  = cod_cli_final
+        order.sent_to_horus_at     = datetime.utcnow()
         db.commit()
 
         # Notificar Erdos: muda status para "preparando"
-        # → pedido some imediatamente da fila /pedidos/prontos-para-despacho
         try:
             config_obj = db.query(DropshipConfig).filter(DropshipConfig.id == order.config_id).first()
             if config_obj:
@@ -699,6 +1428,7 @@ async def send_order_to_horus(
         "status": "ok" if not errors else "partial",
         "horus_pedido_remessa": cod_ped_remessa,
         "horus_pedido_venda": cod_ped_venda,
+        "horus_cod_cli_final": cod_cli_final,
         "errors": errors,
     }
 

@@ -13,6 +13,7 @@ class SellerBranch(Base):
     cnpj = Column(String(20), nullable=True)
     cod_empresa = Column(String(50), nullable=False)
     cod_filial = Column(String(50), nullable=False)
+    cod_local = Column(String(50), nullable=True) # Código de Local de Estoque no Hórus
     active = Column(Boolean, default=True, nullable=False)
 
     # SEFAZ-SP Integration Config (por filial)

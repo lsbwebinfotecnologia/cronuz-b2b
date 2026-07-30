@@ -12,6 +12,7 @@ type Branch = {
   cnpj: string;
   cod_empresa: string;
   cod_filial: string;
+  cod_local?: string;
   active: boolean;
 };
 
@@ -28,6 +29,7 @@ export default function BranchesPage() {
   const [cnpj, setCnpj] = useState('');
   const [codEmpresa, setCodEmpresa] = useState('');
   const [codFilial, setCodFilial] = useState('');
+  const [codLocal, setCodLocal] = useState('');
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -72,6 +74,7 @@ export default function BranchesPage() {
           cnpj: cnpj || null,
           cod_empresa: codEmpresa,
           cod_filial: codFilial,
+          cod_local: codLocal || null,
           active: true
         })
       });
@@ -105,7 +108,8 @@ export default function BranchesPage() {
           nome,
           cnpj: cnpj || null,
           cod_empresa: codEmpresa,
-          cod_filial: codFilial
+          cod_filial: codFilial,
+          cod_local: codLocal || null
         })
       });
       if (!res.ok) throw new Error();
@@ -144,6 +148,7 @@ export default function BranchesPage() {
     setCnpj(branch.cnpj || '');
     setCodEmpresa(branch.cod_empresa);
     setCodFilial(branch.cod_filial);
+    setCodLocal(branch.cod_local || '');
   }
 
   function cancelEdit() {
@@ -156,6 +161,7 @@ export default function BranchesPage() {
     setCnpj('');
     setCodEmpresa('');
     setCodFilial('');
+    setCodLocal('');
   }
 
   return (
@@ -193,7 +199,7 @@ export default function BranchesPage() {
               <h3 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-4">
                 Nova Filial
               </h3>
-              <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-6 gap-4">
                 <div className="md:col-span-2">
                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nome Fantasia *</label>
                   <input
@@ -214,29 +220,37 @@ export default function BranchesPage() {
                     className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cod. Empresa *</label>
-                    <input
-                      type="text"
-                      value={codEmpresa}
-                      onChange={e => setCodEmpresa(e.target.value)}
-                      placeholder="Ex: 1"
-                      className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cod. Filial *</label>
-                    <input
-                      type="text"
-                      value={codFilial}
-                      onChange={e => setCodFilial(e.target.value)}
-                      placeholder="Ex: 5"
-                      className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cod. Empresa *</label>
+                  <input
+                    type="text"
+                    value={codEmpresa}
+                    onChange={e => setCodEmpresa(e.target.value)}
+                    placeholder="Ex: 1"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                  />
                 </div>
-                <div className="md:col-span-4 flex justify-end gap-3 mt-2 border-t border-slate-100 dark:border-slate-800 pt-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cod. Filial *</label>
+                  <input
+                    type="text"
+                    value={codFilial}
+                    onChange={e => setCodFilial(e.target.value)}
+                    placeholder="Ex: 5"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cod. Local Estoque</label>
+                  <input
+                    type="text"
+                    value={codLocal}
+                    onChange={e => setCodLocal(e.target.value)}
+                    placeholder="Ex: 0"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div className="md:col-span-6 flex justify-end gap-3 mt-2 border-t border-slate-100 dark:border-slate-800 pt-4">
                   <button
                     type="button"
                     onClick={() => { setIsAdding(false); resetForm(); }}
@@ -277,6 +291,7 @@ export default function BranchesPage() {
                   <th className="px-6 py-4">CNPJ</th>
                   <th className="px-6 py-4">Cod. Empresa</th>
                   <th className="px-6 py-4">Cod. Filial</th>
+                  <th className="px-6 py-4">Cod. Local</th>
                   <th className="px-6 py-4 text-right">Ações</th>
                 </tr>
               </thead>
@@ -307,7 +322,7 @@ export default function BranchesPage() {
                             type="text"
                             value={codEmpresa}
                             onChange={e => setCodEmpresa(e.target.value)}
-                            className="px-2 py-1 text-sm rounded-lg border border-indigo-400 bg-white dark:bg-slate-950 text-slate-900 dark:text-white w-24 focus:outline-none"
+                            className="px-2 py-1 text-sm rounded-lg border border-indigo-400 bg-white dark:bg-slate-950 text-slate-900 dark:text-white w-20 focus:outline-none"
                           />
                         </td>
                         <td className="px-6 py-3">
@@ -315,7 +330,16 @@ export default function BranchesPage() {
                             type="text"
                             value={codFilial}
                             onChange={e => setCodFilial(e.target.value)}
-                            className="px-2 py-1 text-sm rounded-lg border border-indigo-400 bg-white dark:bg-slate-950 text-slate-900 dark:text-white w-24 focus:outline-none"
+                            className="px-2 py-1 text-sm rounded-lg border border-indigo-400 bg-white dark:bg-slate-950 text-slate-900 dark:text-white w-20 focus:outline-none"
+                          />
+                        </td>
+                        <td className="px-6 py-3">
+                          <input
+                            type="text"
+                            value={codLocal}
+                            onChange={e => setCodLocal(e.target.value)}
+                            placeholder="Ex: 0"
+                            className="px-2 py-1 text-sm rounded-lg border border-indigo-400 bg-white dark:bg-slate-950 text-slate-900 dark:text-white w-20 focus:outline-none"
                           />
                         </td>
                         <td className="px-6 py-3 text-right">
@@ -352,6 +376,9 @@ export default function BranchesPage() {
                         </td>
                         <td className="px-6 py-4 font-mono font-bold text-indigo-600 dark:text-indigo-400">
                           {branch.cod_filial}
+                        </td>
+                        <td className="px-6 py-4 font-mono font-bold text-amber-600 dark:text-amber-400">
+                          {branch.cod_local || '-'}
                         </td>
                         <td className="px-6 py-4 text-right">
                           <div className="flex justify-end gap-2">

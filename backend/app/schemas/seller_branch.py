@@ -49,6 +49,7 @@ class SellerBranchBase(BaseModel):
     cnpj: Optional[str] = None
     cod_empresa: str
     cod_filial: str
+    cod_local: Optional[str] = None
     active: bool = True
 
     # SEFAZ Config
@@ -94,6 +95,7 @@ class SellerBranchUpdate(BaseModel):
     cnpj: Optional[str] = None
     cod_empresa: Optional[str] = None
     cod_filial: Optional[str] = None
+    cod_local: Optional[str] = None
     active: Optional[bool] = None
 
     # SEFAZ Config

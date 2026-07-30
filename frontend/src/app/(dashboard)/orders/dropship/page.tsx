@@ -629,11 +629,24 @@ export default function DropshipOrdersPage() {
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-500 dark:text-slate-400 capitalize">{order.channel || '—'}</td>
                       <td className="px-4 py-3">
-                        <div className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate max-w-[120px]">
-                          {(order.customer_data || {}).nome || '—'}
-                        </div>
-                        <div className="text-[10px] text-slate-400">{(order.customer_data || {}).uf}</div>
-                      </td>
+                         <div className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate max-w-[160px]">
+                           {(order.customer_data || {}).nome || '—'}
+                         </div>
+                         <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[160px]">
+                           {[
+                             (order.customer_data || {}).cidade,
+                             (order.customer_data || {}).uf
+                           ].filter(Boolean).join(' - ')}
+                         </div>
+                         <div className="text-[10px] text-slate-400 dark:text-slate-500 truncate max-w-[160px]">
+                           {[
+                             (order.customer_data || {}).endereco,
+                             (order.customer_data || {}).numero,
+                             (order.customer_data || {}).bairro,
+                             (order.customer_data || {}).cep,
+                           ].filter(Boolean).join(', ')}
+                         </div>
+                       </td>
                       <td className="px-4 py-3">
                         <span className="inline-flex items-center gap-1 bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 px-2 py-0.5 rounded-full text-xs font-semibold">
                           <ShoppingCart className="w-3 h-3" />

@@ -56,6 +56,41 @@ class HorusClients(HorusClient):
             "msg": "Nenhum cliente localizado ou erro de conexão"
         }
 
+    async def get_client_b2c(self, cnpj_destino: str, cpf: str) -> Any:
+        """
+        Busca cliente pelo CPF/CNPJ usando Busca_Cliente (endpoint B2C/dropship).
+        USO EXCLUSIVO: rotina de remessa dropship. NÃO usar nas rotinas B2B/storefront.
+
+        Regra: CPF (11 dígitos) → param CPF=xxx
+               CNPJ (14 dígitos) → param CNPJ=xxx
+               Sem CNPJ_DESTINO — não é parâmetro deste endpoint.
+        """
+        import logging
+        log = logging.getLogger(__name__)
+
+        # Identifica o tipo pelo tamanho e usa o parâmetro correto
+        param_key = "CPF" if len(cpf) == 11 else "CNPJ"
+        params: Dict[str, Any] = {param_key: cpf}
+
+        result = await self.get("Busca_Cliente", params=params)
+        log.info(f"[get_client_b2c] {param_key}={cpf} resultado bruto: {result}")
+
+        item = None
+        if result and isinstance(result, list) and len(result) > 0:
+            item = result[0]
+        elif result and isinstance(result, dict):
+            item = result
+
+        if item and not (item.get("Falha") or item.get("FALHA") == "S"):
+            cod_cli = str(item.get("COD_CLI") or item.get("CODIGO") or "").strip()
+            if cod_cli:
+                log.info(f"[get_client_b2c] Cliente encontrado: COD_CLI={cod_cli}")
+                return {"error": False, "data": item}
+
+        log.info(f"[get_client_b2c] Cliente {param_key}={cpf} não localizado no Hórus")
+        return {"error": True, "msg": "Cliente não encontrado"}
+
+
     async def get_customer_financials(self, cnpj_destino: str, cnpj_cliente: str) -> Dict[str, Any]:
         """
         Specialized fetch to grab credit limit and debt balance via Busca_ClienteB2B

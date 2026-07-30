@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Boolean, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, Numeric, ForeignKey, DateTime, Boolean, JSON, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -29,12 +29,38 @@ class DropshipConfig(Base):
     # Vínculo com customer Cronuz que representa o parceiro (ex: ERDOS)
     # O customer deve ter id_guid e id_doc configurados para uso na API Hórus
     horus_customer_id = Column(Integer, ForeignKey("crm_customer.id"), nullable=True, index=True)
+    horus_customer_cod_cli = Column(String(50), nullable=True) # COD_CLI do customer ERDOS no Hórus
 
-    # Parâmetros fiscais no Hórus (configurados pelo Master)
-    # Remessa: CFOP 5.923/6.923 — tipo DIVERSOS, baixa estoque físico
+    # ─────────────────────────────────────────────────────────────────
+    # Parâmetros fiscais da REMESSA (por estado)
+    # ─────────────────────────────────────────────────────────────────
+    # Intraestadual: UF do cliente == UF do seller
+    horus_fiscal_param_remessa_intra = Column(String(50), nullable=True)
+    # Interestadual: UF do cliente != UF do seller
+    horus_fiscal_param_remessa_inter = Column(String(50), nullable=True)
+    # Campo legado (mantido para compatibilidade — usar os dois acima no novo fluxo)
     horus_fiscal_param_remessa = Column(String(50), nullable=True)
+
     # Venda: CFOP 5.118/6.118 — tipo VENDA, não baixa estoque
     horus_fiscal_param_venda = Column(String(50), nullable=True)
+
+    # ─────────────────────────────────────────────────────────────────
+    # Parâmetros do cliente no Hórus (para InsCliente / InsPedidoVenda)
+    # ─────────────────────────────────────────────────────────────────
+    horus_tipo_cliente    = Column(String(20), nullable=True)   # Tipo de cliente (código)
+    horus_resp_cliente    = Column(String(20), nullable=True)   # Responsável do cliente
+    horus_cod_resp        = Column(String(20), nullable=True)   # Código do responsável
+    horus_cod_endereco    = Column(String(20), nullable=True)   # Código do endereço padrão
+
+    # ─────────────────────────────────────────────────────────────────
+    # Parâmetros do pedido no Hórus
+    # ─────────────────────────────────────────────────────────────────
+    horus_cod_metodo         = Column(String(20), nullable=True)  # Código do método de envio
+    horus_cod_endereco_pedido = Column(String(20), nullable=True) # Código do endereço do pedido
+    # Parâmetros exclusivos do pedido de Remessa (B2C)
+    horus_cod_transp          = Column(String(20), nullable=True)  # COD_TRANSP — transportadora obrigatória
+    horus_frete_emit_dest     = Column(String(5),  nullable=True)  # FRETE_EMIT_DEST: 1=emitente, 2=destinatário
+    horus_status_envio_erp    = Column(String(20), nullable=True)  # Status via AltStatus_Pedido após envio (ex: LEX)
 
     # Sincronização de estoque
     stock_sync_interval_min = Column(Integer, default=30, nullable=False)
@@ -85,6 +111,9 @@ class DropshipOrder(Base):
     horus_pedido_remessa = Column(String(100), nullable=True)    # COD_PED_VENDA pedido de remessa (6.923)
     horus_pedido_venda = Column(String(100), nullable=True)      # COD_PED_VENDA pedido de venda (6.118)
 
+    # COD_CLI do cliente final no Hórus (salvo após primeira busca/criação para reutilização)
+    horus_cod_cli_final = Column(String(50), nullable=True)
+
     # Despacho
     tracking_code = Column(String(100), nullable=True)
     nfe_remessa_key = Column(String(100), nullable=True)         # Chave NF-e de remessa (6.923)
@@ -111,9 +140,33 @@ class DropshipOrder(Base):
     erdos_alert = Column(Boolean, default=False, nullable=False)
 
     # Log de eventos do ciclo de vida (array JSON)
-    # Cada entrada: {"at": ISO, "event": str, "detail": str}
+    # Cada entrada: {\"at\": ISO, \"event\": str, \"detail\": str}
     logs = Column(JSON, nullable=True, default=list)
 
     # Relationships
     company = relationship("Company", foreign_keys=[company_id])
     config = relationship("DropshipConfig", back_populates="orders", foreign_keys=[config_id])
+
+
+class DropshipItemCache(Base):
+    """
+    Cache de COD_ITEM e VLR_CAPA do Hórus por ISBN/EAN por seller.
+    Evita múltiplas chamadas à API do Hórus para o mesmo item.
+    TTL: 24 horas (validado na camada de aplicação).
+    """
+    __tablename__ = "dsp_item_cache"
+    __table_args__ = (
+        UniqueConstraint('company_id', 'isbn', name='uix_dsp_item_cache_company_isbn'),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=False, index=True)
+
+    isbn = Column(String(30), nullable=False, index=True)       # ISBN/EAN do item
+    horus_cod_item = Column(String(50), nullable=True)          # COD_ITEM retornado pelo Hórus
+    horus_vlr_capa = Column(Numeric(10, 2), nullable=True)      # Preço de capa do Hórus
+
+    cached_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationship
+    company = relationship("Company", foreign_keys=[company_id])

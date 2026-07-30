@@ -116,7 +116,79 @@ export default function OrderConferencePage() {
     setIsMounted(true);
     fetchBranches();
     fetchConferences();
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const confId = params.get('conf_id');
+      if (confId) {
+        setViewMode('conference');
+        handleResumeConference(parseInt(confId));
+        return;
+      }
+
+      const bId = params.get('branch_id');
+      const cCli = params.get('cod_cli');
+      const cOrig = params.get('cod_pedido_origem');
+      if (bId && cCli && cOrig) {
+        setSelectedBranchId(bId);
+        setCodCli(cCli);
+        setCodPedidoOrigem(cOrig);
+        setViewMode('search');
+        triggerAutoSearch(bId, cCli, cOrig);
+      }
+    }
   }, []);
+
+  async function triggerAutoSearch(branchId: string, cli: string, orig: string) {
+    setSearching(true);
+    setSession(null);
+    setHorusOrder(null);
+    setHorusItems([]);
+    setOpenVolume(null);
+
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${apiUrl}/logistics/orders/search?branch_id=${branchId}&cod_cli=${encodeURIComponent(cli)}&cod_pedido_origem=${encodeURIComponent(orig)}`,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+      
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao carregar pedido.');
+      }
+
+      setSession(data.session);
+      
+      if (data.session.status === 'COMPLETED') {
+        setHorusOrder({
+          COD_PED_VENDA: data.session.cod_pedido_origem,
+          NOM_CLI: 'Cliente - Conferência Finalizada',
+          STATUS_PEDIDO_VENDA: 'LEX'
+        });
+        toast.info('Esta conferência já foi encerrada.');
+        setOpenVolume(null);
+        setActiveVolumeTab('history');
+      } else {
+        setHorusOrder(data.horus_order);
+        setHorusItems(data.horus_items);
+        
+        const vols = data.session.volumes || [];
+        const lastVol = vols[vols.length - 1];
+        if (lastVol && !lastVol.weight) {
+          setOpenVolume(lastVol);
+          setActiveVolumeTab('current');
+        } else {
+          setOpenVolume(null);
+          setActiveVolumeTab('history');
+        }
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao buscar pedido para conferência.');
+    } finally {
+      setSearching(false);
+    }
+  }
 
   // Keyboard listener for F2 Focus Mode toggle
   useEffect(() => {

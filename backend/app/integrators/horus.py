@@ -77,24 +77,24 @@ class HorusClient:
         )
     
     async def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        import logging
+        log = logging.getLogger(__name__)
         try:
             response = await self._client.get(endpoint, params=params)
+            full_url = str(response.url)
+            log.info(f"[HorusClient.get] {endpoint} → {full_url} | HTTP {response.status_code}")
             response.raise_for_status()
             text = response.text.strip()
-            # Handle BOM and trailing/leading non-json chars cleanly
             if text.startswith("\ufeff"):
                 text = text[1:]
-            
-            # Simple fallback to trying to parse JSON
             import json
             try:
                 return json.loads(text)
             except json.JSONDecodeError:
-                # If Horus returned a pure string instead of JSON, we can return it as an error format
-                return [{"Falha": True, "Mensagem": f"Resposta inválida da API: {text[:100]}"}]
-                
+                return [{"Falha": True, "Mensagem": f"Resposta inválida da API: {text[:200]}"}]
+
         except httpx.HTTPStatusError as e:
-            # Handle API errors gracefully and extract exact Horus message
+            full_url = str(e.request.url)
             err_msg = e.response.text
             try:
                 json_err = e.response.json()
@@ -104,22 +104,34 @@ class HorusClient:
                     err_msg = json_err[0].get("Mensagem")
             except Exception:
                 pass
-            raise Exception(f"Erro Horus ({e.response.status_code}): {err_msg}")
-    
+            log.error(f"[HorusClient.get] HTTP {e.response.status_code} em {full_url}: {err_msg}")
+            raise Exception(f"Hórus HTTP {e.response.status_code} em [{full_url}]: {err_msg}")
+
+        except httpx.RequestError as e:
+            # Falha de conexão TCP/DNS — endpoint nunca foi alcançado
+            req_url = str(e.request.url) if e.request else f"{self._client.base_url}{endpoint}"
+            log.error(f"[HorusClient.get] Falha de conexão em {req_url}: {e}")
+            raise Exception(f"Hórus sem conexão [{req_url}]: {e}")
+
     async def post(self, endpoint: str, json_data: Any, params: Optional[Dict[str, Any]] = None) -> Any:
+        import logging
+        log = logging.getLogger(__name__)
         try:
             response = await self._client.post(endpoint, json=json_data, params=params)
+            full_url = str(response.url)
+            log.info(f"[HorusClient.post] {endpoint} → {full_url} | HTTP {response.status_code}")
             response.raise_for_status()
             text = response.text.strip()
             if text.startswith("\ufeff"):
                 text = text[1:]
-                
             import json
             try:
                 return json.loads(text)
             except json.JSONDecodeError:
-                return [{"Falha": True, "Mensagem": f"Resposta inválida da API: {text[:100]}"}]
+                return [{"Falha": True, "Mensagem": f"Resposta inválida da API: {text[:200]}"}]
+
         except httpx.HTTPStatusError as e:
+            full_url = str(e.request.url)
             err_msg = e.response.text
             try:
                 json_err = e.response.json()
@@ -129,7 +141,14 @@ class HorusClient:
                     err_msg = json_err[0].get("Mensagem")
             except Exception:
                 pass
-            raise Exception(f"Erro Horus ({e.response.status_code}): {err_msg}")
+            log.error(f"[HorusClient.post] HTTP {e.response.status_code} em {full_url}: {err_msg}")
+            raise Exception(f"Hórus HTTP {e.response.status_code} em [{full_url}]: {err_msg}")
+
+        except httpx.RequestError as e:
+            req_url = str(e.request.url) if e.request else f"{self._client.base_url}{endpoint}"
+            log.error(f"[HorusClient.post] Falha de conexão em {req_url}: {e}")
+            raise Exception(f"Hórus sem conexão [{req_url}]: {e}")
+
             
     async def test_api(self) -> Dict[str, Any]:
         """

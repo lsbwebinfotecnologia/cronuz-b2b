@@ -26,8 +26,16 @@ interface DropshipConfig {
   horus_customer_document: string | null;
   horus_customer_id_guid: string | null;
   horus_customer_id_doc: string | null;
-  horus_fiscal_param_remessa: string | null;
+  horus_fiscal_param_remessa: string | null;           // legado
+  horus_fiscal_param_remessa_intra: string | null;
+  horus_fiscal_param_remessa_inter: string | null;
   horus_fiscal_param_venda: string | null;
+  horus_tipo_cliente: string | null;
+  horus_resp_cliente: string | null;
+  horus_cod_resp: string | null;
+  horus_cod_endereco: string | null;
+  horus_cod_metodo: string | null;
+  horus_cod_endereco_pedido: string | null;
   stock_sync_interval_min: number;
   stock_sync_enabled: boolean;
   stock_sync_last_run: string | null;
@@ -68,8 +76,19 @@ export default function CompanyDropshipPage() {
     api_base_url: string;
     horus_customer_id: number | null;
     horus_customer_name: string;
-    horus_fiscal_param_remessa: string;
+    // Fiscais
+    horus_fiscal_param_remessa_intra: string;
+    horus_fiscal_param_remessa_inter: string;
     horus_fiscal_param_venda: string;
+    // Parâmetros cliente
+    horus_tipo_cliente: string;
+    horus_resp_cliente: string;
+    horus_cod_resp: string;
+    horus_cod_endereco: string;
+    // Parâmetros pedido
+    horus_cod_metodo: string;
+    horus_cod_endereco_pedido: string;
+    // Estoque
     stock_sync_interval_min: number;
     stock_sync_enabled: boolean;
   }>({
@@ -79,8 +98,15 @@ export default function CompanyDropshipPage() {
     api_base_url: 'https://wxcapqbtvgttooamglxx.supabase.co/functions/v1/api-fornecedor',
     horus_customer_id: null,
     horus_customer_name: '',
-    horus_fiscal_param_remessa: '',
+    horus_fiscal_param_remessa_intra: '',
+    horus_fiscal_param_remessa_inter: '',
     horus_fiscal_param_venda: '',
+    horus_tipo_cliente: '',
+    horus_resp_cliente: '',
+    horus_cod_resp: '',
+    horus_cod_endereco: '',
+    horus_cod_metodo: '',
+    horus_cod_endereco_pedido: '',
     stock_sync_interval_min: 30,
     stock_sync_enabled: false,
   });
@@ -129,8 +155,15 @@ export default function CompanyDropshipPage() {
           api_base_url: data.api_base_url || '',
           horus_customer_id: data.horus_customer_id,
           horus_customer_name: data.horus_customer_name || '',
-          horus_fiscal_param_remessa: data.horus_fiscal_param_remessa || '',
+          horus_fiscal_param_remessa_intra: data.horus_fiscal_param_remessa_intra || '',
+          horus_fiscal_param_remessa_inter: data.horus_fiscal_param_remessa_inter || '',
           horus_fiscal_param_venda: data.horus_fiscal_param_venda || '',
+          horus_tipo_cliente: data.horus_tipo_cliente || '',
+          horus_resp_cliente: data.horus_resp_cliente || '',
+          horus_cod_resp: data.horus_cod_resp || '',
+          horus_cod_endereco: data.horus_cod_endereco || '',
+          horus_cod_metodo: data.horus_cod_metodo || '',
+          horus_cod_endereco_pedido: data.horus_cod_endereco_pedido || '',
           stock_sync_interval_min: data.stock_sync_interval_min || 30,
           stock_sync_enabled: data.stock_sync_enabled,
         });
@@ -452,7 +485,7 @@ export default function CompanyDropshipPage() {
           </div>
         </motion.div>
 
-        {/* Parâmetros Fiscais Hórus */}
+        {/* Parâmetros Fiscais — Remessa */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -460,52 +493,198 @@ export default function CompanyDropshipPage() {
           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden"
         >
           <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
-            <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Parâmetros Fiscais Hórus</h2>
+            <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Parâmetros Fiscais — Remessa (CFOP 6.923)</h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Códigos dos parâmetros fiscais criados no Hórus para o fluxo de dropshipping
+              Dois códigos distintos por estado — intraestadual (mesmo UF) e interestadual (outro UF)
             </p>
           </div>
           <div className="p-5 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                  COD_PARAM_FISCAL — Remessa (CFOP 6.923)
+                  COD_PARAM_FISCAL — Intraestadual (mesmo UF)
                 </label>
                 <input
                   type="text"
-                  value={formData.horus_fiscal_param_remessa}
-                  onChange={e => setFormData(p => ({ ...p, horus_fiscal_param_remessa: e.target.value }))}
+                  value={formData.horus_fiscal_param_remessa_intra}
+                  onChange={e => setFormData(p => ({ ...p, horus_fiscal_param_remessa_intra: e.target.value }))}
                   className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
                   placeholder="Ex: 123"
                 />
                 <p className="text-[10px] text-slate-400 mt-1">
-                  Tipo DIVERSOS · Baixa estoque físico · movimentação = Sim
+                  Usado quando o UF do cliente == UF do seller
                 </p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                  COD_PARAM_FISCAL — Venda (CFOP 6.118)
+                  COD_PARAM_FISCAL — Interestadual (outro UF)
                 </label>
                 <input
                   type="text"
-                  value={formData.horus_fiscal_param_venda}
-                  onChange={e => setFormData(p => ({ ...p, horus_fiscal_param_venda: e.target.value }))}
+                  value={formData.horus_fiscal_param_remessa_inter}
+                  onChange={e => setFormData(p => ({ ...p, horus_fiscal_param_remessa_inter: e.target.value }))}
                   className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
                   placeholder="Ex: 124"
                 />
                 <p className="text-[10px] text-slate-400 mt-1">
-                  Tipo VENDA · Não baixa estoque · movimentação = Não
+                  Usado quando o UF do cliente != UF do seller
                 </p>
               </div>
             </div>
+          </div>
+        </motion.div>
 
-            <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/40 rounded-xl p-3 flex items-start gap-2.5">
+        {/* Parâmetros Fiscais — Venda */}
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.17 }}
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden"
+        >
+          <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
+            <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Parâmetros Fiscais — Venda (CFOP 6.118)</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Pedido de venda para o customer ERDOS — não baixa estoque
+            </p>
+          </div>
+          <div className="p-5">
+            <div className="max-w-xs">
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                COD_PARAM_FISCAL — Venda (CFOP 6.118)
+              </label>
+              <input
+                type="text"
+                value={formData.horus_fiscal_param_venda}
+                onChange={e => setFormData(p => ({ ...p, horus_fiscal_param_venda: e.target.value }))}
+                className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                placeholder="Ex: 125"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                Tipo VENDA · Não baixa estoque · movimentação = Não
+              </p>
+            </div>
+
+            <div className="mt-4 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/40 rounded-xl p-3 flex items-start gap-2.5">
               <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
               <p className="text-xs text-amber-700 dark:text-amber-300">
-                Os parâmetros fiscais devem ser criados previamente no Hórus ERP e os códigos gerados informados aqui.
-                Para o pedido de <strong>Venda (6.118)</strong>, o parâmetro deve estar configurado também diretamente
-                no Hórus nas configurações do customer ERDOS para o B2B.
+                Os parâmetros fiscais devem ser criados previamente no Hórus ERP. Para o pedido de <strong>Remessa</strong>, o cliente cadastrado será o consumidor final do pedido Erdos.
               </p>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Parâmetros do Cliente no Hórus */}
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.19 }}
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden"
+        >
+          <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
+            <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Parâmetros do Cliente — Hórus</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Usados ao cadastrar o cliente consumidor final no Hórus via InsCliente (campos opcionais)
+            </p>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                  TIPO_CLI
+                </label>
+                <input
+                  type="text"
+                  value={formData.horus_tipo_cliente}
+                  onChange={e => setFormData(p => ({ ...p, horus_tipo_cliente: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                  placeholder="Ex: 1"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Tipo de cliente</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                  RESP_CLI
+                </label>
+                <input
+                  type="text"
+                  value={formData.horus_resp_cliente}
+                  onChange={e => setFormData(p => ({ ...p, horus_resp_cliente: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                  placeholder="Ex: 1"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Responsável</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                  COD_RESP
+                </label>
+                <input
+                  type="text"
+                  value={formData.horus_cod_resp}
+                  onChange={e => setFormData(p => ({ ...p, horus_cod_resp: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                  placeholder="Ex: 1"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Cód. responsável</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                  COD_END
+                </label>
+                <input
+                  type="text"
+                  value={formData.horus_cod_endereco}
+                  onChange={e => setFormData(p => ({ ...p, horus_cod_endereco: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                  placeholder="Ex: 1"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Cód. endereço padrão</p>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Parâmetros do Pedido no Hórus */}
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.21 }}
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden"
+        >
+          <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
+            <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Parâmetros do Pedido — Hórus</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Usados ao inserir o pedido de remessa via InsPedidoVenda (campos opcionais)
+            </p>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-2 gap-4 max-w-sm">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                  COD_MET
+                </label>
+                <input
+                  type="text"
+                  value={formData.horus_cod_metodo}
+                  onChange={e => setFormData(p => ({ ...p, horus_cod_metodo: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                  placeholder="Ex: 1"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Cód. método de envio</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                  COD_END_PED
+                </label>
+                <input
+                  type="text"
+                  value={formData.horus_cod_endereco_pedido}
+                  onChange={e => setFormData(p => ({ ...p, horus_cod_endereco_pedido: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                  placeholder="Ex: 1"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Cód. endereço do pedido</p>
+              </div>
             </div>
           </div>
         </motion.div>

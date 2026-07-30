@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
 import {
   ArrowLeft, PackageCheck, Send, CheckCircle2, Clock, PackageX,
   Loader2, MapPin, ShoppingCart, Truck, FileText, Tag, Download,
-  Printer, RefreshCw, AlertTriangle, X, Search
+  Printer, RefreshCw, AlertTriangle, X, Search, ClipboardCheck
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -25,6 +25,7 @@ interface DropshipOrder {
   fiscal_data: any;
   horus_pedido_remessa: string | null;
   horus_pedido_venda: string | null;
+  horus_cod_cli_final: string | null;
   tracking_code: string | null;
   nfe_remessa_key: string | null;
   label_path: string | null;
@@ -39,6 +40,7 @@ interface DropshipOrder {
   erdos_checked_at: string | null;
   erdos_alert: boolean;
   logs: Array<{ at: string; event: string; erdos_status: string; local_status_before: string; local_status_after: string; detail: string; }> | null;
+  conference?: { id: number; branch_id: number; status: string; cod_cli: string; cod_pedido_origem: string; created_at: string; } | null;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -160,6 +162,107 @@ export default function DropshipOrderDetailPage() {
   const [checkingErdos, setCheckingErdos] = useState(false);
   const [erdosCheckResult, setErdosCheckResult] = useState<any>(null);
 
+  // Modal de Conferência Logística
+  const [showConfModal, setShowConfModal] = useState(false);
+  const [branches, setBranches] = useState<any[]>([]);
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+  const [confCodCli, setConfCodCli] = useState('');
+  const [confCodOrigem, setConfCodOrigem] = useState('');
+  const [loadingBranches, setLoadingBranches] = useState(false);
+
+  const openConferenceModal = async () => {
+    const cust = order?.customer_data || {};
+    const cpfCnpjClean = String(cust.cpf_cnpj || cust.document || '').replace(/\D/g, '');
+    const defaultCodCli = order?.horus_cod_cli_final || cpfCnpjClean || '';
+
+    const remessaCode = order?.horus_pedido_remessa ? String(order.horus_pedido_remessa).replace('#', '').trim() : '';
+    const extId = order?.external_reference || order?.external_order_id || order?.id || '';
+    const defaultCodOrigem = remessaCode || `RM-${extId}`;
+
+    setConfCodCli(defaultCodCli);
+    setConfCodOrigem(defaultCodOrigem);
+    setShowConfModal(true);
+
+    setLoadingBranches(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/logistics/branches`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBranches(data);
+        if (data.length > 0 && !selectedBranchId) {
+          setSelectedBranchId(String(data[0].id));
+        }
+      }
+    } catch {
+      toast.error('Erro ao carregar filiais');
+    } finally {
+      setLoadingBranches(false);
+    }
+  };
+
+  const [startingConf, setStartingConf] = useState(false);
+  const [deletingConf, setDeletingConf] = useState(false);
+
+  const handleStartConference = async () => {
+    if (!selectedBranchId || !confCodCli || !confCodOrigem) {
+      toast.error('Preencha a filial do seller e os códigos para iniciar.');
+      return;
+    }
+
+    setStartingConf(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${API_URL}/logistics/orders/search?branch_id=${selectedBranchId}&cod_cli=${encodeURIComponent(confCodCli)}&cod_pedido_origem=${encodeURIComponent(confCodOrigem)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao consultar o pedido no Hórus.');
+      }
+
+      toast.success('Conferência iniciada no Hórus com sucesso!');
+      setShowConfModal(false);
+
+      if (data.session && data.session.id) {
+        router.push(`/logistics/conference?conf_id=${data.session.id}`);
+      } else {
+        router.push(
+          `/logistics/conference?branch_id=${selectedBranchId}&cod_cli=${encodeURIComponent(confCodCli)}&cod_pedido_origem=${encodeURIComponent(confCodOrigem)}&auto_start=true`
+        );
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao iniciar conferência no Hórus.');
+    } finally {
+      setStartingConf(false);
+    }
+  };
+
+  const handleDeleteConference = async (confId: number) => {
+    if (!confirm('Tem certeza que deseja cancelar/excluir esta conferência em aberto?')) return;
+    setDeletingConf(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/logistics/orders/conferences/${confId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao excluir conferência.');
+      }
+      toast.success('Conferência em aberto excluída com sucesso.');
+      fetchOrder();
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao excluir conferência.');
+    } finally {
+      setDeletingConf(false);
+    }
+  };
+
   useEffect(() => {
     const token = getToken();
     if (token) {
@@ -265,7 +368,17 @@ export default function DropshipOrderDetailPage() {
         }
         fetchOrder();
       } else {
-        toast.error(data.detail || 'Erro ao enviar ao Hórus');
+        // O backend pode retornar detail como string OU como { mensagem, erros: [] }
+        const detail = data.detail;
+        if (detail && typeof detail === 'object' && detail.erros) {
+          // Validação pré-voo: exibe mensagem principal + cada erro individualmente
+          toast.error(detail.mensagem || 'Erro ao enviar ao Hórus', { duration: 6000 });
+          (detail.erros as string[]).forEach((err: string) => {
+            toast.error(err, { duration: 8000 });
+          });
+        } else {
+          toast.error(typeof detail === 'string' ? detail : 'Erro ao enviar ao Hórus');
+        }
       }
     } catch { toast.error('Erro de conexão.'); }
     finally { setSendingToHorus(false); }
@@ -476,14 +589,19 @@ export default function DropshipOrderDetailPage() {
             <Section title="Pedidos Hórus ERP" icon={PackageCheck}>
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/40 rounded-xl p-4">
-                  <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider mb-1">Remessa (CFOP 6.923)</p>
+                  <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider mb-1">REMESSA</p>
                   <p className="text-lg font-black text-blue-700 dark:text-blue-300 font-mono">
                     {order.horus_pedido_remessa ? `#${order.horus_pedido_remessa}` : '—'}
                   </p>
-                  <p className="text-[10px] text-blue-400 mt-1">Baixa estoque físico</p>
+                  {order.horus_cod_cli_final && (
+                    <p className="text-[11px] text-blue-600 dark:text-blue-400 mt-1 font-medium">
+                      Cód. Cliente: <span className="font-mono font-bold">{order.horus_cod_cli_final}</span>
+                    </p>
+                  )}
+                  <p className="text-[10px] text-blue-400 mt-0.5">Baixa estoque físico</p>
                 </div>
                 <div className="bg-violet-50 dark:bg-violet-900/10 border border-violet-200 dark:border-violet-800/40 rounded-xl p-4">
-                  <p className="text-[10px] font-semibold text-violet-500 uppercase tracking-wider mb-1">Venda (CFOP 6.118)</p>
+                  <p className="text-[10px] font-semibold text-violet-500 uppercase tracking-wider mb-1">VENDA</p>
                   <p className="text-lg font-black text-violet-700 dark:text-violet-300 font-mono">
                     {order.horus_pedido_venda ? `#${order.horus_pedido_venda}` : '—'}
                   </p>
@@ -585,6 +703,49 @@ export default function DropshipOrderDetailPage() {
                   <p className="font-mono text-sm font-bold text-emerald-700 dark:text-emerald-300">{order.tracking_code}</p>
                 </div>
               )}
+              {(order.horus_pedido_remessa || order.status === 'SENT_TO_HORUS') && (
+                order.conference ? (
+                  order.conference.status === 'COMPLETED' ? (
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/logistics/conference?conf_id=${order.conference!.id}`)}
+                      className="w-full flex items-center justify-center gap-2 mt-3 py-2.5 px-4 text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 rounded-xl transition shadow-sm"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      Conferência Concluída (Ver)
+                    </button>
+                  ) : (
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/logistics/conference?conf_id=${order.conference!.id}`)}
+                        className="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 text-xs font-bold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/50 rounded-xl transition shadow-sm"
+                      >
+                        <ClipboardCheck className="w-4 h-4 text-amber-600" />
+                        Conferência em Andamento
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteConference(order.conference!.id)}
+                        disabled={deletingConf}
+                        title="Excluir conferência em aberto e iniciar nova"
+                        className="p-2.5 text-rose-500 hover:text-rose-700 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 hover:bg-rose-100 dark:hover:bg-rose-900/40 rounded-xl transition shadow-sm disabled:opacity-50"
+                      >
+                        {deletingConf ? <Loader2 className="w-4 h-4 animate-spin" /> : <PackageX className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    onClick={openConferenceModal}
+                    className="w-full flex items-center justify-center gap-2 mt-3 py-2.5 px-4 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] rounded-xl transition shadow-sm"
+                  >
+                    <ClipboardCheck className="w-4 h-4" />
+                    Conferir Pedido (Logística)
+                  </button>
+                )
+              )}
             </div>
           </Section>
 
@@ -678,6 +839,88 @@ export default function DropshipOrderDetailPage() {
           onClose={() => setShowDispatch(false)}
           onSuccess={fetchOrder}
         />
+      )}
+
+      {/* Modal de Inicialização da Conferência */}
+      {showConfModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 w-full max-w-md shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <ClipboardCheck className="w-5 h-5 text-indigo-500" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Iniciar Conferência Hórus</h3>
+              </div>
+              <button
+                onClick={() => setShowConfModal(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Filial do Seller *</label>
+                {loadingBranches ? (
+                  <div className="flex items-center gap-2 py-2 px-3 bg-slate-50 dark:bg-slate-800 rounded-xl text-slate-400">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Carregando filiais...
+                  </div>
+                ) : (
+                  <select
+                    value={selectedBranchId}
+                    onChange={e => setSelectedBranchId(e.target.value)}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-medium"
+                  >
+                    {branches.map(b => (
+                      <option key={b.id} value={b.id}>
+                        {b.nome} {b.cod_local ? `(Local: ${b.cod_local})` : ''} — Emp: {b.cod_empresa} / Fil: {b.cod_filial}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Código Cliente (Hórus)</label>
+                <input
+                  type="text"
+                  value={confCodCli}
+                  onChange={e => setConfCodCli(e.target.value)}
+                  className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Número Pedido Origem (Remessa)</label>
+                <input
+                  type="text"
+                  value={confCodOrigem}
+                  onChange={e => setConfCodOrigem(e.target.value)}
+                  className="w-full px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowConfModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleStartConference}
+                disabled={startingConf}
+                className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl transition flex items-center gap-1.5 shadow-sm"
+              >
+                {startingConf ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardCheck className="w-4 h-4" />}
+                Iniciar Conferência
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

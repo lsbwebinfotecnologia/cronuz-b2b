@@ -56,6 +56,7 @@ def create_branch(
         cnpj=branch_in.cnpj,
         cod_empresa=branch_in.cod_empresa,
         cod_filial=branch_in.cod_filial,
+        cod_local=branch_in.cod_local,
         active=branch_in.active
     )
     db.add(new_branch)
@@ -248,6 +249,8 @@ async def search_order_for_conference(
 
     # 7. Create/Retrieve local session automatically
     if not local_conf:
+        if not order_data:
+            raise HTTPException(status_code=404, detail="Pedido não localizado no Horus ERP.")
         local_conf = OrderConference(
             company_id=current_user.company_id,
             branch_id=branch_id,

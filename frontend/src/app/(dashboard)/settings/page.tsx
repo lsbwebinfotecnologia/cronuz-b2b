@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2, CreditCard, Truck, ChevronRight, FileText, Key, CheckCircle, BookOpen } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2, CreditCard, Truck, ChevronRight, FileText, Key, CheckCircle, BookOpen, Package } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -11,6 +11,7 @@ import { EmailTemplatesTab } from './EmailTemplatesTab';
 import { HorusTab } from './HorusTab';
 import { BookinfoTab } from './BookinfoTab';
 import { SefazBranchesTab } from './SefazBranchesTab';
+import { DropshipTab } from './DropshipTab';
 import { useCompany } from './layout';
 
 export default function SettingsPage() {
@@ -423,9 +424,10 @@ export default function SettingsPage() {
     { id: 'email', label: 'E-mails (SMTP)', icon: Mail },
     { id: 'templates', label: 'Modelos de E-mail', icon: FileText },
     { id: 'sefaz_sp', label: 'Fiscal SEFAZ', icon: Key },
+    { id: 'dropship', label: 'Dropship Horus', icon: Package },
   ];
 
-  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp';
+  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship';
   const FormContainer = isFormTab ? 'form' : 'div';
 
   return (
@@ -1269,10 +1271,16 @@ export default function SettingsPage() {
                   <SefazBranchesTab />
                 </div>
               )}
+              {/* Tab: DROPSHIP HORUS */}
+              {activeTab === 'dropship' && (
+                <div className="animate-in fade-in">
+                  <DropshipTab />
+                </div>
+              )}
 
             </div>
 
-            {activeTab !== 'templates' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && (
+            {activeTab !== 'templates' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && (
               <div className="p-6 bg-slate-50 border-t border-slate-200 dark:bg-slate-900/60 dark:border-slate-800/60 flex items-center justify-end">
                 <button
                 type="submit"
