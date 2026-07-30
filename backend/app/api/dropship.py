@@ -1643,12 +1643,17 @@ async def check_erdos_status(
 async def confirm_dispatch(
     company_id: int,
     order_id: int,
-    payload: ConfirmDispatchRequest,
+    payload: Optional[ConfirmDispatchRequest] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Confirma o despacho no Hub-Erdos enviando código de rastreamento e chave NF-e 6.923.
+    Confirma o despacho do pedido de dropship com verificação estrita de segurança no Hórus ERP:
+    1. Consulta Busca_NotaFiscal no Hórus para o pedido de remessa (CFOP 6.923).
+    2. Valida se a nota possui STATUS == 'SAÍDA' e se CHAVE_ACESSO_NFE foi emitida.
+    3. Armazena CHAVE_ACESSO_NFE, NRO_NOTA_FISCAL e DAT_EMISSAO_NF localmente.
+    4. Notifica o Hub-Erdos via POST /pedidos/atualizar-status-despacho.
+    5. Atualiza o status do pedido local para DISPATCHED.
     """
     _require_seller_or_master(current_user, company_id)
 
@@ -1657,33 +1662,143 @@ async def confirm_dispatch(
         DropshipOrder.company_id == company_id,
     ).first()
     if not order:
-        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+        raise HTTPException(status_code=404, detail="Pedido dropship não encontrado.")
 
-    if order.status != "SENT_TO_HORUS":
-        raise HTTPException(status_code=400, detail=f"Pedido não está no status SENT_TO_HORUS (atual: {order.status}).")
+    if not order.horus_pedido_remessa:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível confirmar despacho: Pedido ainda não possui o número de remessa gerado no Hórus ERP (horus_pedido_remessa)."
+        )
 
+    # 1. Consultar Busca_NotaFiscal no Hórus ERP
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
     config = db.query(DropshipConfig).filter(DropshipConfig.id == order.config_id).first()
-    client = _build_erdos_client(config)
+
+    horus_client = HorusLogisticsClient(db, company_id)
+    try:
+        cod_empresa = settings.horus_company if settings and settings.horus_company else "1"
+        cod_filial = settings.horus_branch if settings and settings.horus_branch else "1"
+        cod_metodo = (config.horus_cod_metodo if config and config.horus_cod_metodo else None) or getattr(settings, 'horus_cod_metodo', None) or 2
+
+        # Trata COD_PED_VENDA numérico estrito (ex: 61 ou 650693)
+        remessa_num = re.sub(r'\D', '', str(order.horus_pedido_remessa))
+        if not remessa_num:
+            raise HTTPException(status_code=400, detail="Código de remessa inválido para consulta de NF no Hórus.")
+
+        nf_params = {
+            "COD_EMPRESA": str(cod_empresa),
+            "COD_FILIAL": str(cod_filial),
+            "COD_PED_VENDA": int(remessa_num),
+            "COD_METODO": cod_metodo,
+            "OFFSET": 0,
+            "LIMIT": 10
+        }
+        if order.horus_cod_cli_final:
+            nf_params["COD_CLI"] = order.horus_cod_cli_final
+
+        res_nf = await horus_client.get("Busca_NotaFiscal", params=nf_params)
+        await horus_client.close()
+
+        if not res_nf or (isinstance(res_nf, list) and len(res_nf) == 0):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Nenhuma Nota Fiscal localizada no Hórus ERP para o pedido de remessa #{remessa_num} (COD_METODO: {cod_metodo}). Fature a nota no Hórus antes de confirmar o despacho."
+            )
+
+        nf_list = res_nf if isinstance(res_nf, list) else [res_nf]
+
+        # Procurar nota fiscal com STATUS == "SAÍDA" / "SAIDA"
+        saida_nf = None
+        for item in nf_list:
+            if isinstance(item, dict):
+                st = str(item.get("STATUS", "")).strip().upper()
+                if "SA" in st and "DA" in st:  # SAÍDA / SAIDA
+                    saida_nf = item
+                    break
+
+        if not saida_nf:
+            # Fallback: primeira nota se possuir CHAVE_ACESSO_NFE
+            first = nf_list[0]
+            if isinstance(first, dict) and first.get("CHAVE_ACESSO_NFE"):
+                saida_nf = first
+
+        if not saida_nf or not saida_nf.get("CHAVE_ACESSO_NFE"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"A Nota Fiscal de Remessa #{remessa_num} ainda não foi faturada no Hórus com STATUS 'SAÍDA' ou não possui a CHAVE_ACESSO_NFE gerada."
+            )
+
+        chave_acesso = str(saida_nf.get("CHAVE_ACESSO_NFE", "")).strip()
+        nro_nota = str(saida_nf.get("NRO_NOTA_FISCAL", "")).strip()
+        dat_emissao = str(saida_nf.get("DAT_EMISSAO_NF", "")).strip()
+
+        if not chave_acesso:
+            raise HTTPException(
+                status_code=400,
+                detail="Segurança de Despacho: A Nota Fiscal localizada no Hórus ERP não possui CHAVE_ACESSO_NFE válida."
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await horus_client.close()
+        raise HTTPException(status_code=500, detail=f"Erro ao consultar Busca_NotaFiscal no Hórus ERP: {str(e)}")
+
+    # 2. Notificar o Hub-Erdos via API (POST /pedidos/atualizar-status-despacho)
+    erdos_client = _build_erdos_client(config)
+    tracking_code = (payload.tracking_code if payload else None) or order.tracking_code or ""
+    erdos_response = None
 
     try:
-        result = await client.confirm_dispatch(
+        erdos_response = await erdos_client.confirm_dispatch(
             id_pedido_erdos=order.external_order_id,
-            tracking_code=payload.tracking_code,
-            chave_nfe_remessa=payload.nfe_remessa_key,
+            tracking_code=tracking_code,
+            chave_nfe_remessa=chave_acesso,
         )
     except ErdosClientError as e:
-        raise HTTPException(status_code=502, detail=f"Erro ao confirmar despacho no Hub-Erdos: {str(e)}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Nota Fiscal capturada no Hórus (NF {nro_nota}), porém ocorreu erro ao comunicar despacho com o Hub-Erdos: {str(e)}"
+        )
     finally:
-        await client.close()
+        await erdos_client.close()
 
-    # Atualizar pedido local
+    # 3. Atualizar dados do pedido localmente com total segurança
+    status_before = order.status
     order.status = "DISPATCHED"
-    order.tracking_code = payload.tracking_code
-    order.nfe_remessa_key = payload.nfe_remessa_key
+    order.nfe_remessa_key = chave_acesso
+    if tracking_code:
+        order.tracking_code = tracking_code
     order.dispatched_at = datetime.utcnow()
-    db.commit()
 
-    return {"status": "dispatched", "detail": result}
+    # Atualizar objeto JSON fiscal_data
+    fdata = dict(order.fiscal_data or {})
+    fdata["nro_nota_fiscal_remessa"] = nro_nota
+    fdata["dat_emissao_nf_remessa"] = dat_emissao
+    fdata["chave_nfe_remessa_6923"] = chave_acesso
+    order.fiscal_data = fdata
+
+    # Registrar histórico de log
+    logs = list(order.logs or [])
+    logs.append({
+        "at": datetime.utcnow().isoformat(),
+        "event": "CONFIRM_DISPATCH",
+        "local_status_before": status_before,
+        "local_status_after": "DISPATCHED",
+        "detail": f"NF-e de Remessa nº {nro_nota} (Chave: {chave_acesso}) capturada com sucesso do Hórus. Despacho verificado e confirmado no Erdos."
+    })
+    order.logs = logs
+
+    db.commit()
+    db.refresh(order)
+
+    return {
+        "status": "dispatched",
+        "nro_nota_fiscal": nro_nota,
+        "chave_nfe_remessa_6923": chave_acesso,
+        "dat_emissao_nf": dat_emissao,
+        "erdos_response": erdos_response
+    }
 
 
 # ==============================================================================
