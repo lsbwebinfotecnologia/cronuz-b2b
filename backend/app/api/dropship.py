@@ -1368,11 +1368,15 @@ async def send_order_to_horus(
             except Exception as e_lap:
                 errors.append(f"Venda AltStatus (LAP): {str(e_lap)}")
 
-            # STEP 2: Pular_expedicao → LFT (COD_EMPRESA, COD_FILIAL, COD_CLI, COD_PED_VENDA, COD_LOCAL=0)
+            # STEP 2: Pular_expedicao → LFT (COD_EMPRESA, COD_FILIAL, COD_CLI, COD_PED_VENDA, COD_LOCAL)
             try:
+                cod_local_val = getattr(settings, 'horus_stock_local', None)
+                if not cod_local_val or str(cod_local_val).strip() == '':
+                    cod_local_val = 0
+
                 pular_params: Dict[str, Any] = {
                     "COD_PED_VENDA": cod_ped_venda,
-                    "COD_LOCAL":     0,
+                    "COD_LOCAL":     cod_local_val,
                 }
                 if settings.horus_company:
                     pular_params["COD_EMPRESA"] = settings.horus_company
