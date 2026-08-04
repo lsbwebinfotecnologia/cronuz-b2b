@@ -316,6 +316,7 @@ export function Sidebar() {
       icon: PackageCheck,
       subItems: [
         { name: 'Pedidos Erdos', href: '/orders/dropship' },
+        { name: 'Tabela de Preços', href: '/orders/dropship/price-table' },
       ]
     });
   }

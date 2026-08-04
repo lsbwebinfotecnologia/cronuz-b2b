@@ -26,6 +26,8 @@ interface DropshipConfig {
   horus_cod_transp: string | null;
   horus_frete_emit_dest: string | null;
   horus_status_envio_erp: string | null;
+  vlr_taxa_frete: number | null;
+  perc_desconto_remessa: number | null;
 }
 
 interface CustomerOption {
@@ -67,8 +69,14 @@ function FieldInput({
 }
 
 export function DropshipTab() {
-  const currentUser = getUser();
-  const companyId = currentUser?.company_id;
+  // Obtido de forma reativa para evitar "Failed to fetch" quando o contexto
+  // ainda não está disponível no momento do render inicial.
+  const [companyId, setCompanyId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const user = getUser();
+    setCompanyId(user?.company_id ?? null);
+  }, []);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -95,6 +103,8 @@ export function DropshipTab() {
     horus_cod_transp: string;
     horus_frete_emit_dest: string;
     horus_status_envio_erp: string;
+    vlr_taxa_frete: number;
+    perc_desconto_remessa: number;
   }>({
     enabled: false,
     api_token: '',
@@ -113,10 +123,12 @@ export function DropshipTab() {
     horus_cod_transp: '',
     horus_frete_emit_dest: '',
     horus_status_envio_erp: '',
+    vlr_taxa_frete: 0,
+    perc_desconto_remessa: 0,
   });
 
   const fetchConfig = useCallback(async () => {
-    if (!companyId) return;
+    if (!companyId) return;  // guard: não executa sem companyId válido
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/dropship/config/${companyId}`, {
@@ -142,11 +154,13 @@ export function DropshipTab() {
           horus_cod_transp: data.horus_cod_transp || '',
           horus_frete_emit_dest: data.horus_frete_emit_dest || '',
           horus_status_envio_erp: data.horus_status_envio_erp || '',
+          vlr_taxa_frete: data.vlr_taxa_frete ?? 0,
+          perc_desconto_remessa: data.perc_desconto_remessa ?? 0,
         });
         if (data.horus_customer_name) setCustomerSearch(data.horus_customer_name);
       }
     } catch {
-      // sem config ainda
+      // sem config ainda ou erro de rede — silencioso
     } finally {
       setLoading(false);
     }
@@ -368,6 +382,56 @@ export function DropshipTab() {
           <FieldInput label="FRETE_EMIT_DEST *" hint="1=Emitente | 2=Destinatário" value={form.horus_frete_emit_dest} onChange={v => setForm(p => ({ ...p, horus_frete_emit_dest: v }))} placeholder="Ex: 1" />
           <FieldInput label="Status ao enviar (AltStatus)" hint="Cód. status pós-criação" value={form.horus_status_envio_erp} onChange={v => setForm(p => ({ ...p, horus_status_envio_erp: v }))} placeholder="Ex: LEX" />
           <FieldInput label="COD_END_PED" hint="Endereço do pedido (opcional)" value={form.horus_cod_endereco_pedido} onChange={v => setForm(p => ({ ...p, horus_cod_endereco_pedido: v }))} placeholder="Ex: 1" />
+        </div>
+
+        {/* Parâmetros Financeiros */}
+        <div className="pt-3 border-t border-slate-100 dark:border-slate-800/60">
+          <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-3">Parâmetros Financeiros</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                Taxa de Frete — Venda (R$)
+              </label>
+              <div className="relative">
+                <span className="absolute inset-y-0 left-3 flex items-center text-xs text-slate-400 pointer-events-none">R$</span>
+                <input
+                  id="vlr_taxa_frete"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={form.vlr_taxa_frete}
+                  onChange={e => setForm(p => ({ ...p, vlr_taxa_frete: parseFloat(e.target.value) || 0 }))}
+                  className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+                  placeholder="0.00"
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Enviado como <span className="font-mono">VLR_FRETE</span> no pedido de Venda (6.118). Zero = não envia.
+              </p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                Desconto por Item — Remessa (%)
+              </label>
+              <div className="relative">
+                <input
+                  id="perc_desconto_remessa"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.01}
+                  value={form.perc_desconto_remessa}
+                  onChange={e => setForm(p => ({ ...p, perc_desconto_remessa: parseFloat(e.target.value) || 0 }))}
+                  className="w-full pr-8 pl-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+                  placeholder="0.00"
+                />
+                <span className="absolute inset-y-0 right-3 flex items-center text-xs text-slate-400 pointer-events-none">%</span>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Desconto aplicado sobre <span className="font-mono">VLR_LIQUIDO</span> de cada item na Remessa (6.923). Zero = sem desconto.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 

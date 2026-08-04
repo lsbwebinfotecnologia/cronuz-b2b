@@ -30,11 +30,15 @@ from app.db.session import get_db
 from app.core.dependencies import get_current_user
 from app.models.user import User, UserRole
 from app.models.dropship import DropshipConfig, DropshipOrder
+from app.models.dropship_price_table import DropshipPriceTable
 from app.models.company import Company
 from app.models.company_settings import CompanySettings
 from app.models.customer import Customer
 from app.integrators.erdos_client import ErdosClient, ErdosClientError
 from app.integrators.horus_logistics import HorusLogisticsClient
+from fastapi import UploadFile, File
+from datetime import date
+import io
 
 router = APIRouter()
 
@@ -1342,6 +1346,26 @@ async def send_order_to_horus(
                 info = item_info_map.get(isbn, {})
                 vlr_capa = info.get("vlr_capa", 0.0)
 
+                # ── Tabela de Preços: desconto por ISBN (Venda 6.118 apenas) ──
+                # Consulta dsp_price_table — se ISBN existe e validade futura,
+                # aplica desconto e envia VLR_LIQUIDO. Caso contrário, não envia.
+                price_entry = db.query(DropshipPriceTable).filter(
+                    DropshipPriceTable.company_id == company_id,
+                    DropshipPriceTable.isbn == isbn,
+                    DropshipPriceTable.data_validade >= date.today(),
+                ).first()
+
+                if price_entry and vlr_capa:
+                    desc_pct = float(price_entry.desconto or 0)
+                    vlr_liquido_venda = round(float(vlr_capa) * (1 - desc_pct / 100), 2)
+                    price_to_send: Optional[float] = vlr_liquido_venda
+                    log.info(
+                        f"[Dropship][Venda][PriceTable] ISBN={isbn} desconto={desc_pct}% "
+                        f"vlr_capa={vlr_capa} → VLR_LIQUIDO={vlr_liquido_venda}"
+                    )
+                else:
+                    price_to_send = None  # sem desconto: não envia VLR_LIQUIDO
+
                 res_item = await horus_orders.send_order_item(  # type: ignore[attr-defined]
                     id_doc=id_doc_erdos,
                     id_guid=id_guid_erdos,
@@ -1349,7 +1373,7 @@ async def send_order_to_horus(
                     cod_pedido_origem=cod_origem_venda,
                     isbn=isbn,
                     qty=qty,
-                    price=None,  # NÃO envia VLR_LIQUIDO no pedido de Venda B2B
+                    price=price_to_send,  # VLR_LIQUIDO só se ISBN na tabela de preços e valido
                 )
                 log.info(f"[Dropship] InsItensPedidoVenda (Venda B2B) resposta p/ ISBN={isbn}: {res_item}")
                 if res_item and isinstance(res_item, list) and len(res_item) > 0:
@@ -1972,3 +1996,245 @@ async def get_hub_stock(
         raise HTTPException(status_code=502, detail=str(e))
     finally:
         await client.close()
+
+
+# ==============================================================================
+# TABELA DE PREÇOS DROPSHIP (dsp_price_table)
+# ==============================================================================
+
+class PriceTableItemResponse(BaseModel):
+    id: int
+    company_id: int
+    isbn: str
+    titulo: Optional[str]
+    desconto: float
+    data_validade: date
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
+    vencido: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/price-table/{company_id}", response_model=List[PriceTableItemResponse])
+async def list_price_table(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Lista todos os itens da tabela de preços do seller."""
+    _require_seller_or_master(current_user, company_id)
+    items = (
+        db.query(DropshipPriceTable)
+        .filter(DropshipPriceTable.company_id == company_id)
+        .order_by(DropshipPriceTable.data_validade.desc(), DropshipPriceTable.isbn)
+        .all()
+    )
+    today = date.today()
+    result = []
+    for item in items:
+        result.append(PriceTableItemResponse(
+            id=item.id,
+            company_id=item.company_id,
+            isbn=item.isbn,
+            titulo=item.titulo,
+            desconto=float(item.desconto),
+            data_validade=item.data_validade,
+            created_at=item.created_at,
+            updated_at=item.updated_at,
+            vencido=item.data_validade < today,
+        ))
+    return result
+
+
+@router.post("/price-table/{company_id}/upload")
+async def upload_price_table(
+    company_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Faz upload de planilha (.xlsx ou .csv) com colunas:
+    isbn, titulo, desconto, data_validade.
+    Realiza upsert por (company_id, isbn) — sobrescreve se já existir.
+    """
+    _require_seller_or_master(current_user, company_id)
+
+    filename = (file.filename or "").lower()
+    if not (filename.endswith(".xlsx") or filename.endswith(".csv")):
+        raise HTTPException(status_code=400, detail="Formato inválido. Envie um arquivo .xlsx ou .csv.")
+
+    content = await file.read()
+
+    rows: list = []
+    try:
+        if filename.endswith(".xlsx"):
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+            ws = wb.active
+
+            # ── Leitura robusta de headers ──────────────────────────────────────
+            # Aceita headers em português/abreviados e colunas sem nome (por posição).
+            # Planilha esperada (com ou sem header nas primeiras colunas):
+            #   Col A: isbn   | Col B: titulo | Col C: desconto | Col D: data_validade
+            KNOWN_ALIASES = {
+                # isbn
+                "isbn": "isbn", "ean": "isbn", "codigo": "isbn", "código": "isbn",
+                # titulo
+                "titulo": "titulo", "título": "titulo", "nome": "titulo", "descricao": "titulo",
+                "descrição": "titulo", "livro": "titulo",
+                # desconto
+                "desconto": "desconto", "desc": "desconto", "discount": "desconto",
+                "perc": "desconto", "%": "desconto",
+                # data_validade
+                "data_validade": "data_validade", "validade": "data_validade",
+                "vigencia": "data_validade", "vigência": "data_validade",
+                "data": "data_validade", "expira": "data_validade", "vencimento": "data_validade",
+                "data vigencia": "data_validade", "data vigência": "data_validade",
+            }
+            POSITIONAL_MAP = {0: "isbn", 1: "titulo", 2: "desconto", 3: "data_validade"}
+
+            raw_headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            # Resolve headers: por alias primeiro, por posição se vazio/None
+            headers: list = []
+            for idx_h, hval in enumerate(raw_headers):
+                h_clean = str(hval or "").strip().lower()
+                # Remove acentos simples para comparação
+                h_norm = h_clean.replace("ê", "e").replace("ã", "a").replace("ç", "c").replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+                resolved = KNOWN_ALIASES.get(h_clean) or KNOWN_ALIASES.get(h_norm)
+                if not resolved and idx_h in POSITIONAL_MAP:
+                    resolved = POSITIONAL_MAP[idx_h]
+                headers.append(resolved or h_clean or f"col_{idx_h}")
+
+            log.info(f"[PriceTable] Headers resolvidos: {headers}")
+
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                # Ignora linhas completamente vazias
+                if all(v is None for v in row):
+                    continue
+                rows.append(dict(zip(headers, row)))
+        else:  # csv
+            import csv
+            text = content.decode("utf-8-sig", errors="replace")
+            reader = csv.DictReader(io.StringIO(text))
+            for row in reader:
+                rows.append({k.strip().lower(): v for k, v in row.items()})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Erro ao ler o arquivo: {e}")
+
+
+    imported = 0
+    errors: list = []
+
+    for idx, row in enumerate(rows, start=2):  # linha 2 = primeira linha de dados
+        try:
+            isbn_val = row.get("isbn")
+            # ISBN pode vir como int ou float do openpyxl (ex: 9786559671977 ou 9786559671977.0)
+            if isinstance(isbn_val, float):
+                isbn_raw = str(int(isbn_val))
+            elif isinstance(isbn_val, int):
+                isbn_raw = str(isbn_val)
+            else:
+                isbn_raw = str(isbn_val or "").strip()
+
+            # Ignora linhas vazias ou com ISBN inválido
+            if not isbn_raw or isbn_raw.lower() in ("none", "", "nan"):
+                errors.append({"linha": idx, "erro": "ISBN vazio — linha ignorada"})
+                continue
+
+            titulo_raw = str(row.get("titulo") or "").strip() or None
+            desconto_raw = row.get("desconto") or row.get("desc") or 0
+            validade_raw = row.get("data_validade") or row.get("validade") or row.get("data") or ""
+
+            # Parse desconto
+            try:
+                desconto_val = float(str(desconto_raw).replace(",", ".").strip())
+            except Exception:
+                errors.append({"linha": idx, "isbn": isbn_raw, "erro": f"Desconto inválido: {desconto_raw!r}"})
+                continue
+
+            # Parse data_validade
+            validade_parsed: Optional[date] = None
+            if validade_raw:
+                if hasattr(validade_raw, "date"):  # já é datetime do openpyxl
+                    validade_parsed = validade_raw.date() if hasattr(validade_raw, "date") else validade_raw
+                else:
+                    validade_str = str(validade_raw).strip()
+                    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"):
+                        try:
+                            from datetime import datetime as dt_
+                            validade_parsed = dt_.strptime(validade_str, fmt).date()
+                            break
+                        except ValueError:
+                            continue
+
+            if not validade_parsed:
+                errors.append({"linha": idx, "isbn": isbn_raw, "erro": f"Data de validade inválida: {validade_raw!r}"})
+                continue
+
+            # Upsert por (company_id, isbn)
+            existing = db.query(DropshipPriceTable).filter(
+                DropshipPriceTable.company_id == company_id,
+                DropshipPriceTable.isbn == isbn_raw,
+            ).first()
+
+            if existing:
+                existing.titulo = titulo_raw
+                existing.desconto = desconto_val
+                existing.data_validade = validade_parsed
+            else:
+                db.add(DropshipPriceTable(
+                    company_id=company_id,
+                    isbn=isbn_raw,
+                    titulo=titulo_raw,
+                    desconto=desconto_val,
+                    data_validade=validade_parsed,
+                ))
+            imported += 1
+        except Exception as e:
+            errors.append({"linha": idx, "erro": str(e)})
+
+    db.commit()
+
+    return {
+        "importados": imported,
+        "erros": len(errors),
+        "detalhes_erros": errors,
+    }
+
+
+@router.delete("/price-table/{company_id}/{item_id}")
+async def delete_price_table_item(
+    company_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove um item específico da tabela de preços."""
+    _require_seller_or_master(current_user, company_id)
+    item = db.query(DropshipPriceTable).filter(
+        DropshipPriceTable.id == item_id,
+        DropshipPriceTable.company_id == company_id,
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item não encontrado.")
+    db.delete(item)
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/price-table/{company_id}/clear/all")
+async def clear_price_table(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove todos os itens da tabela de preços do seller."""
+    _require_seller_or_master(current_user, company_id)
+    deleted = db.query(DropshipPriceTable).filter(
+        DropshipPriceTable.company_id == company_id
+    ).delete()
+    db.commit()
+    return {"removidos": deleted}

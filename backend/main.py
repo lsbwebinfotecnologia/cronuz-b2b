@@ -25,6 +25,7 @@ from app.models import bookinfo_purchase_log as purchase_log_models
 from app.models import proposal as proposal_models
 from app.models import seller_branch as seller_branch_models
 from app.models import dropship as dropship_models
+from app.models import dropship_price_table as dropship_price_table_models
 from app.models import order_conference as order_conference_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
