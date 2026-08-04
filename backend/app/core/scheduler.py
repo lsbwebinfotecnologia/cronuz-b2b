@@ -14,6 +14,7 @@ import logging
 import os
 from app.tasks.nfse_worker import process_nfse_queue_jobs
 from app.jobs.bookinfo_purchase_job import run_bookinfo_purchase_job
+from app.jobs.dropship_stock_job import run_dropship_stock_sync_job
 
 logger = logging.getLogger("background_jobs")
 logger.setLevel(logging.INFO)
@@ -239,6 +240,18 @@ def start_scheduler():
         misfire_grace_time=300, # tolera ate 5 minutos de atraso
     )
 
+    # Sincronização automática de estoque Dropship: Hórus → Hub-Erdos
+    # Roda a cada 5 min para verificar intervalo de cada seller (stock_sync_interval_min).
+    # Só envia se (now - stock_sync_last_run) >= stock_sync_interval_min.
+    scheduler.add_job(
+        run_dropship_stock_sync_job,
+        IntervalTrigger(minutes=5),
+        id="job_sync_dropship_stock",
+        max_instances=1,        # evita execuções sobrepostas
+        coalesce=True,          # se atrasou, roda só uma vez
+        misfire_grace_time=300, # tolera até 5 min de atraso
+    )
+
     # Limpeza diária de logs de compras com mais de 30 dias (todo dia às 03:00)
     from apscheduler.triggers.cron import CronTrigger
     scheduler.add_job(
@@ -250,4 +263,4 @@ def start_scheduler():
     )
 
     scheduler.start()
-    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Log Cleanup")
+    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup")

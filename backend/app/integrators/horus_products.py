@@ -15,17 +15,29 @@ class HorusProducts(HorusClient):
         is_showcase: bool = False,
         cod_tpo_caract_extra: Optional[int] = None,
         cod_caract_extra: Optional[int] = None,
+        data_ini: Optional[str] = None,   # "dd/mm/yyyy HH:MM:SS" — início do filtro por data de atualização
+        data_fim: Optional[str] = None,   # "dd/mm/yyyy HH:MM:SS" — fim do filtro por data de atualização
         **kwargs
     ) -> Any:
         """
         Translates HsProducts.php methods (searchProduct & searchInList).
         Fetches products from Busca_AcervoB2B endpoint.
+        
+        data_ini / data_fim: filtros de período (DAT_INI / DAT_FIM no Hórus).
+        Quando informados, o Hórus retorna apenas os itens atualizados no intervalo.
+        Use data_ini=stock_sync_last_run para sync incremental.
         """
         params: Dict[str, Any] = {
             "ID_DOC": id_doc,
             "ID_GUID": id_guid,
         }
-        
+
+        # Filtro de período — usado na sincronização incremental de estoque
+        if data_ini:
+            params["DAT_INI"] = data_ini
+        if data_fim:
+            params["DAT_FIM"] = data_fim
+
         # Pagination
         if not getattr(self._settings, 'horus_legacy_pagination', False):
             params["OFFSET"] = offset

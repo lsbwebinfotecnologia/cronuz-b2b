@@ -1915,67 +1915,33 @@ async def push_stock_to_hub(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Consulta estoque no Hórus via AcervoB2B (filtrando por COD_BARRA_ITEM/ISBN)
-    e envia posição atualizada para o Hub-Erdos.
-    Campo de vínculo: COD_BARRA_ITEM (ISBN-13) ↔ sku do Hub-Erdos.
+    Consulta estoque no Hórus via Busca_AcervoB2B com filtro incremental
+    (DATA_INI = stock_sync_last_run, DATA_FIM = agora) e envia ao Hub-Erdos.
+
+    - Primeira execução (last_run NULL): busca tudo desde 01/01/1900.
+    - Execuções seguintes: busca apenas itens atualizados desde o último push.
+    - Paginação automática via OFFSET/LIMIT (PAGE_SIZE=200).
+    - Atualiza stock_sync_last_run somente após push bem-sucedido com itens.
     """
     _require_seller_or_master(current_user, company_id)
 
     config = _get_config_or_404(db, company_id)
-    client = _build_erdos_client(config)
 
     if not config.horus_customer:
-        await client.close()
         raise HTTPException(status_code=400, detail="Customer parceiro não configurado.")
 
     try:
-        from app.integrators.horus_products import HorusProducts
-        horus_prod = HorusProducts(db, company_id)
+        from app.jobs.dropship_stock_job import do_stock_push
+        result = await do_stock_push(config, db)
+        return result
 
-        customer = config.horus_customer
-        # Busca acervo completo do seller no Hórus (paginação ampla)
-        result = await horus_prod.busca_acervo_b2b(
-            id_doc=customer.id_doc,
-            id_guid=customer.id_guid,
-            limit=10000,
-            offset=0,
-        )
-
-        items_to_send = []
-        if isinstance(result, list):
-            for item in result:
-                isbn = item.get("COD_BARRA_ITEM") or item.get("BARRAS_ISBN") or item.get("ISBN")
-                saldo = item.get("SALDO") or item.get("QTD_SALDO") or item.get("QTD_DISPONIVEL") or 0
-                if isbn and str(isbn).strip():
-                    items_to_send.append({
-                        "sku": str(isbn).strip(),
-                        "quantidade": max(0, int(saldo))
-                    })
-
-        if not items_to_send:
-            await horus_prod.close()
-            await client.close()
-            return {"status": "warning", "message": "Nenhum item encontrado no Hórus para enviar.", "skus": 0}
-
-        push_result = await client.push_stock(items_to_send)
-
-        # Atualizar last_run
-        config.stock_sync_last_run = datetime.utcnow()
-        db.commit()
-
-        await horus_prod.close()
-        await client.close()
-
-        return {
-            "status": "ok",
-            "skus_sent": len(items_to_send),
-            "hub_response": push_result,
-        }
-
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except ErdosClientError as e:
         raise HTTPException(status_code=502, detail=f"Erro ao enviar estoque para Hub-Erdos: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno ao processar estoque: {str(e)}")
+
 
 
 @router.get("/stock/{company_id}/hub")
