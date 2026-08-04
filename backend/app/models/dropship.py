@@ -60,7 +60,8 @@ class DropshipConfig(Base):
     # Parâmetros exclusivos do pedido de Remessa (B2C)
     horus_cod_transp          = Column(String(20), nullable=True)  # COD_TRANSP — transportadora obrigatória
     horus_frete_emit_dest     = Column(String(5),  nullable=True)  # FRETE_EMIT_DEST: 1=emitente, 2=destinatário
-    horus_status_envio_erp    = Column(String(20), nullable=True)  # Status via AltStatus_Pedido após envio (ex: LEX)
+    horus_status_envio_erp    = Column(String(20), nullable=True)  # Status via AltStatus_Pedido da REMESSA (ex: LEX)
+    horus_status_pedido_venda = Column(String(20), nullable=True)  # Status via AltStatus_Pedido da VENDA quando sem remessa (ex: LEX)
 
     # ─────────────────────────────────────────────────────────────────
     # Parâmetros financeiros dos pedidos Hórus

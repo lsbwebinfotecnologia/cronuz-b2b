@@ -124,6 +124,7 @@ class DropshipConfigCreate(BaseModel):
     horus_cod_transp: Optional[str] = None
     horus_frete_emit_dest: Optional[str] = None
     horus_status_envio_erp: Optional[str] = None
+    horus_status_pedido_venda: Optional[str] = None  # status da venda quando sem remessa
     # Parâmetros financeiros dos pedidos Hórus
     vlr_taxa_frete: Optional[float] = 0.0
     perc_desconto_remessa: Optional[float] = 0.0
@@ -164,6 +165,7 @@ class DropshipConfigResponse(BaseModel):
     horus_cod_transp: Optional[str] = None
     horus_frete_emit_dest: Optional[str] = None
     horus_status_envio_erp: Optional[str] = None
+    horus_status_pedido_venda: Optional[str] = None  # status da venda quando sem remessa
     # Parâmetros financeiros dos pedidos Hórus
     vlr_taxa_frete: Optional[float] = None
     perc_desconto_remessa: Optional[float] = None
@@ -1551,7 +1553,33 @@ async def send_order_to_horus(
             except Exception as e_pular:
                 errors.append(f"Venda Pular_expedicao (LFT): {str(e_pular)}")
 
+            # STEP 3 (sem remessa): AltStatus final da Venda — status configurável (padrão LEX)
+            if not usar_remessa:
+                target_status_venda = (getattr(config, 'horus_status_pedido_venda', None) or "LEX").strip()
+                try:
+                    alt_venda_final_params: Dict[str, Any] = {
+                        "COD_PED_VENDA": cod_ped_venda,
+                        "STA_PEDIDO":    target_status_venda,
+                    }
+                    if settings.horus_company:
+                        alt_venda_final_params["COD_EMPRESA"] = settings.horus_company
+                    if settings.horus_branch:
+                        alt_venda_final_params["COD_FILIAL"] = settings.horus_branch
+                    if cod_cli_erdos:
+                        alt_venda_final_params["COD_CLI"] = cod_cli_erdos
 
+                    res_alt_final = await horus_clients.get(
+                        "AltStatus_Pedido", params=alt_venda_final_params
+                    )
+                    log.info(f"[Dropship] AltStatus_Pedido venda (sem remessa) {target_status_venda}: {res_alt_final}")
+                    if res_alt_final and isinstance(res_alt_final, list) and len(res_alt_final) > 0:
+                        item_af = res_alt_final[0]
+                        if item_af.get("Falha") or item_af.get("FALHA") == "S":
+                            msg_af = item_af.get("Mensagem") or item_af.get("MENSAGEM") or str(item_af)
+                            errors.append(f"AltStatus Venda ({target_status_venda}): {msg_af}")
+                except Exception as e_alt_final:
+                    log.error(f"[Dropship] AltStatus Venda final falhou: {e_alt_final}")
+                    errors.append(f"AltStatus Venda ({target_status_venda}): {str(e_alt_final)}")
     except Exception as e:
         await horus_orders.close()  # type: ignore[attr-defined]
         await horus_clients.close()  # type: ignore[attr-defined]

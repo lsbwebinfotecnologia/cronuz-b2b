@@ -29,6 +29,7 @@ interface DropshipConfig {
   vlr_taxa_frete: number | null;
   perc_desconto_remessa: number | null;
   usar_pedido_remessa: boolean;
+  horus_status_pedido_venda: string | null;
 }
 
 interface CustomerOption {
@@ -107,6 +108,7 @@ export function DropshipTab() {
     vlr_taxa_frete: number;
     perc_desconto_remessa: number;
     usar_pedido_remessa: boolean;
+    horus_status_pedido_venda: string;
   }>({
     enabled: false,
     api_token: '',
@@ -128,6 +130,7 @@ export function DropshipTab() {
     vlr_taxa_frete: 0,
     perc_desconto_remessa: 0,
     usar_pedido_remessa: true,
+    horus_status_pedido_venda: '',
   });
 
   const fetchConfig = useCallback(async () => {
@@ -160,6 +163,7 @@ export function DropshipTab() {
           vlr_taxa_frete: data.vlr_taxa_frete ?? 0,
           perc_desconto_remessa: data.perc_desconto_remessa ?? 0,
           usar_pedido_remessa: data.usar_pedido_remessa ?? true,
+          horus_status_pedido_venda: data.horus_status_pedido_venda || '',
         });
         if (data.horus_customer_name) setCustomerSearch(data.horus_customer_name);
       }
@@ -468,11 +472,29 @@ export function DropshipTab() {
           </button>
         </div>
         {!form.usar_pedido_remessa && (
-          <div className="flex items-start gap-2.5 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/40 rounded-xl p-3">
-            <AlertTriangle className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-            <p className="text-xs text-blue-700 dark:text-blue-300">
-              Modo <strong>sem remessa</strong>: apenas o Pedido de Venda (6.118) será enviado ao Hórus. Os dados completos do cliente (nome, CPF, endereço) serão inseridos no campo <span className="font-mono">OBS_PEDIDO</span>. Os parâmetros fiscais de remessa e transportadora não serão exigidos.
-            </p>
+          <div className="space-y-3">
+            <div className="flex items-start gap-2.5 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/40 rounded-xl p-3">
+              <AlertTriangle className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+              <p className="text-xs text-blue-700 dark:text-blue-300">
+                Modo <strong>sem remessa</strong>: apenas o Pedido de Venda (6.118) será enviado ao Hórus. Os dados completos do cliente (nome, CPF, endereço) serão inseridos no campo <span className="font-mono">OBS_PEDIDO</span>. Os parâmetros fiscais de remessa e transportadora não serão exigidos.
+              </p>
+            </div>
+            <div className="max-w-xs">
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                Status a Enviar (AltStatus Venda)
+              </label>
+              <input
+                id="horus_status_pedido_venda"
+                type="text"
+                value={form.horus_status_pedido_venda}
+                onChange={e => setForm(p => ({ ...p, horus_status_pedido_venda: e.target.value }))}
+                placeholder="LEX (padrão se vazio)"
+                className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                Código de status enviado ao Hórus via <span className="font-mono">AltStatus_Pedido</span> após criar a Venda. Deixe vazio para usar <span className="font-mono font-bold">LEX</span>.
+              </p>
+            </div>
           </div>
         )}
       </div>
