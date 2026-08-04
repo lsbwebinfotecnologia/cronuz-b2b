@@ -36,6 +36,8 @@ interface DropshipConfig {
   horus_cod_endereco: string | null;
   horus_cod_metodo: string | null;
   horus_cod_endereco_pedido: string | null;
+  vlr_taxa_frete: number | null;
+  perc_desconto_remessa: number | null;
   stock_sync_interval_min: number;
   stock_sync_enabled: boolean;
   stock_sync_last_run: string | null;
@@ -88,6 +90,9 @@ export default function CompanyDropshipPage() {
     // Parâmetros pedido
     horus_cod_metodo: string;
     horus_cod_endereco_pedido: string;
+    // Parâmetros financeiros
+    vlr_taxa_frete: number;
+    perc_desconto_remessa: number;
     // Estoque
     stock_sync_interval_min: number;
     stock_sync_enabled: boolean;
@@ -107,6 +112,8 @@ export default function CompanyDropshipPage() {
     horus_cod_endereco: '',
     horus_cod_metodo: '',
     horus_cod_endereco_pedido: '',
+    vlr_taxa_frete: 0,
+    perc_desconto_remessa: 0,
     stock_sync_interval_min: 30,
     stock_sync_enabled: false,
   });
@@ -164,6 +171,8 @@ export default function CompanyDropshipPage() {
           horus_cod_endereco: data.horus_cod_endereco || '',
           horus_cod_metodo: data.horus_cod_metodo || '',
           horus_cod_endereco_pedido: data.horus_cod_endereco_pedido || '',
+          vlr_taxa_frete: data.vlr_taxa_frete ?? 0,
+          perc_desconto_remessa: data.perc_desconto_remessa ?? 0,
           stock_sync_interval_min: data.stock_sync_interval_min || 30,
           stock_sync_enabled: data.stock_sync_enabled,
         });
@@ -657,36 +666,86 @@ export default function CompanyDropshipPage() {
               Usados ao inserir o pedido de remessa via InsPedidoVenda (campos opcionais)
             </p>
           </div>
-          <div className="p-5">
+            <div className="p-5">
             <div className="grid grid-cols-2 gap-4 max-w-sm">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                  COD_MET
-                </label>
-                <input
-                  type="text"
-                  value={formData.horus_cod_metodo}
-                  onChange={e => setFormData(p => ({ ...p, horus_cod_metodo: e.target.value }))}
-                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
-                  placeholder="Ex: 1"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">Cód. método de envio</p>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                    COD_MET
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.horus_cod_metodo}
+                    onChange={e => setFormData(p => ({ ...p, horus_cod_metodo: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                    placeholder="Ex: 1"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Cód. método de envio</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                    COD_END_PED
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.horus_cod_endereco_pedido}
+                    onChange={e => setFormData(p => ({ ...p, horus_cod_endereco_pedido: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                    placeholder="Ex: 1"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Cód. endereço do pedido</p>
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                  COD_END_PED
-                </label>
-                <input
-                  type="text"
-                  value={formData.horus_cod_endereco_pedido}
-                  onChange={e => setFormData(p => ({ ...p, horus_cod_endereco_pedido: e.target.value }))}
-                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
-                  placeholder="Ex: 1"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">Cód. endereço do pedido</p>
+
+              {/* Parâmetros financeiros */}
+              <div className="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-3 uppercase tracking-wider">Parâmetros Financeiros</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                      Taxa de Frete — Venda (R$)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-3 flex items-center text-xs text-slate-400 pointer-events-none">R$</span>
+                      <input
+                        id="vlr_taxa_frete"
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={formData.vlr_taxa_frete}
+                        onChange={e => setFormData(p => ({ ...p, vlr_taxa_frete: parseFloat(e.target.value) || 0 }))}
+                        className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Enviado como <span className="font-mono">VLR_FRETE</span> no pedido de Venda (6.118). Zero = não envia.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
+                      Desconto por Item — Remessa (%)
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="perc_desconto_remessa"
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={0.01}
+                        value={formData.perc_desconto_remessa}
+                        onChange={e => setFormData(p => ({ ...p, perc_desconto_remessa: parseFloat(e.target.value) || 0 }))}
+                        className="w-full pr-8 pl-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+                        placeholder="0.00"
+                      />
+                      <span className="absolute inset-y-0 right-3 flex items-center text-xs text-slate-400 pointer-events-none">%</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Desconto aplicado sobre <span className="font-mono">VLR_LIQUIDO</span> de cada item na Remessa (6.923). Zero = sem desconto.
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
         </motion.div>
 
         {/* Sincronização de Estoque */}

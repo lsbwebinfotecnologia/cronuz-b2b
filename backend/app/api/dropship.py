@@ -34,6 +34,7 @@ from app.models.company import Company
 from app.models.company_settings import CompanySettings
 from app.models.customer import Customer
 from app.integrators.erdos_client import ErdosClient, ErdosClientError
+from app.integrators.horus_logistics import HorusLogisticsClient
 
 router = APIRouter()
 
@@ -119,6 +120,9 @@ class DropshipConfigCreate(BaseModel):
     horus_cod_transp: Optional[str] = None
     horus_frete_emit_dest: Optional[str] = None
     horus_status_envio_erp: Optional[str] = None
+    # Parâmetros financeiros dos pedidos Hórus
+    vlr_taxa_frete: Optional[float] = 0.0
+    perc_desconto_remessa: Optional[float] = 0.0
     # Sincronização de estoque
     stock_sync_interval_min: int = 30
     stock_sync_enabled: bool = False
@@ -154,6 +158,9 @@ class DropshipConfigResponse(BaseModel):
     horus_cod_transp: Optional[str] = None
     horus_frete_emit_dest: Optional[str] = None
     horus_status_envio_erp: Optional[str] = None
+    # Parâmetros financeiros dos pedidos Hórus
+    vlr_taxa_frete: Optional[float] = None
+    perc_desconto_remessa: Optional[float] = None
     # Estoque
     stock_sync_interval_min: int
     stock_sync_enabled: bool
@@ -1234,11 +1241,14 @@ async def send_order_to_horus(
                 continue
 
             # Parâmetros B2C obrigatórios para InsItensPedidoVenda
+            # Aplicar desconto configurado sobre VLR_LIQUIDO (vlr_capa)
+            perc_desc = float(config.perc_desconto_remessa or 0)
+            vlr_liq = round(vlr_capa * (1 - perc_desc / 100), 2) if perc_desc > 0 else float(vlr_capa)
             item_params_remessa: Dict[str, Any] = {
                 "COD_PED_VENDA": cod_ped_remessa,
                 "COD_ITEM":      cod_item,
                 "QTD_PEDIDA":    qty,
-                "VLR_LIQUIDO":   vlr_capa,
+                "VLR_LIQUIDO":   vlr_liq,
             }
             if settings.horus_company:
                 item_params_remessa["COD_EMPRESA"] = settings.horus_company
@@ -1303,6 +1313,10 @@ async def send_order_to_horus(
             ),
             # NOTA: NÃO enviar COD_FORMA, QTD_PARCELAS, CONDICAO_PAGAMENTO
         }
+        # Adicionar VLR_FRETE ao pedido de Venda se configurado
+        taxa_frete = float(config.vlr_taxa_frete or 0)
+        if taxa_frete > 0:
+            venda_params["VLR_FRETE"] = round(taxa_frete, 2)
         # COD_EMPRESA, COD_FILIAL e COD_METODO NÃO devem ser enviados no pedido de Venda B2B
 
         venda_result = await horus_orders.get(  # type: ignore[attr-defined]
@@ -1742,7 +1756,7 @@ async def confirm_dispatch(
         raise
     except Exception as e:
         await horus_client.close()
-        raise HTTPException(status_code=500, detail=f"Erro ao consultar Busca_NotaFiscal no Hórus ERP: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Erro ao consultar Busca_NotaFiscal no Hórus ERP: {str(e)}")
 
     # 2. Notificar o Hub-Erdos via API (POST /pedidos/atualizar-status-despacho)
     erdos_client = _build_erdos_client(config)

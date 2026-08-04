@@ -62,6 +62,14 @@ class DropshipConfig(Base):
     horus_frete_emit_dest     = Column(String(5),  nullable=True)  # FRETE_EMIT_DEST: 1=emitente, 2=destinatário
     horus_status_envio_erp    = Column(String(20), nullable=True)  # Status via AltStatus_Pedido após envio (ex: LEX)
 
+    # ─────────────────────────────────────────────────────────────────
+    # Parâmetros financeiros dos pedidos Hórus
+    # ─────────────────────────────────────────────────────────────────
+    # Valor fixo de frete (VLR_FRETE) adicionado ao pedido de VENDA (6.118)
+    vlr_taxa_frete = Column(Numeric(10, 2), nullable=True, default=0.0)
+    # Percentual de desconto aplicado sobre VLR_LIQUIDO nos itens da REMESSA (6.923)
+    perc_desconto_remessa = Column(Numeric(5, 2), nullable=True, default=0.0)
+
     # Sincronização de estoque
     stock_sync_interval_min = Column(Integer, default=30, nullable=False)
     stock_sync_last_run = Column(DateTime(timezone=True), nullable=True)
