@@ -74,81 +74,6 @@ function Section({ title, icon: Icon, children }: { title: string; icon: any; ch
   );
 }
 
-interface DispatchModalProps {
-  order: DropshipOrder;
-  companyId: string;
-  onClose: () => void;
-  onSuccess: () => void;
-}
-
-function DispatchModal({ order, companyId, onClose, onSuccess }: DispatchModalProps) {
-  const [tracking, setTracking] = useState('');
-  const [nfeKey, setNfeKey] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const handleConfirm = async () => {
-    setSaving(true);
-    try {
-      const token = getToken();
-      const res = await fetch(`${API_URL}/dropship/orders/${companyId}/${order.id}/confirm-dispatch`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracking_code: tracking || null, nfe_remessa_key: nfeKey || null }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        toast.success('Despacho confirmado!');
-        onSuccess();
-        onClose();
-      } else {
-        toast.error(data.detail || 'Erro ao confirmar despacho');
-      }
-    } catch { toast.error('Erro de conexão.'); }
-    finally { setSaving(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <motion.div
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl p-6 max-w-md w-full"
-      >
-        <div className="flex items-center justify-between mb-5">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Truck className="w-4 h-4 text-emerald-500" /> Confirmar Despacho
-          </h3>
-          <button onClick={onClose}><X className="w-5 h-5 text-slate-400 hover:text-slate-600" /></button>
-        </div>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Código de Rastreamento</label>
-            <input value={tracking} onChange={e => setTracking(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 font-mono"
-              placeholder="BR123456789BR" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Chave NF-e Remessa (6.923)</label>
-            <input value={nfeKey} onChange={e => setNfeKey(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 font-mono"
-              placeholder="35260631492667..." />
-          </div>
-        </div>
-        <div className="flex gap-3 mt-5">
-          <button onClick={onClose} className="flex-1 px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-all">
-            Cancelar
-          </button>
-          <button onClick={handleConfirm} disabled={saving}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 rounded-xl transition-all disabled:opacity-60">
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-            Confirmar
-          </button>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
 export default function DropshipOrderDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -158,7 +83,7 @@ export default function DropshipOrderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [companyId, setCompanyId] = useState('');
   const [sendingToHorus, setSendingToHorus] = useState(false);
-  const [showDispatch, setShowDispatch] = useState(false);
+  const [confirmingDispatch, setConfirmingDispatch] = useState(false);
   const [checkingErdos, setCheckingErdos] = useState(false);
   const [erdosCheckResult, setErdosCheckResult] = useState<any>(null);
 
@@ -386,6 +311,29 @@ export default function DropshipOrderDetailPage() {
 
   const handleCheckErdosStatus = () => checkErdosStatus(false);
 
+  const handleConfirmDispatch = async () => {
+    if (!order || !companyId) return;
+    setConfirmingDispatch(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dropship/orders/${companyId}/${order.id}/confirm-dispatch`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`Despacho confirmado! NF-e nº ${data.nro_nota_fiscal || ''} (Chave: ${data.chave_nfe_remessa_6923}) capturada do Hórus e atualizada no Erdos.`, { duration: 7000 });
+        fetchOrder();
+      } else {
+        toast.error(typeof data.detail === 'string' ? data.detail : 'Erro ao confirmar despacho no Hórus.', { duration: 8000 });
+      }
+    } catch {
+      toast.error('Erro de conexão ao comunicar com o servidor.');
+    } finally {
+      setConfirmingDispatch(false);
+    }
+  };
+
 
   if (loading) {
     return (
@@ -471,10 +419,11 @@ export default function DropshipOrderDetailPage() {
                 Verificar no Erdos
               </button>
               <button
-                onClick={() => setShowDispatch(true)}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white text-sm font-semibold rounded-xl shadow-md transition-all"
+                onClick={handleConfirmDispatch}
+                disabled={confirmingDispatch}
+                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white text-sm font-semibold rounded-xl shadow-md transition-all disabled:opacity-60"
               >
-                <CheckCircle2 className="w-4 h-4" />
+                {confirmingDispatch ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                 Confirmar Despacho
               </button>
             </>
@@ -831,15 +780,6 @@ export default function DropshipOrderDetailPage() {
         </div>
       </div>
 
-      {/* Modal despacho */}
-      {showDispatch && (
-        <DispatchModal
-          order={order}
-          companyId={companyId}
-          onClose={() => setShowDispatch(false)}
-          onSuccess={fetchOrder}
-        />
-      )}
 
       {/* Modal de Inicialização da Conferência */}
       {showConfModal && (
