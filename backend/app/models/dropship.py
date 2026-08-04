@@ -75,6 +75,14 @@ class DropshipConfig(Base):
     stock_sync_last_run = Column(DateTime(timezone=True), nullable=True)
     stock_sync_enabled = Column(Boolean, default=False, nullable=False)
 
+    # ─────────────────────────────────────────────────────────────────
+    # Comportamento do envio ao Hórus
+    # ─────────────────────────────────────────────────────────────────
+    # True (padrão): cria pedido de Remessa (6.923) + pedido de Venda (6.118)
+    # False: cria apenas o pedido de Venda (6.118) e insere dados do
+    #        cliente final no campo OBS_PEDIDO
+    usar_pedido_remessa = Column(Boolean, nullable=False, server_default='true', default=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

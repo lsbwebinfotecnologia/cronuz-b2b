@@ -28,6 +28,7 @@ interface DropshipConfig {
   horus_status_envio_erp: string | null;
   vlr_taxa_frete: number | null;
   perc_desconto_remessa: number | null;
+  usar_pedido_remessa: boolean;
 }
 
 interface CustomerOption {
@@ -105,6 +106,7 @@ export function DropshipTab() {
     horus_status_envio_erp: string;
     vlr_taxa_frete: number;
     perc_desconto_remessa: number;
+    usar_pedido_remessa: boolean;
   }>({
     enabled: false,
     api_token: '',
@@ -125,6 +127,7 @@ export function DropshipTab() {
     horus_status_envio_erp: '',
     vlr_taxa_frete: 0,
     perc_desconto_remessa: 0,
+    usar_pedido_remessa: true,
   });
 
   const fetchConfig = useCallback(async () => {
@@ -156,6 +159,7 @@ export function DropshipTab() {
           horus_status_envio_erp: data.horus_status_envio_erp || '',
           vlr_taxa_frete: data.vlr_taxa_frete ?? 0,
           perc_desconto_remessa: data.perc_desconto_remessa ?? 0,
+          usar_pedido_remessa: data.usar_pedido_remessa ?? true,
         });
         if (data.horus_customer_name) setCustomerSearch(data.horus_customer_name);
       }
@@ -433,6 +437,44 @@ export function DropshipTab() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Comportamento de Envio ao Hórus */}
+      <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+        <div>
+          <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Comportamento de Envio ao Hórus</p>
+          <p className="text-[11px] text-slate-400">Define se o sistema cria pedido de remessa (B2C) além do pedido de venda</p>
+        </div>
+        <div className="flex items-center justify-between p-4 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800/40">
+          <div>
+            <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Usar Pedido de Remessa</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {form.usar_pedido_remessa
+                ? 'SIM — envia Remessa (6.923) + Venda (6.118) para o Hórus'
+                : 'NÃO — envia apenas Venda (6.118) com dados do cliente na observação'}
+            </p>
+          </div>
+          <button
+            type="button"
+            id="toggle-usar-pedido-remessa"
+            onClick={() => setForm(p => ({ ...p, usar_pedido_remessa: !p.usar_pedido_remessa }))}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none ${
+              form.usar_pedido_remessa ? 'bg-violet-500' : 'bg-slate-300 dark:bg-slate-600'
+            }`}
+          >
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+              form.usar_pedido_remessa ? 'translate-x-6' : 'translate-x-1'
+            }`} />
+          </button>
+        </div>
+        {!form.usar_pedido_remessa && (
+          <div className="flex items-start gap-2.5 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/40 rounded-xl p-3">
+            <AlertTriangle className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+            <p className="text-xs text-blue-700 dark:text-blue-300">
+              Modo <strong>sem remessa</strong>: apenas o Pedido de Venda (6.118) será enviado ao Hórus. Os dados completos do cliente (nome, CPF, endereço) serão inseridos no campo <span className="font-mono">OBS_PEDIDO</span>. Os parâmetros fiscais de remessa e transportadora não serão exigidos.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Aviso */}
