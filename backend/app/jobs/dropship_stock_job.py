@@ -24,44 +24,69 @@ log = logging.getLogger("dropship_stock_job")
 PAGE_SIZE = 200
 
 
-async def do_stock_push(config: Any, db: Any) -> Dict[str, Any]:
+async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> Dict[str, Any]:
     """
     Async: busca acervo no Hórus com DATA_INI/DATA_FIM incremental,
     pagina via OFFSET/LIMIT e envia ao Hub-Erdos.
+    Salva um registro em dsp_stock_sync_log independente do resultado.
 
     Args:
-        config: instância de DropshipConfig (com horus_customer precarregado)
-        db    : SQLAlchemy Session
+        config      : instância de DropshipConfig (com horus_customer precarregado)
+        db          : SQLAlchemy Session
+        triggered_by: 'manual' (endpoint) ou 'scheduler' (job automático)
 
     Returns:
         dict com status, skus_sent, data_ini, data_fim e hub_response
     """
     from app.integrators.horus_products import HorusProducts
     from app.integrators.erdos_client import ErdosClientError
-    from app.api.dropship import _build_erdos_client  # helper já existente
+    from app.api.dropship import _build_erdos_client
+    from app.models.dropship_stock_sync_log import DropshipStockSyncLog
+
+    def _save_log(status: str, skus_sent: int = 0,
+                  items_payload=None, hub_response=None, error_msg: str = None,
+                  data_ini: str = None, data_fim: str = None):
+        try:
+            entry = DropshipStockSyncLog(
+                company_id=config.company_id,
+                triggered_by=triggered_by,
+                status=status,
+                data_ini=data_ini,
+                data_fim=data_fim,
+                skus_sent=skus_sent,
+                items_payload=items_payload,
+                hub_response=hub_response,
+                error_msg=error_msg,
+            )
+            db.add(entry)
+            db.commit()
+        except Exception as log_err:
+            log.error(f"[StockSync] Falha ao salvar log: {log_err}")
+            db.rollback()
 
     if not config.horus_customer:
-        raise ValueError(f"[StockSync] company_id={config.company_id}: Customer parceiro não configurado.")
+        err = f"[StockSync] company_id={config.company_id}: Customer parceiro não configurado."
+        _save_log("error", error_msg=err)
+        raise ValueError(err)
 
     customer = config.horus_customer
 
     # ── Definição do período de busca ─────────────────────────────────────────
     if config.stock_sync_last_run:
-        # Garante naive datetime para formatação consistente
         last = config.stock_sync_last_run
         if hasattr(last, "tzinfo") and last.tzinfo is not None:
             from datetime import timezone
             last = last.astimezone(timezone.utc).replace(tzinfo=None)
         data_ini = last.strftime("%d/%m/%Y %H:%M:%S")
     else:
-        data_ini = "01/01/1900 00:00:00"  # primeira carga: tudo
+        data_ini = "01/01/1900 00:00:00"
 
     run_time = datetime.utcnow()
     data_fim = run_time.strftime("%d/%m/%Y %H:%M:%S")
 
     log.info(
         f"[StockSync] company_id={config.company_id} "
-        f"DATA_INI={data_ini!r}  DATA_FIM={data_fim!r}"
+        f"DATA_INI={data_ini!r}  DATA_FIM={data_fim!r}  trigger={triggered_by}"
     )
 
     # ── Coleta paginada no Hórus ──────────────────────────────────────────────
@@ -111,9 +136,15 @@ async def do_stock_push(config: Any, db: Any) -> Dict[str, Any]:
             )
 
             if len(page) < PAGE_SIZE:
-                break  # última página
-
+                break
             offset += PAGE_SIZE
+
+    except Exception as e:
+        await horus_prod.close()
+        err_msg = f"Erro ao buscar acervo no Hórus: {e}"
+        log.error(f"[StockSync] company_id={config.company_id} {err_msg}", exc_info=True)
+        _save_log("error", error_msg=err_msg, data_ini=data_ini, data_fim=data_fim)
+        raise
 
     finally:
         await horus_prod.close()
@@ -124,6 +155,7 @@ async def do_stock_push(config: Any, db: Any) -> Dict[str, Any]:
             f"[StockSync] company_id={config.company_id} "
             f"Nenhum item atualizado no período — last_run não alterado."
         )
+        _save_log("no_items", skus_sent=0, data_ini=data_ini, data_fim=data_fim)
         return {
             "status": "no_items",
             "skus_sent": 0,
@@ -145,6 +177,15 @@ async def do_stock_push(config: Any, db: Any) -> Dict[str, Any]:
             f"✅ {len(all_items)} SKUs enviados — last_run={run_time.isoformat()}"
         )
 
+        _save_log(
+            "ok",
+            skus_sent=len(all_items),
+            items_payload=all_items,
+            hub_response=push_result,
+            data_ini=data_ini,
+            data_fim=data_fim,
+        )
+
         return {
             "status": "ok",
             "skus_sent": len(all_items),
@@ -154,7 +195,10 @@ async def do_stock_push(config: Any, db: Any) -> Dict[str, Any]:
         }
 
     except ErdosClientError as e:
-        log.error(f"[StockSync] company_id={config.company_id} ErdosClientError: {e}")
+        err_msg = f"Erro ao enviar ao Hub-Erdos: {e}"
+        log.error(f"[StockSync] company_id={config.company_id} {err_msg}")
+        _save_log("error", skus_sent=len(all_items), items_payload=all_items,
+                  error_msg=err_msg, data_ini=data_ini, data_fim=data_fim)
         raise
 
     finally:

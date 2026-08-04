@@ -1943,6 +1943,63 @@ async def push_stock_to_hub(
         raise HTTPException(status_code=500, detail=f"Erro interno ao processar estoque: {str(e)}")
 
 
+@router.get("/stock/{company_id}/logs")
+async def get_stock_sync_logs(
+    company_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    status: Optional[str] = None,   # filtro: 'ok' | 'no_items' | 'error'
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Lista o histórico de execuções do sync de estoque Dropship para este seller.
+    Retorna logs paginados, do mais recente ao mais antigo.
+    items_payload incluído em cada entrada (lista completa de SKUs enviados).
+    """
+    _require_seller_or_master(current_user, company_id)
+
+    from app.models.dropship_stock_sync_log import DropshipStockSyncLog
+
+    query = (
+        db.query(DropshipStockSyncLog)
+        .filter(DropshipStockSyncLog.company_id == company_id)
+    )
+    if status:
+        query = query.filter(DropshipStockSyncLog.status == status)
+
+    total = query.count()
+    logs = (
+        query
+        .order_by(DropshipStockSyncLog.executed_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, -(-total // page_size)),  # ceil division
+        "logs": [
+            {
+                "id":            entry.id,
+                "triggered_by":  entry.triggered_by,
+                "status":        entry.status,
+                "data_ini":      entry.data_ini,
+                "data_fim":      entry.data_fim,
+                "skus_sent":     entry.skus_sent,
+                "items_payload": entry.items_payload,
+                "hub_response":  entry.hub_response,
+                "error_msg":     entry.error_msg,
+                "executed_at":   entry.executed_at.isoformat() if entry.executed_at else None,
+            }
+            for entry in logs
+        ],
+    }
+
+
 
 @router.get("/stock/{company_id}/hub")
 async def get_hub_stock(

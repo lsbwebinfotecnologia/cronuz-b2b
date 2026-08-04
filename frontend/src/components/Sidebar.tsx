@@ -317,6 +317,7 @@ export function Sidebar() {
       subItems: [
         { name: 'Pedidos Erdos', href: '/orders/dropship' },
         { name: 'Tabela de Preços', href: '/orders/dropship/price-table' },
+        { name: 'Logs de Estoque', href: '/orders/dropship/stock-logs' },
       ]
     });
   }
