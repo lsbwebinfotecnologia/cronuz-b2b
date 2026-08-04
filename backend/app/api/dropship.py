@@ -491,6 +491,102 @@ async def sync_dropship_orders(
             db.add(new_order)
             synced += 1
 
+    # ── Etapa 2: Recupera pedidos existentes na Erdos mas ausentes no banco ──
+    # Cobre casos em que o pedido avançou de status (ex: preparando) antes do
+    # sync de produção conseguir capturá-lo via prontos-para-despacho.
+    try:
+        all_erdos_orders = await client.get_all_orders()
+
+        # IDs já conhecidos localmente (inclui os recém-inseridos acima)
+        known_ids = {
+            row.external_order_id
+            for row in db.query(DropshipOrder).filter(
+                DropshipOrder.company_id == company_id
+            ).all()
+        }
+
+        for ep in all_erdos_orders:
+            ep_id     = ep.get("id")
+            ep_status = ep.get("status", "")
+
+            if not ep_id or ep_id in known_ids or ep_status == "cancelado":
+                continue
+
+            master     = ep.get("pedidos_master") or {}
+            items_raw  = ep.get("itens_sub_pedido") or []
+
+            # Normaliza items para o mesmo formato de prontos-para-despacho
+            items_normalized = [
+                {
+                    "sku_fornecedor": i.get("sku") or i.get("sku_fornecedor"),
+                    "titulo":         i.get("titulo"),
+                    "quantidade":     i.get("quantidade"),
+                }
+                for i in items_raw
+            ]
+
+            # Tenta baixar documentos pelos endpoints dedicados (URLs assinadas, 1h)
+            order_dir  = f"{base_dir}/{ep_id}"
+            xml_path   = None
+            danfe_path = None
+            label_path = None
+
+            for fetch_fn, store_name, url_key in [
+                (client.get_xml_url,   "nfe.xml",      ("url", "url_xml", "url_documento")),
+                (client.get_danfe_url, "danfe.pdf",    ("url", "url_danfe", "url_documento")),
+                (client.get_label_url, "etiqueta.pdf", ("url", "url_etiqueta", "url_documento")),
+            ]:
+                try:
+                    resp = await fetch_fn(ep_id)
+                    doc_url = next((resp.get(k) for k in url_key if resp.get(k)), None)
+                    if doc_url:
+                        stored = await _download_and_store(client, doc_url, f"{order_dir}/{store_name}")
+                        if store_name == "nfe.xml":
+                            xml_path = stored
+                        elif store_name == "danfe.pdf":
+                            danfe_path = stored
+                        else:
+                            label_path = stored
+                except Exception:
+                    pass  # Documentos opcionais — não impede a importação
+
+            # Data de criação
+            released_at = None
+            try:
+                raw_dt = ep.get("criado_em") or ep.get("data_liberacao")
+                if raw_dt:
+                    released_at = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+            except Exception:
+                pass
+
+            recovered_order = DropshipOrder(
+                company_id=company_id,
+                config_id=config.id,
+                external_order_id=ep_id,
+                external_reference=master.get("referencia"),
+                channel=master.get("canal_origem"),
+                status="PENDING",
+                released_at=released_at,
+                customer_data=None,   # Não disponível fora da fila aguardando
+                items_data=items_normalized,
+                logistics_data={"forma_envio": None},
+                fiscal_data={},
+                xml_path=xml_path,
+                danfe_path=danfe_path,
+                label_path=label_path,
+                synced_at=datetime.utcnow(),
+            )
+            db.add(recovered_order)
+            synced += 1
+            log.info(
+                f"[DropshipSync] Pedido recuperado (status={ep_status}): "
+                f"company={company_id} external_ref={master.get('referencia')} id={ep_id}"
+            )
+
+    except Exception as e:
+        log.warning(f"[DropshipSync] Etapa de recuperação falhou (não crítico): {e}")
+        errors.append({"type": "recovery_sync", "error": str(e)})
+
     db.commit()
     await client.close()
 

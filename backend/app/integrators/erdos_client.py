@@ -202,6 +202,9 @@ class ErdosClient:
         result = await self._get("/pedidos", params=params or None)
         if isinstance(result, list):
             return result
+        # Erdos retorna {"fornecedor": ..., "total": ..., "pedidos": [...]}
+        if isinstance(result, dict):
+            return result.get("pedidos", [])
         return []
 
     async def get_order(self, id_pedido_erdos: str) -> Dict[str, Any]:
