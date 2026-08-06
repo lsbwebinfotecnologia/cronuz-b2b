@@ -22,6 +22,7 @@ export default function ServiceOrdersPage() {
     const currentMonthStr = currentDate.toISOString().slice(0, 7);
     const [startDate, setStartDate] = useState<string>(`${currentMonthStr}-01`);
     const [endDate, setEndDate] = useState<string>(new Date(currentYear, currentDate.getMonth() + 1, 0).toISOString().split('T')[0]);
+    const [activePeriodShortcut, setActivePeriodShortcut] = useState<string>('este_mes');
     const [statusFilter, setStatusFilter] = useState<string>('Ativas'); // Changed to only show Ativas by default
     const [customerFilter, setCustomerFilter] = useState<string>('');
     const [totalExpected, setTotalExpected] = useState(0);
@@ -93,6 +94,26 @@ export default function ServiceOrdersPage() {
     const [isSplitOpen, setIsSplitOpen] = useState(false);
     const [splittingOrder, setSplittingOrder] = useState<any>(null);
     const [splits, setSplits] = useState<any[]>([]);
+
+    const applyPeriodShortcut = (shortcut: string) => {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = now.getMonth();
+        setActivePeriodShortcut(shortcut);
+        if (shortcut === 'este_mes') {
+            setStartDate(new Date(y, m, 1).toISOString().split('T')[0]);
+            setEndDate(new Date(y, m + 1, 0).toISOString().split('T')[0]);
+        } else if (shortcut === 'proximo_mes') {
+            setStartDate(new Date(y, m + 1, 1).toISOString().split('T')[0]);
+            setEndDate(new Date(y, m + 2, 0).toISOString().split('T')[0]);
+        } else if (shortcut === 'ultimos_3') {
+            setStartDate(new Date(y, m - 2, 1).toISOString().split('T')[0]);
+            setEndDate(new Date(y, m + 1, 0).toISOString().split('T')[0]);
+        } else if (shortcut === 'sem_filtro') {
+            setStartDate('');
+            setEndDate('');
+        }
+    };
 
     useEffect(() => {
         fetchOrders();
@@ -808,22 +829,45 @@ export default function ServiceOrdersPage() {
                 
                 {/* Linha Superior: Filtros */}
                 <div className="flex flex-wrap items-center gap-5 w-full">
-                    <div className="flex items-center gap-3 min-w-fit">
-                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Período:</label>
-                        <div className="flex items-center gap-2">
-                           <input 
-                               type="date" 
-                               value={startDate}
-                               onChange={(e) => setStartDate(e.target.value)}
-                               className="px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
-                           />
-                           <span className="text-slate-400 text-xs">até</span>
-                           <input 
-                               type="date" 
-                               value={endDate}
-                               onChange={(e) => setEndDate(e.target.value)}
-                               className="px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
-                           />
+                    <div className="flex flex-col gap-1.5 min-w-fit">
+                        <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Data de Execução</label>
+                        {/* Atalhos rápidos */}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            {[
+                                { key: 'este_mes', label: 'Este mês' },
+                                { key: 'proximo_mes', label: 'Próx. mês' },
+                                { key: 'ultimos_3', label: 'Últ. 3 meses' },
+                                { key: 'sem_filtro', label: 'Sem filtro' },
+                            ].map(({ key, label }) => (
+                                <button
+                                    key={key}
+                                    type="button"
+                                    onClick={() => applyPeriodShortcut(key)}
+                                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
+                                        activePeriodShortcut === key
+                                            ? 'bg-[var(--color-primary-base)] text-white border-[var(--color-primary-base)]'
+                                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-[var(--color-primary-base)] hover:text-[var(--color-primary-base)]'
+                                    }`}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                            {/* Inputs de data customizada */}
+                            <div className="flex items-center gap-1.5 ml-1">
+                               <input
+                                   type="date"
+                                   value={startDate}
+                                   onChange={(e) => { setStartDate(e.target.value); setActivePeriodShortcut('custom'); }}
+                                   className="px-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
+                               />
+                               <span className="text-slate-400 text-xs">até</span>
+                               <input
+                                   type="date"
+                                   value={endDate}
+                                   onChange={(e) => { setEndDate(e.target.value); setActivePeriodShortcut('custom'); }}
+                                   className="px-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
+                               />
+                            </div>
                         </div>
                     </div>
                     
