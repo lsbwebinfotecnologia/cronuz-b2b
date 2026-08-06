@@ -23,6 +23,8 @@ export default function ServiceOrdersPage() {
     const [startDate, setStartDate] = useState<string>(`${currentMonthStr}-01`);
     const [endDate, setEndDate] = useState<string>(new Date(currentYear, currentDate.getMonth() + 1, 0).toISOString().split('T')[0]);
     const [activePeriodShortcut, setActivePeriodShortcut] = useState<string>('este_mes');
+    const [sortField, setSortField] = useState<string>('execution_date');
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [statusFilter, setStatusFilter] = useState<string>('Ativas'); // Changed to only show Ativas by default
     const [customerFilter, setCustomerFilter] = useState<string>('');
     const [totalExpected, setTotalExpected] = useState(0);
@@ -1037,7 +1039,24 @@ export default function ServiceOrdersPage() {
                                 </th>
                                 <th className="px-6 py-4">ID e Cliente</th>
                                 <th className="px-6 py-4">Serviço Prestado</th>
-                                <th className="px-6 py-4">Execução</th>
+                                <th
+                                    className="px-6 py-4 cursor-pointer select-none hover:text-[var(--color-primary-base)] transition-colors group"
+                                    onClick={() => {
+                                        if (sortField === 'execution_date') {
+                                            setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                                        } else {
+                                            setSortField('execution_date');
+                                            setSortDir('asc');
+                                        }
+                                    }}
+                                >
+                                    <span className="flex items-center gap-1">
+                                        Execução
+                                        <span className={`transition-colors ${ sortField === 'execution_date' ? 'text-[var(--color-primary-base)]' : 'text-slate-300 dark:text-slate-600 group-hover:text-slate-400' }`}>
+                                            {sortField === 'execution_date' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
+                                        </span>
+                                    </span>
+                                </th>
                                 <th className="px-6 py-4 text-center">Status / NFS-e</th>
                                 <th className="px-6 py-4 text-right">Ações de Faturamento</th>
                             </tr>
@@ -1046,11 +1065,18 @@ export default function ServiceOrdersPage() {
                             {loading ? (
                                 <tr><td colSpan={6} className="text-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--color-primary-base)] mx-auto"></div></td></tr>
                             ) : (() => {
-                                const filteredOrders = orders.filter(o => 
-                                    statusFilter === 'Todas' ? true : 
-                                    statusFilter === 'Ativas' ? o.status !== 'Cancelado' : 
+                                const filteredOrders = orders.filter(o =>
+                                    statusFilter === 'Todas' ? true :
+                                    statusFilter === 'Ativas' ? o.status !== 'Cancelado' :
                                     o.status === statusFilter
-                                ).sort((a, b) => b.id - a.id);
+                                ).sort((a, b) => {
+                                    if (sortField === 'execution_date') {
+                                        const da = new Date(a.execution_date).getTime();
+                                        const db = new Date(b.execution_date).getTime();
+                                        return sortDir === 'asc' ? da - db : db - da;
+                                    }
+                                    return sortDir === 'asc' ? a.id - b.id : b.id - a.id;
+                                });
                                 if (filteredOrders.length === 0) return <tr><td colSpan={6} className="text-center py-12 text-slate-500">Nenhuma O.S. encontrada.</td></tr>;
                                 return filteredOrders.map(order => (
                                     <tr key={order.id} className="border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800/30">
