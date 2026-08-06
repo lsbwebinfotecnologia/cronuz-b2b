@@ -1178,7 +1178,7 @@ def get_service_order_details(
     
     nfse_history = db.query(NFSeQueue).filter(NFSeQueue.service_order_id == order.id).order_by(NFSeQueue.created_at.desc()).all()
     txs = db.query(FinancialTransaction).filter(
-        FinancialTransaction.description.like(f"%OS #{order.id}%"),
+        FinancialTransaction.description.op('~')(f'OS #' + str(order.id) + r'(\s|\)|,|$)'),
         FinancialTransaction.company_id == current_user.company_id
     ).all()
     

@@ -256,7 +256,7 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
 
     // Lógica para bloquear Inputs
     const isLockedByNFSe = order?.status_nfse === 'Emitida' || order?.status_nfse === 'Em Processamento';
-    const isLockedByFinancial = order?.txs?.length > 0;
+    const isLockedByFinancial = (order?.txs || []).some((tx: any) => tx.status !== 'CANCELADO');
     const isValueLocked = isLockedByNFSe || isLockedByFinancial;
 
     const handleSave = async () => {
