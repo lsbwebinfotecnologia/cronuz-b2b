@@ -391,6 +391,49 @@ def update_bulk_service_order_date(
     return {"status": "success", "updated": len(orders)}
 
 
+class ServiceOrderBulkRecurrenceDayRequest(BaseModel):
+    order_ids: List[int]
+    fixed_day: int  # 1-28
+
+
+@router.patch("/service-orders/bulk/recurrence-day")
+def update_bulk_recurrence_day(
+    bulk_req: ServiceOrderBulkRecurrenceDayRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Altera o dia fixo de vencimento mensal das O.S. recorrentes selecionadas.
+    Recalcula o execution_date de cada OS para o novo dia no seu respectivo mês.
+    """
+    if not (1 <= bulk_req.fixed_day <= 28):
+        raise HTTPException(status_code=400, detail="O dia de vencimento deve ser entre 1 e 28.")
+
+    import calendar
+    from datetime import date
+
+    orders = db.query(ServiceOrder).filter(
+        ServiceOrder.id.in_(bulk_req.order_ids),
+        ServiceOrder.company_id == current_user.company_id,
+        ServiceOrder.is_recurrent == True
+    ).all()
+
+    if not orders:
+        raise HTTPException(status_code=404, detail="Nenhuma O.S. recorrente encontrada entre as selecionadas.")
+
+    updated = 0
+    for order in orders:
+        # Calcula o máximo de dias do mês atual da OS para evitar datas inválidas
+        current_exec = order.execution_date
+        max_day = calendar.monthrange(current_exec.year, current_exec.month)[1]
+        new_day = min(bulk_req.fixed_day, max_day)
+
+        order.execution_date = date(current_exec.year, current_exec.month, new_day)
+        order.recurrence_fixed_day = bulk_req.fixed_day
+        updated += 1
+
+    db.commit()
+    return {"status": "success", "updated": updated}
 
 
 @router.patch("/service-orders/{order_id:int}/status")

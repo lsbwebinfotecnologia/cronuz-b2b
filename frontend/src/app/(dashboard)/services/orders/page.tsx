@@ -84,7 +84,9 @@ export default function ServiceOrdersPage() {
     const [companyDefaultPrintPointId, setCompanyDefaultPrintPointId] = useState<number | ''>('');
     const [sefazLog, setSefazLog] = useState<{status: number|null, body: string, xml: string} | null>(null);
     const [isBulkDateModalOpen, setIsBulkDateModalOpen] = useState(false);
+    const [bulkDateMode, setBulkDateMode] = useState<'execution_date' | 'recurrence_day'>('execution_date');
     const [bulkExecutionDate, setBulkExecutionDate] = useState(new Date().toISOString().split('T')[0]);
+    const [bulkRecurrenceDay, setBulkRecurrenceDay] = useState<number>(10);
     const [updatingBulk, setUpdatingBulk] = useState(false);
     
     // Split Service Order Modal
@@ -410,7 +412,7 @@ export default function ServiceOrdersPage() {
                 })
             });
             if (res.ok) {
-                toast.success(`Data limite de ${selectedOrders.length} O.S. alterada com sucesso!`);
+                toast.success(`Data de execução de ${selectedOrders.length} O.S. alterada com sucesso!`);
                 setSelectedOrders([]);
                 setIsBulkDateModalOpen(false);
                 fetchOrders();
@@ -420,6 +422,41 @@ export default function ServiceOrdersPage() {
             }
         } catch (error) {
             toast.error("Erro de rede ao alterar datas.");
+        } finally {
+            setUpdatingBulk(false);
+        }
+    };
+
+    const handleBulkRecurrenceDayUpdate = async () => {
+        if (!bulkRecurrenceDay || bulkRecurrenceDay < 1 || bulkRecurrenceDay > 28) {
+            toast.error("Selecione um dia entre 1 e 28.");
+            return;
+        }
+        setUpdatingBulk(true);
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/bulk/recurrence-day`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${getToken()}`
+                },
+                body: JSON.stringify({
+                    order_ids: selectedOrders,
+                    fixed_day: bulkRecurrenceDay
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                toast.success(`Dia de vencimento atualizado para dia ${bulkRecurrenceDay} em ${data.updated} O.S. recorrente(s)!`);
+                setSelectedOrders([]);
+                setIsBulkDateModalOpen(false);
+                fetchOrders();
+            } else {
+                const err = await res.json();
+                toast.error(err.detail || "Erro ao alterar dia de vencimento.");
+            }
+        } catch (error) {
+            toast.error("Erro de rede ao alterar dia de vencimento.");
         } finally {
             setUpdatingBulk(false);
         }
@@ -1591,46 +1628,107 @@ export default function ServiceOrdersPage() {
             {isBulkDateModalOpen && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
                     <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in duration-200">
+
+                        {/* Header */}
                         <div className="flex items-center justify-between p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
                             <div>
                                 <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
                                     <Calendar className="w-5 h-5 text-indigo-500" /> Alterar Datas em Lote
                                 </h3>
-                                <p className="text-xs text-slate-500 mt-1">Definir nova data limite para as O.S. selecionadas</p>
+                                <p className="text-xs text-slate-500 mt-1">{selectedOrders.length} O.S. selecionada(s)</p>
                             </div>
-                            <button onClick={() => setIsBulkDateModalOpen(false)} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-400">
+                            <button onClick={() => { setIsBulkDateModalOpen(false); setBulkDateMode('execution_date'); }} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-400">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <div className="p-6 space-y-4">
-                            <div>
-                                <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
-                                    Nova Data Limite de Execução
-                                </label>
-                                <input
-                                    type="date"
-                                    value={bulkExecutionDate}
-                                    onChange={(e) => setBulkExecutionDate(e.target.value)}
-                                    className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 text-slate-700 dark:text-slate-300 font-medium"
-                                />
-                            </div>
-                            
-                            <p className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-lg border border-slate-200/50 dark:border-slate-800">
-                                Nota: Esta alteração atualizará a data limite de execução de todas as <strong>{selectedOrders.length}</strong> ordens de serviço selecionadas.
-                            </p>
 
-                            <div className="flex gap-3 pt-4 border-t border-slate-100 dark:border-slate-800 mt-6">
+                        <div className="p-6 space-y-5">
+
+                            {/* Toggle de modo */}
+                            <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
                                 <button
                                     type="button"
-                                    onClick={() => setIsBulkDateModalOpen(false)}
+                                    onClick={() => setBulkDateMode('execution_date')}
+                                    className={`py-2 px-3 rounded-lg text-xs font-semibold transition-all ${
+                                        bulkDateMode === 'execution_date'
+                                            ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                                    }`}
+                                >
+                                    📅 Data de Execução
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setBulkDateMode('recurrence_day')}
+                                    className={`py-2 px-3 rounded-lg text-xs font-semibold transition-all ${
+                                        bulkDateMode === 'recurrence_day'
+                                            ? 'bg-white dark:bg-slate-700 text-purple-600 dark:text-purple-400 shadow-sm'
+                                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                                    }`}
+                                >
+                                    🔄 Dia Vencimento Mensal
+                                </button>
+                            </div>
+
+                            {/* Modo 1: Data de execução */}
+                            {bulkDateMode === 'execution_date' && (
+                                <div className="space-y-3">
+                                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
+                                        Nova Data Limite de Execução
+                                    </label>
+                                    <input
+                                        type="date"
+                                        value={bulkExecutionDate}
+                                        onChange={(e) => setBulkExecutionDate(e.target.value)}
+                                        className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 text-slate-700 dark:text-slate-300 font-medium"
+                                    />
+                                    <p className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-lg border border-slate-200/50 dark:border-slate-800">
+                                        Atualiza a data de execução de todas as <strong>{selectedOrders.length}</strong> O.S. selecionadas para a data escolhida.
+                                    </p>
+                                </div>
+                            )}
+
+                            {/* Modo 2: Dia fixo mensal (somente recorrentes) */}
+                            {bulkDateMode === 'recurrence_day' && (
+                                <div className="space-y-3">
+                                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300">
+                                        Novo Dia de Vencimento Mensal
+                                        <span className="ml-2 text-xs font-normal text-slate-400">(1 a 28)</span>
+                                    </label>
+                                    <div className="flex items-center gap-3">
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={28}
+                                            value={bulkRecurrenceDay}
+                                            onChange={(e) => setBulkRecurrenceDay(Math.min(28, Math.max(1, parseInt(e.target.value) || 1)))}
+                                            className="w-28 p-3 bg-slate-50 dark:bg-slate-800 border border-purple-200 dark:border-purple-800 rounded-xl focus:ring-2 focus:ring-purple-500 text-purple-700 dark:text-purple-300 font-bold text-center text-lg"
+                                        />
+                                        <span className="text-sm text-slate-500">de cada mês</span>
+                                    </div>
+                                    <p className="text-xs text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20 p-3 rounded-lg border border-purple-200/50 dark:border-purple-800/50">
+                                        🔄 Aplica somente em <strong>O.S. recorrentes</strong>. O único dia é atualizado no mês atual de cada O.S. O.S. não recorrentes entre as selecionadas serão ignoradas.
+                                    </p>
+                                </div>
+                            )}
+
+                            {/* Footer */}
+                            <div className="flex gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+                                <button
+                                    type="button"
+                                    onClick={() => { setIsBulkDateModalOpen(false); setBulkDateMode('execution_date'); }}
                                     className="flex-1 py-2.5 text-center px-4 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 font-medium rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition"
                                 >
                                     Cancelar
                                 </button>
                                 <button
-                                    onClick={handleBulkDateUpdate}
+                                    onClick={bulkDateMode === 'execution_date' ? handleBulkDateUpdate : handleBulkRecurrenceDayUpdate}
                                     disabled={updatingBulk}
-                                    className="flex-1 py-2.5 bg-indigo-600 text-white text-center px-4 font-bold rounded-xl hover:bg-indigo-700 transition shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
+                                    className={`flex-1 py-2.5 text-white text-center px-4 font-bold rounded-xl transition shadow-md flex items-center justify-center gap-2 disabled:opacity-50 ${
+                                        bulkDateMode === 'recurrence_day'
+                                            ? 'bg-purple-600 hover:bg-purple-700'
+                                            : 'bg-indigo-600 hover:bg-indigo-700'
+                                    }`}
                                 >
                                     {updatingBulk ? 'Processando...' : 'Confirmar'}
                                 </button>

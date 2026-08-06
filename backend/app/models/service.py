@@ -67,6 +67,7 @@ class ServiceOrder(Base):
 
     is_recurrent = Column(Boolean, default=False, nullable=False)
     recurrence_end_date = Column(Date, nullable=True)
+    recurrence_fixed_day = Column(Integer, nullable=True)  # Dia fixo de vencimento mensal (1-28)
 
     invoice_pdf_url = Column(String(500), nullable=True)
 
