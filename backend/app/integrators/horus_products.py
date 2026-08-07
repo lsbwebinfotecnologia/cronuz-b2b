@@ -38,11 +38,6 @@ class HorusProducts(HorusClient):
         if data_fim:
             params["DATA_FIM"] = data_fim
 
-        # Pagination
-        if not getattr(self._settings, 'horus_legacy_pagination', False):
-            params["OFFSET"] = offset
-            params["LIMIT"] = limit if (limit is not None and limit > 0) else 10000
-            
         # Company / Branch context from settings
         if getattr(self._settings, 'horus_hide_zero_balance', False):
             if self._settings.horus_company:
