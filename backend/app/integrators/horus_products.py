@@ -34,9 +34,9 @@ class HorusProducts(HorusClient):
 
         # Filtro de período — usado na sincronização incremental de estoque
         if data_ini:
-            params["DAT_INI"] = data_ini
+            params["DATA_INI"] = data_ini
         if data_fim:
-            params["DAT_FIM"] = data_fim
+            params["DATA_FIM"] = data_fim
 
         # Pagination
         if not getattr(self._settings, 'horus_legacy_pagination', False):
