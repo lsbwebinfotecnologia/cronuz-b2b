@@ -42,22 +42,6 @@ class HorusProducts(HorusClient):
         params["OFFSET"] = offset
         params["LIMIT"] = limit if (limit is not None and limit > 0) else 50
 
-        # Company / Branch context from settings
-        if getattr(self._settings, 'horus_hide_zero_balance', False):
-            if self._settings.horus_company:
-                params["AC_COD_EMPRESA"] = self._settings.horus_company
-            if self._settings.horus_branch:
-                params["AC_COD_FILIAL"] = self._settings.horus_branch
-            if getattr(self._settings, 'horus_stock_local', None):
-                params["AC_LOCAL_ESTOQUE"] = self._settings.horus_stock_local
-        else:
-            if self._settings.horus_company:
-                params["SD_COD_EMPRESA"] = self._settings.horus_company
-            if self._settings.horus_branch:
-                params["SD_COD_FILIAL"] = self._settings.horus_branch
-            if getattr(self._settings, 'horus_stock_local', None):
-                params["SD_LOCAL_ESTOQUE"] = self._settings.horus_stock_local
-            
         # Vitrines / Showcase filters
         if is_showcase and cod_tpo_caract_extra and cod_caract_extra:
             params["COD_TPO_CARACT_EXTRA"] = cod_tpo_caract_extra
