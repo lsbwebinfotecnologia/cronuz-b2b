@@ -13,16 +13,16 @@ Regra de DATA_INI:
 Paginação Hórus:
   - PAGE_SIZE=50, loop OFFSET até retornar página vazia ou menor que PAGE_SIZE.
 
-Filtro de saldo:
-  - Apenas itens com saldo > 0 são enviados ao Erdos.
-  - ISBNs que foram enviados anteriormente e agora têm saldo = 0 (ou sumiram)
-    recebem qty=0 na Erdos e são removidos do rastreamento.
+Envio:
+  - Todos os itens retornados pelo Hórus são enviados ao Erdos (sem filtro de saldo).
+  - O incrementalismo é controlado pelo DATA_INI/DATA_FIM baseado no campo de
+    última atualização do Hórus.
 """
 
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List
 
 log = logging.getLogger("dropship_stock_job")
 
@@ -165,72 +165,24 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
     finally:
         await horus_prod.close()
 
-    # ── Filtrar por saldo e calcular zeragens ─────────────────────────────────
-    # Itens com saldo > 0 (serão enviados ao Erdos)
-    items_com_saldo: List[Dict[str, Any]] = [i for i in all_items_raw if i["quantidade"] > 0]
-    # ISBNs que apareceram com saldo > 0 neste retorno
-    isbns_com_saldo: Set[str] = {i["sku"] for i in items_com_saldo}
-
-    # ISBNs que já foram enviados ao Erdos anteriormente (rastreados no banco)
-    enviados_db = db.query(StockSentErdos).filter(
-        StockSentErdos.company_id == config.company_id
-    ).all()
-    isbns_enviados: Set[str] = {row.isbn for row in enviados_db}
-
-    # ISBNs para zerar = estavam no banco MAS não estão mais com saldo > 0
-    # (apareceram com saldo=0 OU sumiram do retorno atual)
-    isbns_para_zerar: Set[str] = isbns_enviados - isbns_com_saldo
-    items_zeragem: List[Dict[str, Any]] = [
-        {"sku": isbn, "quantidade": 0} for isbn in isbns_para_zerar
-    ]
-
-    log.info(
-        f"[StockSync] company_id={config.company_id} "
-        f"com_saldo={len(items_com_saldo)} | para_zerar={len(isbns_para_zerar)}"
-    )
-
-    # ── Nada a fazer ─────────────────────────────────────────────────────────
-    payload_total = items_com_saldo + items_zeragem
-    if not payload_total:
+    # ── Sem itens: não atualiza last_run ─────────────────────────────────────
+    if not all_items_raw:
         log.info(
             f"[StockSync] company_id={config.company_id} "
-            f"Nenhum item para enviar ou zerar — last_run não alterado."
+            f"Nenhum item atualizado no período — last_run não alterado."
         )
         _save_log("no_items", skus_sent=0, data_ini=data_ini, data_fim=data_fim)
         return {
             "status": "no_items",
             "skus_sent": 0,
-            "zeroed": 0,
             "data_ini": data_ini,
             "data_fim": data_fim,
         }
 
-    # ── Envia ao Hub-Erdos ────────────────────────────────────────────────────
+    # ── Envia ao Hub-Erdos (todos os itens, sem filtro de saldo) ─────────────
     client = _build_erdos_client(config)
     try:
-        push_result = await client.push_stock(payload_total)
-
-        # ── Atualiza rastreamento dsp_stock_sent_erdos ────────────────────────
-        # UPSERT: itens com saldo > 0
-        for item in items_com_saldo:
-            existing = next((r for r in enviados_db if r.isbn == item["sku"]), None)
-            if existing:
-                existing.last_qty = item["quantidade"]
-                existing.last_sent_at = run_time
-            else:
-                db.add(StockSentErdos(
-                    company_id=config.company_id,
-                    isbn=item["sku"],
-                    last_qty=item["quantidade"],
-                    last_sent_at=run_time,
-                ))
-
-        # DELETE: itens zerados
-        if isbns_para_zerar:
-            db.query(StockSentErdos).filter(
-                StockSentErdos.company_id == config.company_id,
-                StockSentErdos.isbn.in_(list(isbns_para_zerar))
-            ).delete(synchronize_session=False)
+        push_result = await client.push_stock(all_items_raw)
 
         # Atualiza last_run SOMENTE após push bem-sucedido
         config.stock_sync_last_run = run_time
@@ -238,14 +190,13 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
 
         log.info(
             f"[StockSync] company_id={config.company_id} "
-            f"✅ {len(items_com_saldo)} SKUs enviados, {len(isbns_para_zerar)} zerados "
-            f"— last_run={run_time.isoformat()}"
+            f"✅ {len(all_items_raw)} SKUs enviados — last_run={run_time.isoformat()}"
         )
 
         _save_log(
             "ok",
-            skus_sent=len(payload_total),
-            items_payload=payload_total,
+            skus_sent=len(all_items_raw),
+            items_payload=all_items_raw,
             hub_response=push_result,
             data_ini=data_ini,
             data_fim=data_fim,
@@ -253,8 +204,7 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
 
         return {
             "status": "ok",
-            "skus_sent": len(items_com_saldo),
-            "zeroed": len(isbns_para_zerar),
+            "skus_sent": len(all_items_raw),
             "data_ini": data_ini,
             "data_fim": data_fim,
             "hub_response": push_result,
@@ -263,7 +213,7 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
     except ErdosClientError as e:
         err_msg = f"Erro ao enviar ao Hub-Erdos: {e}"
         log.error(f"[StockSync] company_id={config.company_id} {err_msg}")
-        _save_log("error", skus_sent=len(payload_total), items_payload=payload_total,
+        _save_log("error", skus_sent=len(all_items_raw), items_payload=all_items_raw,
                   error_msg=err_msg, data_ini=data_ini, data_fim=data_fim)
         raise
 
