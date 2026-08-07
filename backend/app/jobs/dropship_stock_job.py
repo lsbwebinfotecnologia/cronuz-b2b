@@ -130,7 +130,10 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
                     or item.get("ISBN")
                 )
                 # Usar None-check para detectar saldo=0 corretamente
-                saldo_raw = item.get("SALDO")
+                # Campo confirmado no retorno real do Hórus: SALDO_DISPONIVEL
+                saldo_raw = item.get("SALDO_DISPONIVEL")
+                if saldo_raw is None:
+                    saldo_raw = item.get("SALDO")
                 if saldo_raw is None:
                     saldo_raw = item.get("QTD_SALDO")
                 if saldo_raw is None:
