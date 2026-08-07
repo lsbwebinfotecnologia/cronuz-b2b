@@ -38,6 +38,10 @@ class HorusProducts(HorusClient):
         if data_fim:
             params["DATA_FIM"] = data_fim
 
+        # OFFSET/LIMIT — obrigatório para evitar timeout no Hórus (sem limite, resposta pode ser truncada)
+        params["OFFSET"] = offset
+        params["LIMIT"] = limit if (limit is not None and limit > 0) else 10000
+
         # Company / Branch context from settings
         if getattr(self._settings, 'horus_hide_zero_balance', False):
             if self._settings.horus_company:
