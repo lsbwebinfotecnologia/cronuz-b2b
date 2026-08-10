@@ -504,6 +504,9 @@ async def sync_dropship_orders(
     try:
         all_erdos_orders = await client.get_all_orders()
 
+        # Flush garante que os inserts da Etapa 1 sejam visíveis na query abaixo
+        db.flush()
+
         # IDs já conhecidos localmente (inclui os recém-inseridos acima)
         known_ids = {
             row.external_order_id
