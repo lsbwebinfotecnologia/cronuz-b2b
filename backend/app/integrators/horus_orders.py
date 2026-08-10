@@ -94,21 +94,13 @@ class HorusOrders(HorusClient):
         }
         
         # Regra de envio do VLR_LIQUIDO:
-        # - B2B_CRONUZ (ou qualquer modelo != B2B_HORUS): sempre envia VLR_LIQUIDO (Cronuz é quem calcula)
-        # - B2B_HORUS puro: NÃO envia VLR_LIQUIDO (Horus calcula pelo desconto do cliente no ERP)
-        # - B2B_HORUS + horus_use_cronuz_discount=True: envia VLR_LIQUIDO (Cronuz sobrescreve o desconto do Horus)
-        is_b2b_horus = getattr(self._settings, "horus_api_mode", "") == "B2B"
-        use_cronuz_discount = getattr(self._settings, "horus_use_cronuz_discount", False)
-        
+        # A decisão de "calcular ou não" já foi tomada pelo código chamador (dropship.py):
+        #   - Se o ISBN está na dsp_price_table → price vem preenchido (override)
+        #   - Se não está → price vem como None (Hórus usa o desconto do cliente no ERP)
+        # Portanto, se price não for None, sempre enviamos VLR_LIQUIDO.
         if price is not None:
-            if not is_b2b_horus:
-                # Modelo Cronuz — sempre envia o valor calculado
-                params["VLR_LIQUIDO"] = price
-            elif is_b2b_horus and use_cronuz_discount:
-                # B2B Horus com desconto Cronuz ativo — força o valor para sobrepor o Horus
-                params["VLR_LIQUIDO"] = price
-            # else: B2B_HORUS puro — Horus calcula, não enviamos VLR_LIQUIDO
-        
+            params["VLR_LIQUIDO"] = price
+
         return await self.get("InsItensPedidoVenda", params=params)
 
     async def clear_order_items(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_ped_venda: Union[str, int]) -> Any:
