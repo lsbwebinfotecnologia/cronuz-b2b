@@ -2147,6 +2147,56 @@ async def get_stock_sync_logs(
     }
 
 
+# ==============================================================================
+# STOCK SYNC — CONFIGURAÇÃO (interval / enabled)
+# ==============================================================================
+
+@router.get("/stock/{company_id}/config")
+def get_stock_sync_config(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retorna configuração atual de sync automático de estoque."""
+    _require_seller_or_master(current_user, company_id)
+    config = _get_config_or_404(db, company_id)
+    return {
+        "stock_sync_enabled":      config.stock_sync_enabled,
+        "stock_sync_interval_min": config.stock_sync_interval_min,
+        "stock_sync_last_run":     config.stock_sync_last_run.isoformat() if config.stock_sync_last_run else None,
+    }
+
+
+@router.patch("/stock/{company_id}/config")
+def patch_stock_sync_config(
+    company_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Atualiza configuração de sync automático de estoque.
+    Campos aceitos: stock_sync_enabled (bool), stock_sync_interval_min (int ≥ 1).
+    """
+    _require_seller_or_master(current_user, company_id)
+    config = _get_config_or_404(db, company_id)
+
+    if "stock_sync_enabled" in payload:
+        config.stock_sync_enabled = bool(payload["stock_sync_enabled"])
+
+    if "stock_sync_interval_min" in payload:
+        interval = int(payload["stock_sync_interval_min"])
+        if interval < 1:
+            raise HTTPException(status_code=400, detail="Intervalo mínimo é 1 minuto.")
+        config.stock_sync_interval_min = interval
+
+    db.commit()
+    return {
+        "stock_sync_enabled":      config.stock_sync_enabled,
+        "stock_sync_interval_min": config.stock_sync_interval_min,
+        "stock_sync_last_run":     config.stock_sync_last_run.isoformat() if config.stock_sync_last_run else None,
+    }
+
 
 @router.get("/stock/{company_id}/hub")
 async def get_hub_stock(

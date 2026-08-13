@@ -6,7 +6,7 @@ import {
   RefreshCw, Loader2, CheckCircle2, AlertTriangle,
   PackageSearch, ChevronLeft, ChevronRight,
   ChevronDown, ChevronUp, Clock, Send, Filter,
-  BarChart3, Boxes, CalendarClock,
+  BarChart3, Boxes, CalendarClock, Settings2, Zap, ZapOff, Save,
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -39,6 +39,12 @@ interface LogsResponse {
   logs: SyncLog[];
 }
 
+interface SyncConfig {
+  stock_sync_enabled: boolean;
+  stock_sync_interval_min: number;
+  stock_sync_last_run: string | null;
+}
+
 const STATUS_CONFIG = {
   ok:       { label: 'Enviado',    bg: 'bg-emerald-50 dark:bg-emerald-900/20', text: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-200 dark:border-emerald-800/40', icon: CheckCircle2 },
   no_items: { label: 'Sem itens',  bg: 'bg-slate-50 dark:bg-slate-800/50',     text: 'text-slate-500 dark:text-slate-400',     border: 'border-slate-200 dark:border-slate-700',         icon: PackageSearch },
@@ -55,6 +61,12 @@ export default function StockSyncLogsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  // Config state
+  const [config, setConfig] = useState<SyncConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [intervalInput, setIntervalInput] = useState<string>('');
+  const [savingConfig, setSavingConfig] = useState(false);
 
   const fetchLogs = useCallback(async (page = 1) => {
     if (!companyId) return;
@@ -77,7 +89,28 @@ export default function StockSyncLogsPage() {
     }
   }, [companyId, statusFilter]);
 
+  const fetchConfig = useCallback(async () => {
+    if (!companyId) return;
+    setConfigLoading(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dropship/stock/${companyId}/config`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const cfg: SyncConfig = await res.json();
+        setConfig(cfg);
+        setIntervalInput(String(cfg.stock_sync_interval_min));
+      }
+    } catch {
+      // silencioso
+    } finally {
+      setConfigLoading(false);
+    }
+  }, [companyId]);
+
   useEffect(() => { fetchLogs(1); }, [fetchLogs]);
+  useEffect(() => { fetchConfig(); }, [fetchConfig]);
 
   const handleManualPush = async () => {
     if (!companyId) return;
@@ -93,6 +126,7 @@ export default function StockSyncLogsPage() {
         if (result.status === 'ok') toast.success(`✅ ${result.skus_sent} SKUs enviados ao Hub-Erdos!`);
         else if (result.status === 'no_items') toast.info('Nenhum item atualizado no período.');
         fetchLogs(1);
+        fetchConfig();
       } else {
         toast.error(result.detail || 'Erro ao enviar estoque.');
       }
@@ -100,6 +134,53 @@ export default function StockSyncLogsPage() {
       toast.error('Erro de conexão.');
     } finally {
       setPushing(false);
+    }
+  };
+
+  const handleToggleEnabled = async () => {
+    if (!companyId || !config) return;
+    setSavingConfig(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dropship/stock/${companyId}/config`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock_sync_enabled: !config.stock_sync_enabled }),
+      });
+      if (res.ok) {
+        const updated: SyncConfig = await res.json();
+        setConfig(updated);
+        toast.success(updated.stock_sync_enabled ? '✅ Sync automático ativado!' : 'Sync automático desativado.');
+      }
+    } catch {
+      toast.error('Erro ao atualizar configuração.');
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  const handleSaveInterval = async () => {
+    if (!companyId) return;
+    const val = parseInt(intervalInput, 10);
+    if (isNaN(val) || val < 1) { toast.error('Intervalo mínimo é 1 minuto.'); return; }
+    setSavingConfig(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dropship/stock/${companyId}/config`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock_sync_interval_min: val }),
+      });
+      if (res.ok) {
+        const updated: SyncConfig = await res.json();
+        setConfig(updated);
+        setIntervalInput(String(updated.stock_sync_interval_min));
+        toast.success(`✅ Intervalo atualizado para ${updated.stock_sync_interval_min} min.`);
+      }
+    } catch {
+      toast.error('Erro ao salvar intervalo.');
+    } finally {
+      setSavingConfig(false);
     }
   };
 
@@ -141,6 +222,73 @@ export default function StockSyncLogsPage() {
       </div>
 
       <div className="p-6 space-y-4 flex-1">
+
+        {/* Painel de Configuração do Sync Automático */}
+        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Settings2 className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+            <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">Sincronização Automática</span>
+            {config?.stock_sync_last_run && (
+              <span className="ml-auto text-[10px] text-slate-400 flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                Última: {formatDate(config.stock_sync_last_run)}
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            {/* Toggle ativo/inativo */}
+            <button
+              onClick={handleToggleEnabled}
+              disabled={savingConfig || configLoading}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border transition-all disabled:opacity-50 ${
+                config?.stock_sync_enabled
+                  ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/40 hover:bg-emerald-100'
+                  : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              {savingConfig ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : config?.stock_sync_enabled ? (
+                <Zap className="w-4 h-4" />
+              ) : (
+                <ZapOff className="w-4 h-4" />
+              )}
+              {config?.stock_sync_enabled ? 'Auto-sync Ativo' : 'Auto-sync Inativo'}
+            </button>
+
+            {/* Separador */}
+            <div className="hidden sm:block w-px h-8 bg-slate-200 dark:bg-slate-700" />
+
+            {/* Intervalo */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">Intervalo (min):</span>
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                value={intervalInput}
+                onChange={e => setIntervalInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleSaveInterval()}
+                className="w-20 px-2.5 py-1.5 text-sm font-mono font-semibold text-center text-slate-800 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-400"
+              />
+              <button
+                onClick={handleSaveInterval}
+                disabled={savingConfig || intervalInput === String(config?.stock_sync_interval_min)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-all disabled:opacity-40 disabled:pointer-events-none"
+              >
+                {savingConfig ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                Salvar
+              </button>
+            </div>
+
+            {/* Info scheduler */}
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 ml-auto hidden lg:block">
+              O scheduler verifica a cada 5 min e só envia se o intervalo configurado passou.
+            </p>
+          </div>
+        </motion.div>
 
         {/* Resumo rápido */}
         {data && data.total > 0 && (
