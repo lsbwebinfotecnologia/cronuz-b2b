@@ -61,3 +61,46 @@ Para manter a raiz do projeto limpa e organizada, aplicam-se as seguintes regras
 * **Deploy Seguro**: Nunca faça `git push`, deploy ou modificações diretas no servidor de produção a menos que explicitamente autorizado no prompt atual (ex: *"sobe pra producao"*). Se o usuário disser *"apenas no local"*, restrinja-se a simulações e execuções no ambiente local.
 * **Integridade do Worker**: Antes de finalizar qualquer tarefa relacionada ao backend, verifique se o worker do Uvicorn/Gunicorn no servidor de produção não ficou travado em estado Zumbi.
 * **Validação de API**: Após qualquer alteração que afete o backend, valide se a API subiu corretamente respondendo com status HTTP 200 OK na porta `8000` via teste local (ex: `curl`).
+
+---
+
+## 🌿 5. Estratégia de Git Branching
+
+### Branch `main` — Produção
+* A branch `main` é a branch de **produção/código estável**.
+* Ela é a única implantada no servidor de produção (DigitalOcean).
+* **Nunca desenvolva diretamente na `main`.** Todo código novo deve passar por uma feature branch antes de ser mesclado.
+
+### Criando uma Feature Branch (Windows ou Mac)
+Antes de iniciar qualquer funcionalidade ou correção, crie uma branch isolada a partir da `main` atualizada:
+
+```bash
+git checkout main
+git pull origin main
+git checkout -b feature/nome-da-funcionalidade
+```
+
+* Tudo o que for desenvolvido ficará isolado nessa branch até estar testado e aprovado.
+* Use nomes descritivos para as branches (ex: `feature/busca-por-cpf`, `fix/trava-valor-os`, `feat/dia-vencimento-recorrente`).
+
+### Publicando para Produção
+Somente quando a funcionalidade estiver **testada e aprovada**, faça o merge da feature branch para a `main`:
+
+```bash
+git checkout main
+git pull origin main
+git merge feature/nome-da-funcionalidade
+git push origin main
+```
+
+* Após o merge, a `main` é implantada no servidor de produção mediante autorização explícita do usuário (ex: *"sobe pra producao"*).
+* Feature branches concluídas podem ser deletadas após o merge:
+
+```bash
+git branch -d feature/nome-da-funcionalidade
+git push origin --delete feature/nome-da-funcionalidade
+```
+
+> [!IMPORTANT]
+> Esta regra se aplica tanto ao desenvolvimento no **Windows** quanto no **Mac**. Nenhum agente ou desenvolvedor deve fazer commits diretos na `main` sem passar pelo fluxo de feature branch.
+
