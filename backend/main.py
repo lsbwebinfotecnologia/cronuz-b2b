@@ -355,6 +355,7 @@ class ModuleUpdate(BaseModel):
     module_consignment: Optional[bool] = None
     module_proposals: Optional[bool] = None
     module_logistica_horus: Optional[bool] = None
+    module_dropship: Optional[bool] = None
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(

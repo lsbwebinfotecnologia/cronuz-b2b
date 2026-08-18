@@ -57,6 +57,7 @@ class CompanyBase(BaseModel):
     module_consignment: bool = False
     module_proposals: bool = False
     module_logistica_horus: bool = False
+    module_dropship: bool = False
     active: bool = True
 
 class CompanyCreate(CompanyBase):
@@ -122,6 +123,7 @@ class CompanyUpdate(BaseModel):
     module_consignment: Optional[bool] = None
     module_proposals: Optional[bool] = None
     module_logistica_horus: Optional[bool] = None
+    module_dropship: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):
