@@ -158,6 +158,7 @@ export function Sidebar() {
   const [moduleCommercial, setModuleCommercial] = useState(false);
   const [moduleProposals, setModuleProposals] = useState(false);
   const [moduleLogisticaHorus, setModuleLogisticaHorus] = useState(false);
+  const [moduleDropship, setModuleDropship] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
@@ -201,6 +202,7 @@ export function Sidebar() {
                setModuleCommercial(data.module_commercial || false);
                setModuleProposals(data.module_proposals || false);
                setModuleLogisticaHorus(data.module_logistica_horus || false);
+               setModuleDropship(data.module_dropship || false);
             }
          } catch (e) {}
        };
@@ -306,11 +308,11 @@ export function Sidebar() {
     });
   }
 
-  if (moduleLogisticaHorus) {
-    // Insert Dropship after Logística Horus
-    const logisticaIndex = filteredSellerNavigation.findIndex(n => n.name === 'Logística Horus');
-    const afterLogistica = logisticaIndex !== -1 ? logisticaIndex + 1 : filteredSellerNavigation.length;
-    filteredSellerNavigation.splice(afterLogistica, 0, {
+  if (moduleDropship) {
+    // Insert Dropship before Configurações
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
       name: 'Dropship',
       href: '/orders/dropship',
       icon: PackageCheck,
