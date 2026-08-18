@@ -44,6 +44,22 @@ def _validar_cnpj(cnpj: str) -> str:
     return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"
 
 
+def _safe_validate_cnpj(v) -> Optional[str]:
+    if not v:
+        return v
+    try:
+        return _validar_cnpj(str(v))
+    except ValueError:
+        # Tenta preencher com zeros se tiver menos de 14 dígitos
+        digits = "".join(filter(str.isdigit, str(v)))
+        if len(digits) > 0 and len(digits) < 14:
+            try:
+                return _validar_cnpj(digits.zfill(14))
+            except ValueError:
+                pass
+        return str(v)
+
+
 class SellerBranchBase(BaseModel):
     nome: str
     cnpj: Optional[str] = None
@@ -62,28 +78,32 @@ class SellerBranchBase(BaseModel):
     @field_validator('cnpj', mode='before')
     @classmethod
     def validate_cnpj(cls, v):
-        if not v:
-            return v
-        return _validar_cnpj(str(v))
+        return _safe_validate_cnpj(v)
 
     @field_validator('sefaz_environment', mode='before')
     @classmethod
     def validate_ambiente(cls, v):
-        if v not in ('HOMOLOGACAO', 'PRODUCAO'):
-            raise ValueError("Ambiente deve ser 'HOMOLOGACAO' ou 'PRODUCAO'.")
-        return v
+        if not v:
+            return 'HOMOLOGACAO'
+        v_str = str(v).upper().strip()
+        if v_str not in ('HOMOLOGACAO', 'PRODUCAO'):
+            return 'HOMOLOGACAO'
+        return v_str
 
     @field_validator('uf', mode='before')
     @classmethod
     def validate_uf(cls, v):
+        if not v:
+            return 'SP'
         ufs_validas = {
             'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA',
             'MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN',
             'RS','RO','RR','SC','SP','SE','TO',
         }
-        if str(v).upper() not in ufs_validas:
-            raise ValueError(f"UF '{v}' inválida.")
-        return str(v).upper()
+        v_str = str(v).upper().strip()
+        if v_str not in ufs_validas:
+            return 'SP'
+        return v_str
 
 
 class SellerBranchCreate(SellerBranchBase):
@@ -108,9 +128,7 @@ class SellerBranchUpdate(BaseModel):
     @field_validator('cnpj', mode='before')
     @classmethod
     def validate_cnpj(cls, v):
-        if not v:
-            return v
-        return _validar_cnpj(str(v))
+        return _safe_validate_cnpj(v)
 
 
 class SellerBranchResponse(SellerBranchBase):
