@@ -46,6 +46,7 @@ interface Company {
   module_consignment: boolean;
   module_proposals: boolean;
   module_logistica_horus: boolean;
+  module_dropship: boolean;
   active: boolean;
 }
 
