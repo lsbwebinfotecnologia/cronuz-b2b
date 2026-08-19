@@ -28,6 +28,7 @@ from app.models import dropship as dropship_models
 from app.models import dropship_price_table as dropship_price_table_models
 from app.models import dropship_stock_sync_log as dropship_stock_sync_log_models
 from app.models import order_conference as order_conference_models
+from app.models import alert as alert_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -66,6 +67,7 @@ from app.api import mobile_pdv
 from app.api import brand
 from app.api import dropship
 from app.api import sefaz_download
+from app.api import alerts as alerts_api
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -93,6 +95,7 @@ proposal_models.Base.metadata.create_all(bind=engine)
 seller_branch_models.Base.metadata.create_all(bind=engine)
 order_conference_models.Base.metadata.create_all(bind=engine)
 dropship_models.Base.metadata.create_all(bind=engine)
+alert_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -168,6 +171,7 @@ app.include_router(mobile_pdv.router, tags=["mobile-pdv"])
 app.include_router(brand.router, tags=["app-brand"])
 app.include_router(dropship.router, prefix="/dropship", tags=["dropship"])
 app.include_router(sefaz_download.router)
+app.include_router(alerts_api.router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)

@@ -1,6 +1,7 @@
 import React from 'react';
 import { cookies, headers } from 'next/headers';
 import { StoreHeader } from '@/components/store/StoreHeader';
+import { StoreAlertBanner } from '@/components/store/StoreAlertBanner';
 import { StoreProvider } from '@/components/store/StoreContext';
 import { CartProvider } from '@/components/store/CartContext';
 import { CartDrawer } from '@/components/store/CartDrawer';
@@ -61,6 +62,7 @@ export default async function StoreLayout({ children }: { children: React.ReactN
       <CartProvider>
         <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-[#0a0f1c] dark:text-white flex flex-col font-sans transition-colors duration-200">
           <StoreHeader />
+          <StoreAlertBanner companyId={companyId} />
           <CartDrawer />
           <main className="flex-1 w-full flex flex-col">
             {children}
