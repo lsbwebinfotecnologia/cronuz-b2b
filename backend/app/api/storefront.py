@@ -938,15 +938,25 @@ async def checkout_cart(
             
             origem = cart.customer_order_ref if cart.customer_order_ref else cart.id
             obs_text = f"B2B PEDIDO {cart.id} - Meu Pedido: {cart.customer_order_ref}" if cart.customer_order_ref else f"B2B PEDIDO {cart.id}"
-            
-            order_res = await horus_client.send_order(
-                id_doc=customer.document,
-                id_guid=customer.id_guid,
-                cnpj_destino=company.document,
-                cod_pedido_origem=origem,
-                type_order=cart.type_order,
-                obs=obs_text
-            )
+
+            # ── GUARDA DE IDEMPOTÊNCIA ──────────────────────────────────────
+            # Se o pedido já possui horus_pedido_venda, foi enviado com sucesso
+            # em uma tentativa anterior. Não enviar novamente ao Horus para
+            # evitar duplicidade. Apenas sincronizar status/itens.
+            if cart.horus_pedido_venda:
+                print(f"INFO CHECKOUT: Pedido {cart.id} já possui horus_pedido_venda={cart.horus_pedido_venda}. Pulando InsPedidoVenda.")
+                horus_ped_venda = cart.horus_pedido_venda
+                order_res = {"error": False, "COD_PED_VENDA": horus_ped_venda}
+            else:
+                order_res = await horus_client.send_order(
+                    id_doc=customer.document,
+                    id_guid=customer.id_guid,
+                    cnpj_destino=company.document,
+                    cod_pedido_origem=origem,
+                    type_order=cart.type_order,
+                    obs=obs_text
+                )
+            # ────────────────────────────────────────────────────────────────
             
             if order_res.get("error"):
                 raise HTTPException(status_code=400, detail=f"Erro no Horus: {order_res.get('msg')}")
