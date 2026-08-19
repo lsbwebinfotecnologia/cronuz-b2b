@@ -325,26 +325,15 @@ async def get_order_detail(
             try:
                 cod_origem = order.partner_reference if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id)
 
-                # 1ª tentativa: COD_PED_VENDA (número do pedido no ERP Horus) — mais preciso
+                # Horus B2B não aceita COD_PED_VENDA no Busca_PedidosVenda —
+                # única forma válida é via COD_PEDIDO_ORIGEM
                 horus_data = await horus_client.get_order(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
-                    cod_pedido_origem=None,
-                    cod_ped_venda=order.horus_pedido_venda
+                    cod_pedido_origem=cod_origem,
+                    cod_ped_venda=None
                 )
-
-                # Fallback: se não encontrou via COD_PED_VENDA, tenta pelo COD_PEDIDO_ORIGEM
-                if not horus_data or (isinstance(horus_data, list) and len(horus_data) == 0) or \
-                   (isinstance(horus_data, list) and horus_data and isinstance(horus_data[0], dict) and horus_data[0].get("Falha")):
-                    print(f"DEBUG HORUS: COD_PED_VENDA={order.horus_pedido_venda} sem resultado, tentando COD_PEDIDO_ORIGEM={cod_origem}")
-                    horus_data = await horus_client.get_order(
-                        id_doc=customer.document,
-                        id_guid=customer.id_guid,
-                        cnpj_destino=company.document,
-                        cod_pedido_origem=cod_origem,
-                        cod_ped_venda=None
-                    )
                 
                 if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:
                     horus_data = horus_data[0]
