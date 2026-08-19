@@ -28,6 +28,7 @@ export default function CompanyHorusPage() {
     horus_legacy_pagination: false,
     horus_stock_local: '',
     horus_hide_zero_balance: false,
+    horus_use_stock_location_filter: false,
     horus_use_cronuz_discount: false,
     bookinfo_api_key: ''
   });
@@ -57,6 +58,7 @@ export default function CompanyHorusPage() {
              horus_legacy_pagination: data.horus_legacy_pagination || false,
              horus_stock_local: data.horus_stock_local || '',
              horus_hide_zero_balance: data.horus_hide_zero_balance || false,
+             horus_use_stock_location_filter: data.horus_use_stock_location_filter || false,
              horus_use_cronuz_discount: data.horus_use_cronuz_discount || false,
              allow_backorder: data.allow_backorder || false,
              bookinfo_api_key: data.bookinfo_api_key || ''
@@ -385,6 +387,34 @@ export default function CompanyHorusPage() {
                    </div>
                 </div>
              </div>
+
+             {/* ── REGRA DE FILTRO DE ESTOQUE ─────────────────────────────────────────
+                  Controla se envia SD_COD_EMPRESA / SD_COD_FILIAL / SD_LOCAL_ESTOQUE
+                  ao Horus. Ver horus_products.py › busca_acervo_b2b para detalhes.     */}
+              <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-200 dark:border-slate-800/60 rounded-2xl p-6 shadow-sm flex items-start justify-between gap-4 mt-2">
+                <div className="space-y-1 flex-1">
+                  <h3 className="text-sm font-bold text-teal-600 tracking-widest uppercase">FILTRAR ESTOQUE POR LOCAL</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Quando <strong>desativado</strong> (padrão): busca geral — o Horus retorna o saldo consolidado de todos os locais via <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded text-[11px]">ID_DOC + ID_GUID</code>.<br />
+                    Quando <strong>ativado</strong>: envia <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded text-[11px]">SD_COD_EMPRESA + SD_COD_FILIAL + SD_LOCAL_ESTOQUE</code> para filtrar apenas o local configurado acima. Use quando a editora possui múltiplos depósitos e não quer exibir estoque de outros locais.
+                  </p>
+                  {formData.horus_use_stock_location_filter && !formData.horus_stock_local && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 font-semibold mt-1 flex items-center gap-1">
+                      ⚠️ Atenção: preencha o campo &quot;Local (Estoque)&quot; acima para o filtro funcionar.
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-sm font-bold text-slate-600 dark:text-slate-300">Filtro por Local</span>
+                  <button
+                    type="button"
+                    onClick={() => setFormData(prev => ({ ...prev, horus_use_stock_location_filter: !prev.horus_use_stock_location_filter }))}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 ${formData.horus_use_stock_location_filter ? 'bg-teal-500' : 'bg-slate-200 dark:bg-slate-700'}`}
+                  >
+                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${formData.horus_use_stock_location_filter ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+              </div>
 
              <div className="bg-slate-50/50 dark:bg-slate-900/20 border border-slate-200 dark:border-slate-800/60 rounded-2xl p-6 shadow-sm flex items-center justify-between">
                 <div className="space-y-1">

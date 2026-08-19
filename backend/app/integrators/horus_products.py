@@ -42,7 +42,43 @@ class HorusProducts(HorusClient):
         params["OFFSET"] = offset
         params["LIMIT"] = limit if (limit is not None and limit > 0) else 50
 
-        # Vitrines / Showcase filters
+        # ══════════════════════════════════════════════════════════════════════
+        # REGRA DE FILTRO DE ESTOQUE — horus_use_stock_location_filter
+        # ══════════════════════════════════════════════════════════════════════
+        # Esta regra controla se a busca filtra o estoque por empresa/filial/
+        # local específico ou usa o filtro geral do Horus B2B.
+        #
+        # MODO GERAL (False — padrão):
+        #   Envia apenas ID_DOC + ID_GUID. O Horus B2B retorna o saldo
+        #   consolidado de TODOS os locais de estoque configurados para aquela
+        #   empresa. Adequado quando a editora tem depósito único ou quer
+        #   exibir o estoque total disponível.
+        #
+        # MODO POR LOCAL (True):
+        #   Envia SD_COD_EMPRESA + SD_COD_FILIAL + SD_LOCAL_ESTOQUE com os
+        #   valores configurados em horus_company, horus_branch e
+        #   horus_stock_local. O Horus filtra e retorna APENAS o saldo do
+        #   local específico. Use quando a editora tem múltiplos depósitos
+        #   e não quer exibir estoque de outros locais no portal B2B.
+        #
+        # ⚠️  IMPORTANTE PARA FUTURAS IMPLEMENTAÇÕES:
+        #   - Nunca envie SD_* incondicionalmente — isso afeta a exibição
+        #     de saldo para editoras que usam filtro geral.
+        #   - O campo horus_stock_local DEVE estar preenchido para o modo
+        #     por local funcionar. Se estiver vazio, os parâmetros SD_ não
+        #     são enviados mesmo com o flag ativo.
+        #   - Não confundir com AC_COD_EMPRESA / AC_COD_FILIAL (prefixo AC_)
+        #     que eram usados para o modo horus_hide_zero_balance (removido).
+        # ══════════════════════════════════════════════════════════════════════
+        if getattr(self._settings, 'horus_use_stock_location_filter', False):
+            if self._settings.horus_company:
+                params["SD_COD_EMPRESA"] = self._settings.horus_company
+            if self._settings.horus_branch:
+                params["SD_COD_FILIAL"] = self._settings.horus_branch
+            if getattr(self._settings, 'horus_stock_local', None):
+                params["SD_LOCAL_ESTOQUE"] = self._settings.horus_stock_local
+        # ══════════════════════════════════════════════════════════════════════
+
         if is_showcase and cod_tpo_caract_extra and cod_caract_extra:
             params["COD_TPO_CARACT_EXTRA"] = cod_tpo_caract_extra
             params["COD_CARACT_EXTRA"] = cod_caract_extra
