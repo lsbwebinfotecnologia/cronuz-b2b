@@ -50,7 +50,7 @@ export default function LeadsDashboard() {
     try {
       setLoading(true);
       const token = getToken() || '';
-      const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/leads/`);
+      const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/leads`);
       if (filter !== 'all') {
         url.searchParams.append('status', filter);
       }
@@ -97,7 +97,7 @@ export default function LeadsDashboard() {
     setSubmitting(true);
     try {
       const token = getToken() || '';
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/leads/`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/leads`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

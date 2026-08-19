@@ -408,7 +408,7 @@ export default function NewOrEditProposalPage() {
           status: "new"
         };
 
-        const leadRes = await fetch(`${apiUrl}/leads/`, {
+        const leadRes = await fetch(`${apiUrl}/leads`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,

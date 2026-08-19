@@ -33,7 +33,7 @@ export default function CronuzLanding() {
         setSubmitting(true);
         try {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, '') || 'http://localhost:8000';
-            const res = await fetch(`${apiUrl}/leads/`, {
+            const res = await fetch(`${apiUrl}/leads`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(formData)
