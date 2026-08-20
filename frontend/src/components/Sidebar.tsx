@@ -34,7 +34,8 @@ import {
   ClipboardList,
   Receipt,
   Zap,
-  PackageCheck
+  PackageCheck,
+  Bell
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -159,6 +160,7 @@ export function Sidebar() {
   const [moduleProposals, setModuleProposals] = useState(false);
   const [moduleLogisticaHorus, setModuleLogisticaHorus] = useState(false);
   const [moduleDropship, setModuleDropship] = useState(false);
+  const [moduleNotifications, setModuleNotifications] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
@@ -203,6 +205,7 @@ export function Sidebar() {
                setModuleProposals(data.module_proposals || false);
                setModuleLogisticaHorus(data.module_logistica_horus || false);
                setModuleDropship(data.module_dropship || false);
+               setModuleNotifications(data.module_notifications || false);
             }
          } catch (e) {}
        };
@@ -321,6 +324,17 @@ export function Sidebar() {
         { name: 'Tabela de Preços', href: '/orders/dropship/price-table' },
         { name: 'Logs de Estoque', href: '/orders/dropship/stock-logs' },
       ]
+    });
+  }
+
+  if (moduleNotifications) {
+    // Insert Notificações before Configurações
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Notificações',
+      href: '/notifications',
+      icon: Bell,
     });
   }
 

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, UserCircle } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, UserCircle, Bell } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -121,6 +121,7 @@ export default function CompanyModulesPage() {
       module_proposals: company.module_proposals,
       module_logistica_horus: company.module_logistica_horus,
       module_dropship: company.module_dropship,
+      module_notifications: company.module_notifications,
       [moduleName]: !currentValue
     };
 
@@ -547,6 +548,27 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_dropship', company.module_dropship)}
                     disabled={togglingModule !== null}
                     colorClass="bg-amber-500"
+                  />
+                </div>
+              </div>
+
+              {/* Notificações */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_notifications ? 'bg-teal-500/10 border-teal-500/20 text-teal-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <Bell className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Notificações</p>
+                    <p className="text-xs text-slate-500">Permite que o seller crie alertas programáveis exibidos no storefront para os clientes (avisos de preços, retirada de pedidos, etc.).</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch
+                    active={company.module_notifications}
+                    onClick={() => handleToggleModule('module_notifications', company.module_notifications)}
+                    disabled={togglingModule !== null}
+                    colorClass="bg-teal-500"
                   />
                 </div>
               </div>

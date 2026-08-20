@@ -47,6 +47,7 @@ interface Company {
   module_proposals: boolean;
   module_logistica_horus: boolean;
   module_dropship: boolean;
+  module_notifications: boolean;
   active: boolean;
 }
 

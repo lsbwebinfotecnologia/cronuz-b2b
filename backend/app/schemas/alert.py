@@ -3,6 +3,7 @@ from typing import Optional, Literal
 from datetime import datetime
 
 AlertType = Literal["info", "warning", "success", "urgent"]
+AlertScope = Literal["all", "home"]  # 'all' = todas as páginas | 'home' = só homepage
 
 
 class AlertBase(BaseModel):
@@ -13,6 +14,8 @@ class AlertBase(BaseModel):
     ends_at: Optional[datetime] = None
     active: bool = True
     dismissible: bool = True
+    scope: AlertScope = "all"          # onde exibe no storefront
+    pin_to_top: bool = False           # True = faixa acima do header, sem fechar
 
 
 class AlertCreate(AlertBase):
@@ -27,6 +30,8 @@ class AlertUpdate(BaseModel):
     ends_at: Optional[datetime] = None
     active: Optional[bool] = None
     dismissible: Optional[bool] = None
+    scope: Optional[AlertScope] = None
+    pin_to_top: Optional[bool] = None
 
 
 class AlertResponse(AlertBase):

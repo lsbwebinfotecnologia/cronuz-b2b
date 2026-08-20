@@ -61,8 +61,11 @@ export default async function StoreLayout({ children }: { children: React.ReactN
     <StoreProvider coverImageBaseUrl={config.coverImageBaseUrl} companyId={companyId} usesHorus={config.usesHorus} b2bShowStockQuantity={config.b2bShowStockQuantity} logo={config.logo} name={config.name}>
       <CartProvider>
         <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-[#0a0f1c] dark:text-white flex flex-col font-sans transition-colors duration-200">
+          {/* Faixa de alerta crítico — acima do header, sem fechar (pin_to_top=true) */}
+          <StoreAlertBanner companyId={companyId} mode="top" />
           <StoreHeader />
-          <StoreAlertBanner companyId={companyId} />
+          {/* Alerta inline — entre header e conteúdo, dispensável (pin_to_top=false) */}
+          <StoreAlertBanner companyId={companyId} mode="inline" />
           <CartDrawer />
           <main className="flex-1 w-full flex flex-col">
             {children}

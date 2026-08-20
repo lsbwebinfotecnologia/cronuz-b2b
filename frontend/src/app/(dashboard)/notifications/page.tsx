@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from '../layout';
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -127,7 +127,7 @@ function toDatetimeLocal(dateStr: string | null): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function CompanyAlertsPage() {
-  const { company } = useCompany();
+  
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -141,11 +141,11 @@ export default function CompanyAlertsPage() {
 
   // ── Fetch ────────────────────────────────────────────────────────────────
   const fetchAlerts = useCallback(async () => {
-    if (!company) return;
+    // Seller: usa company_id do token — sem necessidade de company na URL
     setLoading(true);
     try {
       const token = getToken();
-      const res = await fetch(`${API}/alerts?company_id=${company.id}`, {
+      const res = await fetch(`${API}/alerts`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) setAlerts(await res.json());
@@ -154,7 +154,7 @@ export default function CompanyAlertsPage() {
     } finally {
       setLoading(false);
     }
-  }, [company, API]);
+  }, [API]);
 
   useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
 
@@ -194,12 +194,12 @@ export default function CompanyAlertsPage() {
   // ── Save ─────────────────────────────────────────────────────────────────
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!company) return;
+    // Seller: usa company_id do token — sem necessidade de company na URL
     if (!form.title.trim()) { toast.error('Título é obrigatório.'); return; }
 
     setSaving(true);
     const payload = {
-      company_id: company.id,
+      // company_id resolvido no backend pelo token
       title: form.title.trim(),
       message: form.message.trim(),
       type: form.type,
@@ -252,7 +252,7 @@ export default function CompanyAlertsPage() {
     }
   };
 
-  if (loading || !company) {
+  if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-[var(--color-primary-base)]" />
@@ -411,8 +411,6 @@ export default function CompanyAlertsPage() {
               {/* Escopo e Posicionamento */}
               <div className="space-y-3 rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50/50 dark:bg-slate-900/30">
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Exibição no Storefront</p>
-
-                {/* Scope */}
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Páginas</label>
                   <div className="flex gap-2">
@@ -428,8 +426,6 @@ export default function CompanyAlertsPage() {
                     ))}
                   </div>
                 </div>
-
-                {/* Pin to top */}
                 <label className="flex items-start gap-3 cursor-pointer">
                   <button
                     type="button"
