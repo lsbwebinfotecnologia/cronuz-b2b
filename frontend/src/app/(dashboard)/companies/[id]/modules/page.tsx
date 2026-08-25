@@ -122,6 +122,7 @@ export default function CompanyModulesPage() {
       module_logistica_horus: company.module_logistica_horus,
       module_dropship: company.module_dropship,
       module_notifications: company.module_notifications,
+      module_busca_preco: company.module_busca_preco,
       [moduleName]: !currentValue
     };
 
@@ -569,6 +570,27 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_notifications', company.module_notifications)}
                     disabled={togglingModule !== null}
                     colorClass="bg-teal-500"
+                  />
+                </div>
+              </div>
+
+              {/* Busca Preço */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_busca_preco ? 'bg-[#00b4b4]/10 border-[#00b4b4]/20 text-[#00b4b4]' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <ScanBarcode className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Busca Preço</p>
+                    <p className="text-xs text-slate-500">Consulta de produto e visualização de estoque por filial em tempo real via API Horus.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch
+                    active={company.module_busca_preco}
+                    onClick={() => handleToggleModule('module_busca_preco', company.module_busca_preco)}
+                    disabled={togglingModule !== null}
+                    colorClass="bg-[#00b4b4]"
                   />
                 </div>
               </div>

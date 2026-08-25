@@ -35,7 +35,8 @@ import {
   Receipt,
   Zap,
   PackageCheck,
-  Bell
+  Bell,
+  ScanBarcode
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -161,6 +162,7 @@ export function Sidebar() {
   const [moduleLogisticaHorus, setModuleLogisticaHorus] = useState(false);
   const [moduleDropship, setModuleDropship] = useState(false);
   const [moduleNotifications, setModuleNotifications] = useState(false);
+  const [moduleBuscaPreco, setModuleBuscaPreco] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
 
   useEffect(() => {
@@ -206,6 +208,7 @@ export function Sidebar() {
                setModuleLogisticaHorus(data.module_logistica_horus || false);
                setModuleDropship(data.module_dropship || false);
                setModuleNotifications(data.module_notifications || false);
+               setModuleBuscaPreco(data.module_busca_preco || false);
             }
          } catch (e) {}
        };
@@ -337,6 +340,18 @@ export function Sidebar() {
       icon: Bell,
     });
   }
+
+  if (moduleBuscaPreco) {
+    // Insert Busca Preço before Configurações
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Busca Preço',
+      href: '/product-search',
+      icon: ScanBarcode,
+    });
+  }
+
 
   const dynamicMasterNavigation = masterNavigation.map(item => {
     if (item.name === 'Leads Capturados') {

@@ -68,6 +68,7 @@ from app.api import brand
 from app.api import dropship
 from app.api import sefaz_download
 from app.api import alerts as alerts_api
+from app.api import product_search
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -172,6 +173,7 @@ app.include_router(brand.router, tags=["app-brand"])
 app.include_router(dropship.router, prefix="/dropship", tags=["dropship"])
 app.include_router(sefaz_download.router)
 app.include_router(alerts_api.router)
+app.include_router(product_search.router, prefix="/product-search", tags=["product-search"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -361,6 +363,7 @@ class ModuleUpdate(BaseModel):
     module_logistica_horus: Optional[bool] = None
     module_dropship: Optional[bool] = None
     module_notifications: Optional[bool] = None
+    module_busca_preco: Optional[bool] = None
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(

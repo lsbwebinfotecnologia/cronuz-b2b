@@ -59,6 +59,7 @@ class CompanyBase(BaseModel):
     module_logistica_horus: bool = False
     module_dropship: bool = False
     module_notifications: bool = False
+    module_busca_preco: bool = False
     active: bool = True
 
 class CompanyCreate(CompanyBase):
@@ -126,6 +127,7 @@ class CompanyUpdate(BaseModel):
     module_logistica_horus: Optional[bool] = None
     module_dropship: Optional[bool] = None
     module_notifications: Optional[bool] = None
+    module_busca_preco: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

@@ -62,6 +62,8 @@ class Company(Base):
     module_logistica_horus = Column(Boolean, default=False, nullable=False)
     module_dropship = Column(Boolean, default=False, nullable=False)
     module_notifications = Column(Boolean, default=False, nullable=False)  # Módulo Notificações — seller gerencia alertas para customers
+    module_busca_preco = Column(Boolean, default=False, nullable=False)    # Módulo Busca Preço — consulta produto e estoque por filial via Horus
+
     
     # Mobile App Modules (per-seller, managed by MASTER)
     mobile_modules = Column(JSONB, nullable=True, default=lambda: {
