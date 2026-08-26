@@ -49,3 +49,7 @@ frontend/public/uploads/
 certs/
 certs/nfse/
 certs/inter/
+
+# Hosted Institutional Sites
+sites/
+backend/sites/
