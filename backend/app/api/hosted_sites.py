@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from app.db.session import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import require_master_user
 from app.models.user import User
 from app.models.hosted_site import HostedSite
 from app.schemas.hosted_site import (
@@ -111,13 +111,10 @@ def list_files_tree(directory: Path, max_depth: int = 3, current_depth: int = 0)
 @router.get("", response_model=List[HostedSiteResponse])
 def get_hosted_sites(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_master_user)
 ):
-    """Lista todos os sites institucionais cadastrados (filtrados por empresa se for seller)."""
-    query = db.query(HostedSite)
-    if current_user.company_id:
-        query = query.filter(HostedSite.company_id == current_user.company_id)
-    sites = query.order_by(desc(HostedSite.created_at)).all()
+    """Lista todos os sites institucionais cadastrados (exclusivo para MASTER)."""
+    sites = db.query(HostedSite).order_by(desc(HostedSite.created_at)).all()
     return [build_site_response(s) for s in sites]
 
 
@@ -125,9 +122,9 @@ def get_hosted_sites(
 def create_hosted_site(
     site_in: HostedSiteCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_master_user)
 ):
-    """Cria um novo registro de site com slug único."""
+    """Cria um novo registro de site com slug único (exclusivo para MASTER)."""
     clean_slug = sanitize_slug(site_in.slug)
     
     # Valida duplicidade
@@ -141,10 +138,8 @@ def create_hosted_site(
     site_dir = SITES_DIR / clean_slug
     site_dir.mkdir(parents=True, exist_ok=True)
 
-    company_id = current_user.company_id if current_user.company_id else site_in.company_id
-
     new_site = HostedSite(
-        company_id=company_id,
+        company_id=site_in.company_id,
         title=site_in.title.strip(),
         slug=clean_slug,
         description=site_in.description,
@@ -165,7 +160,7 @@ def create_hosted_site(
 def get_hosted_site_detail(
     site_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_master_user)
 ):
     """Retorna os detalhes de um site, incluindo sua árvore de arquivos."""
     site = db.query(HostedSite).filter(HostedSite.id == site_id).first()
@@ -183,7 +178,7 @@ def update_hosted_site(
     site_id: int,
     site_in: HostedSiteUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_master_user)
 ):
     """Atualiza informações básicas de um site."""
     site = db.query(HostedSite).filter(HostedSite.id == site_id).first()
@@ -207,7 +202,7 @@ async def upload_site_zip(
     site_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_master_user)
 ):
     """Faz upload do arquivo ZIP compactado com os arquivos do site."""
     site = db.query(HostedSite).filter(HostedSite.id == site_id).first()
@@ -247,7 +242,7 @@ async def upload_site_zip(
 def extract_site_zip(
     site_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_master_user)
 ):
     """Extrai o ZIP enviado para a pasta do site com desaninamento inteligente e validações."""
     site = db.query(HostedSite).filter(HostedSite.id == site_id).first()
@@ -342,7 +337,7 @@ def extract_site_zip(
 def delete_hosted_site(
     site_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_master_user)
 ):
     """Exclui o site e remove os arquivos da hospedagem."""
     site = db.query(HostedSite).filter(HostedSite.id == site_id).first()

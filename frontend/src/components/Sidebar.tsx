@@ -119,8 +119,7 @@ const sellerNavigation: NavItem[] = [
     subItems: [
        { name: 'Promoções', href: '/promotions', icon: Ticket },
        { name: 'Vitrines da Loja', href: '/marketing/showcases', icon: Store },
-       { name: 'Menu de Navegação', href: '/marketing/navigation', icon: Menu },
-       { name: 'Site Institucional', href: '/hosted-sites', icon: Globe }
+       { name: 'Menu de Navegação', href: '/marketing/navigation', icon: Menu }
     ]
   },
   {
