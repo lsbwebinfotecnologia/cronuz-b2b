@@ -36,7 +36,8 @@ import {
   Zap,
   PackageCheck,
   Bell,
-  ScanBarcode
+  ScanBarcode,
+  Globe
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -64,6 +65,7 @@ type UserData = {
 
 const masterNavigation: NavItem[] = [
   { name: 'Parceiros', href: '/companies', icon: Users },
+  { name: 'Sites Institucionais', href: '/hosted-sites', icon: Globe },
   {
     name: 'Hub Sync Bookinfo',
     href: '/settings/bookinfo-sync',
