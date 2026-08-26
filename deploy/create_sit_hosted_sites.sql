@@ -3,6 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS sit_hosted_sites (
     id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES cmp_company(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
     slug VARCHAR(100) NOT NULL UNIQUE,
     description TEXT,
@@ -18,5 +19,6 @@ CREATE TABLE IF NOT EXISTS sit_hosted_sites (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_sit_hosted_sites_company_id ON sit_hosted_sites(company_id);
 CREATE INDEX IF NOT EXISTS idx_sit_hosted_sites_slug ON sit_hosted_sites(slug);
 CREATE INDEX IF NOT EXISTS idx_sit_hosted_sites_status ON sit_hosted_sites(status);

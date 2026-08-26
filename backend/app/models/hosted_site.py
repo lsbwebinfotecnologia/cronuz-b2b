@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, BigInteger, String, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.sql import func
 from app.db.session import Base
 
@@ -7,6 +7,7 @@ class HostedSite(Base):
     __tablename__ = "sit_hosted_sites"
 
     id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("cmp_company.id", ondelete="CASCADE"), nullable=True, index=True)
     title = Column(String(255), nullable=False)
     slug = Column(String(100), unique=True, index=True, nullable=False)
     description = Column(Text, nullable=True)

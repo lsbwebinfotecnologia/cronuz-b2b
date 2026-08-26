@@ -50,6 +50,8 @@ certs/
 certs/nfse/
 certs/inter/
 
-# Hosted Institutional Sites
+# Hosted Institutional Sites (Arquivos estáticos dos sellers/clientes)
 sites/
 backend/sites/
+frontend/public/sites/
+uploads/sites/

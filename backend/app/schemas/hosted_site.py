@@ -8,6 +8,7 @@ class HostedSiteBase(BaseModel):
     slug: str = Field(..., max_length=100)
     description: Optional[str] = None
     custom_domain: Optional[str] = None
+    company_id: Optional[int] = None
 
 
 class HostedSiteCreate(HostedSiteBase):
@@ -19,6 +20,7 @@ class HostedSiteUpdate(BaseModel):
     slug: Optional[str] = Field(None, max_length=100)
     description: Optional[str] = None
     custom_domain: Optional[str] = None
+    company_id: Optional[int] = None
 
 
 class HostedSiteFileNode(BaseModel):
@@ -31,6 +33,7 @@ class HostedSiteFileNode(BaseModel):
 
 class HostedSiteResponse(HostedSiteBase):
     id: int
+    company_id: Optional[int] = None
     status: str
     zip_filename: Optional[str] = None
     zip_size_bytes: Optional[int] = None

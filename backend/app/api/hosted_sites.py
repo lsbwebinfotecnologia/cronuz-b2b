@@ -56,6 +56,7 @@ def build_site_response(site: HostedSite, req: Optional[Request] = None) -> dict
 
     return {
         "id": site.id,
+        "company_id": site.company_id,
         "title": site.title,
         "slug": site.slug,
         "description": site.description,
@@ -112,8 +113,11 @@ def get_hosted_sites(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Lista todos os sites institucionais cadastrados."""
-    sites = db.query(HostedSite).order_by(desc(HostedSite.created_at)).all()
+    """Lista todos os sites institucionais cadastrados (filtrados por empresa se for seller)."""
+    query = db.query(HostedSite)
+    if current_user.company_id:
+        query = query.filter(HostedSite.company_id == current_user.company_id)
+    sites = query.order_by(desc(HostedSite.created_at)).all()
     return [build_site_response(s) for s in sites]
 
 
@@ -137,7 +141,10 @@ def create_hosted_site(
     site_dir = SITES_DIR / clean_slug
     site_dir.mkdir(parents=True, exist_ok=True)
 
+    company_id = current_user.company_id if current_user.company_id else site_in.company_id
+
     new_site = HostedSite(
+        company_id=company_id,
         title=site_in.title.strip(),
         slug=clean_slug,
         description=site_in.description,
