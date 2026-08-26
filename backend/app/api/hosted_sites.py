@@ -50,7 +50,10 @@ def sanitize_slug(slug_raw: str) -> str:
 
 
 def build_site_response(site: HostedSite, req: Optional[Request] = None) -> dict:
-    domain_host = site.custom_domain or f"{site.slug}.site.cronuzb2b.com.br"
+    # URL pública: usa domínio customizado OU padrão {slug}.cronuzb2b.com.br
+    # O certificado SSL *.cronuzb2b.com.br já cobre este padrão sem precisar de novo cert wildcard
+    # ATENÇÃO: NÃO usar {slug}.site.cronuzb2b.com.br — 2 níveis de subdomínio não são cobertos pelo cert atual
+    domain_host = site.custom_domain or f"{site.slug}.cronuzb2b.com.br"
     public_url = f"https://{domain_host}"
     preview_url = f"/api/v1/hosted-sites/preview/{site.slug}/"
 
