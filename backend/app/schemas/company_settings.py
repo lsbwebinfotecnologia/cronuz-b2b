@@ -72,6 +72,25 @@ class CompanySettingsBase(BaseModel):
     b2b_showcases_config: Optional[Dict[str, Any]] = None
     b2b_show_stock_quantity: Optional[bool] = True
 
+    # Horus SQL Direct
+    horus_sql_enabled: Optional[bool] = False
+    horus_sql_host: Optional[str] = None
+    horus_sql_port: Optional[str] = None
+    horus_sql_database: Optional[str] = None
+    horus_sql_username: Optional[str] = None
+    horus_sql_password: Optional[str] = None  # nunca retornado em plaintext pela API
+    horus_sql_cod_empresa: Optional[str] = None
+    horus_sql_cod_filial: Optional[str] = None
+    horus_sql_feature_vindi_baixa: Optional[bool] = False
+
+    # Horus Banking Parameters (Borderô)
+    horus_banco_forma_pagto: Optional[str] = None
+    horus_banco_codigo: Optional[str] = None
+    horus_banco_agencia: Optional[str] = None
+    horus_banco_conta: Optional[str] = None
+    horus_banco_carteira: Optional[str] = None
+
+
 class CompanySettingsUpdate(CompanySettingsBase):
     pass
 

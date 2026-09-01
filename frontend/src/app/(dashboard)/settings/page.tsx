@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, Building2, CreditCard, Truck, ChevronRight, FileText, Key, CheckCircle, BookOpen, Package } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, DatabaseZap, Building2, CreditCard, Truck, ChevronRight, FileText, Key, CheckCircle, BookOpen, Package } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { PrintPointsTab } from './PrintPointsTab';
 import { EmailTemplatesTab } from './EmailTemplatesTab';
 import { HorusTab } from './HorusTab';
+import { HorusSQLTab } from './HorusSQLTab';
 import { BookinfoTab } from './BookinfoTab';
 import { SefazBranchesTab } from './SefazBranchesTab';
 import { DropshipTab } from './DropshipTab';
@@ -415,6 +416,7 @@ export default function SettingsPage() {
   const tabs = [
     { id: 'geral', label: 'Dados Gerais', icon: Settings2 },
     ...(company?.module_horus_erp ? [{ id: 'horus', label: 'Integração Horus ERP', icon: Database }] : []),
+    ...(company?.module_horus_sql ? [{ id: 'horus_sql', label: 'Horus SQL Direct', icon: DatabaseZap }] : []),
     { id: 'bookinfo', label: 'Integração Bookinfo', icon: BookOpen },
     { id: 'fiscal', label: 'Fiscal (NFS-e)', icon: Building2 },
     { id: 'print_points', label: 'Séries e Pontos', icon: FileText },
@@ -427,7 +429,7 @@ export default function SettingsPage() {
     { id: 'dropship', label: 'Dropship Horus', icon: Package },
   ];
 
-  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship';
+  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'horus_sql' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship';
   const FormContainer = isFormTab ? 'form' : 'div';
 
   return (
@@ -1255,6 +1257,13 @@ export default function SettingsPage() {
               {activeTab === 'horus' && (
                 <div className="animate-in fade-in">
                   <HorusTab />
+                </div>
+              )}
+
+              {/* Tab: HORUS SQL DIRECT */}
+              {activeTab === 'horus_sql' && (
+                <div className="animate-in fade-in">
+                  <HorusSQLTab />
                 </div>
               )}
 

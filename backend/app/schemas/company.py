@@ -60,7 +60,9 @@ class CompanyBase(BaseModel):
     module_dropship: bool = False
     module_notifications: bool = False
     module_busca_preco: bool = False
+    module_horus_sql: bool = False
     active: bool = True
+
 
 class CompanyCreate(CompanyBase):
     lead_id: Optional[str] = None

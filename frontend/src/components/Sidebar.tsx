@@ -37,14 +37,16 @@ import {
   PackageCheck,
   Bell,
   ScanBarcode,
-  Globe
+  Globe,
+  DatabaseZap,
+  CreditCard
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { removeToken, getUser, getToken } from '@/lib/auth';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 
 type NavItem = {
   name: string;
@@ -165,7 +167,12 @@ export function Sidebar() {
   const [moduleDropship, setModuleDropship] = useState(false);
   const [moduleNotifications, setModuleNotifications] = useState(false);
   const [moduleBuscaPreco, setModuleBuscaPreco] = useState(false);
+  const [moduleHorusSql, setModuleHorusSql] = useState(false);
+  const [horusSqlVindiBaixa, setHorusSqlVindiBaixa] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
+  // [PERF] Garante que fetchSettings() é executado apenas UMA VEZ por montagem
+  // Evita re-fetch desnecessário a cada mudança de pathname (navegação interna).
+  const _settingsFetchedRef = useRef(false);
 
   useEffect(() => {
     const currentUser = getUser();
@@ -184,6 +191,7 @@ export function Sidebar() {
        });
        if (pathname.startsWith('/financial')) initialOpen['Financeiro'] = true;
        if (pathname.startsWith('/subscriptions') || pathname.startsWith('/subscribers')) initialOpen['Assinaturas'] = true;
+       if (pathname.startsWith('/horus-direct')) initialOpen['Horus Direct'] = true;
        setOpenMenus(initialOpen);
        
        const fetchSettings = async () => {
@@ -211,6 +219,8 @@ export function Sidebar() {
                setModuleDropship(data.module_dropship || false);
                setModuleNotifications(data.module_notifications || false);
                setModuleBuscaPreco(data.module_busca_preco || false);
+               setModuleHorusSql(data.module_horus_sql || false);
+               setHorusSqlVindiBaixa(data.horus_sql_feature_vindi_baixa || false);
             }
          } catch (e) {}
        };
@@ -354,9 +364,24 @@ export function Sidebar() {
     });
   }
 
+  if (moduleHorusSql) {
+    // Insert Horus Direct before Configurações
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    const subItems: { name: string; href: string; icon?: any }[] = [
+      { name: 'Financeiro Vindi', href: '/horus-direct/financeiro-vindi', icon: CreditCard }
+    ];
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Horus Direct',
+      href: '/horus-direct/financeiro-vindi',
+      icon: DatabaseZap,
+      subItems: subItems
+    });
+  }
+
 
   const dynamicMasterNavigation = masterNavigation.map(item => {
-    if (item.name === 'Leads Capturados') {
+    if (item.name === 'Leads') {
       return { ...item, badge: unreadLeads };
     }
     return item;

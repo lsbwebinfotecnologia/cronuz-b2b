@@ -3,7 +3,7 @@
 import { useEffect, useState, createContext, useContext } from 'react';
 import Link from 'next/link';
 import { usePathname, useParams, useRouter } from 'next/navigation';
-import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, Boxes, Settings, BookOpen, PackageCheck, Bell } from 'lucide-react';
+import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, DatabaseZap, Boxes, Settings, BookOpen, PackageCheck, Bell } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 
 interface Company {
@@ -49,6 +49,7 @@ interface Company {
   module_dropship: boolean;
   module_notifications: boolean;
   module_busca_preco: boolean;
+  module_horus_sql?: boolean;
   active: boolean;
 }
 
@@ -99,6 +100,7 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
     { name: 'Acessos e Logins', path: `/companies/${companyId}/users`, icon: Users },
     { name: 'Módulos', path: `/companies/${companyId}/modules`, icon: Boxes },
     { name: 'Horus', path: `/companies/${companyId}/horus`, icon: Database },
+    { name: 'Horus SQL', path: `/companies/${companyId}/horus-sql`, icon: DatabaseZap },
     { name: 'Bookinfo', path: `/companies/${companyId}/bookinfo`, icon: BookOpen },
     { name: 'Dropship', path: `/companies/${companyId}/dropship`, icon: PackageCheck },
     { name: 'Alertas', path: `/companies/${companyId}/alerts`, icon: Bell },

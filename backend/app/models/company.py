@@ -63,6 +63,7 @@ class Company(Base):
     module_dropship = Column(Boolean, default=False, nullable=False)
     module_notifications = Column(Boolean, default=False, nullable=False)  # Módulo Notificações — seller gerencia alertas para customers
     module_busca_preco = Column(Boolean, default=False, nullable=False)    # Módulo Busca Preço — consulta produto e estoque por filial via Horus
+    module_horus_sql = Column(Boolean, default=False, nullable=False)     # Módulo Horus SQL Direct — conexão direta ao SQL Server do Horus
 
     
     # Mobile App Modules (per-seller, managed by MASTER)

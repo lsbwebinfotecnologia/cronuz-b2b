@@ -71,11 +71,21 @@ from app.api import sefaz_download
 from app.api import alerts as alerts_api
 from app.api import product_search
 from app.api import hosted_sites as hosted_sites_api
+from app.api import horus_sql as horus_sql_api
+from app.api import horus_financial
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 import os
+import traceback as _traceback
+import logging
+
+_main_logger = logging.getLogger("cronuz.main")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
 
 # Create tables for both company and user
 company_models.Base.metadata.create_all(bind=engine)
@@ -105,35 +115,32 @@ app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    import json
     body = await request.body()
     try:
         body_text = body.decode()
-    except:
-        body_text = str(body)
-    error_msg = f"Validation Error!\nBody: {body_text}\nErrors: {exc.errors()}"
-    print(error_msg, flush=True)
-    with open("/tmp/pydantic_error.log", "w") as f:
-        f.write(error_msg)
+    except Exception:
+        body_text = "<body não decodificável>"
+    # [SEC] log interno apenas — body_text não retornado em produção para evitar vazamento
+    _main_logger.warning("[422] Validation error | body=%s | errors=%s", body_text[:200], exc.errors())
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "body": body_text},
+        content={"detail": exc.errors()},
     )
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    import traceback
-    err_msg = traceback.format_exc()
-    print("GLOBAL ERROR:", err_msg, flush=True)
+    # [SEC] traceback NUNCA retornado ao cliente — apenas logado internamente
+    _main_logger.error("[500] %s", _traceback.format_exc())
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal Server Error", "traceback": err_msg},
+        content={"detail": "Internal Server Error"},
     )
 
-# Enable CORS for Next.js frontend (Allow all origins for Multitenant Custom Domains)
+
+# [SEC] CORS — permite localhost/127.0.0.1 em desenvolvimento e apenas HTTPS em produção
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https?://.*",
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:[0-9]+)?|https://.+)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -178,6 +185,8 @@ app.include_router(sefaz_download.router)
 app.include_router(alerts_api.router)
 app.include_router(product_search.router, prefix="/product-search", tags=["product-search"])
 app.include_router(hosted_sites_api.router)
+app.include_router(horus_sql_api.router, tags=["horus-sql"])
+app.include_router(horus_financial.router, tags=["horus-financial"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -200,7 +209,9 @@ def seed_master_user():
                 name="Cronuz Master System",
                 email=master_email,
                 type=user_models.UserRole.MASTER,
-                password_hash=security.get_password_hash("C1r2o34@9182"),
+                password_hash=security.get_password_hash(
+                    os.environ.get("MASTER_SEED_PASSWORD", "C1r2o34@9182")  # [SEC] sobrescrever via .env em producao
+                ),
                 company_id=None
             )
             db.add(master_user)
@@ -212,10 +223,9 @@ def seed_master_user():
     # Estratégia: usa arquivo de lock atômico com O_EXCL para garantir
     # que somente o PRIMEIRO worker que conseguir criar o arquivo sobe o scheduler.
     # O arquivo é apagado quando o processo dono morrer (via systemd restart).
-    import os
     SCHEDULER_LOCK_FILE = "/tmp/cronuz_scheduler_{ppid}.lock".format(ppid=os.getppid())
     try:
-        # O_CREAT | O_EXCL garante criação atômica — falha se já existir
+        # O_CREAT | O_EXCL garante criacao atomica — falha se ja existir
         fd = os.open(SCHEDULER_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
@@ -223,11 +233,10 @@ def seed_master_user():
         from app.core.scheduler import start_scheduler
         start_scheduler()
     except FileExistsError:
-        # Outro worker já criou o arquivo — scheduler já está rodando
-        import logging
-        logging.getLogger("background_jobs").info(
-            f"[Scheduler] Worker PID {os.getpid()} ignorou start_scheduler "
-            f"(lock {SCHEDULER_LOCK_FILE} já existe)."
+        # Outro worker ja criou o arquivo — scheduler ja esta rodando
+        _main_logger.info(
+            "[Scheduler] Worker PID %s ignorou start_scheduler (lock %s ja existe).",
+            os.getpid(), SCHEDULER_LOCK_FILE
         )
 
 @app.get("/")
@@ -368,6 +377,7 @@ class ModuleUpdate(BaseModel):
     module_dropship: Optional[bool] = None
     module_notifications: Optional[bool] = None
     module_busca_preco: Optional[bool] = None
+    module_horus_sql: Optional[bool] = None
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(

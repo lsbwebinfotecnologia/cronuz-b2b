@@ -147,6 +147,8 @@ def get_dashboard_metrics(
     module_dropship = getattr(company, "module_dropship", False) if company else False
     module_notifications = getattr(company, "module_notifications", False) if company else False
     module_busca_preco = getattr(company, "module_busca_preco", False) if company else False
+    module_horus_sql = bool(getattr(company, "module_horus_sql", False) or (settings and getattr(settings, "horus_sql_enabled", False)))
+    horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     company_logo = getattr(company, "logo", None) if company else None
 
     # Uses horus is now strongly derived from the company flag
@@ -247,6 +249,8 @@ def get_dashboard_metrics(
         "module_dropship": module_dropship,
         "module_notifications": module_notifications,
         "module_busca_preco": module_busca_preco,
+        "module_horus_sql": module_horus_sql,
+        "horus_sql_feature_vindi_baixa": horus_sql_feature_vindi_baixa,
         "company_logo": company_logo,
     }
 

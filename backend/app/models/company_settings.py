@@ -106,4 +106,29 @@ class CompanySettings(Base):
     b2b_showcases_config = Column(JSON, nullable=True)
     b2b_show_stock_quantity = Column(Boolean, default=True, nullable=False)
 
+    # ── Horus SQL Direct ────────────────────────────────────────────────────────
+    # Conexão direta ao SQL Server do Horus ERP (independente da API REST).
+    # horus_sql_password é SEMPRE armazenado criptografado com Fernet.
+    # Nunca persiste em plaintext — descriptografar apenas em runtime no job/client.
+    horus_sql_enabled     = Column(Boolean, default=False, nullable=False)
+    horus_sql_host        = Column(String(255), nullable=True)   # IP ou hostname do SQL Server
+    horus_sql_port        = Column(String(10),  nullable=True)   # Porta (padrão: 1433)
+    horus_sql_database    = Column(String(100), nullable=True)   # Nome do banco (ex: admlivros)
+    horus_sql_username    = Column(String(100), nullable=True)   # Usuário SQL (ex: sa)
+    horus_sql_password    = Column(String(500), nullable=True)   # Senha CRIPTOGRAFADA com Fernet
+    horus_sql_cod_empresa = Column(String(20),  nullable=True)   # Código empresa no Horus
+    horus_sql_cod_filial  = Column(String(20),  nullable=True)   # Código filial no Horus
+
+    # ── Horus SQL — Sub-funcionalidades habilitadas pelo Master ──────────────
+    horus_sql_feature_vindi_baixa = Column(Boolean, nullable=False, default=False)  # Baixa financeira com Vindi
+
+    # ── Horus SQL — Parâmetros Bancários para Borderô Financeiro ─────────────
+    horus_banco_forma_pagto = Column(String(50), nullable=True)  # Código forma de pagamento (ex: 01, DIN, CAR)
+    horus_banco_codigo      = Column(String(20), nullable=True)  # Código do banco no Horus (ex: 001, 237, 341)
+    horus_banco_agencia     = Column(String(20), nullable=True)  # Código da agência
+    horus_banco_conta       = Column(String(30), nullable=True)  # Número da conta corrente
+    horus_banco_carteira    = Column(String(20), nullable=True)  # Número da carteira bancária
+
+    # ────────────────────────────────────────────────────────────────────────────
+
     company = relationship("Company")

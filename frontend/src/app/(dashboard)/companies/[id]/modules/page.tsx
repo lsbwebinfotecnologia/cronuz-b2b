@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, UserCircle, Bell } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, UserCircle, Bell, DatabaseZap, Zap, AlertTriangle, CreditCard } from 'lucide-react';
+
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -36,6 +37,17 @@ export default function CompanyModulesPage() {
   const [loadingMobile, setLoadingMobile] = useState(true);
   const [togglingMobile, setTogglingMobile] = useState<string | null>(null);
 
+  // ─── Horus SQL Direct — Features State ────────────────────────────
+  interface HorusSQLFeatures { vindi_baixa: boolean }
+  const [horusSQLData, setHorusSQLData] = useState<{
+    sql_configured: boolean;
+    module_horus_sql: boolean;
+    features: HorusSQLFeatures;
+  } | null>(null);
+  const [loadingHorusSQL, setLoadingHorusSQL] = useState(true);
+  const [togglingHorusFeature, setTogglingHorusFeature] = useState<string | null>(null);
+
+
   useEffect(() => {
     async function fetchMobileModules() {
       const token = getToken();
@@ -63,6 +75,52 @@ export default function CompanyModulesPage() {
     }
     fetchMobileModules();
   }, [companyId]);
+
+  // Carrega features do Horus SQL Direct
+  useEffect(() => {
+    async function fetchHorusSQLFeatures() {
+      const token = getToken();
+      if (!token || !companyId) { setLoadingHorusSQL(false); return; }
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/horus-sql/features`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res.ok) setHorusSQLData(await res.json());
+      } catch { /* silencioso */ } finally {
+        setLoadingHorusSQL(false);
+      }
+    }
+    fetchHorusSQLFeatures();
+  }, [companyId]);
+
+  async function handleToggleHorusSQLFeature(feature: keyof HorusSQLFeatures) {
+    if (!horusSQLData) return;
+    setTogglingHorusFeature(feature);
+    const newValue = !horusSQLData.features[feature];
+    const token = getToken();
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/horus-sql/features`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ [`horus_sql_feature_${feature}`]: newValue }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body?.detail || 'Erro ao salvar feature Horus SQL.');
+        return;
+      }
+      setHorusSQLData(prev => prev ? { ...prev, features: { ...prev.features, [feature]: newValue } } : prev);
+      toast.success(`Feature ${newValue ? 'ativada ✓' : 'desativada'} com sucesso!`);
+    } catch (err: any) {
+      toast.error(`Erro de rede: ${err?.message || err}`);
+    } finally {
+      setTogglingHorusFeature(null);
+    }
+  }
 
   async function handleToggleMobileModule(key: keyof MobileModules) {
     setTogglingMobile(key);
@@ -123,6 +181,7 @@ export default function CompanyModulesPage() {
       module_dropship: company.module_dropship,
       module_notifications: company.module_notifications,
       module_busca_preco: company.module_busca_preco,
+      module_horus_sql: company.module_horus_sql ?? false,
       [moduleName]: !currentValue
     };
 
@@ -694,6 +753,99 @@ export default function CompanyModulesPage() {
           </div>
         </section>
 
+
+        {/* ─── Horus SQL Direct Section ────────────────────────────────── */}
+        <section className="space-y-4">
+          <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider flex items-center gap-2 mt-8">
+            <DatabaseZap className="h-4 w-4 text-violet-500" /> Horus SQL Direct
+          </h3>
+
+          {loadingHorusSQL ? (
+            <div className="flex items-center gap-2 text-sm text-slate-400 py-4">
+              <Loader2 className="h-4 w-4 animate-spin" /> Carregando configurações SQL...
+            </div>
+          ) : !horusSQLData?.sql_configured ? (
+            /* Credenciais SQL não configuradas — aviso */
+            <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/40 dark:bg-amber-950/20">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div>
+                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Credenciais SQL não configuradas</p>
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  Configure o acesso ao SQL Server na aba <strong>Horus SQL</strong> antes de habilitar este módulo.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-violet-200 bg-white overflow-hidden shadow-sm dark:border-violet-500/20 dark:bg-slate-900/40">
+
+              {/* Toggle mestre — module_horus_sql */}
+              <div className={`px-6 py-5 flex items-center justify-between border-b transition-colors ${horusSQLData?.module_horus_sql ? 'bg-violet-50 dark:bg-violet-500/10 border-violet-200 dark:border-violet-500/20' : 'bg-slate-50 dark:bg-slate-800/40 border-slate-100 dark:border-slate-800'}`}>
+                <div className="flex items-center gap-3">
+                  <div className={`p-2.5 rounded-xl border transition-colors ${horusSQLData?.module_horus_sql ? 'bg-violet-500/15 border-violet-500/30 text-violet-600' : 'bg-slate-200 border-slate-300 text-slate-400 dark:bg-slate-700 dark:border-slate-600'}`}>
+                    <DatabaseZap className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Habilitar Horus SQL Direct</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {horusSQLData?.module_horus_sql
+                        ? 'Módulo ativo — conexão direta ao SQL Server do Horus habilitada.'
+                        : 'Módulo inativo — sub-funcionalidades SQL não aparecem para o seller.'}
+                    </p>
+                  </div>
+                </div>
+                <div className="shrink-0 flex items-center gap-3">
+                  <Switch
+                    active={horusSQLData?.module_horus_sql ?? false}
+                    onClick={() => handleToggleModule('module_horus_sql', horusSQLData?.module_horus_sql ?? false)}
+                    disabled={togglingModule !== null}
+                    colorClass="bg-violet-600"
+                  />
+                </div>
+              </div>
+
+              {/* Sub-funcionalidades — só visíveis quando módulo ativo */}
+              <div className={`transition-opacity ${horusSQLData?.module_horus_sql ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+
+                {/* Header sub-features */}
+                <div className="px-6 py-3 bg-slate-50/70 dark:bg-slate-800/30 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
+                  <Zap className="h-3.5 w-3.5 text-violet-500" />
+                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    Funcionalidades disponíveis para o seller
+                  </span>
+                </div>
+
+                {/* Baixa Financeira com Vindi */}
+                <div className="p-5 flex items-center justify-between hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                  <div className="flex items-center gap-4">
+                    <div className={`p-2 rounded-xl border ${horusSQLData?.features.vindi_baixa ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                      <CreditCard className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Baixa Financeira com Vindi</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Importa extrato de pagamentos da Vindi e gera borderô de baixa no Horus ERP.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="shrink-0 pl-4 flex items-center gap-3">
+                    {togglingHorusFeature === 'vindi_baixa'
+                      ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                      : (
+                        <Switch
+                          active={horusSQLData?.features.vindi_baixa ?? false}
+                          onClick={() => handleToggleHorusSQLFeature('vindi_baixa')}
+                          disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
+                          colorClass="bg-emerald-500"
+                        />
+                      )
+                    }
+                  </div>
+                </div>
+
+              </div>{/* fim wrapper opacity */}
+            </div>
+          )}
+        </section>
 
       </div>
     </motion.div>
