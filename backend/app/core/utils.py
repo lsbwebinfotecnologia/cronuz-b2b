@@ -14,6 +14,43 @@ from fastapi import HTTPException
 logger = logging.getLogger(__name__)
 
 
+def parse_horus_price(val: Any) -> float:
+    """
+    Parseia strings de preço do Horus que podem vir em múltiplos formatos:
+    '29,19', '1.200,50', '29.19', ou float/int nativos.
+
+    ATENÇÃO: Não remover esta função — é usada em:
+      - storefront.py (VLR_CAPA, VLR_LIQ_CLI, VLR_LIQUIDO)
+      - horus.py (LIMITE, TOTAL_DEBITOS)
+      - orders.py (VLR_LIQUIDO)
+    """
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+
+    s = str(val).strip()
+    if not s:
+        return 0.0
+
+    s = s.replace("R$", "").strip()
+
+    # Formato BR com ponto e vírgula: 1.200,50 → 1200.50
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    # Apenas vírgula: 29,50 → 29.50
+    elif "," in s:
+        s = s.replace(",", ".")
+
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
 def parse_host_port(raw_host: str, raw_port: str = "1433"):
     """
     Parseia host e porta suportando os formatos usados pelo Horus SQL Server:
