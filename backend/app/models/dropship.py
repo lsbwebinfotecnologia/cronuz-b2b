@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Numeric, ForeignKey, DateTime, Boolean, JSON, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Float, Numeric, ForeignKey, DateTime, Boolean, JSON, UniqueConstraint, Index, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -147,6 +147,8 @@ class DropshipOrder(Base):
     synced_at = Column(DateTime(timezone=True), nullable=True)
     sent_to_horus_at = Column(DateTime(timezone=True), nullable=True)
     dispatched_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

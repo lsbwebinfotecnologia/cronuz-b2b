@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
 import {
   ArrowLeft, PackageCheck, Send, CheckCircle2, Clock, PackageX,
   Loader2, MapPin, ShoppingCart, Truck, FileText, Tag, Download,
-  Printer, RefreshCw, AlertTriangle, X, Search, ClipboardCheck
+  Printer, RefreshCw, AlertTriangle, X, Search, ClipboardCheck, Ban
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -34,6 +34,9 @@ interface DropshipOrder {
   synced_at: string | null;
   sent_to_horus_at: string | null;
   dispatched_at: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  erdos_credential_label?: string | null;
   created_at: string | null;
   // Campos Erdos em tempo real
   erdos_status: string | null;
@@ -334,6 +337,42 @@ export default function DropshipOrderDetailPage() {
     }
   };
 
+  // Modal de Cancelamento de Pedido
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+
+  const handleConfirmCancel = async () => {
+    if (!order || !companyId) return;
+    if (cancelReason.trim().length < 3) {
+      toast.error('Informe uma justificativa com no mínimo 3 caracteres.');
+      return;
+    }
+    setCancelling(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dropship/orders/${companyId}/${order.id}/cancel`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ reason: cancelReason }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success('Pedido cancelado com sucesso.');
+        setShowCancelModal(false);
+        fetchOrder();
+      } else {
+        toast.error(`Erro ao cancelar: ${data.detail || 'Não foi possível cancelar o pedido.'}`);
+      }
+    } catch {
+      toast.error('Erro de conexão ao cancelar o pedido.');
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -386,6 +425,11 @@ export default function DropshipOrderDetailPage() {
                 <StatusIcon className="w-3 h-3" />
                 {st.label}
               </span>
+              {order.erdos_credential_label && (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-700/40">
+                  {order.erdos_credential_label}
+                </span>
+              )}
             </div>
             <p className="text-sm text-slate-400 mt-1">
               Canal: <span className="capitalize">{order.channel || '—'}</span> ·
@@ -396,6 +440,18 @@ export default function DropshipOrderDetailPage() {
 
         {/* Ação principal */}
         <div className="shrink-0 flex items-center gap-2">
+          {order.status !== 'CANCELLED' && order.status !== 'DISPATCHED' && (
+            <button
+              onClick={() => {
+                setCancelReason('');
+                setShowCancelModal(true);
+              }}
+              className="flex items-center gap-2 px-4 py-2.5 bg-rose-50 hover:bg-rose-100 dark:bg-rose-900/20 dark:hover:bg-rose-900/40 text-rose-600 dark:text-rose-400 text-sm font-semibold rounded-xl border border-rose-200 dark:border-rose-800/40 transition-all shadow-sm"
+            >
+              <Ban className="w-4 h-4" />
+              Cancelar Pedido
+            </button>
+          )}
           {order.status === 'PENDING' && (
             <button
               onClick={handleSendToHorus}
@@ -430,6 +486,26 @@ export default function DropshipOrderDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Banner de Cancelamento */}
+      {order.status === 'CANCELLED' && (
+        <div className="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800/40 rounded-2xl p-5 space-y-2">
+          <div className="flex items-center gap-2 text-rose-700 dark:text-rose-300 font-bold text-sm">
+            <PackageX className="w-5 h-5" />
+            <span>Pedido Cancelado</span>
+          </div>
+          {order.cancel_reason && (
+            <p className="text-xs text-rose-800 dark:text-rose-200">
+              <span className="font-semibold">Justificativa / Motivo:</span> {order.cancel_reason}
+            </p>
+          )}
+          {order.cancelled_at && (
+            <p className="text-[11px] text-rose-600/80 dark:text-rose-400/80">
+              Data do cancelamento: {formatDate(order.cancelled_at)}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Banner de fluxo Erdos — mostra etapa atual */}
       {order.status !== 'CANCELLED' && (
@@ -860,6 +936,82 @@ export default function DropshipOrderDetailPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Modal de Cancelamento de Pedido */}
+      {showCancelModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-600 dark:text-rose-400">
+                  <Ban className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white">Cancelar Pedido</h3>
+                  <p className="text-xs text-slate-400">{order.external_reference || `#${order.id}`}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCancelModal(false)}
+                disabled={cancelling}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-xl text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                Esta ação marcará o pedido como <strong>Cancelado</strong> no sistema e notificará o Hub-Erdos.
+                {order.status === 'SENT_TO_HORUS' && (
+                  <span className="block mt-1 font-semibold text-rose-600 dark:text-rose-400">
+                    Atenção: Este pedido já foi enviado ao Hórus. Cancele também os pedidos correspondentes no Hórus ERP.
+                  </span>
+                )}
+              </span>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                Motivo / Justificativa do Cancelamento *
+              </label>
+              <textarea
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="Ex: Cliente solicitou cancelamento / Produto sem estoque físico..."
+                rows={3}
+                disabled={cancelling}
+                className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500/30 resize-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCancelModal(false)}
+                disabled={cancelling}
+                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCancel}
+                disabled={cancelling || cancelReason.trim().length < 3}
+                className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-all shadow-md"
+              >
+                {cancelling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+                Confirmar Cancelamento
+              </button>
+            </div>
+          </motion.div>
         </div>
       )}
     </div>

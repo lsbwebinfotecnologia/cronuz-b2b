@@ -7,7 +7,7 @@ import {
   PackageCheck, RefreshCw, ArrowUpFromLine, Loader2,
   FileText, Tag, ShoppingCart, CheckCircle2, Truck, X, MapPin, Download,
   AlertTriangle, Clock, Send, PackageX, Filter,
-  Printer, Eye
+  Printer, Eye, Ban
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -35,6 +35,8 @@ interface DropshipOrder {
   synced_at: string | null;
   sent_to_horus_at: string | null;
   dispatched_at: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
   created_at: string | null;
   updated_at: string | null;
   erdos_credential_id: number | null;
@@ -42,6 +44,104 @@ interface DropshipOrder {
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+function CancelOrderModal({
+  order,
+  isOpen,
+  onClose,
+  onConfirm,
+  loading,
+}: {
+  order: DropshipOrder | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: (reason: string) => Promise<void>;
+  loading: boolean;
+}) {
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    if (isOpen) setReason('');
+  }, [isOpen]);
+
+  if (!isOpen || !order) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4"
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-600 dark:text-rose-400">
+              <Ban className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 dark:text-white">Cancelar Pedido</h3>
+              <p className="text-xs text-slate-400">{order.external_reference || `#${order.id}`}</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-xl text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            Esta ação marcará o pedido como <strong>Cancelado</strong> no sistema e notificará o Hub-Erdos.
+            {order.status === 'SENT_TO_HORUS' && (
+              <span className="block mt-1 font-semibold text-rose-600 dark:text-rose-400">
+                Atenção: Este pedido já foi enviado ao Hórus. Cancele também os pedidos correspondentes no Hórus ERP.
+              </span>
+            )}
+          </span>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+            Motivo / Justificativa do Cancelamento *
+          </label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Ex: Cliente solicitou cancelamento / Produto sem estoque físico..."
+            rows={3}
+            disabled={loading}
+            className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500/30 resize-none"
+          />
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+          >
+            Voltar
+          </button>
+          <button
+            type="button"
+            onClick={() => onConfirm(reason)}
+            disabled={loading || reason.trim().length < 3}
+            className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-all shadow-md"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+            Confirmar Cancelamento
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   PENDING: { label: 'Pendente', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border border-amber-200 dark:border-amber-700/40', icon: Clock },
@@ -420,6 +520,8 @@ export default function DropshipOrdersPage() {
   const [pushingStock, setPushingStock] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
   const [companyId, setCompanyId] = useState<string>('');
+  const [cancelModalOrder, setCancelModalOrder] = useState<DropshipOrder | null>(null);
+  const [cancellingOrder, setCancellingOrder] = useState(false);
 
   // Get company ID from auth
   useEffect(() => {
@@ -454,6 +556,37 @@ export default function DropshipOrdersPage() {
   useEffect(() => {
     if (companyId) fetchOrders();
   }, [fetchOrders]);
+
+  const handleConfirmCancel = async (reason: string) => {
+    if (!companyId || !cancelModalOrder) return;
+    setCancellingOrder(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${API_URL}/dropship/orders/${companyId}/${cancelModalOrder.id}/cancel`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ reason }),
+        }
+      );
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`Pedido #${cancelModalOrder.external_reference || cancelModalOrder.id} cancelado com sucesso.`);
+        setCancelModalOrder(null);
+        fetchOrders();
+      } else {
+        toast.error(`Erro ao cancelar: ${data.detail || 'Não foi possível cancelar o pedido.'}`);
+      }
+    } catch {
+      toast.error('Erro de conexão ao cancelar o pedido.');
+    } finally {
+      setCancellingOrder(false);
+    }
+  };
 
   const handleSync = async () => {
     if (!companyId) return;
@@ -675,6 +808,14 @@ export default function DropshipOrdersPage() {
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={order.status} />
+                        {order.status === 'CANCELLED' && order.cancel_reason && (
+                          <span
+                            className="block text-[10px] text-rose-500 font-medium truncate max-w-[130px] mt-0.5"
+                            title={`Motivo: ${order.cancel_reason}`}
+                          >
+                            {order.cancel_reason}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-xs font-mono text-slate-600 dark:text-slate-400">
                         {order.horus_pedido_remessa ? `#${order.horus_pedido_remessa}` : '—'}
@@ -706,12 +847,27 @@ export default function DropshipOrdersPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); router.push(`/orders/dropship/${order.id}`); }}
-                          className="p-1.5 rounded-lg hover:bg-violet-100 dark:hover:bg-violet-900/30 text-slate-400 hover:text-violet-600 transition-colors"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center gap-1 justify-end">
+                          {order.status !== 'CANCELLED' && order.status !== 'DISPATCHED' && (
+                            <button
+                              title="Cancelar Pedido"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCancelModalOrder(order);
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-rose-100 dark:hover:bg-rose-900/30 text-slate-400 hover:text-rose-600 transition-colors"
+                            >
+                              <Ban className="w-4 h-4" />
+                            </button>
+                          )}
+                          <button
+                            title="Ver Detalhes"
+                            onClick={(e) => { e.stopPropagation(); router.push(`/orders/dropship/${order.id}`); }}
+                            className="p-1.5 rounded-lg hover:bg-violet-100 dark:hover:bg-violet-900/30 text-slate-400 hover:text-violet-600 transition-colors"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </motion.tr>
                   );
@@ -721,6 +877,15 @@ export default function DropshipOrdersPage() {
           </div>
         )}
       </div>
+
+      {/* Modal de Cancelamento de Pedido */}
+      <CancelOrderModal
+        order={cancelModalOrder}
+        isOpen={!!cancelModalOrder}
+        onClose={() => setCancelModalOrder(null)}
+        onConfirm={handleConfirmCancel}
+        loading={cancellingOrder}
+      />
     </div>
   );
 }

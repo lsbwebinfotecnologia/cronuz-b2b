@@ -270,9 +270,16 @@ class DropshipOrderResponse(BaseModel):
     # Credencial Erdos — qual token trouxe este pedido
     erdos_credential_id: Optional[int] = None
     erdos_credential_label: Optional[str] = None
+    # Cancelamento
+    cancel_reason: Optional[str] = None
+    cancelled_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class CancelOrderRequest(BaseModel):
+    reason: str
 
 
 class ConfirmDispatchRequest(BaseModel):
@@ -729,9 +736,12 @@ async def sync_dropship_orders(
                     DropshipOrder.external_order_id == external_id
                 ).first()
 
-                if existing and existing.status not in ["PENDING"]:
-                    skipped += 1
-                    continue
+                if existing:
+                    if not existing.erdos_credential_id:
+                        existing.erdos_credential_id = cred.id
+                    if existing.status not in ["PENDING"]:
+                        skipped += 1
+                        continue
 
                 order_dir = f"{base_dir}/{external_id}"
                 xml_path = danfe_path = label_path = None
@@ -935,6 +945,21 @@ def list_dropship_orders(
 
     orders = query.order_by(DropshipOrder.released_at.desc().nullslast()).all()
 
+    # Identifica credencial padrão/primária para fallback em pedidos legados
+    primary_cred = (
+        db.query(DspErdosCredential)
+        .filter(DspErdosCredential.company_id == company_id, DspErdosCredential.is_primary == True)
+        .first()
+    )
+    fallback_label = primary_cred.label if primary_cred else None
+    if not fallback_label:
+        first_cred = (
+            db.query(DspErdosCredential)
+            .filter(DspErdosCredential.company_id == company_id, DspErdosCredential.is_active == True)
+            .first()
+        )
+        fallback_label = first_cred.label if first_cred else None
+
     # Serializa manualmente para incluir o label da credencial (campo virtual)
     result = []
     for order in orders:
@@ -944,8 +969,10 @@ def list_dropship_orders(
         }
         data["erdos_credential_id"] = order.erdos_credential_id
         data["erdos_credential_label"] = (
-            order.erdos_credential.label if order.erdos_credential else None
+            order.erdos_credential.label if order.erdos_credential else fallback_label
         )
+        data["cancel_reason"] = getattr(order, "cancel_reason", None)
+        data["cancelled_at"] = getattr(order, "cancelled_at", None)
         data["conference"] = None
         result.append(DropshipOrderResponse(**data))
     return result
@@ -1011,6 +1038,12 @@ def get_dropship_order(
         "cod_pedido_origem": conf.cod_pedido_origem,
         "created_at": conf.created_at.isoformat() if conf.created_at else None
     } if conf else None
+
+    order_data["erdos_credential_label"] = (
+        order.erdos_credential.label if order.erdos_credential else None
+    )
+    order_data["cancel_reason"] = getattr(order, "cancel_reason", None)
+    order_data["cancelled_at"] = getattr(order, "cancelled_at", None)
 
     return order_data
 
@@ -2342,6 +2375,102 @@ async def confirm_dispatch(
         "dat_emissao_nf": dat_emissao,
         "erdos_response": erdos_response
     }
+
+
+# ==============================================================================
+# CANCELAMENTO DE PEDIDO DROPSHIP
+# ==============================================================================
+
+@router.post("/orders/{company_id}/{order_id}/cancel")
+async def cancel_dropship_order(
+    company_id: int,
+    order_id: int,
+    payload: CancelOrderRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Cancela manualmente um pedido dropship com justificativa obrigatória.
+    Atualiza status para CANCELLED, salva cancel_reason e cancelled_at,
+    e notifica o Hub-Erdos via PATCH /pedidos/{id}/status.
+    """
+    _require_seller_or_master(current_user, company_id)
+
+    order = db.query(DropshipOrder).filter(
+        DropshipOrder.id == order_id,
+        DropshipOrder.company_id == company_id,
+    ).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+
+    if order.status == "CANCELLED":
+        raise HTTPException(status_code=400, detail="Este pedido já está cancelado.")
+
+    if order.status == "DISPATCHED":
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível cancelar um pedido que já foi despachado no Hub."
+        )
+
+    reason_clean = (payload.reason or "").strip()
+    if len(reason_clean) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Informe uma justificativa válida para o cancelamento (mínimo de 3 caracteres)."
+        )
+
+    config = _get_config_or_404(db, company_id)
+    order_cred = order.erdos_credential
+    erdos_client = _build_erdos_client_from_cred(config, order_cred) if order_cred else _build_erdos_client(config)
+
+    erdos_notified = False
+    erdos_error = None
+    try:
+        await erdos_client.update_order_status(order.external_order_id, "cancelado")
+        erdos_notified = True
+    except Exception as e:
+        log.warning(f"[CancelOrder] Aviso ao notificar Erdos para pedido {order.external_order_id}: {e}")
+        erdos_error = str(e)
+    finally:
+        await erdos_client.close()
+
+    status_before = order.status
+    order.status = "CANCELLED"
+    order.cancel_reason = reason_clean
+    order.cancelled_at = datetime.utcnow()
+
+    # Log de auditoria
+    logs = list(order.logs or [])
+    user_name = getattr(current_user, "name", None) or getattr(current_user, "email", None) or f"Usuário #{current_user.id}"
+    detail_msg = f"Cancelado manualmente por {user_name}. Justificativa: {reason_clean}."
+    if erdos_notified:
+        detail_msg += " Hub-Erdos atualizado com status 'cancelado'."
+    elif erdos_error:
+        detail_msg += f" (Aviso Erdos: {erdos_error})"
+
+    logs.append({
+        "at": datetime.utcnow().isoformat(),
+        "event": "MANUALLY_CANCELLED",
+        "erdos_status": "cancelado" if erdos_notified else order.erdos_status,
+        "local_status_before": status_before,
+        "local_status_after": "CANCELLED",
+        "detail": detail_msg,
+    })
+    order.logs = logs
+
+    db.commit()
+    db.refresh(order)
+
+    return {
+        "ok": True,
+        "order_id": order.id,
+        "status": order.status,
+        "cancel_reason": order.cancel_reason,
+        "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
+        "erdos_notified": erdos_notified,
+    }
+
+
 
 
 # ==============================================================================
