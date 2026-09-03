@@ -256,7 +256,16 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
 
     // Lógica para bloquear Inputs
     const isLockedByNFSe = order?.status_nfse === 'Emitida' || order?.status_nfse === 'Em Processamento';
-    const isLockedByFinancial = (order?.txs || []).some((tx: any) => tx.status !== 'CANCELADO');
+    // Bloqueia edição de valor SOMENTE quando há parcela efetivamente paga (PAID).
+    // STATUS do sistema:
+    //   transaction_status: PROSPECCAO | CONFIRMADO | CANCELADO
+    //   installment.status: PENDING | PAID | OVERDUE | CANCELLED
+    // CONFIRMADO = cobrança emitida (não necessariamente paga) → NÃO bloqueia
+    // PAID em alguma parcela = dinheiro recebido → bloqueia por integridade contábil
+    const isLockedByFinancial = (order?.txs || []).some((tx: any) =>
+        tx.status !== 'CANCELADO' &&
+        (tx.installments || []).some((inst: any) => inst.status === 'PAID')
+    );
     const isValueLocked = isLockedByNFSe || isLockedByFinancial;
 
     const handleSave = async () => {
