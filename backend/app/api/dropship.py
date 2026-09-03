@@ -2545,6 +2545,7 @@ async def get_order_document(
 @router.post("/stock/{company_id}/push")
 async def push_stock_to_hub(
     company_id: int,
+    erdos_credential_id: Optional[int] = Query(None, description="ID da credencial/token específico a enviar"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -2552,10 +2553,10 @@ async def push_stock_to_hub(
     Consulta estoque no Hórus via Busca_AcervoB2B com filtro incremental
     (DATA_INI = stock_sync_last_run, DATA_FIM = agora) e envia ao Hub-Erdos.
 
-    - Primeira execução (last_run NULL): busca tudo desde 01/01/1900.
-    - Execuções seguintes: busca apenas itens atualizados desde o último push.
+    - Se erdos_credential_id for fornecido, força o envio pelo token dessa credencial.
+    - Se omitido, envia pela credencial primária do seller.
     - Paginação automática via OFFSET/LIMIT (PAGE_SIZE=200).
-    - Atualiza stock_sync_last_run somente após push bem-sucedido com itens.
+    - Salva o registro em dsp_stock_sync_log com a credencial utilizada.
     """
     _require_seller_or_master(current_user, company_id)
 
@@ -2566,7 +2567,7 @@ async def push_stock_to_hub(
 
     try:
         from app.jobs.dropship_stock_job import do_stock_push
-        result = await do_stock_push(config, db)
+        result = await do_stock_push(config, db, credential_id=erdos_credential_id)
         return result
 
     except ValueError as e:
@@ -2583,24 +2584,28 @@ async def get_stock_sync_logs(
     page: int = 1,
     page_size: int = 20,
     status: Optional[str] = None,   # filtro: 'ok' | 'no_items' | 'error'
+    erdos_credential_id: Optional[int] = Query(None, description="Filtrar logs por token/credencial"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Lista o histórico de execuções do sync de estoque Dropship para este seller.
-    Retorna logs paginados, do mais recente ao mais antigo.
-    items_payload incluído em cada entrada (lista completa de SKUs enviados).
+    Retorna logs paginados, com filtro opcional de credencial/token.
     """
     _require_seller_or_master(current_user, company_id)
 
     from app.models.dropship_stock_sync_log import DropshipStockSyncLog
+    from sqlalchemy.orm import joinedload
 
     query = (
         db.query(DropshipStockSyncLog)
+        .options(joinedload(DropshipStockSyncLog.erdos_credential))
         .filter(DropshipStockSyncLog.company_id == company_id)
     )
     if status:
         query = query.filter(DropshipStockSyncLog.status == status)
+    if erdos_credential_id:
+        query = query.filter(DropshipStockSyncLog.erdos_credential_id == erdos_credential_id)
 
     total = query.count()
     logs = (
@@ -2615,19 +2620,21 @@ async def get_stock_sync_logs(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "total_pages": max(1, -(-total // page_size)),  # ceil division
+        "total_pages": max(1, -(-total // page_size)),
         "logs": [
             {
-                "id":            entry.id,
-                "triggered_by":  entry.triggered_by,
-                "status":        entry.status,
-                "data_ini":      entry.data_ini,
-                "data_fim":      entry.data_fim,
-                "skus_sent":     entry.skus_sent,
-                "items_payload": entry.items_payload,
-                "hub_response":  entry.hub_response,
-                "error_msg":     entry.error_msg,
-                "executed_at":   entry.executed_at.isoformat() if entry.executed_at else None,
+                "id":                     entry.id,
+                "triggered_by":           entry.triggered_by,
+                "status":                 entry.status,
+                "data_ini":               entry.data_ini,
+                "data_fim":               entry.data_fim,
+                "skus_sent":              entry.skus_sent,
+                "items_payload":          entry.items_payload,
+                "hub_response":           entry.hub_response,
+                "error_msg":              entry.error_msg,
+                "executed_at":            entry.executed_at.isoformat() if entry.executed_at else None,
+                "erdos_credential_id":    entry.erdos_credential_id,
+                "erdos_credential_label": entry.erdos_credential.label if entry.erdos_credential else None,
             }
             for entry in logs
         ],

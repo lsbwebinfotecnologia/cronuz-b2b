@@ -22,36 +22,81 @@ Envio:
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from sqlalchemy.orm import Session
+from app.models.dropship import DropshipConfig
 
 log = logging.getLogger("dropship_stock_job")
 
 PAGE_SIZE = 50
 
 
-async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> Dict[str, Any]:
+async def do_stock_push(
+    config: DropshipConfig,
+    db: Session,
+    triggered_by: str = "manual",
+    credential_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """
-    Async: busca acervo no Hórus com DATA_INI/DATA_FIM incremental,
-    pagina via OFFSET/LIMIT e envia ao Hub-Erdos.
-
-    - Envia apenas itens com saldo > 0.
-    - Zera automaticamente na Erdos os ISBNs que antes tinham saldo
-      e agora retornaram com saldo = 0 ou não apareceram no retorno.
-    - Salva um registro em dsp_stock_sync_log independente do resultado.
+    Executa o ciclo completo de sincronização de estoque Hórus → Hub-Erdos para um seller.
+    - Consulta acervo no Hórus com filtro incremental DATA_INI / DATA_FIM.
+    - Monta payload com TODOS os itens (positivos + zerados).
+    - Envia para o Hub-Erdos via POST /estoque.
+    - Registra itens enviados em dsp_stock_sent_erdos (deduplicação).
+    - Atualiza stock_sync_last_run em dsp_config apenas após sucesso com itens.
+    - Salva um registro em dsp_stock_sync_log com o token/credencial utilizado.
 
     Args:
-        config      : instância de DropshipConfig (com horus_customer precarregado)
-        db          : SQLAlchemy Session
-        triggered_by: 'manual' (endpoint) ou 'scheduler' (job automático)
+        config       : instância de DropshipConfig (com horus_customer precarregado)
+        db           : SQLAlchemy Session
+        triggered_by : 'manual' (endpoint) ou 'scheduler' (job automático)
+        credential_id: ID opcional de DspErdosCredential para forçar envio por um token específico
 
     Returns:
-        dict com status, skus_sent, zeroed, data_ini, data_fim e hub_response
+        dict com status, skus_sent, data_ini, data_fim, hub_response e dados da credencial
     """
     from app.integrators.horus_products import HorusProducts
     from app.integrators.erdos_client import ErdosClientError
     from app.api.dropship import _build_erdos_client
     from app.models.dropship_stock_sync_log import DropshipStockSyncLog
     from app.models.dropship_stock_sent_erdos import StockSentErdos
+    from app.models.dropship_erdos_credential import DspErdosCredential
+
+    # ── Seleciona credencial/token para envio de estoque ───────────────────────
+    target_cred: Optional[DspErdosCredential] = None
+    if credential_id:
+        target_cred = (
+            db.query(DspErdosCredential)
+            .filter(
+                DspErdosCredential.id == credential_id,
+                DspErdosCredential.config_id == config.id,
+            )
+            .first()
+        )
+        if not target_cred:
+            raise ValueError(f"Credencial #{credential_id} não encontrada para esta empresa.")
+    else:
+        # Usa is_primary=True ou primeira ativa
+        target_cred = (
+            db.query(DspErdosCredential)
+            .filter(
+                DspErdosCredential.config_id == config.id,
+                DspErdosCredential.is_primary == True,
+                DspErdosCredential.is_active == True,
+            )
+            .first()
+        ) or (
+            db.query(DspErdosCredential)
+            .filter(
+                DspErdosCredential.config_id == config.id,
+                DspErdosCredential.is_active == True,
+            )
+            .first()
+        )
+
+    target_cred_id = target_cred.id if target_cred else None
+    target_cred_label = target_cred.label if target_cred else "Padrão"
+    stock_api_token = (target_cred.api_token if target_cred else None) or config.api_token
 
     def _save_log(status: str, skus_sent: int = 0,
                   items_payload=None, hub_response=None, error_msg: str = None,
@@ -59,6 +104,7 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
         try:
             entry = DropshipStockSyncLog(
                 company_id=config.company_id,
+                erdos_credential_id=target_cred_id,
                 triggered_by=triggered_by,
                 status=status,
                 data_ini=data_ini,
@@ -80,28 +126,6 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
         raise ValueError(err)
 
     customer = config.horus_customer
-
-    # ── Seleciona token para envio de estoque (credencial primária) ───────────
-    # Estoque é enviado UMA vez (Hub-Erdos distribui automaticamente para todos os CNPJs).
-    # Usa is_primary=True ou primeira credencial ativa. Fallback: config.api_token legado.
-    from app.models.dropship_erdos_credential import DspErdosCredential
-    primary_cred = (
-        db.query(DspErdosCredential)
-        .filter(
-            DspErdosCredential.config_id == config.id,
-            DspErdosCredential.is_primary == True,
-            DspErdosCredential.is_active == True,
-        )
-        .first()
-    ) or (
-        db.query(DspErdosCredential)
-        .filter(
-            DspErdosCredential.config_id == config.id,
-            DspErdosCredential.is_active == True,
-        )
-        .first()
-    )
-    stock_api_token = (primary_cred.api_token if primary_cred else None) or config.api_token
 
     # ── Definição do período de busca ─────────────────────────────────────────
     if config.stock_sync_last_run:
@@ -199,6 +223,8 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
             "skus_sent": 0,
             "data_ini": data_ini,
             "data_fim": data_fim,
+            "erdos_credential_id": target_cred_id,
+            "erdos_credential_label": target_cred_label,
         }
 
     # ── Envia ao Hub-Erdos (todos os itens, sem filtro de saldo) ─────────────
@@ -232,6 +258,8 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
             "data_ini": data_ini,
             "data_fim": data_fim,
             "hub_response": push_result,
+            "erdos_credential_id": target_cred_id,
+            "erdos_credential_label": target_cred_label,
         }
 
     except ErdosClientError as e:

@@ -33,4 +33,7 @@ class DropshipStockSyncLog(Base):
 
     executed_at    = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    erdos_credential_id = Column(Integer, ForeignKey("dsp_erdos_credential.id"), nullable=True, index=True)
+
     company = relationship("Company", foreign_keys=[company_id])
+    erdos_credential = relationship("DspErdosCredential", foreign_keys=[erdos_credential_id])

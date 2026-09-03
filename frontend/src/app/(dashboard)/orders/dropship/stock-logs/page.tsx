@@ -29,6 +29,15 @@ interface SyncLog {
   hub_response: any;
   error_msg: string | null;
   executed_at: string;
+  erdos_credential_id?: number | null;
+  erdos_credential_label?: string | null;
+}
+
+interface Credential {
+  id: number;
+  label: string;
+  is_primary: boolean;
+  is_active: boolean;
 }
 
 interface LogsResponse {
@@ -60,13 +69,34 @@ export default function StockSyncLogsPage() {
   const [pushing, setPushing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [credFilter, setCredFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  // Credenciais do seller (tokens Erdos)
+  const [credentials, setCredentials] = useState<Credential[]>([]);
+  const [pushCredId, setPushCredId] = useState<string>('');
 
   // Config state
   const [config, setConfig] = useState<SyncConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [intervalInput, setIntervalInput] = useState<string>('');
   const [savingConfig, setSavingConfig] = useState(false);
+
+  const fetchCredentials = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dropship/config/${companyId}/credentials`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const list: Credential[] = await res.json();
+        setCredentials(list);
+      }
+    } catch {
+      // silencioso
+    }
+  }, [companyId]);
 
   const fetchLogs = useCallback(async (page = 1) => {
     if (!companyId) return;
@@ -75,6 +105,7 @@ export default function StockSyncLogsPage() {
       const token = getToken();
       const params = new URLSearchParams({ page: String(page), page_size: '15' });
       if (statusFilter) params.set('status', statusFilter);
+      if (credFilter) params.set('erdos_credential_id', credFilter);
       const res = await fetch(`${API_URL}/dropship/stock/${companyId}/logs?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -87,7 +118,7 @@ export default function StockSyncLogsPage() {
     } finally {
       setLoading(false);
     }
-  }, [companyId, statusFilter]);
+  }, [companyId, statusFilter, credFilter]);
 
   const fetchConfig = useCallback(async () => {
     if (!companyId) return;
@@ -109,22 +140,27 @@ export default function StockSyncLogsPage() {
     }
   }, [companyId]);
 
+  useEffect(() => { fetchCredentials(); }, [fetchCredentials]);
   useEffect(() => { fetchLogs(1); }, [fetchLogs]);
   useEffect(() => { fetchConfig(); }, [fetchConfig]);
 
-  const handleManualPush = async () => {
+  const handleManualPush = async (targetCredId?: string | number) => {
     if (!companyId) return;
     setPushing(true);
     try {
       const token = getToken();
-      const res = await fetch(`${API_URL}/dropship/stock/${companyId}/push`, {
+      const url = targetCredId
+        ? `${API_URL}/dropship/stock/${companyId}/push?erdos_credential_id=${targetCredId}`
+        : `${API_URL}/dropship/stock/${companyId}/push`;
+      const res = await fetch(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
       const result = await res.json();
       if (res.ok) {
-        if (result.status === 'ok') toast.success(`✅ ${result.skus_sent} SKUs enviados ao Hub-Erdos!`);
-        else if (result.status === 'no_items') toast.info('Nenhum item atualizado no período.');
+        const credName = result.erdos_credential_label ? ` [${result.erdos_credential_label}]` : '';
+        if (result.status === 'ok') toast.success(`✅ ${result.skus_sent} SKUs enviados ao Hub-Erdos${credName}!`);
+        else if (result.status === 'no_items') toast.info(`Nenhum item atualizado no período${credName}.`);
         fetchLogs(1);
         fetchConfig();
       } else {
@@ -212,11 +248,40 @@ export default function StockSyncLogsPage() {
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
               Atualizar
             </button>
-            <button onClick={handleManualPush} disabled={pushing}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm shadow-indigo-500/30 transition-all disabled:opacity-60">
-              {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-              {pushing ? 'Enviando...' : 'Enviar Agora'}
-            </button>
+            {credentials.length > 1 ? (
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={pushCredId}
+                  onChange={(e) => setPushCredId(e.target.value)}
+                  disabled={pushing}
+                  className="px-3 py-2 text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
+                >
+                  <option value="">Token Primário ({credentials.find(c => c.is_primary)?.label || 'Padrão'})</option>
+                  {credentials.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.label} {c.is_primary ? '⭐ (Primário)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => handleManualPush(pushCredId)}
+                  disabled={pushing}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm shadow-indigo-500/30 transition-all disabled:opacity-60 whitespace-nowrap"
+                >
+                  {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  {pushing ? 'Enviando...' : 'Enviar Agora'}
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => handleManualPush()}
+                disabled={pushing}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm shadow-indigo-500/30 transition-all disabled:opacity-60"
+              >
+                {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                {pushing ? 'Enviando...' : 'Enviar Agora'}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -309,19 +374,50 @@ export default function StockSyncLogsPage() {
 
         {/* Filtros */}
         <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
-          className="flex items-center gap-2">
-          <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-          <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Filtrar:</span>
-          {(['', 'ok', 'no_items', 'error'] as const).map(s => (
-            <button key={s} onClick={() => { setStatusFilter(s); setCurrentPage(1); }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
-                statusFilter === s
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-indigo-400'
-              }`}>
-              {s === '' ? 'Todos' : STATUS_CONFIG[s].label}
-            </button>
-          ))}
+          className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Status:</span>
+            {(['', 'ok', 'no_items', 'error'] as const).map(s => (
+              <button key={s} onClick={() => { setStatusFilter(s); setCurrentPage(1); }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                  statusFilter === s
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-indigo-400'
+                }`}>
+                {s === '' ? 'Todos' : STATUS_CONFIG[s].label}
+              </button>
+            ))}
+          </div>
+
+          {credentials.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap sm:border-l sm:border-slate-200 sm:dark:border-slate-800 sm:pl-4">
+              <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Token / Parceiro:</span>
+              <button
+                onClick={() => { setCredFilter(''); setCurrentPage(1); }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                  credFilter === ''
+                    ? 'bg-violet-600 text-white border-violet-600 shadow-sm'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-violet-400'
+                }`}
+              >
+                Todos os Tokens
+              </button>
+              {credentials.map(c => (
+                <button
+                  key={c.id}
+                  onClick={() => { setCredFilter(String(c.id)); setCurrentPage(1); }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                    credFilter === String(c.id)
+                      ? 'bg-violet-600 text-white border-violet-600 shadow-sm'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-violet-400'
+                  }`}
+                >
+                  {c.label} {c.is_primary ? '⭐' : ''}
+                </button>
+              ))}
+            </div>
+          )}
         </motion.div>
 
         {/* Lista de logs */}
@@ -331,7 +427,12 @@ export default function StockSyncLogsPage() {
           <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
             <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
               {data?.total ?? 0} execução(ões) registrada(s)
-              {statusFilter && <span className="text-slate-400 font-normal ml-1">— filtrado por "{STATUS_CONFIG[statusFilter as keyof typeof STATUS_CONFIG]?.label}"</span>}
+              {statusFilter && <span className="text-slate-400 font-normal ml-1">— filtrado por status "{STATUS_CONFIG[statusFilter as keyof typeof STATUS_CONFIG]?.label}"</span>}
+              {credFilter && (
+                <span className="text-violet-600 dark:text-violet-400 font-normal ml-1">
+                  — token "{credentials.find(c => String(c.id) === credFilter)?.label || credFilter}"
+                </span>
+              )}
             </p>
           </div>
 
@@ -391,6 +492,13 @@ export default function StockSyncLogsPage() {
                       }`}>
                         {entry.triggered_by === 'scheduler' ? '⏱ Auto' : '👤 Manual'}
                       </span>
+
+                      {/* Token badge */}
+                      {entry.erdos_credential_label && (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold shrink-0 bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-700/40">
+                          {entry.erdos_credential_label}
+                        </span>
+                      )}
 
                       {/* Data/hora */}
                       <div className="flex items-center gap-1 text-xs text-slate-400 ml-auto shrink-0">
