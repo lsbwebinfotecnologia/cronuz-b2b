@@ -21,6 +21,9 @@ export function CurrencyInput({
 }: CurrencyInputProps) {
   const [displayValue, setDisplayValue] = useState('');
   const isFocused = useRef(false);
+  // Guarda o valor numérico atual DENTRO do componente para não depender
+  // do ciclo de re-render do pai no handleBlur
+  const internalValue = useRef<number>(value ?? 0);
 
   const formatNumber = (num: number) =>
     new Intl.NumberFormat('pt-BR', {
@@ -29,15 +32,14 @@ export function CurrencyInput({
     }).format(num);
 
   // Sincroniza com o valor externo SOMENTE quando o campo NÃO está focado.
-  // Evita sobrescrever o que o usuário está digitando.
   useEffect(() => {
     if (isFocused.current) return;
-
-    if (value !== undefined && value !== null && typeof value === 'number') {
-      setDisplayValue(`${prefixStr}${formatNumber(value)}${suffixStr}`);
-    } else {
-      setDisplayValue('');
-    }
+    internalValue.current = value ?? 0;
+    setDisplayValue(
+      value !== undefined && value !== null
+        ? `${prefixStr}${formatNumber(value)}${suffixStr}`
+        : ''
+    );
   }, [value, prefixStr, suffixStr, maxDecimals]);
 
   const handleFocus = () => {
@@ -46,32 +48,24 @@ export function CurrencyInput({
 
   const handleBlur = () => {
     isFocused.current = false;
-    // Ao sair do campo, formata o valor final corretamente
-    if (value !== undefined && value !== null && typeof value === 'number') {
-      setDisplayValue(`${prefixStr}${formatNumber(value)}${suffixStr}`);
-    } else {
-      setDisplayValue('');
-    }
+    // Usa internalValue.current (atualizado a cada digitação) — nunca stale
+    setDisplayValue(`${prefixStr}${formatNumber(internalValue.current)}${suffixStr}`);
   };
 
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
-    let rawValue = e.target.value;
+    const rawValue = e.target.value.replace(/\D/g, '');
 
-    // Remove tudo que não for número
-    rawValue = rawValue.replace(/\D/g, '');
-
-    // Campo apagado → zera o valor mas mantém display vazio para o usuário digitar
     if (rawValue === '') {
+      internalValue.current = 0;
       onChangeValue(0);
       setDisplayValue('');
       return;
     }
 
-    // Campo formatado: divide por 10^decimais
-    // ex: digitou "95000" → 950,00
     const divisor = Math.pow(10, maxDecimals);
     const numValue = Number(rawValue) / divisor;
 
+    internalValue.current = numValue;
     setDisplayValue(`${prefixStr}${formatNumber(numValue)}${suffixStr}`);
     onChangeValue(numValue);
   };
