@@ -10,21 +10,11 @@ interface CurrencyInputProps extends Omit<React.InputHTMLAttributes<HTMLInputEle
   maxDecimals?: number;
 }
 
-function toBR(n: number, dec = 2): string {
+function formatBR(n: number, dec = 2): string {
   return (n ?? 0).toLocaleString('pt-BR', {
     minimumFractionDigits: dec,
     maximumFractionDigits: dec,
   });
-}
-
-function fromBR(s: string): number {
-  const clean = s.replace(/[^\d,.]/g, '');
-  if (!clean) return 0;
-  let norm = clean.includes(',')
-    ? clean.replace(/\./g, '').replace(',', '.')
-    : clean.replace(/\./g, '');
-  const n = parseFloat(norm);
-  return isNaN(n) ? 0 : Math.round(n * 100) / 100;
 }
 
 export function CurrencyInput({
@@ -37,42 +27,66 @@ export function CurrencyInput({
   disabled,
   ...props
 }: CurrencyInputProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  // lastExternal: último valor que veio de fora (props). Usado para detectar
-  // atualização externa real (ex: fetchDetails após save) vs mudança local.
+  const isFocused = useRef(false);
+  // Rastreia o último valor numérico vindo de fora (props).
+  // Atualizado tanto pelo useEffect (valor externo real) quanto
+  // pelo onChange (digitação), para evitar o ciclo de reset.
   const lastExternal = useRef<number>(value ?? 0);
-  const [text, setText] = useState(() => `${prefixStr}${toBR(value ?? 0, maxDecimals)}${suffixStr}`);
 
-  // Sincroniza SOMENTE quando o valor externo muda de fora
-  // (ex: após fetchDetails, após save bem-sucedido).
-  // Não roda enquanto o usuário está editando, porque lastExternal
-  // é atualizado no onBlur ANTES que o re-render do pai chegue.
+  const fmt = (n: number) => `${prefixStr}${formatBR(n, maxDecimals)}${suffixStr}`;
+
+  const [text, setText] = useState(() => fmt(value ?? 0));
+
+  // Sincroniza quando o valor externo muda de verdade
+  // (ex: fetchDetails, save bem-sucedido).
+  // Se o valor que chegou é o que acabamos de enviar (lastExternal),
+  // não sobrescreve — evita o ciclo stale.
   useEffect(() => {
-    if (value !== lastExternal.current) {
+    if (!isFocused.current && value !== lastExternal.current) {
       lastExternal.current = value;
-      setText(`${prefixStr}${toBR(value ?? 0, maxDecimals)}${suffixStr}`);
+      setText(fmt(value ?? 0));
     }
   }, [value, prefixStr, suffixStr, maxDecimals]);
 
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Máscara automática estilo "caixa registradora":
+    // remove não-dígitos e divide por 10^decimais.
+    // Ex: digitar "1", "3", "5", "0", "0", "0" → "1.350,00"
+    const raw = e.target.value.replace(/\D/g, '');
+
+    if (raw === '') {
+      setText('');
+      lastExternal.current = 0;
+      onChangeValue(0);
+      return;
+    }
+
+    const divisor = Math.pow(10, maxDecimals);
+    const num = Number(raw) / divisor;
+    lastExternal.current = num; // previne useEffect de sobrescrever
+    setText(fmt(num));
+    onChangeValue(num);
+  };
+
   return (
     <input
-      ref={inputRef}
       type="text"
-      inputMode="decimal"
+      inputMode="numeric"
       value={text}
       disabled={disabled}
       className={className}
-      onChange={(e) => setText(e.target.value)}
-      onFocus={() => requestAnimationFrame(() => inputRef.current?.select())}
+      onFocus={() => { isFocused.current = true; }}
       onBlur={() => {
-        const parsed = fromBR(text);
-        const formatted = `${prefixStr}${toBR(parsed, maxDecimals)}${suffixStr}`;
-        setText(formatted);
-        // Atualiza lastExternal para que o useEffect não sobrescreva com
-        // o valor antigo quando o re-render do pai chegar com o novo valor
-        lastExternal.current = parsed;
-        onChangeValue(parsed);
+        isFocused.current = false;
+        // Se o campo ficou vazio (usuário apagou tudo sem digitar nada),
+        // exibe "0,00" ao sair
+        if (!text.trim()) {
+          setText(fmt(0));
+          lastExternal.current = 0;
+          onChangeValue(0);
+        }
       }}
+      onChange={handleChange}
       {...props}
     />
   );
