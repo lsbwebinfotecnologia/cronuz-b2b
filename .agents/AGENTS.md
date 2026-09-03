@@ -4,6 +4,48 @@ Este documento estabelece diretrizes críticas de segurança, banco de dados, de
 
 ---
 
+## 🖥️ 0. Infraestrutura de Produção
+
+> [!IMPORTANT]
+> **SEMPRE use este servidor quando o usuário pedir para subir para produção ou fazer deploy.**
+> Nunca assuma outro IP ou servidor sem confirmação explícita do usuário.
+
+### Servidor de Produção (DigitalOcean)
+| Item | Valor |
+|---|---|
+| **IP** | `64.23.182.183` |
+| **Usuário SSH** | `root` |
+| **Acesso** | `ssh root@64.23.182.183` |
+| **Diretório do projeto** | `/var/www/cronuz` |
+| **Frontend** | PM2 — processo `cronuz-frontend` — porta `3000` |
+| **Backend** | systemd — serviço `cronuz-backend` — porta `8000` |
+
+### Banco de Dados PostgreSQL (Produção)
+| Item | Valor |
+|---|---|
+| **Host** | `localhost` (no próprio servidor) |
+| **Banco** | `cronuz_b2b` |
+| **Usuário** | `cronuz_admin` |
+| **Senha** | `cronuz_password_123` |
+| **Conexão psql** | `PGPASSWORD=cronuz_password_123 psql -U cronuz_admin -h localhost -d cronuz_b2b` |
+
+### Comandos Padrão de Deploy
+```bash
+# Pull + Build Frontend + Restart
+cd /var/www/cronuz && git pull origin main
+cd /var/www/cronuz/frontend && npm run build
+pm2 restart cronuz-frontend
+
+# Restart Backend
+systemctl restart cronuz-backend
+
+# Validação final
+curl -s -o /dev/null -w 'Backend: %{http_code}\n' http://localhost:8000/dashboard/metrics -H 'Authorization: Bearer test'
+curl -s -o /dev/null -w 'Frontend: %{http_code}\n' http://localhost:3000
+```
+
+---
+
 ## 📁 1. Organização de Arquivos e Pastas
 
 Para manter a raiz do projeto limpa e organizada, aplicam-se as seguintes regras de diretórios:
