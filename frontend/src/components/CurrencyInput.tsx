@@ -10,39 +10,21 @@ interface CurrencyInputProps extends Omit<React.InputHTMLAttributes<HTMLInputEle
   maxDecimals?: number;
 }
 
-// Fora do componente — sem re-criação a cada render
-function formatBR(n: number, decimals = 2): string {
+function toBR(n: number, dec = 2): string {
   return (n ?? 0).toLocaleString('pt-BR', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
+    minimumFractionDigits: dec,
+    maximumFractionDigits: dec,
   });
 }
 
-function parseBR(s: string, prefixStr = '', suffixStr = ''): number {
-  // Remove prefix/suffix e espaços
-  let clean = s;
-  if (prefixStr) clean = clean.replace(prefixStr, '');
-  if (suffixStr) clean = clean.replace(suffixStr, '');
-  clean = clean.trim();
-
-  // Remove tudo exceto dígitos, vírgula e ponto
-  clean = clean.replace(/[^\d,.]/g, '');
+function fromBR(s: string): number {
+  const clean = s.replace(/[^\d,.]/g, '');
   if (!clean) return 0;
-
-  let normalized: string;
-  if (clean.includes(',')) {
-    // vírgula = separador decimal; pontos = milhar → "1.234,56" → "1234.56"
-    normalized = clean.replace(/\./g, '').replace(',', '.');
-  } else if ((clean.match(/\./g) || []).length === 1) {
-    // único ponto = decimal → "950.50"
-    normalized = clean;
-  } else {
-    // múltiplos pontos sem vírgula = milhar → "1.350" → "1350"
-    normalized = clean.replace(/\./g, '');
-  }
-
-  const result = parseFloat(normalized);
-  return isNaN(result) ? 0 : Math.round(result * 100) / 100;
+  let norm = clean.includes(',')
+    ? clean.replace(/\./g, '').replace(',', '.')
+    : clean.replace(/\./g, '');
+  const n = parseFloat(norm);
+  return isNaN(n) ? 0 : Math.round(n * 100) / 100;
 }
 
 export function CurrencyInput({
@@ -56,17 +38,19 @@ export function CurrencyInput({
   ...props
 }: CurrencyInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const isFocused = useRef(false);
+  // lastExternal: último valor que veio de fora (props). Usado para detectar
+  // atualização externa real (ex: fetchDetails após save) vs mudança local.
+  const lastExternal = useRef<number>(value ?? 0);
+  const [text, setText] = useState(() => `${prefixStr}${toBR(value ?? 0, maxDecimals)}${suffixStr}`);
 
-  const display = (n: number) =>
-    `${prefixStr}${formatBR(n, maxDecimals)}${suffixStr}`;
-
-  const [text, setText] = useState(() => display(value ?? 0));
-
-  // Sincroniza com valor externo SOMENTE quando o campo não está focado
+  // Sincroniza SOMENTE quando o valor externo muda de fora
+  // (ex: após fetchDetails, após save bem-sucedido).
+  // Não roda enquanto o usuário está editando, porque lastExternal
+  // é atualizado no onBlur ANTES que o re-render do pai chegue.
   useEffect(() => {
-    if (!isFocused.current) {
-      setText(display(value ?? 0));
+    if (value !== lastExternal.current) {
+      lastExternal.current = value;
+      setText(`${prefixStr}${toBR(value ?? 0, maxDecimals)}${suffixStr}`);
     }
   }, [value, prefixStr, suffixStr, maxDecimals]);
 
@@ -78,18 +62,15 @@ export function CurrencyInput({
       value={text}
       disabled={disabled}
       className={className}
-      onChange={(e) => {
-        // Apenas atualiza o display — parse ocorre somente no onBlur
-        setText(e.target.value);
-      }}
-      onFocus={() => {
-        isFocused.current = true;
-        requestAnimationFrame(() => inputRef.current?.select());
-      }}
+      onChange={(e) => setText(e.target.value)}
+      onFocus={() => requestAnimationFrame(() => inputRef.current?.select())}
       onBlur={() => {
-        isFocused.current = false;
-        const parsed = parseBR(text, prefixStr, suffixStr);
-        setText(display(parsed));
+        const parsed = fromBR(text);
+        const formatted = `${prefixStr}${toBR(parsed, maxDecimals)}${suffixStr}`;
+        setText(formatted);
+        // Atualiza lastExternal para que o useEffect não sobrescreva com
+        // o valor antigo quando o re-render do pai chegar com o novo valor
+        lastExternal.current = parsed;
         onChangeValue(parsed);
       }}
       {...props}
