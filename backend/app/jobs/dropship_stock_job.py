@@ -81,6 +81,28 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
 
     customer = config.horus_customer
 
+    # ── Seleciona token para envio de estoque (credencial primária) ───────────
+    # Estoque é enviado UMA vez (Hub-Erdos distribui automaticamente para todos os CNPJs).
+    # Usa is_primary=True ou primeira credencial ativa. Fallback: config.api_token legado.
+    from app.models.dropship_erdos_credential import DspErdosCredential
+    primary_cred = (
+        db.query(DspErdosCredential)
+        .filter(
+            DspErdosCredential.config_id == config.id,
+            DspErdosCredential.is_primary == True,
+            DspErdosCredential.is_active == True,
+        )
+        .first()
+    ) or (
+        db.query(DspErdosCredential)
+        .filter(
+            DspErdosCredential.config_id == config.id,
+            DspErdosCredential.is_active == True,
+        )
+        .first()
+    )
+    stock_api_token = (primary_cred.api_token if primary_cred else None) or config.api_token
+
     # ── Definição do período de busca ─────────────────────────────────────────
     if config.stock_sync_last_run:
         last = config.stock_sync_last_run
@@ -180,7 +202,9 @@ async def do_stock_push(config: Any, db: Any, triggered_by: str = "manual") -> D
         }
 
     # ── Envia ao Hub-Erdos (todos os itens, sem filtro de saldo) ─────────────
-    client = _build_erdos_client(config)
+    # Usa o token da credencial primária (Hub distribui automaticamente para todos os CNPJs)
+    from app.integrators.erdos_client import ErdosClient as _ErdosClient
+    client = _ErdosClient(base_url=config.api_base_url, api_key=stock_api_token)
     try:
         push_result = await client.push_stock(all_items_raw)
 

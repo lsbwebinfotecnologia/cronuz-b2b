@@ -91,6 +91,9 @@ class DropshipConfig(Base):
     company = relationship("Company", foreign_keys=[company_id])
     horus_customer = relationship("Customer", foreign_keys=[horus_customer_id])
     orders = relationship("DropshipOrder", back_populates="config", cascade="all, delete-orphan", foreign_keys="DropshipOrder.config_id")
+    credentials = relationship("DspErdosCredential", back_populates="config",
+                               foreign_keys="DspErdosCredential.config_id",
+                               cascade="all, delete-orphan")
 
 
 class DropshipOrder(Base):
@@ -160,9 +163,15 @@ class DropshipOrder(Base):
     # Cada entrada: {\"at\": ISO, \"event\": str, \"detail\": str}
     logs = Column(JSON, nullable=True, default=list)
 
+    # Credencial Erdos que originou este pedido — usada no despacho (token errado = 404)
+    erdos_credential_id = Column(
+        Integer, ForeignKey("dsp_erdos_credential.id"), nullable=True, index=True
+    )
+
     # Relationships
-    company = relationship("Company", foreign_keys=[company_id])
-    config = relationship("DropshipConfig", back_populates="orders", foreign_keys=[config_id])
+    company          = relationship("Company",           foreign_keys=[company_id])
+    config           = relationship("DropshipConfig",    back_populates="orders",       foreign_keys=[config_id])
+    erdos_credential = relationship("DspErdosCredential", foreign_keys=[erdos_credential_id])
 
 
 class DropshipItemCache(Base):

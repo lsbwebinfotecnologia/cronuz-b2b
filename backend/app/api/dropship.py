@@ -31,6 +31,7 @@ from app.core.dependencies import get_current_user
 from app.models.user import User, UserRole
 from app.models.dropship import DropshipConfig, DropshipOrder
 from app.models.dropship_price_table import DropshipPriceTable
+from app.models.dropship_erdos_credential import DspErdosCredential
 from app.models.company import Company
 from app.models.company_settings import CompanySettings
 from app.models.customer import Customer
@@ -77,6 +78,58 @@ def _build_erdos_client(config: DropshipConfig) -> ErdosClient:
     if not config.api_token or not config.api_base_url:
         raise HTTPException(status_code=400, detail="Token ou URL base do Hub-Erdos não configurados.")
     return ErdosClient(base_url=config.api_base_url, api_key=config.api_token)
+
+
+def _build_erdos_client_from_cred(config: DropshipConfig, cred: DspErdosCredential) -> ErdosClient:
+    """Constrói ErdosClient usando o token de uma credencial específica."""
+    if not config.enabled:
+        raise HTTPException(status_code=400, detail="Integração Dropship está desativada para esta empresa.")
+    if not cred.api_token or not config.api_base_url:
+        raise HTTPException(status_code=400, detail="Token ou URL base do Hub-Erdos não configurados.")
+    return ErdosClient(base_url=config.api_base_url, api_key=cred.api_token)
+
+
+def _ensure_credentials_migrated(config: DropshipConfig, db) -> None:
+    """
+    Migração automática one-time: se o seller possui api_token em dsp_config mas
+    ainda não tem credenciais em dsp_erdos_credential, cria a primeira credencial
+    (is_primary=True) e vincula os registros orphan de dsp_price_table.
+    Ignora silenciosamente se customer não estiver configurado.
+    """
+    if not config.api_token:
+        return
+    count = db.query(DspErdosCredential).filter(
+        DspErdosCredential.config_id == config.id
+    ).count()
+    if count > 0:
+        return  # já migrado
+
+    if not config.horus_customer_id:
+        return  # não pode migrar sem customer
+
+    cred = DspErdosCredential(
+        company_id=config.company_id,
+        config_id=config.id,
+        label="Padrão",
+        api_token=config.api_token,
+        horus_customer_id=config.horus_customer_id,
+        horus_customer_cod_cli=config.horus_customer_cod_cli,
+        horus_fiscal_param_remessa_intra=config.horus_fiscal_param_remessa_intra,
+        horus_fiscal_param_remessa_inter=config.horus_fiscal_param_remessa_inter,
+        horus_fiscal_param_venda=config.horus_fiscal_param_venda,
+        is_active=True,
+        is_primary=True,
+    )
+    db.add(cred)
+    db.flush()  # gera id antes de atualizar price_table
+
+    # Vincula price_table legados (erdos_credential_id IS NULL) a esta credencial
+    db.query(DropshipPriceTable).filter(
+        DropshipPriceTable.company_id == config.company_id,
+        DropshipPriceTable.erdos_credential_id == None,
+    ).update({"erdos_credential_id": cred.id}, synchronize_session=False)
+    db.commit()
+    log.info(f"[MultiToken] Credencial padrão criada para company_id={config.company_id}, cred_id={cred.id}")
 
 
 async def _download_and_store(client: ErdosClient, url: Optional[str], dest_path: str) -> Optional[str]:
@@ -382,6 +435,226 @@ def search_horus_linked_customers(
     return customers
 
 
+
+# ==============================================================================
+# CREDENCIAIS ERDOS (multi-token por seller)
+# ==============================================================================
+
+class CredentialCreate(BaseModel):
+    label: str
+    api_token: str
+    horus_customer_id: int
+    horus_customer_cod_cli: Optional[str] = None
+    horus_fiscal_param_remessa_intra: Optional[str] = None
+    horus_fiscal_param_remessa_inter: Optional[str] = None
+    horus_fiscal_param_venda: Optional[str] = None
+    is_primary: bool = False
+    is_active: bool = True
+
+
+class CredentialUpdate(BaseModel):
+    label: Optional[str] = None
+    api_token: Optional[str] = None
+    horus_customer_id: Optional[int] = None
+    horus_customer_cod_cli: Optional[str] = None
+    horus_fiscal_param_remessa_intra: Optional[str] = None
+    horus_fiscal_param_remessa_inter: Optional[str] = None
+    horus_fiscal_param_venda: Optional[str] = None
+    is_primary: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class CredentialResponse(BaseModel):
+    id: int
+    company_id: int
+    config_id: int
+    label: str
+    api_token: str
+    horus_customer_id: int
+    horus_customer_name: Optional[str] = None
+    horus_customer_document: Optional[str] = None
+    horus_customer_cod_cli: Optional[str] = None
+    horus_fiscal_param_remessa_intra: Optional[str] = None
+    horus_fiscal_param_remessa_inter: Optional[str] = None
+    horus_fiscal_param_venda: Optional[str] = None
+    is_primary: bool
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+def _cred_to_response(cred: DspErdosCredential) -> CredentialResponse:
+    resp = CredentialResponse.model_validate(cred)
+    if cred.horus_customer:
+        resp.horus_customer_name = cred.horus_customer.name
+        resp.horus_customer_document = cred.horus_customer.document
+    return resp
+
+
+@router.get("/config/{company_id}/credentials", response_model=List[CredentialResponse])
+def list_credentials(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Lista credenciais Erdos do seller (com migração automática do token legado)."""
+    _require_seller_or_master(current_user, company_id)
+    config = _get_config_or_404(db, company_id)
+    _ensure_credentials_migrated(config, db)
+
+    creds = (
+        db.query(DspErdosCredential)
+        .filter(DspErdosCredential.config_id == config.id)
+        .order_by(DspErdosCredential.is_primary.desc(), DspErdosCredential.id)
+        .all()
+    )
+    return [_cred_to_response(c) for c in creds]
+
+
+@router.post("/config/{company_id}/credentials", response_model=CredentialResponse)
+def create_credential(
+    company_id: int,
+    payload: CredentialCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cria nova credencial Erdos para o seller."""
+    _require_seller_or_master(current_user, company_id)
+    config = _get_config_or_404(db, company_id)
+
+    # Valida customer
+    customer = db.query(Customer).filter(Customer.id == payload.horus_customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer Hórus não encontrado.")
+
+    # Se is_primary=True, remove de qualquer outra credencial
+    if payload.is_primary:
+        db.query(DspErdosCredential).filter(
+            DspErdosCredential.config_id == config.id,
+            DspErdosCredential.is_primary == True,
+        ).update({"is_primary": False}, synchronize_session=False)
+
+    cred = DspErdosCredential(
+        company_id=company_id,
+        config_id=config.id,
+        label=payload.label,
+        api_token=payload.api_token,
+        horus_customer_id=payload.horus_customer_id,
+        horus_customer_cod_cli=payload.horus_customer_cod_cli,
+        horus_fiscal_param_remessa_intra=payload.horus_fiscal_param_remessa_intra,
+        horus_fiscal_param_remessa_inter=payload.horus_fiscal_param_remessa_inter,
+        horus_fiscal_param_venda=payload.horus_fiscal_param_venda,
+        is_primary=payload.is_primary,
+        is_active=payload.is_active,
+    )
+    db.add(cred)
+    db.commit()
+    db.refresh(cred)
+    return _cred_to_response(cred)
+
+
+@router.patch("/config/{company_id}/credentials/{cred_id}", response_model=CredentialResponse)
+def update_credential(
+    company_id: int,
+    cred_id: int,
+    payload: CredentialUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Atualiza credencial Erdos existente."""
+    _require_seller_or_master(current_user, company_id)
+    config = _get_config_or_404(db, company_id)
+
+    cred = db.query(DspErdosCredential).filter(
+        DspErdosCredential.id == cred_id,
+        DspErdosCredential.config_id == config.id,
+    ).first()
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credencial não encontrada.")
+
+    # Se marcando como primária, remove das demais
+    if payload.is_primary:
+        db.query(DspErdosCredential).filter(
+            DspErdosCredential.config_id == config.id,
+            DspErdosCredential.id != cred_id,
+            DspErdosCredential.is_primary == True,
+        ).update({"is_primary": False}, synchronize_session=False)
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(cred, field, value)
+
+    db.commit()
+    db.refresh(cred)
+    return _cred_to_response(cred)
+
+
+@router.delete("/config/{company_id}/credentials/{cred_id}")
+def delete_credential(
+    company_id: int,
+    cred_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove credencial Erdos. Não permite remover se existirem pedidos vinculados."""
+    _require_seller_or_master(current_user, company_id)
+    config = _get_config_or_404(db, company_id)
+
+    cred = db.query(DspErdosCredential).filter(
+        DspErdosCredential.id == cred_id,
+        DspErdosCredential.config_id == config.id,
+    ).first()
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credencial não encontrada.")
+
+    # Protege se houver pedidos vinculados
+    orders_count = db.query(DropshipOrder).filter(
+        DropshipOrder.erdos_credential_id == cred_id,
+        DropshipOrder.status.notin_(["DISPATCHED", "CANCELLED"]),
+    ).count()
+    if orders_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Não é possível remover: {orders_count} pedido(s) ativo(s) vinculado(s) a esta credencial."
+        )
+
+    db.delete(cred)
+    db.commit()
+    return {"ok": True, "removed": cred_id}
+
+
+@router.patch("/config/{company_id}/credentials/{cred_id}/set-primary", response_model=CredentialResponse)
+def set_primary_credential(
+    company_id: int,
+    cred_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Define credencial como primária (usada para envio de estoque)."""
+    _require_seller_or_master(current_user, company_id)
+    config = _get_config_or_404(db, company_id)
+
+    cred = db.query(DspErdosCredential).filter(
+        DspErdosCredential.id == cred_id,
+        DspErdosCredential.config_id == config.id,
+    ).first()
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credencial não encontrada.")
+
+    # Remove is_primary de todas as outras
+    db.query(DspErdosCredential).filter(
+        DspErdosCredential.config_id == config.id,
+        DspErdosCredential.id != cred_id,
+    ).update({"is_primary": False}, synchronize_session=False)
+
+    cred.is_primary = True
+    db.commit()
+    db.refresh(cred)
+    return _cred_to_response(cred)
+
+
 # ==============================================================================
 # PEDIDOS — SINCRONIZAÇÃO
 # ==============================================================================
@@ -394,217 +667,227 @@ async def sync_dropship_orders(
 ):
     """
     Busca pedidos prontos para despacho no Hub-Erdos e salva/atualiza localmente.
+    Itera sobre TODAS as credenciais ativas — cada token traz apenas seus próprios pedidos.
     Baixa documentos (XML, DANFE, etiqueta) imediatamente — URLs expiram em 1h.
     """
     _require_seller_or_master(current_user, company_id)
 
     config = _get_config_or_404(db, company_id)
-    client = _build_erdos_client(config)
+    _ensure_credentials_migrated(config, db)
 
-    try:
-        pending_orders = await client.get_pending_orders()
-    except ErdosClientError as e:
-        raise HTTPException(status_code=502, detail=f"Erro ao conectar com Hub-Erdos: {str(e)}")
+    # Carrega credenciais ativas
+    credentials = (
+        db.query(DspErdosCredential)
+        .filter(
+            DspErdosCredential.config_id == config.id,
+            DspErdosCredential.is_active == True,
+        )
+        .all()
+    )
+
+    if not credentials:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhuma credencial Erdos ativa configurada. Configure ao menos uma credencial em Configurações → Dropship Horus."
+        )
 
     synced = 0
     skipped = 0
     errors = []
-
+    total_hub = 0
     base_dir = f"uploads/{company_id}/dropship"
 
-    for order_data in pending_orders:
-        external_id = order_data.get("id_pedido_erdos")
-        if not external_id:
-            continue
-
-        # Verificar se já existe
-        existing = db.query(DropshipOrder).filter(
-            DropshipOrder.company_id == company_id,
-            DropshipOrder.external_order_id == external_id
-        ).first()
-
-        # Pedido já processado (fora da fila Erdos) — não sobrescrever
-        if existing and existing.status not in ["PENDING"]:
-            skipped += 1
-            continue
-
-        order_dir = f"{base_dir}/{external_id}"
-
-        # Baixar documentos imediatamente (URLs assinadas expiram em 1h)
-        xml_path = None
-        danfe_path = None
-        label_path = None
-
-        doc_fiscal = order_data.get("documentos_fiscais", {}) or {}
-        logistica = order_data.get("logistica", {}) or {}
-
-        xml_url = doc_fiscal.get("url_xml_nfe_venda_6120")
-        danfe_url = doc_fiscal.get("url_pdf_danfe")
-        label_url = logistica.get("url_pdf_etiqueta_postagem")
-
+    async def _sync_single_credential(cred: DspErdosCredential):
+        nonlocal synced, skipped, total_hub
+        client = _build_erdos_client_from_cred(config, cred)
         try:
-            if xml_url:
-                xml_path = await _download_and_store(client, xml_url, f"{order_dir}/nfe.xml")
-            if danfe_url:
-                danfe_path = await _download_and_store(client, danfe_url, f"{order_dir}/danfe.pdf")
-            if label_url:
-                label_path = await _download_and_store(client, label_url, f"{order_dir}/etiqueta.pdf")
-        except Exception as e:
-            errors.append({"order": external_id, "error": f"Download de documentos: {str(e)}"})
-
-        # Parsear data_liberacao
-        released_at = None
-        try:
-            data_lib = order_data.get("data_liberacao")
-            if data_lib:
-                released_at = datetime.fromisoformat(data_lib.replace("Z", "+00:00"))
-        except Exception:
-            pass
-
-        if existing:
-            # Atualizar pedido existente (PENDING)
-            existing.external_reference = order_data.get("referencia")
-            existing.channel = order_data.get("canal_origem")
-            existing.released_at = released_at
-            existing.customer_data = order_data.get("dados_cliente")
-            existing.items_data = order_data.get("itens")
-            existing.logistics_data = {k: v for k, v in logistica.items() if k != "url_pdf_etiqueta_postagem"}
-            existing.fiscal_data = {k: v for k, v in doc_fiscal.items() if not k.startswith("url_")}
-            if xml_path:
-                existing.xml_path = xml_path
-            if danfe_path:
-                existing.danfe_path = danfe_path
-            if label_path:
-                existing.label_path = label_path
-            existing.synced_at = datetime.utcnow()
-        else:
-            new_order = DropshipOrder(
-                company_id=company_id,
-                config_id=config.id,
-                external_order_id=external_id,
-                external_reference=order_data.get("referencia"),
-                channel=order_data.get("canal_origem"),
-                status="PENDING",
-                released_at=released_at,
-                customer_data=order_data.get("dados_cliente"),
-                items_data=order_data.get("itens"),
-                logistics_data={k: v for k, v in logistica.items() if k != "url_pdf_etiqueta_postagem"},
-                fiscal_data={k: v for k, v in doc_fiscal.items() if not k.startswith("url_")},
-                xml_path=xml_path,
-                danfe_path=danfe_path,
-                label_path=label_path,
-                synced_at=datetime.utcnow(),
-            )
-            db.add(new_order)
-            synced += 1
-
-    # ── Etapa 2: Recupera pedidos existentes na Erdos mas ausentes no banco ──
-    # Cobre casos em que o pedido avançou de status (ex: preparando) antes do
-    # sync de produção conseguir capturá-lo via prontos-para-despacho.
-    try:
-        all_erdos_orders = await client.get_all_orders()
-
-        # Flush garante que os inserts da Etapa 1 sejam visíveis na query abaixo
-        db.flush()
-
-        # IDs já conhecidos localmente (inclui os recém-inseridos acima)
-        known_ids = {
-            row.external_order_id
-            for row in db.query(DropshipOrder).filter(
-                DropshipOrder.company_id == company_id
-            ).all()
-        }
-
-        for ep in all_erdos_orders:
-            ep_id     = ep.get("id")
-            ep_status = ep.get("status", "")
-
-            if not ep_id or ep_id in known_ids or ep_status == "cancelado":
-                continue
-
-            master     = ep.get("pedidos_master") or {}
-            items_raw  = ep.get("itens_sub_pedido") or []
-
-            # Normaliza items para o mesmo formato de prontos-para-despacho
-            items_normalized = [
-                {
-                    "sku_fornecedor": i.get("sku") or i.get("sku_fornecedor"),
-                    "titulo":         i.get("titulo"),
-                    "quantidade":     i.get("quantidade"),
-                }
-                for i in items_raw
-            ]
-
-            # Tenta baixar documentos pelos endpoints dedicados (URLs assinadas, 1h)
-            order_dir  = f"{base_dir}/{ep_id}"
-            xml_path   = None
-            danfe_path = None
-            label_path = None
-
-            for fetch_fn, store_name, url_key in [
-                (client.get_xml_url,   "nfe.xml",      ("url", "url_xml", "url_documento")),
-                (client.get_danfe_url, "danfe.pdf",    ("url", "url_danfe", "url_documento")),
-                (client.get_label_url, "etiqueta.pdf", ("url", "url_etiqueta", "url_documento")),
-            ]:
-                try:
-                    resp = await fetch_fn(ep_id)
-                    doc_url = next((resp.get(k) for k in url_key if resp.get(k)), None)
-                    if doc_url:
-                        stored = await _download_and_store(client, doc_url, f"{order_dir}/{store_name}")
-                        if store_name == "nfe.xml":
-                            xml_path = stored
-                        elif store_name == "danfe.pdf":
-                            danfe_path = stored
-                        else:
-                            label_path = stored
-                except Exception:
-                    pass  # Documentos opcionais — não impede a importação
-
-            # Data de criação
-            released_at = None
+            # ── Etapa 1: Prontos para despacho ───────────────────────────────
             try:
-                raw_dt = ep.get("criado_em") or ep.get("data_liberacao")
-                if raw_dt:
-                    released_at = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
-            except Exception:
-                pass
+                pending_orders = await client.get_pending_orders()
+            except ErdosClientError as e:
+                errors.append({"credential": cred.label, "error": str(e)})
+                await client.close()
+                return
 
-            recovered_order = DropshipOrder(
-                company_id=company_id,
-                config_id=config.id,
-                external_order_id=ep_id,
-                external_reference=master.get("referencia"),
-                channel=master.get("canal_origem"),
-                status="PENDING",
-                released_at=released_at,
-                customer_data=None,   # Não disponível fora da fila aguardando
-                items_data=items_normalized,
-                logistics_data={"forma_envio": None},
-                fiscal_data={},
-                xml_path=xml_path,
-                danfe_path=danfe_path,
-                label_path=label_path,
-                synced_at=datetime.utcnow(),
-            )
-            db.add(recovered_order)
-            synced += 1
-            log.info(
-                f"[DropshipSync] Pedido recuperado (status={ep_status}): "
-                f"company={company_id} external_ref={master.get('referencia')} id={ep_id}"
-            )
+            total_hub += len(pending_orders)
 
-    except Exception as e:
-        log.warning(f"[DropshipSync] Etapa de recuperação falhou (não crítico): {e}")
-        errors.append({"type": "recovery_sync", "error": str(e)})
+            for order_data in pending_orders:
+                external_id = order_data.get("id_pedido_erdos")
+                if not external_id:
+                    continue
+
+                existing = db.query(DropshipOrder).filter(
+                    DropshipOrder.company_id == company_id,
+                    DropshipOrder.external_order_id == external_id
+                ).first()
+
+                if existing and existing.status not in ["PENDING"]:
+                    skipped += 1
+                    continue
+
+                order_dir = f"{base_dir}/{external_id}"
+                xml_path = danfe_path = label_path = None
+
+                doc_fiscal = order_data.get("documentos_fiscais", {}) or {}
+                logistica  = order_data.get("logistica", {}) or {}
+                xml_url    = doc_fiscal.get("url_xml_nfe_venda_6120")
+                danfe_url  = doc_fiscal.get("url_pdf_danfe")
+                label_url  = logistica.get("url_pdf_etiqueta_postagem")
+
+                try:
+                    if xml_url:
+                        xml_path = await _download_and_store(client, xml_url, f"{order_dir}/nfe.xml")
+                    if danfe_url:
+                        danfe_path = await _download_and_store(client, danfe_url, f"{order_dir}/danfe.pdf")
+                    if label_url:
+                        label_path = await _download_and_store(client, label_url, f"{order_dir}/etiqueta.pdf")
+                except Exception as e:
+                    errors.append({"credential": cred.label, "order": external_id, "error": f"Download: {str(e)}"})
+
+                released_at = None
+                try:
+                    data_lib = order_data.get("data_liberacao")
+                    if data_lib:
+                        released_at = datetime.fromisoformat(data_lib.replace("Z", "+00:00"))
+                except Exception:
+                    pass
+
+                if existing:
+                    existing.external_reference = order_data.get("referencia")
+                    existing.channel            = order_data.get("canal_origem")
+                    existing.released_at        = released_at
+                    existing.customer_data      = order_data.get("dados_cliente")
+                    existing.items_data         = order_data.get("itens")
+                    existing.logistics_data     = {k: v for k, v in logistica.items() if k != "url_pdf_etiqueta_postagem"}
+                    existing.fiscal_data        = {k: v for k, v in doc_fiscal.items() if not k.startswith("url_")}
+                    if xml_path:   existing.xml_path   = xml_path
+                    if danfe_path: existing.danfe_path = danfe_path
+                    if label_path: existing.label_path = label_path
+                    existing.synced_at          = datetime.utcnow()
+                    # Atualiza credencial se ainda não tiver
+                    if not existing.erdos_credential_id:
+                        existing.erdos_credential_id = cred.id
+                else:
+                    new_order = DropshipOrder(
+                        company_id=company_id,
+                        config_id=config.id,
+                        erdos_credential_id=cred.id,  # ← vincula credencial
+                        external_order_id=external_id,
+                        external_reference=order_data.get("referencia"),
+                        channel=order_data.get("canal_origem"),
+                        status="PENDING",
+                        released_at=released_at,
+                        customer_data=order_data.get("dados_cliente"),
+                        items_data=order_data.get("itens"),
+                        logistics_data={k: v for k, v in logistica.items() if k != "url_pdf_etiqueta_postagem"},
+                        fiscal_data={k: v for k, v in doc_fiscal.items() if not k.startswith("url_")},
+                        xml_path=xml_path,
+                        danfe_path=danfe_path,
+                        label_path=label_path,
+                        synced_at=datetime.utcnow(),
+                    )
+                    db.add(new_order)
+                    synced += 1
+
+            # ── Etapa 2: Recupera pedidos ausentes (status avançado) ────────
+            try:
+                all_erdos_orders = await client.get_all_orders()
+                db.flush()
+
+                known_ids = {
+                    row.external_order_id
+                    for row in db.query(DropshipOrder).filter(
+                        DropshipOrder.company_id == company_id
+                    ).all()
+                }
+
+                for ep in all_erdos_orders:
+                    ep_id     = ep.get("id")
+                    ep_status = ep.get("status", "")
+                    if not ep_id or ep_id in known_ids or ep_status == "cancelado":
+                        continue
+
+                    master    = ep.get("pedidos_master") or {}
+                    items_raw = ep.get("itens_sub_pedido") or []
+                    items_normalized = [
+                        {
+                            "sku_fornecedor": i.get("sku") or i.get("sku_fornecedor"),
+                            "titulo":         i.get("titulo"),
+                            "quantidade":     i.get("quantidade"),
+                        }
+                        for i in items_raw
+                    ]
+
+                    order_dir  = f"{base_dir}/{ep_id}"
+                    xml_path   = danfe_path = label_path = None
+                    for fetch_fn, store_name, url_key in [
+                        (client.get_xml_url,   "nfe.xml",      ("url", "url_xml", "url_documento")),
+                        (client.get_danfe_url, "danfe.pdf",    ("url", "url_danfe", "url_documento")),
+                        (client.get_label_url, "etiqueta.pdf", ("url", "url_etiqueta", "url_documento")),
+                    ]:
+                        try:
+                            resp    = await fetch_fn(ep_id)
+                            doc_url = next((resp.get(k) for k in url_key if resp.get(k)), None)
+                            if doc_url:
+                                stored = await _download_and_store(client, doc_url, f"{order_dir}/{store_name}")
+                                if store_name == "nfe.xml":      xml_path   = stored
+                                elif store_name == "danfe.pdf":  danfe_path = stored
+                                else:                            label_path = stored
+                        except Exception:
+                            pass
+
+                    released_at = None
+                    try:
+                        raw_dt = ep.get("criado_em") or ep.get("data_liberacao")
+                        if raw_dt:
+                            released_at = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+                    except Exception:
+                        pass
+
+                    recovered_order = DropshipOrder(
+                        company_id=company_id,
+                        config_id=config.id,
+                        erdos_credential_id=cred.id,  # ← vincula credencial
+                        external_order_id=ep_id,
+                        external_reference=master.get("referencia"),
+                        channel=master.get("canal_origem"),
+                        status="PENDING",
+                        released_at=released_at,
+                        customer_data=None,
+                        items_data=items_normalized,
+                        logistics_data={"forma_envio": None},
+                        fiscal_data={},
+                        xml_path=xml_path,
+                        danfe_path=danfe_path,
+                        label_path=label_path,
+                        synced_at=datetime.utcnow(),
+                    )
+                    db.add(recovered_order)
+                    synced += 1
+                    log.info(
+                        f"[DropshipSync] Pedido recuperado (cred={cred.label} status={ep_status}): "
+                        f"company={company_id} external_ref={master.get('referencia')} id={ep_id}"
+                    )
+
+            except Exception as e:
+                log.warning(f"[DropshipSync] Etapa de recuperação falhou para cred={cred.label}: {e}")
+                errors.append({"credential": cred.label, "type": "recovery_sync", "error": str(e)})
+
+        finally:
+            await client.close()
+
+    # Itera sobre todas as credenciais ativas
+    for cred in credentials:
+        await _sync_single_credential(cred)
 
     db.commit()
-    await client.close()
 
     return {
         "synced": synced,
         "skipped": skipped,
         "errors": errors,
-        "total_hub": len(pending_orders),
+        "total_hub": total_hub,
+        "credentials_synced": len(credentials),
     }
 
 
@@ -1130,19 +1413,50 @@ async def send_order_to_horus(
     if not config:
         raise HTTPException(status_code=400, detail="Configuração Dropship não encontrada.")
 
-    fiscal_intra = config.horus_fiscal_param_remessa_intra or config.horus_fiscal_param_remessa
-    fiscal_inter = config.horus_fiscal_param_remessa_inter or config.horus_fiscal_param_remessa
+    # 3. Carregar credencial Erdos do pedido (multi-token)
+    cred = order.erdos_credential
+    if not cred:
+        # Fallback: tenta carregar a credencial primária (pedidos legados sem cred vinculada)
+        cred = db.query(DspErdosCredential).filter(
+            DspErdosCredential.config_id == config.id,
+            DspErdosCredential.is_primary == True,
+            DspErdosCredential.is_active == True,
+        ).first() or db.query(DspErdosCredential).filter(
+            DspErdosCredential.config_id == config.id,
+            DspErdosCredential.is_active == True,
+        ).first()
 
-    # 3. Carregar empresa e customer ERDOS
+    # Parâmetros fiscais: da credencial (por CNPJ) ou do config legado
+    fiscal_intra = (
+        (cred.horus_fiscal_param_remessa_intra if cred else None)
+        or config.horus_fiscal_param_remessa_intra
+        or config.horus_fiscal_param_remessa
+    )
+    fiscal_inter = (
+        (cred.horus_fiscal_param_remessa_inter if cred else None)
+        or config.horus_fiscal_param_remessa_inter
+        or config.horus_fiscal_param_remessa
+    )
+    fiscal_venda = (
+        (cred.horus_fiscal_param_venda if cred else None)
+        or config.horus_fiscal_param_venda
+    )
+
+    # 4. Carregar empresa e customer ERDOS da credencial
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Empresa não encontrada.")
 
-    customer_erdos = db.query(Customer).filter(Customer.id == config.horus_customer_id).first() if config.horus_customer_id else None
+    # Customer: da credencial (obrigatório no multi-token) ou do config legado
+    if cred and cred.horus_customer_id:
+        customer_erdos = cred.horus_customer
+    else:
+        customer_erdos = db.query(Customer).filter(Customer.id == config.horus_customer_id).first() if config.horus_customer_id else None
+
     if not customer_erdos or not customer_erdos.id_guid or not customer_erdos.id_doc:
         raise HTTPException(status_code=400, detail="Customer ERDOS não possui id_guid/id_doc configurados.")
 
-    # 4. Validação Pré-Voo (✅ tudo antes de qualquer chamada ao Hórus)
+    # 5. Validação Pré-Voo (✅ tudo antes de qualquer chamada ao Hórus)
     customer_data = order.customer_data or {}
     usar_remessa = getattr(config, "usar_pedido_remessa", True)
     preflight_errors = _validate_preflight(
@@ -1162,7 +1476,7 @@ async def send_order_to_horus(
             }
         )
 
-    # 5. Verificar integração Hórus habilitada
+    # 6. Verificar integração Hórus habilitada
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
     if not settings or not settings.horus_enabled:
         raise HTTPException(status_code=400, detail="Integração Hórus não habilitada.")
@@ -1170,7 +1484,7 @@ async def send_order_to_horus(
     from app.integrators.horus_clients import HorusClients
     from app.integrators.horus_orders import HorusOrders
 
-    # 5. Preparar dados base
+    # 7. Preparar dados base
     customer_data = order.customer_data or {}
     ext_id        = str(order.external_reference or order.external_order_id or order.id)
     cod_origem_remessa = f"RM-{ext_id[:20]}"
@@ -1179,7 +1493,7 @@ async def send_order_to_horus(
     id_doc_erdos       = re.sub(r"\D", "", str(customer_erdos.id_doc)) if customer_erdos.id_doc else ""
     id_guid_erdos      = customer_erdos.id_guid or ""
 
-    # 6. Determinar parâmetro fiscal da remessa (intra × inter estado)
+    # 8. Determinar parâmetro fiscal da remessa (intra × inter estado)
     uf_seller  = str(getattr(settings, "state", "") or getattr(company, "state", "") or "").strip().upper()
     uf_cliente = str(customer_data.get("uf") or "").strip().upper()
     if uf_seller and uf_cliente and uf_seller == uf_cliente:
@@ -1435,7 +1749,7 @@ async def send_order_to_horus(
             "CNPJ_DESTINO":      cnpj_destino,
             "TIPO_PEDIDO_V_T_D": "L",
             "COD_PEDIDO_ORIGEM": cod_origem_venda,
-            "COD_PARAM_FISCAL":  config.horus_fiscal_param_venda,
+            "COD_PARAM_FISCAL":  fiscal_venda,
             "OBS_PEDIDO": obs_venda,
         }
         # Adicionar VLR_FRETE ao pedido de Venda se configurado
@@ -1467,11 +1781,11 @@ async def send_order_to_horus(
                 info = item_info_map.get(isbn, {})
                 vlr_capa = info.get("vlr_capa", 0.0)
 
-                # ── Tabela de Preços: desconto por ISBN (Venda 6.118 apenas) ──
-                # Consulta dsp_price_table — se ISBN existe e validade futura,
-                # aplica desconto e envia VLR_LIQUIDO. Caso contrário, não envia.
+                # ── Tabela de Preços: desconto por ISBN e por credencial (Venda 6.118 apenas) ──
+                # Filtra por (company_id, erdos_credential_id, isbn) — cada CNPJ Erdos tem seus próprios descontos.
                 price_entry = db.query(DropshipPriceTable).filter(
                     DropshipPriceTable.company_id == company_id,
+                    DropshipPriceTable.erdos_credential_id == order.erdos_credential_id,
                     DropshipPriceTable.isbn == isbn,
                     DropshipPriceTable.data_validade >= date.today(),
                 ).first()
@@ -1930,7 +2244,12 @@ async def confirm_dispatch(
         raise HTTPException(status_code=400, detail=f"Erro ao consultar Busca_NotaFiscal no Hórus ERP: {str(e)}")
 
     # 2. Notificar o Hub-Erdos via API (POST /pedidos/atualizar-status-despacho)
-    erdos_client = _build_erdos_client(config)
+    # IMPORTANTE: usar o mesmo token que trouxe o pedido — Erdos recusa token diferente com 404
+    order_cred = order.erdos_credential
+    if order_cred:
+        erdos_client = _build_erdos_client_from_cred(config, order_cred)
+    else:
+        erdos_client = _build_erdos_client(config)  # fallback legado
     tracking_code = (payload.tracking_code if payload else None) or order.tracking_code or ""
     erdos_response = None
 
@@ -2225,6 +2544,7 @@ async def get_hub_stock(
 class PriceTableItemResponse(BaseModel):
     id: int
     company_id: int
+    erdos_credential_id: Optional[int] = None
     isbn: str
     titulo: Optional[str]
     desconto: float
@@ -2240,23 +2560,23 @@ class PriceTableItemResponse(BaseModel):
 @router.get("/price-table/{company_id}", response_model=List[PriceTableItemResponse])
 async def list_price_table(
     company_id: int,
+    erdos_credential_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Lista todos os itens da tabela de preços do seller."""
+    """Lista itens da tabela de preços. Filtra por credencial se informado."""
     _require_seller_or_master(current_user, company_id)
-    items = (
-        db.query(DropshipPriceTable)
-        .filter(DropshipPriceTable.company_id == company_id)
-        .order_by(DropshipPriceTable.data_validade.desc(), DropshipPriceTable.isbn)
-        .all()
-    )
+    query = db.query(DropshipPriceTable).filter(DropshipPriceTable.company_id == company_id)
+    if erdos_credential_id is not None:
+        query = query.filter(DropshipPriceTable.erdos_credential_id == erdos_credential_id)
+    items = query.order_by(DropshipPriceTable.data_validade.desc(), DropshipPriceTable.isbn).all()
     today = date.today()
     result = []
     for item in items:
         result.append(PriceTableItemResponse(
             id=item.id,
             company_id=item.company_id,
+            erdos_credential_id=item.erdos_credential_id,
             isbn=item.isbn,
             titulo=item.titulo,
             desconto=float(item.desconto),
@@ -2271,6 +2591,7 @@ async def list_price_table(
 @router.post("/price-table/{company_id}/upload")
 async def upload_price_table(
     company_id: int,
+    erdos_credential_id: int = Query(..., description="ID da credencial Erdos a qual esta tabela de preços pertence"),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -2278,9 +2599,17 @@ async def upload_price_table(
     """
     Faz upload de planilha (.xlsx ou .csv) com colunas:
     isbn, titulo, desconto, data_validade.
-    Realiza upsert por (company_id, isbn) — sobrescreve se já existir.
+    Realiza upsert por (company_id, erdos_credential_id, isbn).
     """
     _require_seller_or_master(current_user, company_id)
+
+    # Valida que a credencial pertence à empresa
+    cred = db.query(DspErdosCredential).filter(
+        DspErdosCredential.id == erdos_credential_id,
+        DspErdosCredential.company_id == company_id,
+    ).first()
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credencial Erdos não encontrada para esta empresa.")
 
     filename = (file.filename or "").lower()
     if not (filename.endswith(".xlsx") or filename.endswith(".csv")):
@@ -2394,9 +2723,10 @@ async def upload_price_table(
                 errors.append({"linha": idx, "isbn": isbn_raw, "erro": f"Data de validade inválida: {validade_raw!r}"})
                 continue
 
-            # Upsert por (company_id, isbn)
+            # Upsert por (company_id, erdos_credential_id, isbn)
             existing = db.query(DropshipPriceTable).filter(
                 DropshipPriceTable.company_id == company_id,
+                DropshipPriceTable.erdos_credential_id == erdos_credential_id,
                 DropshipPriceTable.isbn == isbn_raw,
             ).first()
 
@@ -2404,9 +2734,11 @@ async def upload_price_table(
                 existing.titulo = titulo_raw
                 existing.desconto = desconto_val
                 existing.data_validade = validade_parsed
+                existing.erdos_credential_id = erdos_credential_id
             else:
                 db.add(DropshipPriceTable(
                     company_id=company_id,
+                    erdos_credential_id=erdos_credential_id,
                     isbn=isbn_raw,
                     titulo=titulo_raw,
                     desconto=desconto_val,

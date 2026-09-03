@@ -21,12 +21,21 @@ interface PriceTableItem {
   data_validade: string;
   vencido: boolean;
   created_at: string | null;
+  erdos_credential_id: number | null;
 }
 
 interface UploadResult {
   importados: number;
   erros: number;
   detalhes_erros: { linha: number; isbn?: string; erro: string }[];
+}
+
+interface ErdosCredential {
+  id: number;
+  label: string;
+  horus_customer_name: string | null;
+  is_primary: boolean;
+  is_active: boolean;
 }
 
 export default function DropshipPriceTablePage() {
@@ -43,14 +52,37 @@ export default function DropshipPriceTablePage() {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Seletor de credencial
+  const [credentials, setCredentials] = useState<ErdosCredential[]>([]);
+  const [selectedCredId, setSelectedCredId] = useState<number | null>(null);
+
   const PAGE_SIZE = 25;
+
+  const fetchCredentials = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dropship/config/${companyId}/credentials`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data: ErdosCredential[] = await res.json();
+        setCredentials(data.filter(c => c.is_active));
+        // Pré-seleciona a primária
+        const primary = data.find(c => c.is_primary && c.is_active);
+        if (primary) setSelectedCredId(primary.id);
+        else if (data.length > 0) setSelectedCredId(data[0].id);
+      }
+    } catch { /* silencioso */ }
+  }, [companyId]);
 
   const fetchItems = useCallback(async () => {
     if (!companyId) return;
     setLoading(true);
     try {
       const token = getToken();
-      const res = await fetch(`${API_URL}/dropship/price-table/${companyId}`, {
+      const credParam = selectedCredId ? `?erdos_credential_id=${selectedCredId}` : '';
+      const res = await fetch(`${API_URL}/dropship/price-table/${companyId}${credParam}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -62,12 +94,17 @@ export default function DropshipPriceTablePage() {
     } finally {
       setLoading(false);
     }
-  }, [companyId]);
+  }, [companyId, selectedCredId]);
 
+  useEffect(() => { fetchCredentials(); }, [fetchCredentials]);
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
   const handleUpload = async (file: File) => {
     if (!companyId) return;
+    if (!selectedCredId) {
+      toast.error('Selecione uma credencial Erdos antes de fazer o upload.');
+      return;
+    }
     if (!file.name.match(/\.(xlsx|csv)$/i)) {
       toast.error('Formato inválido. Use .xlsx ou .csv');
       return;
@@ -78,11 +115,14 @@ export default function DropshipPriceTablePage() {
       const token = getToken();
       const formData = new FormData();
       formData.append('file', file);
-      const res = await fetch(`${API_URL}/dropship/price-table/${companyId}/upload`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
+      const res = await fetch(
+        `${API_URL}/dropship/price-table/${companyId}/upload?erdos_credential_id=${selectedCredId}`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        }
+      );
       const data: UploadResult = await res.json();
       if (res.ok) {
         setUploadResult(data);
@@ -290,6 +330,44 @@ export default function DropshipPriceTablePage() {
                 ))}
               </div>
             </div>
+
+            {/* Seletor de Credencial */}
+            {credentials.length > 0 ? (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                  Credencial Erdos *
+                </label>
+                <p className="text-[11px] text-slate-400 mb-2">
+                  Selecione o CNPJ/token ao qual esta tabela de preços pertence
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {credentials.map(cred => (
+                    <button
+                      key={cred.id}
+                      type="button"
+                      onClick={() => setSelectedCredId(cred.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                        selectedCredId === cred.id
+                          ? 'bg-violet-600 border-violet-600 text-white'
+                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-violet-400'
+                      }`}
+                    >
+                      {cred.label}
+                      {cred.is_primary && <span className="ml-1 opacity-70">⭐</span>}
+                    </button>
+                  ))}
+                </div>
+                {!selectedCredId && (
+                  <p className="text-[11px] text-rose-500 mt-1">Selecione uma credencial antes de importar.</p>
+                )}
+              </div>
+            ) : (
+              <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/40 rounded-xl p-3">
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  Nenhuma credencial Erdos ativa. Acesse <strong>Configurações → Dropship</strong> para criar.
+                </p>
+              </div>
+            )}
 
             {/* Drag & Drop area */}
             <div
