@@ -267,6 +267,9 @@ class DropshipOrderResponse(BaseModel):
     erdos_alert: Optional[bool]
     logs: Optional[Any]  # list[dict]
     conference: Optional[Any] = None
+    # Credencial Erdos — qual token trouxe este pedido
+    erdos_credential_id: Optional[int] = None
+    erdos_credential_label: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -696,10 +699,14 @@ async def sync_dropship_orders(
     errors = []
     total_hub = 0
     base_dir = f"uploads/{company_id}/dropship"
+    # Rastreia contagem por credencial: {cred_id: {"label": ..., "synced": N, "hub_total": N}}
+    per_credential: dict = {}
 
     async def _sync_single_credential(cred: DspErdosCredential):
         nonlocal synced, skipped, total_hub
         client = _build_erdos_client_from_cred(config, cred)
+        cred_synced = 0
+        cred_hub_total = 0
         try:
             # ── Etapa 1: Prontos para despacho ───────────────────────────────
             try:
@@ -710,6 +717,7 @@ async def sync_dropship_orders(
                 return
 
             total_hub += len(pending_orders)
+            cred_hub_total += len(pending_orders)
 
             for order_data in pending_orders:
                 external_id = order_data.get("id_pedido_erdos")
@@ -788,6 +796,7 @@ async def sync_dropship_orders(
                     )
                     db.add(new_order)
                     synced += 1
+                    cred_synced += 1
 
             # ── Etapa 2: Recupera pedidos ausentes (status avançado) ────────
             try:
@@ -864,6 +873,7 @@ async def sync_dropship_orders(
                     )
                     db.add(recovered_order)
                     synced += 1
+                    cred_synced += 1
                     log.info(
                         f"[DropshipSync] Pedido recuperado (cred={cred.label} status={ep_status}): "
                         f"company={company_id} external_ref={master.get('referencia')} id={ep_id}"
@@ -875,6 +885,12 @@ async def sync_dropship_orders(
 
         finally:
             await client.close()
+            # Registra resumo desta credencial no breakdown
+            per_credential[str(cred.id)] = {
+                "label": cred.label,
+                "hub_total": cred_hub_total,
+                "synced": cred_synced,
+            }
 
     # Itera sobre todas as credenciais ativas
     for cred in credentials:
@@ -888,6 +904,8 @@ async def sync_dropship_orders(
         "errors": errors,
         "total_hub": total_hub,
         "credentials_synced": len(credentials),
+        # Breakdown por token: [{"label": "Ivanilda", "hub_total": 5, "synced": 2}, ...]
+        "by_credential": list(per_credential.values()),
     }
 
 
@@ -905,11 +923,32 @@ def list_dropship_orders(
     """Lista pedidos dropship da empresa com filtro opcional de status."""
     _require_seller_or_master(current_user, company_id)
 
-    query = db.query(DropshipOrder).filter(DropshipOrder.company_id == company_id)
+    from sqlalchemy.orm import joinedload
+
+    query = (
+        db.query(DropshipOrder)
+        .options(joinedload(DropshipOrder.erdos_credential))
+        .filter(DropshipOrder.company_id == company_id)
+    )
     if status:
         query = query.filter(DropshipOrder.status == status.upper())
 
-    return query.order_by(DropshipOrder.released_at.desc().nullslast()).all()
+    orders = query.order_by(DropshipOrder.released_at.desc().nullslast()).all()
+
+    # Serializa manualmente para incluir o label da credencial (campo virtual)
+    result = []
+    for order in orders:
+        data = {
+            col.name: getattr(order, col.name)
+            for col in order.__table__.columns
+        }
+        data["erdos_credential_id"] = order.erdos_credential_id
+        data["erdos_credential_label"] = (
+            order.erdos_credential.label if order.erdos_credential else None
+        )
+        data["conference"] = None
+        result.append(DropshipOrderResponse(**data))
+    return result
 
 
 @router.get("/orders/{company_id}/{order_id}", response_model=DropshipOrderResponse)

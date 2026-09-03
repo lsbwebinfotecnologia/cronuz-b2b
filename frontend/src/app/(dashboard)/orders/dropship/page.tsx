@@ -37,6 +37,8 @@ interface DropshipOrder {
   dispatched_at: string | null;
   created_at: string | null;
   updated_at: string | null;
+  erdos_credential_id: number | null;
+  erdos_credential_label: string | null;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -464,7 +466,20 @@ export default function DropshipOrdersPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        toast.success(`Sincronizado! ${data.synced} novo(s) pedido(s) encontrado(s).`);
+        // Toast principal
+        if (data.synced === 0) {
+          toast.success('Sincronizado! Nenhum pedido novo encontrado.');
+        } else {
+          toast.success(`Sincronizado! ${data.synced} novo(s) pedido(s) importado(s).`);
+        }
+        // Breakdown por credencial — toasts secundários
+        if (data.by_credential && data.by_credential.length > 1) {
+          data.by_credential.forEach((c: { label: string; hub_total: number; synced: number }) => {
+            toast.info(`${c.label}: ${c.hub_total} no Hub · ${c.synced} novos`, {
+              duration: 6000,
+            });
+          });
+        }
         fetchOrders();
       } else {
         toast.error(`Erro: ${data.detail}`);
@@ -638,6 +653,11 @@ export default function DropshipOrdersPage() {
                              (order.customer_data || {}).uf
                            ].filter(Boolean).join(' - ')}
                          </div>
+                         {order.erdos_credential_label && (
+                           <span className="inline-block mt-0.5 px-1.5 py-0.5 text-[9px] font-semibold rounded bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-700/40">
+                             {order.erdos_credential_label}
+                           </span>
+                         )}
                          <div className="text-[10px] text-slate-400 dark:text-slate-500 truncate max-w-[160px]">
                            {[
                              (order.customer_data || {}).endereco,
