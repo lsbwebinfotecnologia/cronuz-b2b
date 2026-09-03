@@ -286,12 +286,17 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
 
             toast.success("O.S atualizada com sucesso!");
             
-            // Reload to sync logic
+            // Reload para sincronizar com o banco
             const resGet = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/${orderId}/details`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const dataGet = await resGet.json();
             setOrder(dataGet.data);
+            // Sincroniza todos os campos do form com o valor confirmado pelo banco
+            setNegotiatedValue(dataGet.data.negotiated_value || 0);
+            setExecutionDate(dataGet.data.execution_date || '');
+            setCustomDescription(dataGet.data.custom_description || '');
+            setServiceId(dataGet.data.service_id || 0);
             
         } catch (error: any) {
             console.error(error);
