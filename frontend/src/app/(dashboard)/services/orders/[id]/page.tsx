@@ -202,12 +202,12 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
                 const data = await res.json();
                 setTemplates(data);
                 (window as any).__loadedTemplates = data;
-                if (order) {
-                    applyTemplate(data, 'SERVICE_ORDER', order);
-                }
+                // NÃO aplica template aqui — o useEffect([order]) abaixo cuida disso.
+                // 'order' foi removido das dependências para evitar loop infinito:
+                // fetchDetails → setOrder → recria fetchTemplates → re-dispara useEffect → loop
             }
         } catch (e) {}
-    }, [token, order]);
+    }, [token]); // ← SEM 'order' nas dependências
 
     const applyTemplate = (tpls: any[], type: string, transaction: any) => {
         const tpl = tpls.find(t => t.type === type);
@@ -240,6 +240,7 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
         setSelectedTemplateType(type);
     };
 
+    // Aplica template de e-mail quando o order é carregado pela primeira vez
     useEffect(() => {
         if (order && templates.length === 0 && (window as any).__loadedTemplates) {
             setTemplates((window as any).__loadedTemplates);
@@ -249,6 +250,8 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
         }
     }, [order]);
 
+    // Inicialização: roda UMA vez ao montar (fetchDetails e fetchTemplates são
+    // estáveis — dependem de [token, orderId, router] e [token] respectivamente)
     useEffect(() => {
         fetchDetails();
         fetchTemplates();
