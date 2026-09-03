@@ -255,18 +255,11 @@ export default function ServiceOrderDetailPage({ params }: { params: Promise<{ i
     }, [fetchDetails, fetchTemplates]);
 
     // Lógica para bloquear Inputs
+    // Regra de bloqueio: SOMENTE NFS-e emitida impede edição do serviço.
+    // Transações financeiras (cobranças) NÃO bloqueiam — o seller pode
+    // ajustar valor/serviço enquanto não houver nota fiscal emitida.
     const isLockedByNFSe = order?.status_nfse === 'Emitida' || order?.status_nfse === 'Em Processamento';
-    // Bloqueia edição de valor SOMENTE quando há parcela efetivamente paga (PAID).
-    // STATUS do sistema:
-    //   transaction_status: PROSPECCAO | CONFIRMADO | CANCELADO
-    //   installment.status: PENDING | PAID | OVERDUE | CANCELLED
-    // CONFIRMADO = cobrança emitida (não necessariamente paga) → NÃO bloqueia
-    // PAID em alguma parcela = dinheiro recebido → bloqueia por integridade contábil
-    const isLockedByFinancial = (order?.txs || []).some((tx: any) =>
-        tx.status !== 'CANCELADO' &&
-        (tx.installments || []).some((inst: any) => inst.status === 'PAID')
-    );
-    const isValueLocked = isLockedByNFSe || isLockedByFinancial;
+    const isValueLocked = isLockedByNFSe;
 
     const handleSave = async () => {
         if (!token) return;
