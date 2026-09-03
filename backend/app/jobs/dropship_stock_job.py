@@ -21,7 +21,7 @@ Envio:
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 from app.models.dropship import DropshipConfig
@@ -98,9 +98,34 @@ async def do_stock_push(
     target_cred_label = target_cred.label if target_cred else "Padrão"
     stock_api_token = (target_cred.api_token if target_cred else None) or config.api_token
 
+    run_time = datetime.utcnow()
+    data_fim = run_time.strftime("%d/%m/%Y %H:%M:%S")
+
+    # ── Expurgo de logs com mais de 2 meses (60 dias) para manter a tabela limpa
+    try:
+        cutoff_2_months = run_time - timedelta(days=60)
+        deleted_count = (
+            db.query(DropshipStockSyncLog)
+            .filter(
+                DropshipStockSyncLog.company_id == config.company_id,
+                DropshipStockSyncLog.executed_at < cutoff_2_months,
+            )
+            .delete(synchronize_session=False)
+        )
+        if deleted_count > 0:
+            db.commit()
+            log.info(f"[StockSync] company_id={config.company_id}: {deleted_count} log(s) de estoque com mais de 2 meses expurgados.")
+    except Exception as cleanup_err:
+        log.warning(f"[StockSync] Erro no expurgo de logs: {cleanup_err}")
+        db.rollback()
+
     def _save_log(status: str, skus_sent: int = 0,
                   items_payload=None, hub_response=None, error_msg: str = None,
                   data_ini: str = None, data_fim: str = None):
+        # Se não houver resultado (0 SKUs enviados), NÃO grava log
+        if status == "no_items" or (status == "ok" and skus_sent == 0):
+            return
+
         try:
             entry = DropshipStockSyncLog(
                 company_id=config.company_id,
@@ -120,28 +145,38 @@ async def do_stock_push(
             log.error(f"[StockSync] Falha ao salvar log: {log_err}")
             db.rollback()
 
-    if not config.horus_customer:
+    # ── Seleciona customer para a consulta no Hórus ───────────────────────────
+    # Se a credencial tiver customer vinculado (ex: Bookstore), usa ele prioritariamente!
+    customer = None
+    if target_cred and target_cred.horus_customer:
+        customer = target_cred.horus_customer
+    elif config.horus_customer:
+        customer = config.horus_customer
+
+    if not customer:
         err = f"[StockSync] company_id={config.company_id}: Customer parceiro não configurado."
         _save_log("error", error_msg=err)
         raise ValueError(err)
 
-    customer = config.horus_customer
-
     # ── Definição do período de busca ─────────────────────────────────────────
-    if config.stock_sync_last_run:
+    # Se a credencial alvo tem histórico de sync, usa o dela; senão usa config geral.
+    last = None
+    if target_cred and target_cred.stock_sync_last_run:
+        last = target_cred.stock_sync_last_run
+    elif not target_cred and config.stock_sync_last_run:
         last = config.stock_sync_last_run
+
+    if last:
         if hasattr(last, "tzinfo") and last.tzinfo is not None:
-            from datetime import timezone
             last = last.astimezone(timezone.utc).replace(tzinfo=None)
         data_ini = last.strftime("%d/%m/%Y %H:%M:%S")
     else:
-        data_ini = "01/01/1900 00:00:00"
-
-    run_time = datetime.utcnow()
-    data_fim = run_time.strftime("%d/%m/%Y %H:%M:%S")
+        # Sem sincronização prévia / primeira carga: pega 4 anos para trás a partir de agora!
+        four_years_ago = run_time - timedelta(days=int(4 * 365.25))
+        data_ini = four_years_ago.strftime("%d/%m/%Y 00:00:00")
 
     log.info(
-        f"[StockSync] company_id={config.company_id} "
+        f"[StockSync] company_id={config.company_id} token={target_cred_label!r} "
         f"DATA_INI={data_ini!r}  DATA_FIM={data_fim!r}  trigger={triggered_by}"
     )
 
@@ -211,13 +246,12 @@ async def do_stock_push(
     finally:
         await horus_prod.close()
 
-    # ── Sem itens: não atualiza last_run ─────────────────────────────────────
+    # ── Sem itens: não grava log e não altera last_run ──────────────────────
     if not all_items_raw:
         log.info(
-            f"[StockSync] company_id={config.company_id} "
-            f"Nenhum item atualizado no período — last_run não alterado."
+            f"[StockSync] company_id={config.company_id} token={target_cred_label!r} "
+            f"Nenhum item atualizado no período ({data_ini} → {data_fim}) — log não registrado."
         )
-        _save_log("no_items", skus_sent=0, data_ini=data_ini, data_fim=data_fim)
         return {
             "status": "no_items",
             "skus_sent": 0,
@@ -227,19 +261,20 @@ async def do_stock_push(
             "erdos_credential_label": target_cred_label,
         }
 
-    # ── Envia ao Hub-Erdos (todos os itens, sem filtro de saldo) ─────────────
-    # Usa o token da credencial primária (Hub distribui automaticamente para todos os CNPJs)
+    # ── Envia ao Hub-Erdos ───────────────────────────────────────────────────
     from app.integrators.erdos_client import ErdosClient as _ErdosClient
     client = _ErdosClient(base_url=config.api_base_url, api_key=stock_api_token)
     try:
         push_result = await client.push_stock(all_items_raw)
 
-        # Atualiza last_run SOMENTE após push bem-sucedido
+        # Atualiza last_run SOMENTE após push bem-sucedido com itens
+        if target_cred:
+            target_cred.stock_sync_last_run = run_time
         config.stock_sync_last_run = run_time
         db.commit()
 
         log.info(
-            f"[StockSync] company_id={config.company_id} "
+            f"[StockSync] company_id={config.company_id} token={target_cred_label!r} "
             f"✅ {len(all_items_raw)} SKUs enviados — last_run={run_time.isoformat()}"
         )
 
@@ -281,6 +316,7 @@ def run_dropship_stock_sync_job() -> None:
     """
     from app.db.session import SessionLocal
     from app.models.dropship import DropshipConfig
+    from app.models.dropship_erdos_credential import DspErdosCredential
 
     db = SessionLocal()
     try:
@@ -293,44 +329,66 @@ def run_dropship_stock_sync_job() -> None:
         log.info(f"[StockSync] Verificando {len(configs)} seller(s) com sync habilitado.")
 
         for config in configs:
-            now = datetime.utcnow()
-            last = config.stock_sync_last_run
             interval_min: int = config.stock_sync_interval_min or 30
 
-            # Verifica se o intervalo configurado já passou
-            if last is not None:
-                # Garante comparação naive vs naive
-                last_naive = last.replace(tzinfo=None) if hasattr(last, "tzinfo") and last.tzinfo else last
-                elapsed_min = (now - last_naive).total_seconds() / 60
-                if elapsed_min < interval_min:
-                    log.debug(
-                        f"[StockSync] company_id={config.company_id} "
-                        f"intervalo não atingido ({elapsed_min:.1f} / {interval_min} min)"
-                    )
-                    continue
-
-            log.info(
-                f"[StockSync] Iniciando push para company_id={config.company_id} "
-                f"(interval={interval_min} min)"
+            # Busca credenciais ativas cadastradas para a empresa
+            creds = (
+                db.query(DspErdosCredential)
+                .filter(
+                    DspErdosCredential.config_id == config.id,
+                    DspErdosCredential.is_active == True,
+                )
+                .all()
             )
 
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    result = loop.run_until_complete(do_stock_push(config, db))
-                    log.info(
-                        f"[StockSync] company_id={config.company_id} "
-                        f"resultado: status={result.get('status')} skus={result.get('skus_sent')} zeroed={result.get('zeroed', 0)}"
-                    )
-                finally:
-                    loop.close()
+            # Se existirem credenciais cadastradas, roda para cada uma individualmente;
+            # caso contrário, roda para o registro geral de config.
+            target_list = creds if creds else [None]
 
-            except Exception as e:
-                log.error(
-                    f"[StockSync] company_id={config.company_id} ERRO: {e}",
-                    exc_info=True,
+            for target_cred in target_list:
+                now = datetime.utcnow()
+                cred_label = target_cred.label if target_cred else "Geral"
+                last = target_cred.stock_sync_last_run if target_cred else config.stock_sync_last_run
+
+                if last is not None:
+                    last_naive = last.replace(tzinfo=None) if hasattr(last, "tzinfo") and last.tzinfo else last
+                    elapsed_min = (now - last_naive).total_seconds() / 60
+                    if elapsed_min < interval_min:
+                        log.debug(
+                            f"[StockSync] company_id={config.company_id} token={cred_label!r} "
+                            f"intervalo não atingido ({elapsed_min:.1f} / {interval_min} min)"
+                        )
+                        continue
+
+                log.info(
+                    f"[StockSync] Iniciando push para company_id={config.company_id} token={cred_label!r} "
+                    f"(interval={interval_min} min)"
                 )
+
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        result = loop.run_until_complete(
+                            do_stock_push(
+                                config,
+                                db,
+                                triggered_by="scheduler",
+                                credential_id=target_cred.id if target_cred else None,
+                            )
+                        )
+                        log.info(
+                            f"[StockSync] company_id={config.company_id} token={cred_label!r} "
+                            f"resultado: status={result.get('status')} skus={result.get('skus_sent')}"
+                        )
+                    finally:
+                        loop.close()
+
+                except Exception as e:
+                    log.error(
+                        f"[StockSync] company_id={config.company_id} token={cred_label!r} ERRO: {e}",
+                        exc_info=True,
+                    )
 
     except Exception as e:
         log.error(f"[StockSync] Erro geral no job: {e}", exc_info=True)

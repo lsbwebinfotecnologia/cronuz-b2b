@@ -49,6 +49,9 @@ class DspErdosCredential(Base):
     is_primary = Column(Boolean, nullable=False, default=False)
     is_active  = Column(Boolean, nullable=False, default=True)
 
+    # Última sincronização de estoque executada especificamente para este token/customer
+    stock_sync_last_run = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
