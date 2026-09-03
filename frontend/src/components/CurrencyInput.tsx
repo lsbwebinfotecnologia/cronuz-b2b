@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, ChangeEvent } from 'react';
+import React, { useState, useEffect, useRef, ChangeEvent } from 'react';
 
 interface CurrencyInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> {
   value: number;
@@ -20,47 +20,59 @@ export function CurrencyInput({
   ...props
 }: CurrencyInputProps) {
   const [displayValue, setDisplayValue] = useState('');
+  const isFocused = useRef(false);
 
-  // Sincroniza o valor externo com o valor do display
+  const formatNumber = (num: number) =>
+    new Intl.NumberFormat('pt-BR', {
+      minimumFractionDigits: maxDecimals,
+      maximumFractionDigits: maxDecimals,
+    }).format(num);
+
+  // Sincroniza com o valor externo SOMENTE quando o campo NÃO está focado.
+  // Evita sobrescrever o que o usuário está digitando.
   useEffect(() => {
-    if (value !== undefined && value !== null) {
-      if (typeof value === 'number') {
-        const formatted = new Intl.NumberFormat('pt-BR', {
-          minimumFractionDigits: maxDecimals,
-          maximumFractionDigits: maxDecimals,
-        }).format(value);
-        setDisplayValue(`${prefixStr}${formatted}${suffixStr}`);
-      }
+    if (isFocused.current) return;
+
+    if (value !== undefined && value !== null && typeof value === 'number') {
+      setDisplayValue(`${prefixStr}${formatNumber(value)}${suffixStr}`);
     } else {
       setDisplayValue('');
     }
   }, [value, prefixStr, suffixStr, maxDecimals]);
 
+  const handleFocus = () => {
+    isFocused.current = true;
+  };
+
+  const handleBlur = () => {
+    isFocused.current = false;
+    // Ao sair do campo, formata o valor final corretamente
+    if (value !== undefined && value !== null && typeof value === 'number') {
+      setDisplayValue(`${prefixStr}${formatNumber(value)}${suffixStr}`);
+    } else {
+      setDisplayValue('');
+    }
+  };
+
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
     let rawValue = e.target.value;
-    
-    // Remove tudo que não for número (incluindo vírgula e ponto)
+
+    // Remove tudo que não for número
     rawValue = rawValue.replace(/\D/g, '');
-    
-    // Se o usuário apagar tudo, retorna 0 (ou vazio se preferir)
+
+    // Campo apagado → zera o valor mas mantém display vazio para o usuário digitar
     if (rawValue === '') {
       onChangeValue(0);
       setDisplayValue('');
       return;
     }
 
-    // Como é campo formatado sempre, se for 2 decimais divide por 100
-    // "100" vira 1,00
-    // "1090" vira 10,90
+    // Campo formatado: divide por 10^decimais
+    // ex: digitou "95000" → 950,00
     const divisor = Math.pow(10, maxDecimals);
     const numValue = Number(rawValue) / divisor;
-    
-    const formatted = new Intl.NumberFormat('pt-BR', {
-      minimumFractionDigits: maxDecimals,
-      maximumFractionDigits: maxDecimals,
-    }).format(numValue);
-    
-    setDisplayValue(`${prefixStr}${formatted}${suffixStr}`);
+
+    setDisplayValue(`${prefixStr}${formatNumber(numValue)}${suffixStr}`);
     onChangeValue(numValue);
   };
 
@@ -70,6 +82,8 @@ export function CurrencyInput({
       inputMode="numeric"
       value={displayValue}
       onChange={handleChange}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
       className={className}
       {...props}
     />
