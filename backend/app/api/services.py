@@ -341,19 +341,12 @@ def update_service_order(
         needs_financial_check = True
         
     if needs_financial_check:
+        # Regra: bloquear alteração SOMENTE quando há NFS-e emitida ou em processamento.
+        # Transações financeiras abertas/pendentes NÃO bloqueiam — seller pode ajustar
+        # valor e serviço enquanto não houver nota fiscal emitida.
         from app.models.service import ServiceOrderNfseStatus
         if order.status_nfse in [ServiceOrderNfseStatus.ISSUED, ServiceOrderNfseStatus.PROCESSING]:
-            raise HTTPException(status_code=400, detail="Não é permitido alterar o valor de uma O.S. que já possui processamento fiscal (NFS-e) ativo.")
-            
-        from app.models.financial import FinancialTransaction
-        has_financials = db.query(FinancialTransaction).filter(
-            FinancialTransaction.company_id == current_user.company_id,
-            FinancialTransaction.description.like(f"%OS #{order.id}%"),
-            FinancialTransaction.transaction_status != "CANCELADO"
-        ).first()
-        
-        if has_financials:
-            raise HTTPException(status_code=400, detail="Não é permitido alterar a O.S. se houver financeiro atrelado ativo. Cancele o faturamento atual primeiro.")
+            raise HTTPException(status_code=400, detail="Não é permitido alterar o valor de uma O.S. que já possui NFS-e emitida ou em processamento.")
 
     for field, value in update_data.items():
         setattr(order, field, value)
