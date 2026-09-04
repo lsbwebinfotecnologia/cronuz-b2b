@@ -28,6 +28,7 @@ from app.models import dropship as dropship_models
 from app.models import dropship_price_table as dropship_price_table_models
 from app.models import dropship_erdos_credential as dropship_erdos_credential_models
 from app.models import dropship_stock_sync_log as dropship_stock_sync_log_models
+from app.models import dropship_manifest as dropship_manifest_models
 from app.models import order_conference as order_conference_models
 from app.models import alert as alert_models
 from app.models import hosted_site as hosted_site_models

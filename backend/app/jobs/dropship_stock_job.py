@@ -36,6 +36,7 @@ async def do_stock_push(
     db: Session,
     triggered_by: str = "manual",
     credential_id: Optional[int] = None,
+    full_sync: bool = False,
 ) -> Dict[str, Any]:
     """
     Executa o ciclo completo de sincronização de estoque Hórus → Hub-Erdos para um seller.
@@ -166,14 +167,14 @@ async def do_stock_push(
     elif not target_cred and config.stock_sync_last_run:
         last = config.stock_sync_last_run
 
-    if last:
+    if full_sync or not last:
+        # Carga completa / período amplo: pega 4 anos para trás a partir de agora!
+        four_years_ago = run_time - timedelta(days=int(4 * 365.25))
+        data_ini = four_years_ago.strftime("%d/%m/%Y 00:00:00")
+    else:
         if hasattr(last, "tzinfo") and last.tzinfo is not None:
             last = last.astimezone(timezone.utc).replace(tzinfo=None)
         data_ini = last.strftime("%d/%m/%Y %H:%M:%S")
-    else:
-        # Sem sincronização prévia / primeira carga: pega 4 anos para trás a partir de agora!
-        four_years_ago = run_time - timedelta(days=int(4 * 365.25))
-        data_ini = four_years_ago.strftime("%d/%m/%Y 00:00:00")
 
     log.info(
         f"[StockSync] company_id={config.company_id} token={target_cred_label!r} "

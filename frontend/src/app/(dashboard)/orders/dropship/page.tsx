@@ -7,7 +7,7 @@ import {
   PackageCheck, RefreshCw, ArrowUpFromLine, Loader2,
   FileText, Tag, ShoppingCart, CheckCircle2, Truck, X, MapPin, Download,
   AlertTriangle, Clock, Send, PackageX, Filter,
-  Printer, Eye, Ban
+  Printer, Eye, Ban, CheckSquare, Square, ClipboardList, UserCheck, Calendar
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -41,6 +41,29 @@ interface DropshipOrder {
   updated_at: string | null;
   erdos_credential_id: number | null;
   erdos_credential_label: string | null;
+  manifest_id: number | null;
+  manifest_number: string | null;
+  manifest_at: string | null;
+}
+
+interface ManifestData {
+  id: number;
+  company_id: number;
+  manifest_number: string;
+  carrier_name?: string | null;
+  driver_name?: string | null;
+  driver_document?: string | null;
+  vehicle_plate?: string | null;
+  notes?: string | null;
+  total_orders: number;
+  total_volumes: number;
+  total_value: number;
+  created_at: string;
+  created_by_name?: string | null;
+  orders: DropshipOrder[];
+  company_name?: string | null;
+  company_cnpj?: string | null;
+  company_address?: string | null;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -276,6 +299,452 @@ function ConfirmDispatchModal({ order, companyId, onClose, onSuccess }: ConfirmD
           </button>
         </div>
       </motion.div>
+    </div>
+  );
+}
+
+function CreateManifestModal({
+  selectedOrders,
+  isOpen,
+  onClose,
+  onSuccess,
+  companyId,
+}: {
+  selectedOrders: DropshipOrder[];
+  isOpen: boolean;
+  onClose: () => void;
+  onSuccess: (manifest: ManifestData) => void;
+  companyId: string;
+}) {
+  const [carrier, setCarrier] = useState('');
+  const [driverName, setDriverName] = useState('');
+  const [driverDoc, setDriverDoc] = useState('');
+  const [vehiclePlate, setVehiclePlate] = useState('');
+  const [notes, setNotes] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setCarrier('');
+      setDriverName('');
+      setDriverDoc('');
+      setVehiclePlate('');
+      setNotes('');
+    }
+  }, [isOpen]);
+
+  if (!isOpen || selectedOrders.length === 0) return null;
+
+  const handleGenerate = async () => {
+    setLoading(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dropship/orders/${companyId}/manifests`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          order_ids: selectedOrders.map(o => o.id),
+          carrier_name: carrier || null,
+          driver_name: driverName || null,
+          driver_document: driverDoc || null,
+          vehicle_plate: vehiclePlate || null,
+          notes: notes || null,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`✅ Minuta ${data.manifest_number} gerada com sucesso!`);
+        onSuccess(data);
+      } else {
+        toast.error(`Erro: ${data.detail || 'Não foi possível gerar a minuta.'}`);
+      }
+    } catch {
+      toast.error('Erro de conexão ao gerar minuta de coleta.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4"
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center text-violet-600 dark:text-violet-400">
+              <ClipboardList className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 dark:text-white">Gerar Minuta de Despacho</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Termo de Coleta e Transferência de Custódia
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Resumo da carga selecionada */}
+        <div className="p-3.5 bg-violet-50/70 dark:bg-violet-950/20 border border-violet-100 dark:border-violet-900/40 rounded-xl text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-violet-600 dark:text-violet-400 shrink-0" />
+            <span className="text-slate-700 dark:text-slate-300">
+              Pedidos despachados selecionados:
+            </span>
+          </div>
+          <span className="font-bold text-violet-700 dark:text-violet-300 text-sm">
+            {selectedOrders.length} pedido(s)
+          </span>
+        </div>
+
+        {/* Formulário de Identificação do Coletor */}
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Transportadora
+              </label>
+              <input
+                type="text"
+                value={carrier}
+                onChange={e => setCarrier(e.target.value)}
+                placeholder="Ex: Correios, Jadlog, Própria..."
+                className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Placa do Veículo
+              </label>
+              <input
+                type="text"
+                value={vehiclePlate}
+                onChange={e => setVehiclePlate(e.target.value.toUpperCase())}
+                placeholder="Ex: ABC-1D23"
+                className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 uppercase font-mono"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Nome do Motorista / Coletor
+              </label>
+              <input
+                type="text"
+                value={driverName}
+                onChange={e => setDriverName(e.target.value)}
+                placeholder="Nome completo de quem retira"
+                className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                RG / CPF do Motorista
+              </label>
+              <input
+                type="text"
+                value={driverDoc}
+                onChange={e => setDriverDoc(e.target.value)}
+                placeholder="Documento para conferência"
+                className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Observações da Coleta (Opcional)
+            </label>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Ex: Coleta programada das 16:30 / 2 caixas grandes..."
+              rows={2}
+              className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="px-4 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={loading}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white text-xs font-bold rounded-xl shadow-md transition-all disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+            Gerar e Visualizar Minuta
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function PrintManifestModal({
+  manifest,
+  isOpen,
+  onClose,
+}: {
+  manifest: ManifestData | null;
+  isOpen: boolean;
+  onClose: () => void;
+}) {
+  if (!isOpen || !manifest) return null;
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+      {/* Botões de Ação Flutuantes na tela (não aparecem na impressão) */}
+      <div className="fixed top-4 right-4 z-50 flex items-center gap-2 print:hidden">
+        <button
+          onClick={handlePrint}
+          className="flex items-center gap-2 px-4 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs rounded-xl shadow-lg transition-all"
+        >
+          <Printer className="w-4 h-4" />
+          Imprimir Minuta (A4)
+        </button>
+        <button
+          onClick={onClose}
+          className="p-2.5 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 rounded-xl shadow-lg border border-slate-200 dark:border-slate-700"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Conteúdo Imprimível A4 */}
+      <div
+        id="printable-manifest"
+        className="bg-white text-black w-full max-w-4xl p-8 rounded-2xl shadow-2xl my-8 print:my-0 print:p-4 print:max-w-none print:w-full print:shadow-none print:rounded-none font-sans"
+      >
+        <style jsx global>{`
+          @media print {
+            body * {
+              visibility: hidden;
+            }
+            #printable-manifest, #printable-manifest * {
+              visibility: visible;
+            }
+            #printable-manifest {
+              position: absolute;
+              left: 0;
+              top: 0;
+              width: 100%;
+              margin: 0;
+              padding: 15mm;
+              font-size: 11px;
+            }
+          }
+        `}</style>
+
+        {/* Cabeçalho da Minuta */}
+        <div className="border-b-2 border-slate-800 pb-4 mb-4">
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="text-xl font-extrabold uppercase tracking-wide text-slate-900">
+                Minuta de Despacho & Romaneio de Coleta
+              </h1>
+              <p className="text-xs text-slate-600 font-semibold mt-0.5">
+                {manifest.company_name || 'Empresa Remetente'}
+              </p>
+              {manifest.company_cnpj && (
+                <p className="text-[11px] text-slate-500">
+                  CNPJ: {manifest.company_cnpj}
+                </p>
+              )}
+              {manifest.company_address && (
+                <p className="text-[10px] text-slate-400">
+                  {manifest.company_address}
+                </p>
+              )}
+            </div>
+            <div className="text-right">
+              <div className="inline-block border-2 border-slate-800 px-3 py-1.5 rounded-lg bg-slate-50">
+                <span className="text-[10px] uppercase font-bold text-slate-500 block">Número da Minuta</span>
+                <span className="text-base font-black font-mono text-slate-900">{manifest.manifest_number}</span>
+              </div>
+              <p className="text-[10px] text-slate-500 mt-1">
+                Data/Hora: {new Date(manifest.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Dados da Transportadora e Motorista */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3 bg-slate-50 border border-slate-300 rounded-lg text-xs mb-4">
+          <div>
+            <span className="block text-[9px] uppercase font-bold text-slate-500">Transportadora:</span>
+            <span className="font-semibold text-slate-900">{manifest.carrier_name || 'Não informada'}</span>
+          </div>
+          <div>
+            <span className="block text-[9px] uppercase font-bold text-slate-500">Motorista / Coletor:</span>
+            <span className="font-semibold text-slate-900">{manifest.driver_name || '______________________'}</span>
+          </div>
+          <div>
+            <span className="block text-[9px] uppercase font-bold text-slate-500">RG / CPF:</span>
+            <span className="font-semibold text-slate-900">{manifest.driver_document || '______________________'}</span>
+          </div>
+          <div>
+            <span className="block text-[9px] uppercase font-bold text-slate-500">Placa Veículo:</span>
+            <span className="font-semibold font-mono text-slate-900">{manifest.vehicle_plate || '________'}</span>
+          </div>
+        </div>
+
+        {manifest.notes && (
+          <div className="text-[10px] text-slate-600 bg-amber-50/60 border border-amber-200 p-2 rounded mb-3">
+            <strong>Observações:</strong> {manifest.notes}
+          </div>
+        )}
+
+        {/* Tabela de Pedidos / Pacotes */}
+        <div className="overflow-x-auto mb-4">
+          <table className="w-full text-[10px] border-collapse border border-slate-300">
+            <thead>
+              <tr className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300">
+                <th className="border border-slate-300 p-1.5 text-center w-8">#</th>
+                <th className="border border-slate-300 p-1.5 text-left">Pedido / Ref. Hub</th>
+                <th className="border border-slate-300 p-1.5 text-left">Ped. Hórus</th>
+                <th className="border border-slate-300 p-1.5 text-left">NF-e Remessa / Rastreio</th>
+                <th className="border border-slate-300 p-1.5 text-left">Destinatário Final</th>
+                <th className="border border-slate-300 p-1.5 text-center">Cidade/UF</th>
+                <th className="border border-slate-300 p-1.5 text-center w-12">Vol.</th>
+                <th className="border border-slate-300 p-1.5 text-right">Valor R$</th>
+                <th className="border border-slate-300 p-1.5 text-center">Token / Canal</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {manifest.orders.map((o, idx) => {
+                const customer = o.customer_data || {};
+                const items = o.items_data || [];
+                const vol = items.reduce((acc: number, it: any) => acc + (parseInt(it.quantidade) || 1), 0) || 1;
+                const val = items.reduce((acc: number, it: any) => acc + ((parseInt(it.quantidade) || 1) * (parseFloat(it.preco_unitario || it.preco || 0) || 0)), 0);
+
+                return (
+                  <tr key={o.id} className={idx % 2 === 1 ? 'bg-slate-50/50' : ''}>
+                    <td className="border border-slate-300 p-1.5 text-center font-mono font-bold text-slate-500">
+                      {idx + 1}
+                    </td>
+                    <td className="border border-slate-300 p-1.5">
+                      <span className="font-bold text-slate-900">{o.external_reference || `#${o.id}`}</span>
+                      <span className="block text-[8px] text-slate-400 font-mono">{o.external_order_id.substring(0, 14)}…</span>
+                    </td>
+                    <td className="border border-slate-300 p-1.5 font-mono">
+                      {o.horus_pedido_remessa ? `#${o.horus_pedido_remessa}` : '—'}
+                    </td>
+                    <td className="border border-slate-300 p-1.5">
+                      {o.tracking_code && <span className="font-mono font-semibold block">{o.tracking_code}</span>}
+                      {o.nfe_remessa_key && (
+                        <span className="text-[8px] font-mono text-slate-500 block truncate max-w-[140px]" title={o.nfe_remessa_key}>
+                          {o.nfe_remessa_key.substring(0, 25)}…
+                        </span>
+                      )}
+                      {!o.tracking_code && !o.nfe_remessa_key && <span className="text-slate-400">—</span>}
+                    </td>
+                    <td className="border border-slate-300 p-1.5">
+                      <span className="font-semibold text-slate-900 block truncate max-w-[150px]">{customer.nome || '—'}</span>
+                      {customer.cpf_cnpj && <span className="text-[8px] text-slate-500 block">{customer.cpf_cnpj}</span>}
+                    </td>
+                    <td className="border border-slate-300 p-1.5 text-center">
+                      {[customer.cidade, customer.uf].filter(Boolean).join('/') || '—'}
+                    </td>
+                    <td className="border border-slate-300 p-1.5 text-center font-bold">
+                      {vol}
+                    </td>
+                    <td className="border border-slate-300 p-1.5 text-right font-mono font-semibold">
+                      {val > 0 ? val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'}
+                    </td>
+                    <td className="border border-slate-300 p-1.5 text-center">
+                      <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-slate-100 text-slate-700">
+                        {o.erdos_credential_label || 'Padrão'}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Totalizadores Consolidados */}
+        <div className="flex items-center justify-between p-3 bg-slate-100 border border-slate-300 rounded-lg text-xs font-bold mb-6">
+          <div className="flex items-center gap-6">
+            <span>
+              TOTAL DE PEDIDOS: <span className="text-sm font-black text-slate-900 ml-1">{manifest.total_orders}</span>
+            </span>
+            <span>
+              TOTAL DE VOLUMES: <span className="text-sm font-black text-slate-900 ml-1">{manifest.total_volumes}</span>
+            </span>
+          </div>
+          <div>
+            VALOR TOTAL DECLARADO: <span className="text-sm font-black text-slate-900 ml-1">
+              {manifest.total_value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            </span>
+          </div>
+        </div>
+
+        {/* Termo de Custódia e Declaração de Coleta */}
+        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-[10px] text-slate-600 mb-8 leading-relaxed">
+          <p className="font-bold text-slate-800 uppercase mb-1">Declaração de Recebimento e Transferência de Custódia:</p>
+          <p>
+            Declaro para os devidos fins que recebi da empresa remetente identificada nesta minuta os volumes devidamente lacrados,
+            acondicionados e sem avarias externas aparentes, acompanhados de suas respectivas notas fiscais / etiquetas de postagem,
+            assumindo a responsabilidade pela guarda, transporte e entrega aos destinatários finais relacionados.
+          </p>
+        </div>
+
+        {/* Canhoto Duplo de Assinaturas */}
+        <div className="grid grid-cols-2 gap-8 pt-4 border-t border-slate-300">
+          <div className="text-center">
+            <div className="border-b border-slate-400 mb-2 pb-8"></div>
+            <p className="text-xs font-bold text-slate-900 uppercase">Expedição / Remetente</p>
+            <p className="text-[9px] text-slate-500">
+              {manifest.created_by_name || 'Conferente Responsável'}
+            </p>
+          </div>
+          <div className="text-center">
+            <div className="border-b border-slate-400 mb-2 pb-8"></div>
+            <p className="text-xs font-bold text-slate-900 uppercase">Motorista / Coletor Transportadora</p>
+            <p className="text-[9px] text-slate-500">
+              Nome: {manifest.driver_name || '__________________________'} · Doc: {manifest.driver_document || '________________'}
+            </p>
+          </div>
+        </div>
+
+        {/* Rodapé das Vias */}
+        <div className="flex items-center justify-between text-[8px] text-slate-400 mt-6 pt-2 border-t border-slate-200">
+          <span>Sistema Cronuz B2B · Módulo Dropshipping</span>
+          <span className="font-semibold uppercase">
+            1ª Via: Expedição Remetente (Comprovante) &nbsp;|&nbsp; 2ª Via: Transportador (Controle de Carga)
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -523,6 +992,24 @@ export default function DropshipOrdersPage() {
   const [cancelModalOrder, setCancelModalOrder] = useState<DropshipOrder | null>(null);
   const [cancellingOrder, setCancellingOrder] = useState(false);
 
+  // Inicializa período com os últimos 30 dias (máximo permitido: 90 dias)
+  const [dateStart, setDateStart] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().split('T')[0];
+  });
+  const [dateEnd, setDateEnd] = useState<string>(() => {
+    return new Date().toISOString().split('T')[0];
+  });
+
+  // Paginação
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const pageSize = 15;
+
+  // Minuta ativa para visualização/reimpressão
+  const [activeManifest, setActiveManifest] = useState<ManifestData | null>(null);
+  const [isPrintManifestOpen, setIsPrintManifestOpen] = useState(false);
+
   // Get company ID from auth
   useEffect(() => {
     const token = getToken();
@@ -556,6 +1043,24 @@ export default function DropshipOrdersPage() {
   useEffect(() => {
     if (companyId) fetchOrders();
   }, [fetchOrders]);
+
+  const handleOpenExistingManifest = async (manifestId: number) => {
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dropship/orders/${companyId}/manifests/${manifestId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setActiveManifest(data);
+        setIsPrintManifestOpen(true);
+      } else {
+        toast.error('Não foi possível carregar a minuta.');
+      }
+    } catch {
+      toast.error('Erro de conexão ao carregar minuta.');
+    }
+  };
 
   const handleConfirmCancel = async (reason: string) => {
     if (!companyId || !cancelModalOrder) return;
@@ -650,6 +1155,45 @@ export default function DropshipOrdersPage() {
   const sentCount = orders.filter(o => o.status === 'SENT_TO_HORUS').length;
   const dispatchedCount = orders.filter(o => o.status === 'DISPATCHED').length;
 
+  // Validação de intervalo de datas (máximo 90 dias)
+  const handleDateChange = (newStart: string, newEnd: string) => {
+    if (newStart && newEnd) {
+      const d1 = new Date(newStart);
+      const d2 = new Date(newEnd);
+      const diffDays = Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays < 0) {
+        toast.error('A data inicial não pode ser posterior à data final.');
+        return;
+      }
+      if (diffDays > 90) {
+        toast.error('O período selecionado não pode ser superior a 90 dias.');
+        return;
+      }
+    }
+    setDateStart(newStart);
+    setDateEnd(newEnd);
+    setCurrentPage(1);
+  };
+
+  // Filtragem por status e período
+  const filteredOrders = orders.filter(order => {
+    if (statusFilter && order.status !== statusFilter) return false;
+
+    if (dateStart) {
+      const orderDate = order.dispatched_at || order.released_at || order.created_at;
+      if (orderDate && new Date(orderDate) < new Date(`${dateStart}T00:00:00`)) return false;
+    }
+    if (dateEnd) {
+      const orderDate = order.dispatched_at || order.released_at || order.created_at;
+      if (orderDate && new Date(orderDate) > new Date(`${dateEnd}T23:59:59`)) return false;
+    }
+
+    return true;
+  });
+
+  const totalPages = Math.ceil(filteredOrders.length / pageSize) || 1;
+  const paginatedOrders = filteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -709,14 +1253,14 @@ export default function DropshipOrdersPage() {
         ))}
       </div>
 
-      {/* Filtros */}
-      <div className="flex items-center gap-3">
-        <Filter className="w-4 h-4 text-slate-400" />
-        <div className="flex gap-2 flex-wrap">
+      {/* Filtros Limpos e Organizados */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3.5 rounded-2xl shadow-sm">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Filter className="w-4 h-4 text-slate-400 mr-1" />
           {['', 'PENDING', 'SENT_TO_HORUS', 'DISPATCHED', 'CANCELLED'].map(s => (
             <button
               key={s}
-              onClick={() => setStatusFilter(s)}
+              onClick={() => { setStatusFilter(s); setCurrentPage(1); }}
               className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
                 statusFilter === s
                   ? 'bg-violet-600 text-white shadow-md'
@@ -727,6 +1271,27 @@ export default function DropshipOrdersPage() {
             </button>
           ))}
         </div>
+
+        {/* Filtro de Período (Últimos 30 dias por padrão / Limite máximo de 90 dias) */}
+        <div className="flex items-center gap-2 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 px-3 py-1.5 rounded-xl">
+          <Calendar className="w-3.5 h-3.5 text-slate-400" />
+          <span className="text-slate-500 font-medium">Período:</span>
+          <input
+            type="date"
+            value={dateStart}
+            onChange={e => handleDateChange(e.target.value, dateEnd)}
+            className="px-2 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-slate-800 dark:text-slate-200 text-xs focus:outline-none"
+            title="Data Inicial"
+          />
+          <span className="text-slate-400">até</span>
+          <input
+            type="date"
+            value={dateEnd}
+            onChange={e => handleDateChange(dateStart, e.target.value)}
+            className="px-2 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-slate-800 dark:text-slate-200 text-xs focus:outline-none"
+            title="Data Final"
+          />
+        </div>
       </div>
 
       {/* Table */}
@@ -735,11 +1300,11 @@ export default function DropshipOrdersPage() {
           <div className="flex items-center justify-center py-16">
             <Loader2 className="w-8 h-8 animate-spin text-violet-500" />
           </div>
-        ) : orders.length === 0 ? (
+        ) : filteredOrders.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <PackageCheck className="w-12 h-12 text-slate-300 dark:text-slate-600 mb-3" />
             <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">Nenhum pedido Dropship encontrado</p>
-            <p className="text-xs text-slate-400 mt-1">Clique em "Sincronizar Pedidos" para buscar pedidos prontos para despacho no Hub Horus B2B</p>
+            <p className="text-xs text-slate-400 mt-1">Tente ajustar o período ou o status selecionado.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -754,10 +1319,11 @@ export default function DropshipOrdersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {orders.map((order, i) => {
+                {paginatedOrders.map((order, i) => {
                   const customer = order.customer_data || {};
                   const items = order.items_data || [];
                   const logistics = order.logistics_data || {};
+
                   return (
                     <motion.tr
                       key={order.id}
@@ -808,6 +1374,22 @@ export default function DropshipOrdersPage() {
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={order.status} />
+
+                        {/* Badge de Minuta de Coleta (se houver) */}
+                        {order.manifest_number && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (order.manifest_id) handleOpenExistingManifest(order.manifest_id);
+                            }}
+                            title="Ver / Re-imprimir Minuta de Coleta"
+                            className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 text-[9px] font-mono font-bold rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors"
+                          >
+                            <ClipboardList className="w-2.5 h-2.5 text-violet-500" />
+                            {order.manifest_number}
+                          </button>
+                        )}
+
                         {order.status === 'CANCELLED' && order.cancel_reason && (
                           <span
                             className="block text-[10px] text-rose-500 font-medium truncate max-w-[130px] mt-0.5"
@@ -876,6 +1458,37 @@ export default function DropshipOrdersPage() {
             </table>
           </div>
         )}
+
+        {/* Paginação */}
+        {filteredOrders.length > 0 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/20 text-xs text-slate-500">
+            <div>
+              Mostrando <strong className="text-slate-700 dark:text-slate-300">{(currentPage - 1) * pageSize + 1}</strong> a{' '}
+              <strong className="text-slate-700 dark:text-slate-300">{Math.min(currentPage * pageSize, filteredOrders.length)}</strong> de{' '}
+              <strong className="text-slate-700 dark:text-slate-300">{filteredOrders.length}</strong> pedidos
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-all"
+              >
+                Anterior
+              </button>
+              <span className="px-2 font-medium">
+                Página {currentPage} de {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-all"
+              >
+                Próxima
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Modal de Cancelamento de Pedido */}
@@ -885,6 +1498,13 @@ export default function DropshipOrdersPage() {
         onClose={() => setCancelModalOrder(null)}
         onConfirm={handleConfirmCancel}
         loading={cancellingOrder}
+      />
+
+      {/* Modal de Impressão A4 da Minuta (se aberto pelo badge) */}
+      <PrintManifestModal
+        manifest={activeManifest}
+        isOpen={isPrintManifestOpen}
+        onClose={() => setIsPrintManifestOpen(false)}
       />
     </div>
   );

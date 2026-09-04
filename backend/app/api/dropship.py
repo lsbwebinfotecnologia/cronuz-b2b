@@ -273,9 +273,48 @@ class DropshipOrderResponse(BaseModel):
     # Cancelamento
     cancel_reason: Optional[str] = None
     cancelled_at: Optional[datetime] = None
+    # Minuta de Despacho / Termo de Coleta
+    manifest_id: Optional[int] = None
+    manifest_number: Optional[str] = None
+    manifest_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class CreateManifestRequest(BaseModel):
+    order_ids: List[int]
+    carrier_name: Optional[str] = None
+    driver_name: Optional[str] = None
+    driver_document: Optional[str] = None
+    vehicle_plate: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ManifestResponse(BaseModel):
+    id: int
+    company_id: int
+    manifest_number: str
+    carrier_name: Optional[str] = None
+    driver_name: Optional[str] = None
+    driver_document: Optional[str] = None
+    vehicle_plate: Optional[str] = None
+    notes: Optional[str] = None
+    total_orders: int
+    total_volumes: int
+    total_value: float
+    created_at: Optional[datetime] = None
+    created_by_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ManifestDetailResponse(ManifestResponse):
+    orders: List[Any]
+    company_name: Optional[str] = None
+    company_cnpj: Optional[str] = None
+    company_address: Optional[str] = None
 
 
 class CancelOrderRequest(BaseModel):
@@ -973,6 +1012,7 @@ def list_dropship_orders(
         )
         data["cancel_reason"] = getattr(order, "cancel_reason", None)
         data["cancelled_at"] = getattr(order, "cancelled_at", None)
+        data["manifest_number"] = order.manifest.manifest_number if order.manifest else None
         data["conference"] = None
         result.append(DropshipOrderResponse(**data))
     return result
@@ -1044,6 +1084,7 @@ def get_dropship_order(
     )
     order_data["cancel_reason"] = getattr(order, "cancel_reason", None)
     order_data["cancelled_at"] = getattr(order, "cancelled_at", None)
+    order_data["manifest_number"] = order.manifest.manifest_number if order.manifest else None
 
     return order_data
 
@@ -2546,6 +2587,7 @@ async def get_order_document(
 async def push_stock_to_hub(
     company_id: int,
     erdos_credential_id: Optional[int] = Query(None, description="ID da credencial/token específico a enviar"),
+    full_sync: bool = Query(False, description="Forçar carga completa com período amplo de 4 anos"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -2554,8 +2596,8 @@ async def push_stock_to_hub(
     (DATA_INI = stock_sync_last_run, DATA_FIM = agora) e envia ao Hub-Erdos.
 
     - Se erdos_credential_id for fornecido, força o envio pelo token dessa credencial.
-    - Se omitido, envia pela credencial primária do seller.
-    - Paginação automática via OFFSET/LIMIT (PAGE_SIZE=200).
+    - Se full_sync=True, consulta período amplo de 4 anos para carga geral completa.
+    - Paginação automática via OFFSET/LIMIT.
     - Salva o registro em dsp_stock_sync_log com a credencial utilizada.
     """
     _require_seller_or_master(current_user, company_id)
@@ -2567,7 +2609,7 @@ async def push_stock_to_hub(
 
     try:
         from app.jobs.dropship_stock_job import do_stock_push
-        result = await do_stock_push(config, db, credential_id=erdos_credential_id)
+        result = await do_stock_push(config, db, credential_id=erdos_credential_id, full_sync=full_sync)
         return result
 
     except ValueError as e:
@@ -2965,3 +3007,266 @@ async def clear_price_table(
     ).delete()
     db.commit()
     return {"removidos": deleted}
+
+
+# ==============================================================================
+# MINUTA DE DESPACHO / TERMO DE COLETA (dsp_dispatch_manifest)
+# ==============================================================================
+
+@router.post("/orders/{company_id}/manifests", response_model=ManifestDetailResponse)
+async def create_dispatch_manifest(
+    company_id: int,
+    payload: CreateManifestRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Cria uma Minuta de Despacho / Termo de Coleta para os pedidos selecionados.
+    - Valida que todos os pedidos pertencem à empresa e estão no status DISPATCHED.
+    - Calcula totais de pedidos, volumes e valor total.
+    - Gera número sequencial de minuta (ex: MIN-2026-0001).
+    - Vincula os pedidos e registra auditoria nos logs.
+    """
+    _require_seller_or_master(current_user, company_id)
+
+    if not payload.order_ids:
+        raise HTTPException(status_code=400, detail="Nenhum pedido foi selecionado.")
+
+    from app.models.dropship_manifest import DropshipDispatchManifest
+    from app.models.company import Company
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+
+    # Busca os pedidos selecionados
+    orders = (
+        db.query(DropshipOrder)
+        .filter(
+            DropshipOrder.company_id == company_id,
+            DropshipOrder.id.in_(payload.order_ids),
+        )
+        .all()
+    )
+
+    if len(orders) != len(set(payload.order_ids)):
+        raise HTTPException(status_code=400, detail="Um ou mais pedidos não foram encontrados.")
+
+    # Regra logística essencial: apenas pedidos DESPACHADOS podem entrar na minuta
+    not_dispatched = [o for o in orders if o.status != "DISPATCHED"]
+    if not_dispatched:
+        invalid_refs = [o.external_reference or f"#{o.id}" for o in not_dispatched]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Apenas pedidos com status 'Despachado' podem ser incluídos na minuta. Pedidos inválidos: {', '.join(invalid_refs)}"
+        )
+
+    # Cálculo dos totalizadores
+    total_orders = len(orders)
+    total_volumes = 0
+    total_value = 0.0
+
+    for o in orders:
+        items = o.items_data or []
+        vol = 0
+        val = 0.0
+        for it in items:
+            qtd = int(float(it.get("quantidade", 1)))
+            preco = float(it.get("preco_unitario", 0.0) or it.get("preco", 0.0) or 0.0)
+            vol += qtd
+            val += (qtd * preco)
+        total_volumes += max(1, vol)
+        total_value += val
+
+    # Gerar número sequencial da minuta por empresa no ano corrente
+    year = datetime.utcnow().strftime("%Y")
+    prefix = f"MIN-{year}-"
+    last_manifest = (
+        db.query(DropshipDispatchManifest)
+        .filter(
+            DropshipDispatchManifest.company_id == company_id,
+            DropshipDispatchManifest.manifest_number.like(f"{prefix}%"),
+        )
+        .order_by(DropshipDispatchManifest.id.desc())
+        .first()
+    )
+    next_seq = 1
+    if last_manifest and last_manifest.manifest_number:
+        try:
+            seq_part = last_manifest.manifest_number.split("-")[-1]
+            next_seq = int(seq_part) + 1
+        except Exception:
+            next_seq = db.query(DropshipDispatchManifest).filter(DropshipDispatchManifest.company_id == company_id).count() + 1
+
+    manifest_number = f"{prefix}{next_seq:04d}"
+
+    manifest = DropshipDispatchManifest(
+        company_id=company_id,
+        manifest_number=manifest_number,
+        carrier_name=payload.carrier_name,
+        driver_name=payload.driver_name,
+        driver_document=payload.driver_document,
+        vehicle_plate=payload.vehicle_plate,
+        notes=payload.notes,
+        total_orders=total_orders,
+        total_volumes=total_volumes,
+        total_value=round(total_value, 2),
+        created_by_user_id=current_user.id,
+    )
+    db.add(manifest)
+    db.flush()
+
+    # Atualiza cada pedido com o vínculo da minuta
+    now = datetime.utcnow()
+    user_label = current_user.name or current_user.email or "Usuário"
+    for o in orders:
+        o.manifest_id = manifest.id
+        o.manifest_at = now
+        logs = list(o.logs or [])
+        logs.append({
+            "at": now.isoformat(),
+            "event": "MANIFEST_CREATED",
+            "detail": f"Minuta de despacho {manifest_number} gerada por {user_label}.",
+        })
+        o.logs = logs
+
+    db.commit()
+    db.refresh(manifest)
+
+    # Serializa pedidos para o retorno
+    serialized_orders = []
+    for order in orders:
+        order_dict = {
+            col.name: getattr(order, col.name)
+            for col in order.__table__.columns
+        }
+        order_dict["manifest_number"] = manifest_number
+        order_dict["erdos_credential_label"] = (
+            order.erdos_credential.label if order.erdos_credential else None
+        )
+        serialized_orders.append(order_dict)
+
+    return {
+        "id": manifest.id,
+        "company_id": manifest.company_id,
+        "manifest_number": manifest.manifest_number,
+        "carrier_name": manifest.carrier_name,
+        "driver_name": manifest.driver_name,
+        "driver_document": manifest.driver_document,
+        "vehicle_plate": manifest.vehicle_plate,
+        "notes": manifest.notes,
+        "total_orders": manifest.total_orders,
+        "total_volumes": manifest.total_volumes,
+        "total_value": float(manifest.total_value),
+        "created_at": manifest.created_at,
+        "created_by_name": user_label,
+        "orders": serialized_orders,
+        "company_name": company.razao_social or company.nome_fantasia or "Empresa Remetente",
+        "company_cnpj": company.cnpj,
+        "company_address": f"{company.logradouro or ''}, {company.numero or ''} - {company.bairro or ''} {company.cidade or ''}/{company.uf or ''}".strip(),
+    }
+
+
+@router.get("/orders/{company_id}/manifests/{manifest_id}", response_model=ManifestDetailResponse)
+async def get_dispatch_manifest(
+    company_id: int,
+    manifest_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retorna detalhes e itens de uma minuta específica para reimpressão e consulta."""
+    _require_seller_or_master(current_user, company_id)
+
+    from app.models.dropship_manifest import DropshipDispatchManifest
+    from app.models.company import Company
+
+    manifest = db.query(DropshipDispatchManifest).filter(
+        DropshipDispatchManifest.id == manifest_id,
+        DropshipDispatchManifest.company_id == company_id,
+    ).first()
+
+    if not manifest:
+        raise HTTPException(status_code=404, detail="Minuta de despacho não encontrada.")
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    orders = db.query(DropshipOrder).filter(DropshipOrder.manifest_id == manifest.id).all()
+
+    serialized_orders = []
+    for order in orders:
+        order_dict = {
+            col.name: getattr(order, col.name)
+            for col in order.__table__.columns
+        }
+        order_dict["manifest_number"] = manifest.manifest_number
+        order_dict["erdos_credential_label"] = (
+            order.erdos_credential.label if order.erdos_credential else None
+        )
+        serialized_orders.append(order_dict)
+
+    user_label = manifest.created_by.name if manifest.created_by else None
+
+    return {
+        "id": manifest.id,
+        "company_id": manifest.company_id,
+        "manifest_number": manifest.manifest_number,
+        "carrier_name": manifest.carrier_name,
+        "driver_name": manifest.driver_name,
+        "driver_document": manifest.driver_document,
+        "vehicle_plate": manifest.vehicle_plate,
+        "notes": manifest.notes,
+        "total_orders": manifest.total_orders,
+        "total_volumes": manifest.total_volumes,
+        "total_value": float(manifest.total_value),
+        "created_at": manifest.created_at,
+        "created_by_name": user_label,
+        "orders": serialized_orders,
+        "company_name": company.razao_social or company.nome_fantasia if company else "Empresa Remetente",
+        "company_cnpj": company.cnpj if company else None,
+        "company_address": f"{company.logradouro or ''}, {company.numero or ''} - {company.bairro or ''} {company.cidade or ''}/{company.uf or ''}".strip() if company else None,
+    }
+
+
+@router.get("/orders/{company_id}/manifests")
+async def list_dispatch_manifests(
+    company_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Lista o histórico de minutas geradas pela empresa."""
+    _require_seller_or_master(current_user, company_id)
+
+    from app.models.dropship_manifest import DropshipDispatchManifest
+
+    query = (
+        db.query(DropshipDispatchManifest)
+        .filter(DropshipDispatchManifest.company_id == company_id)
+        .order_by(DropshipDispatchManifest.created_at.desc())
+    )
+
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, -(-total // page_size)),
+        "manifests": [
+            {
+                "id": m.id,
+                "manifest_number": m.manifest_number,
+                "carrier_name": m.carrier_name,
+                "driver_name": m.driver_name,
+                "driver_document": m.driver_document,
+                "vehicle_plate": m.vehicle_plate,
+                "total_orders": m.total_orders,
+                "total_volumes": m.total_volumes,
+                "total_value": float(m.total_value),
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "created_by_name": m.created_by.name if m.created_by else None,
+            }
+            for m in items
+        ],
+    }

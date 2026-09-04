@@ -170,10 +170,17 @@ class DropshipOrder(Base):
         Integer, ForeignKey("dsp_erdos_credential.id"), nullable=True, index=True
     )
 
+    # Vínculo com Minuta de Despacho / Termo de Coleta
+    manifest_id = Column(
+        Integer, ForeignKey("dsp_dispatch_manifest.id"), nullable=True, index=True
+    )
+    manifest_at = Column(DateTime(timezone=True), nullable=True)
+
     # Relationships
-    company          = relationship("Company",           foreign_keys=[company_id])
-    config           = relationship("DropshipConfig",    back_populates="orders",       foreign_keys=[config_id])
-    erdos_credential = relationship("DspErdosCredential", foreign_keys=[erdos_credential_id])
+    company          = relationship("Company",                  foreign_keys=[company_id])
+    config           = relationship("DropshipConfig",           back_populates="orders",       foreign_keys=[config_id])
+    erdos_credential = relationship("DspErdosCredential",       foreign_keys=[erdos_credential_id])
+    manifest         = relationship("DropshipDispatchManifest", back_populates="orders",       foreign_keys=[manifest_id])
 
 
 class DropshipItemCache(Base):
