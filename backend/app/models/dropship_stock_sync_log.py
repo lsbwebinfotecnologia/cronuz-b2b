@@ -20,7 +20,7 @@ class DropshipStockSyncLog(Base):
     company_id     = Column(Integer, ForeignKey("cmp_company.id"), nullable=False)
 
     # Contexto da execução
-    triggered_by   = Column(String(20), nullable=False, default="manual")   # 'manual' | 'scheduler'
+    triggered_by   = Column(String(50), nullable=False, default="manual")   # 'manual' | 'scheduler'
     status         = Column(String(20), nullable=False)                      # 'ok' | 'no_items' | 'error'
     data_ini       = Column(String(30), nullable=True)   # DATA_INI enviado ao Hórus
     data_fim       = Column(String(30), nullable=True)   # DATA_FIM enviado ao Hórus
