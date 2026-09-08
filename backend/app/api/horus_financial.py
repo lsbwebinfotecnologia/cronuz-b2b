@@ -219,9 +219,14 @@ async def preview_vindi_reconciliation(
     total_divergence_amount = 0.0
     total_not_found_amount = 0.0
 
+    # Rastreamento de lançamentos já pareados para evitar produto cartesiano (duplicação)
+    used_lanctos = set()
+
     for v_row in vindi_rows:
         ped = str(v_row["pedido_web"]).strip()
         v_valor = float(v_row["valor"])
+        v_valor_liq = float(v_row.get("valor_liquido") or v_valor)
+        v_taxa = float(v_row.get("taxa") or 0.0)
         total_vindi_amount += v_valor
 
         matches = horus_by_pedido.get(ped, [])
@@ -234,6 +239,8 @@ async def preview_vindi_reconciliation(
                 "cliente_nome": v_row["cliente_nome"],
                 "documento": v_row["documento"],
                 "valor_vindi": v_valor,
+                "valor_liquido": v_valor_liq,
+                "taxa": v_taxa,
                 "data_pagamento": v_row["data_pagamento"],
                 "status_vindi": v_row["status_vindi"],
                 "forma_pagamento": v_row["forma_pagamento"],
@@ -250,94 +257,170 @@ async def preview_vindi_reconciliation(
         mais_recente_ped_horus = pedidos_horus_ids[0] if pedidos_horus_ids else None
         has_multiplos_pedidos = len(pedidos_horus_ids) > 1
 
-        # Para cada lançamento correspondente no Horus
-        for idx_match, h_match in enumerate(matches):
-            h_ped_venda = int(h_match.get("COD_PED_VENDA") or 0)
-            is_pedido_mais_recente = (h_ped_venda == mais_recente_ped_horus)
+        # Encontra o melhor lançamento ainda não pareado para esta linha da planilha:
+        # Prioridade 1: Lançamento do pedido mais recente com valor idêntico (ou diferença <= 0.05) e não pareado
+        # Prioridade 2: Qualquer lançamento do pedido mais recente em aberto ('AB') e não pareado
+        # Prioridade 3: Primeiro lançamento não pareado
+        # Fallback: Se todos já foram pareados, pega o mais recente
+        selected_match = None
+        for m in matches:
+            lancto_id = m.get("NRO_LANCTO_CRECEBER")
+            if lancto_id in used_lanctos:
+                continue
+            h_ped = int(m.get("COD_PED_VENDA") or 0)
+            h_val = float(m.get("VLR_LANCTO_CRECEBER") or 0.0)
+            if h_ped == mais_recente_ped_horus and abs(v_valor - h_val) <= 0.05:
+                selected_match = m
+                break
 
-            # Conta quantas parcelas/lançamentos este mesmo COD_PED_VENDA possui
-            parcelas_deste_pedido = [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == h_ped_venda]
-            total_parcelas = len(parcelas_deste_pedido)
-            parcela_num = parcelas_deste_pedido.index(h_match) + 1 if h_match in parcelas_deste_pedido else 1
+        if not selected_match:
+            for m in matches:
+                lancto_id = m.get("NRO_LANCTO_CRECEBER")
+                if lancto_id in used_lanctos:
+                    continue
+                h_ped = int(m.get("COD_PED_VENDA") or 0)
+                is_ab = str(m.get("STA_LANCTO_CRECEBER", "")).strip().upper() == "AB" and not (m.get("COD_BORDERO") and int(m.get("COD_BORDERO")) > 0)
+                if h_ped == mais_recente_ped_horus and is_ab:
+                    selected_match = m
+                    break
 
-            h_status = str(h_match.get("STA_LANCTO_CRECEBER", "")).strip().upper()
-            h_valor = float(h_match.get("VLR_LANCTO_CRECEBER") or 0.0)
-            h_bordero = h_match.get("COD_BORDERO")
-            h_lancto = h_match.get("NRO_LANCTO_CRECEBER")
-            h_nf = h_match.get("NRO_NOTA_FISCAL")
+        if not selected_match:
+            for m in matches:
+                lancto_id = m.get("NRO_LANCTO_CRECEBER")
+                if lancto_id not in used_lanctos:
+                    selected_match = m
+                    break
 
-            diff_val = round(abs(v_valor - h_valor), 2)
-            has_value_divergence = diff_val > 0.05  # tolerância de 5 centavos
+        if not selected_match:
+            selected_match = matches[0]
 
-            # Determina a situação simplificada no ERP
-            is_bordero_set = bool(h_bordero and int(h_bordero) > 0)
-            if h_status == "AB" and not is_bordero_set:
-                situacao_horus = "ABERTO"
-            elif is_bordero_set or h_status in ("PG", "LQ", "BX", "BA"):
-                situacao_horus = "PAGO"
-            elif h_status == "CA":
-                situacao_horus = "CANCELADO"
-            else:
-                situacao_horus = h_status or "DESCONHECIDO"
+        used_lanctos.add(selected_match.get("NRO_LANCTO_CRECEBER"))
 
-            # Auto-seleção: marca por padrão TODOS os lançamentos em aberto DO PEDIDO HORUS MAIS RECENTE
-            should_select = bool(situacao_horus == "ABERTO" and is_pedido_mais_recente)
+        h_match = selected_match
+        h_ped_venda = int(h_match.get("COD_PED_VENDA") or 0)
+        is_pedido_mais_recente = (h_ped_venda == mais_recente_ped_horus)
 
-            base_item = {
-                "linha": v_row["linha"],
-                "pedido_web": ped,
-                "nro_lancamento": h_lancto,
-                "cod_ped_venda": h_ped_venda,
-                "cod_filial": cod_filial,
-                "nro_nota_fiscal": h_nf or "-",
-                "cliente_nome": v_row["cliente_nome"],
-                "documento": v_row["documento"],
-                "valor_vindi": v_valor,
-                "valor_horus": h_valor,
-                "diferenca_valor": diff_val if has_value_divergence else 0.0,
-                "data_pagamento": v_row["data_pagamento"],
-                "status_horus": h_status,
-                "situacao_horus": situacao_horus,
-                "status_vindi": v_row["status_vindi"],
-                "cod_bordero": h_bordero,
-                "forma_pagamento": v_row["forma_pagamento"],
-                "is_mais_recente": is_pedido_mais_recente,
-                "has_multiplos": has_multiplos_pedidos,
-                "total_pedidos_horus": len(pedidos_horus_ids),
-                "total_parcelas": total_parcelas,
-                "parcela_num": parcela_num,
-                "selected": should_select,
-            }
+        # Conta quantas parcelas/lançamentos este mesmo COD_PED_VENDA possui
+        parcelas_deste_pedido = [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == h_ped_venda]
+        total_parcelas = len(parcelas_deste_pedido)
+        parcela_num = parcelas_deste_pedido.index(h_match) + 1 if h_match in parcelas_deste_pedido else 1
 
-            if is_bordero_set:
-                base_item["motivo"] = f"Lançamento já incluído no Borderô #{h_bordero}."
-                items_already_paid.append(base_item)
-            elif h_status != "AB":
-                base_item["motivo"] = f"Lançamento no Horus não está em aberto (Status: {h_status})."
-                items_already_paid.append(base_item)
-            elif has_value_divergence:
-                base_item["motivo"] = f"Divergência de valor: Vindi R$ {v_valor:.2f} x Horus R$ {h_valor:.2f} (Dif: R$ {diff_val:.2f})."
-                items_divergence.append(base_item)
-                if should_select:
-                    total_divergence_amount += v_valor
-            else:
-                items_ready.append(base_item)
-                if should_select:
-                    total_ready_amount += v_valor
+        h_status = str(h_match.get("STA_LANCTO_CRECEBER", "")).strip().upper()
+        h_valor = float(h_match.get("VLR_LANCTO_CRECEBER") or 0.0)
+        h_bordero = h_match.get("COD_BORDERO")
+        h_lancto = h_match.get("NRO_LANCTO_CRECEBER")
+        h_nf = h_match.get("NRO_NOTA_FISCAL")
+
+        # ──────────────────────────────────────────────────────────────
+        # ANÁLISE 1 — Divergência real do título: Vindi Bruto vs Horus
+        #   diff_bruto > 0  → Vindi recebeu a mais (Horus a menos)
+        #   diff_bruto < 0  → Vindi recebeu a menos (Horus a mais)
+        #   Tolerância de 5 centavos para arredondamentos.
+        # ──────────────────────────────────────────────────────────────
+        diff_bruto = round(v_valor - h_valor, 2)
+        diff_bruto_abs = abs(diff_bruto)
+        has_value_divergence = diff_bruto_abs > 0.05
+
+        # ──────────────────────────────────────────────────────────────
+        # ANÁLISE 2 — Taxa retida pela Vindi: Vindi Líq - Vindi Bruto
+        #   Resultado sempre ≤ 0 (a Vindi retém uma parte do bruto).
+        #   Se a planilha já informar a taxa, usa ela diretamente.
+        # ──────────────────────────────────────────────────────────────
+        if v_taxa > 0:
+            diff_taxa = -round(v_taxa, 2)           # taxa explícita já é positiva na planilha
+        else:
+            diff_taxa = round(v_valor_liq - v_valor, 2)  # calculada via diferença bruto-líq
+        diff_taxa_abs = abs(diff_taxa)
+
+        # Determina a situação simplificada no ERP
+        is_bordero_set = bool(h_bordero and int(h_bordero) > 0)
+        if h_status == "AB" and not is_bordero_set:
+            situacao_horus = "ABERTO"
+        elif is_bordero_set or h_status in ("PG", "LQ", "BX", "BA"):
+            situacao_horus = "PAGO"
+        elif h_status == "CA":
+            situacao_horus = "CANCELADO"
+        else:
+            situacao_horus = h_status or "DESCONHECIDO"
+
+        # Auto-seleção: marca por padrão os lançamentos em aberto
+        should_select = bool(situacao_horus == "ABERTO")
+
+        base_item = {
+            "linha": v_row["linha"],
+            "pedido_web": ped,
+            "nro_lancamento": h_lancto,
+            "cod_ped_venda": h_ped_venda,
+            "cod_filial": cod_filial,
+            "nro_nota_fiscal": h_nf or "-",
+            "cliente_nome": v_row["cliente_nome"],
+            "documento": v_row["documento"],
+            "valor_vindi": v_valor,
+            "valor_bruto": v_valor,
+            "valor_liquido": v_valor_liq,
+            "taxa": round(diff_taxa_abs, 2),          # sempre positivo: quanto a Vindi reteve
+            "valor_horus": h_valor,
+            # Análise 1: divergência real do título (Bruto Vindi vs Horus)
+            "diferenca_valor": diff_bruto if has_value_divergence else 0.0,
+            "diferenca_valor_abs": diff_bruto_abs if has_value_divergence else 0.0,
+            # Análise 2: taxa descontada pela Vindi (sempre informativa)
+            "diff_taxa": diff_taxa,
+            "diff_taxa_abs": diff_taxa_abs,
+            "data_pagamento": v_row["data_pagamento"],
+            "status_horus": h_status,
+            "situacao_horus": situacao_horus,
+            "status_vindi": v_row["status_vindi"],
+            "cod_bordero": h_bordero,
+            "forma_pagamento": v_row["forma_pagamento"],
+            "is_mais_recente": is_pedido_mais_recente,
+            "has_multiplos": has_multiplos_pedidos,
+            "total_pedidos_horus": len(pedidos_horus_ids),
+            "total_parcelas": total_parcelas,
+            "parcela_num": parcela_num,
+            "selected": should_select,
+        }
+
+        if is_bordero_set:
+            base_item["motivo"] = f"Lançamento já incluído no Borderô #{h_bordero}."
+            items_already_paid.append(base_item)
+        elif h_status != "AB":
+            base_item["motivo"] = f"Lançamento no Horus não está em aberto (Status: {h_status})."
+            items_already_paid.append(base_item)
+        elif has_value_divergence:
+            sinal_str = f"+R$ {diff_bruto:.2f}" if diff_bruto > 0 else f"-R$ {abs(diff_bruto):.2f}"
+            base_item["motivo"] = f"Divergência: Vindi Bruto R$ {v_valor:.2f} ≠ Horus R$ {h_valor:.2f} ({sinal_str})."
+            items_divergence.append(base_item)
+            if should_select:
+                total_divergence_amount += h_valor
+        else:
+            items_ready.append(base_item)
+            if should_select:
+                total_ready_amount += h_valor
 
     # 8. Estatísticas consolidadas
     abertos_qtd = sum(1 for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
-    abertos_valor = sum(it.get("valor_vindi", 0) for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
+    abertos_valor = sum(it.get("valor_horus", it.get("valor_vindi", 0)) for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
     pagos_qtd = len(items_already_paid)
-    pagos_valor = sum(it.get("valor_vindi", 0) for it in items_already_paid)
+    pagos_valor = sum(it.get("valor_horus", it.get("valor_vindi", 0)) for it in items_already_paid)
+
+    # Somatório das divergências de título (Bruto Vindi - Horus), apenas itens divergentes
+    total_diff_divergencias = sum(float(it.get("diferenca_valor") or 0.0) for it in items_divergence)
+    # Somatório de TODAS as taxas retidas pela Vindi (ready + divergence — positivo, representa o desconto)
+    all_conciliated = items_ready + items_divergence
+    total_taxa_vindi = sum(abs(float(it.get("diff_taxa") or 0.0)) for it in all_conciliated)
+    # Total líquido da planilha (coluna Valor Líq. do xlsx)
+    total_planilha_liq = sum(float(it.get("valor_liquido") or 0.0) for it in vindi_rows)
 
     summary = {
         "total_planilha_qtd": len(vindi_rows),
         "total_planilha_valor": round(total_vindi_amount, 2),
+        "total_planilha_liq": round(total_planilha_liq, 2),
         "ready_qtd": len(items_ready),
         "ready_valor": round(total_ready_amount, 2),
         "divergence_qtd": len(items_divergence),
         "divergence_valor": round(total_divergence_amount, 2),
+        "divergence_diff_total": round(total_diff_divergencias, 2),
+        "total_taxa_vindi": round(total_taxa_vindi, 2),
         "already_paid_qtd": len(items_already_paid),
         "already_paid_valor": round(pagos_valor, 2),
         "abertos_qtd": abertos_qtd,

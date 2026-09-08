@@ -50,6 +50,7 @@ interface Company {
   module_notifications: boolean;
   module_busca_preco: boolean;
   module_horus_sql?: boolean;
+  modulo_autores_ativo?: boolean;
   active: boolean;
 }
 

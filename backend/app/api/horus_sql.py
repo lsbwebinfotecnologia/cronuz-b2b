@@ -66,6 +66,9 @@ class HorusSQLSettingsUpdate(BaseModel):
     horus_banco_conta: Optional[str] = None
     horus_banco_carteira: Optional[str] = None
 
+    # Parâmetros de Vendas
+    horus_vendas_metodo: Optional[str] = None
+
 
 class HorusSQLTestLivePayload(BaseModel):
     """Credenciais para teste ao vivo — nao persistidas, apenas para validar a conexao."""
@@ -85,7 +88,7 @@ def get_horus_sql_settings(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Retorna as configuracoes do Horus SQL Direct e parametros bancarios.
+    Retorna as configuracoes do Horus SQL Direct e parametros bancarios e de vendas.
     horus_sql_password retorna 'SET' se configurado — NUNCA o valor real.
     """
     _assert_ownership(current_user, company_id)  # [SEC]
@@ -104,6 +107,7 @@ def get_horus_sql_settings(
         "horus_banco_agencia":     settings.horus_banco_agencia,
         "horus_banco_conta":       settings.horus_banco_conta,
         "horus_banco_carteira":    settings.horus_banco_carteira,
+        "horus_vendas_metodo":     settings.horus_vendas_metodo,
     }
 
 
@@ -152,6 +156,10 @@ def update_horus_sql_settings(
         settings.horus_banco_conta = payload.horus_banco_conta.strip() or None
     if payload.horus_banco_carteira is not None:
         settings.horus_banco_carteira = payload.horus_banco_carteira.strip() or None
+
+    # Parâmetros de vendas
+    if payload.horus_vendas_metodo is not None:
+        settings.horus_vendas_metodo = payload.horus_vendas_metodo.strip() or None
 
     credentials_changed = False
     if payload.horus_sql_password and payload.horus_sql_password not in ("SET", ""):
@@ -315,6 +323,7 @@ def get_horus_sql_module_status(
 class HorusSQLFeaturesUpdate(BaseModel):
     """Payload para ativar/desativar sub-funcionalidades do modulo Horus SQL Direct."""
     horus_sql_feature_vindi_baixa: Optional[bool] = None
+    horus_sql_feature_pedidos: Optional[bool] = None
 
 
 @router.get("/companies/{company_id}/horus-sql/features")
@@ -341,7 +350,8 @@ def get_horus_sql_features(
         "sql_configured": is_sql_configured,          # credenciais SQL configuradas (pre-requisito)
         "module_horus_sql": is_module_active,
         "features": {
-            "vindi_baixa": settings.horus_sql_feature_vindi_baixa,
+            "vindi_baixa": getattr(settings, "horus_sql_feature_vindi_baixa", False),
+            "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
         }
     }
 
@@ -374,6 +384,10 @@ def update_horus_sql_features(
         settings.horus_sql_feature_vindi_baixa = payload.horus_sql_feature_vindi_baixa
         changed = True
 
+    if payload.horus_sql_feature_pedidos is not None:
+        settings.horus_sql_feature_pedidos = payload.horus_sql_feature_pedidos
+        changed = True
+
     if changed:
         db.commit()
         db.refresh(settings)
@@ -381,6 +395,7 @@ def update_horus_sql_features(
     return {
         "success": True,
         "features": {
-            "vindi_baixa": settings.horus_sql_feature_vindi_baixa,
+            "vindi_baixa": getattr(settings, "horus_sql_feature_vindi_baixa", False),
+            "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
         }
     }

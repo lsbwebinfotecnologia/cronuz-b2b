@@ -57,6 +57,19 @@ export function middleware(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-tenant-id', tenant);
 
+  // A1. Portal do Autor (Multi-Tenant Subdomain Routing: autores.[seller].cronuzb2b.com.br ou autores.[seller].localhost)
+  const authorSubdomainMatch = hostname.match(/^autores\.([a-zA-Z0-9_-]+)\.(cronuzb2b\.com\.br|cronuz\.com\.br|localhost|cronuzb2b\.localhost)$/i);
+  if (authorSubdomainMatch) {
+    const sellerSlug = authorSubdomainMatch[1].toLowerCase();
+    requestHeaders.set('x-seller-slug', sellerSlug);
+    requestHeaders.set('x-portal-type', 'autor');
+
+    url.pathname = `/portal-autor/${sellerSlug}${url.pathname === '/' ? '' : url.pathname}`;
+    return NextResponse.rewrite(url, {
+      request: { headers: requestHeaders }
+    });
+  }
+
   // B. Marketing Site (Public)
   if (marketingDomains.includes(hostname)) {
     // se formos adicionar outras rotas como /marketing/contato, podemos fazer rewrite também
@@ -73,7 +86,7 @@ export function middleware(request: NextRequest) {
 
   // C. Custom Domain / Tenant Hotsite (Public)
   if (!appDomains.includes(hostname) && !marketingDomains.includes(hostname)) {
-    const isAppNativePath = url.pathname.startsWith('/store') || url.pathname.startsWith('/dashboard') || url.pathname.startsWith('/cart') || url.pathname.startsWith('/checkout');
+    const isAppNativePath = url.pathname.startsWith('/store') || url.pathname.startsWith('/dashboard') || url.pathname.startsWith('/cart') || url.pathname.startsWith('/checkout') || url.pathname.startsWith('/portal-autor');
     
     if (!isAppNativePath) {
       url.pathname = `/domain/${hostname}${url.pathname === '/' ? '' : url.pathname}`;
@@ -91,7 +104,7 @@ export function middleware(request: NextRequest) {
   
   const isLoginPage = url.pathname === '/login';
   const isUploads = url.pathname.startsWith('/uploads');
-  const isPublicPage = url.pathname.startsWith('/h/') || url.pathname.startsWith('/marketing') || url.pathname.startsWith('/public/');
+  const isPublicPage = url.pathname.startsWith('/h/') || url.pathname.startsWith('/marketing') || url.pathname.startsWith('/public/') || url.pathname.startsWith('/portal-autor');
 
   // Skip auth checks for public routes hitting the app domain directly
   if (isUploads || isPublicPage) {

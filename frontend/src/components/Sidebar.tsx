@@ -39,7 +39,8 @@ import {
   ScanBarcode,
   Globe,
   DatabaseZap,
-  CreditCard
+  CreditCard,
+  Feather
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -169,6 +170,8 @@ export function Sidebar() {
   const [moduleBuscaPreco, setModuleBuscaPreco] = useState(false);
   const [moduleHorusSql, setModuleHorusSql] = useState(false);
   const [horusSqlVindiBaixa, setHorusSqlVindiBaixa] = useState(false);
+  const [horusSqlPedidos, setHorusSqlPedidos] = useState(true);
+  const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   // [PERF] Garante que fetchSettings() é executado apenas UMA VEZ por montagem
   // Evita re-fetch desnecessário a cada mudança de pathname (navegação interna).
@@ -221,6 +224,8 @@ export function Sidebar() {
                setModuleBuscaPreco(data.module_busca_preco || false);
                setModuleHorusSql(data.module_horus_sql || false);
                setHorusSqlVindiBaixa(data.horus_sql_feature_vindi_baixa || false);
+               setHorusSqlPedidos(data.horus_sql_feature_pedidos ?? true);
+               setModuloAutoresAtivo(data.modulo_autores_ativo || false);
             }
          } catch (e) {}
        };
@@ -368,14 +373,28 @@ export function Sidebar() {
     // Insert Horus Direct before Configurações
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
-    const subItems: { name: string; href: string; icon?: any }[] = [
-      { name: 'Financeiro Vindi', href: '/horus-direct/financeiro-vindi', icon: CreditCard }
-    ];
+    const subItems: { name: string; href: string; icon?: any }[] = [];
+    if (horusSqlPedidos) {
+      subItems.push({ name: 'Pedidos (Horus)', href: '/horus-direct/pedidos', icon: ShoppingBag });
+    }
+    if (horusSqlVindiBaixa || subItems.length === 0) {
+      subItems.push({ name: 'Financeiro Vindi', href: '/horus-direct/financeiro-vindi', icon: CreditCard });
+    }
     filteredSellerNavigation.splice(targetIndex, 0, {
       name: 'Horus Direct',
-      href: '/horus-direct/financeiro-vindi',
+      href: subItems[0]?.href || '/horus-direct/pedidos',
       icon: DatabaseZap,
-      subItems: subItems
+      subItems: subItems.length > 1 ? subItems : undefined
+    });
+  }
+
+  if (moduloAutoresAtivo) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Autores',
+      href: '/authors',
+      icon: Feather,
     });
   }
 

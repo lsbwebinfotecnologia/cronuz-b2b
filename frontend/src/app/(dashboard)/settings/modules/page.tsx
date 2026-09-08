@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, ClipboardList } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, ClipboardList, Feather } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -29,6 +29,7 @@ export default function CompanyModulesPage() {
       module_pdv: company.module_pdv,
       module_agents: company.module_agents,
       module_logistica_horus: company.module_logistica_horus,
+      modulo_autores_ativo: company.modulo_autores_ativo ?? false,
       [moduleName]: !currentValue
     };
 
@@ -288,6 +289,30 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_logistica_horus', company.module_logistica_horus)} 
                     disabled={togglingModule !== null}
                     colorClass="bg-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Portal do Autor */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.modulo_autores_ativo ? 'bg-amber-500/10 border-amber-500/20 text-amber-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <Feather className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Portal do Autor</p>
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 rounded dark:bg-amber-900/30 dark:text-amber-400">Novo</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Habilita o subdomínio exclusivo <code className="text-slate-600 dark:text-slate-400">autores.[seller].cronuzb2b.com.br</code> para consulta de vendas de autores via Horus.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch 
+                    active={company.modulo_autores_ativo ?? false} 
+                    onClick={() => handleToggleModule('modulo_autores_ativo', company.modulo_autores_ativo ?? false)} 
+                    disabled={togglingModule !== null}
+                    colorClass="bg-amber-500"
                   />
                 </div>
               </div>

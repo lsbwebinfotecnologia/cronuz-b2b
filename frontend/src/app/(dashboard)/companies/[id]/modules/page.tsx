@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, UserCircle, Bell, DatabaseZap, Zap, AlertTriangle, CreditCard } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, UserCircle, Bell, DatabaseZap, Zap, AlertTriangle, CreditCard, Feather } from 'lucide-react';
 
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -38,7 +38,7 @@ export default function CompanyModulesPage() {
   const [togglingMobile, setTogglingMobile] = useState<string | null>(null);
 
   // ─── Horus SQL Direct — Features State ────────────────────────────
-  interface HorusSQLFeatures { vindi_baixa: boolean }
+  interface HorusSQLFeatures { vindi_baixa: boolean; pedidos: boolean; }
   const [horusSQLData, setHorusSQLData] = useState<{
     sql_configured: boolean;
     module_horus_sql: boolean;
@@ -182,6 +182,7 @@ export default function CompanyModulesPage() {
       module_notifications: company.module_notifications,
       module_busca_preco: company.module_busca_preco,
       module_horus_sql: company.module_horus_sql ?? false,
+      modulo_autores_ativo: company.modulo_autores_ativo ?? false,
       [moduleName]: !currentValue
     };
 
@@ -654,6 +655,30 @@ export default function CompanyModulesPage() {
                 </div>
               </div>
 
+              {/* Portal do Autor */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.modulo_autores_ativo ? 'bg-amber-500/10 border-amber-500/20 text-amber-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <Feather className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Portal do Autor</p>
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 rounded dark:bg-amber-900/30 dark:text-amber-400">Novo</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Habilita o subdomínio exclusivo <code className="text-slate-600 dark:text-slate-400">autores.[seller].cronuzb2b.com.br</code> e o painel de vendas e acertos de autores integrado ao Horus ERP.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch
+                    active={company.modulo_autores_ativo ?? false}
+                    onClick={() => handleToggleModule('modulo_autores_ativo', company.modulo_autores_ativo ?? false)}
+                    disabled={togglingModule !== null}
+                    colorClass="bg-amber-500"
+                  />
+                </div>
+              </div>
+
            </div>
         </section>
 
@@ -836,6 +861,34 @@ export default function CompanyModulesPage() {
                           onClick={() => handleToggleHorusSQLFeature('vindi_baixa')}
                           disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
                           colorClass="bg-emerald-500"
+                        />
+                      )
+                    }
+                  </div>
+                </div>
+
+                {/* Pedidos (Horus) */}
+                <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                  <div className="flex items-center gap-4">
+                    <div className={`p-2 rounded-xl border ${horusSQLData?.features.pedidos ? 'bg-violet-500/10 border-violet-500/20 text-violet-600' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                      <ShoppingBag className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Pedidos (Horus)</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Listagem e acompanhamento de pedidos no Horus com filtros por status, datas operacionais (criação, expedição, LFT), itens e dados de NF.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="shrink-0 pl-4 flex items-center gap-3">
+                    {togglingHorusFeature === 'pedidos'
+                      ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                      : (
+                        <Switch
+                          active={horusSQLData?.features.pedidos ?? false}
+                          onClick={() => handleToggleHorusSQLFeature('pedidos')}
+                          disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
+                          colorClass="bg-violet-600"
                         />
                       )
                     }

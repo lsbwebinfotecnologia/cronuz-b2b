@@ -27,6 +27,7 @@ interface HorusSQLSettings {
   horus_banco_agencia: string;
   horus_banco_conta: string;
   horus_banco_carteira: string;
+  horus_vendas_metodo?: string;
 }
 
 export function HorusSQLTab() {
@@ -53,6 +54,7 @@ export function HorusSQLTab() {
     horus_banco_agencia: '',
     horus_banco_conta: '',
     horus_banco_carteira: '',
+    horus_vendas_metodo: '',
   });
 
   const [newPassword, setNewPassword] = useState('');
@@ -85,6 +87,7 @@ export function HorusSQLTab() {
           horus_banco_agencia:     data.horus_banco_agencia ?? '',
           horus_banco_conta:       data.horus_banco_conta ?? '',
           horus_banco_carteira:    data.horus_banco_carteira ?? '',
+          horus_vendas_metodo:     data.horus_vendas_metodo ?? '',
         });
       }
     } catch (e) {
@@ -532,14 +535,37 @@ export function HorusSQLTab() {
         </div>
       )}
 
-      {/* ─── ABA: VENDAS (FUTURO) ─────────────────────────────── */}
+      {/* ─── ABA: VENDAS ──────────────────────────────────────── */}
       {activeSubTab === 'vendas' && (
-        <div className="p-8 text-center rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-2">
-          <ShoppingCart className="h-8 w-8 text-slate-400 mx-auto" />
-          <h4 className="text-sm font-bold text-slate-700 dark:text-slate-200">Parâmetros de Vendas & Pedidos Horus</h4>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto">
-            Configurações para métodos de venda padrão, transportadoras e tabelas de preço do ERP.
-          </p>
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm space-y-5">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-violet-100 dark:bg-violet-950/50 text-violet-600">
+              <ShoppingCart className="h-5 w-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">Parâmetros de Vendas & Pedidos Horus</h4>
+              <p className="text-xs text-slate-400">Configurações para consulta e filtros de pedidos no ERP Horus.</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                Método de Venda Padrão (COD_METODO)
+              </label>
+              <input
+                type="text"
+                name="horus_vendas_metodo"
+                value={settings.horus_vendas_metodo || ''}
+                onChange={handleChange}
+                placeholder="Ex: 1, 01, WEB, LOJA"
+                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500 font-mono"
+              />
+              <p className="text-[11px] text-slate-400">
+                Define o método de venda padrão pré-selecionado na tela de Pedidos do Horus Direct.
+              </p>
+            </div>
+          </div>
         </div>
       )}
 

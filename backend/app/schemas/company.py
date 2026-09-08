@@ -61,6 +61,7 @@ class CompanyBase(BaseModel):
     module_notifications: bool = False
     module_busca_preco: bool = False
     module_horus_sql: bool = False
+    modulo_autores_ativo: bool = False
     active: bool = True
 
 
@@ -130,6 +131,7 @@ class CompanyUpdate(BaseModel):
     module_dropship: Optional[bool] = None
     module_notifications: Optional[bool] = None
     module_busca_preco: Optional[bool] = None
+    modulo_autores_ativo: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

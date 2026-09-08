@@ -83,9 +83,9 @@ class HorusSQLClient:
             )
         return plain
 
-    def _get_connection(self):
+    def _get_connection_entry(self) -> Dict[str, Any]:
         """
-        Retorna conexao do pool (ou cria nova se nao existir / expirada / morta).
+        Retorna entrada do pool com a conexao e seu respectivo lock de execucao.
         Thread-safe via _POOL_LOCK.
         """
         import pytds
@@ -96,25 +96,30 @@ class HorusSQLClient:
 
             if entry:
                 if now - entry["last_used"] > _POOL_TTL_SECONDS:
-                    logger.info("[HorusSQLPool] Conexao expirada para company={self.company_id}. Reconectando.")
+                    logger.info(f"[HorusSQLPool] Conexao expirada para company={self.company_id}. Reconectando.")
                     try:
                         entry["conn"].close()
                     except Exception:
                         pass
+                    _CONNECTION_POOL.pop(self._conn_key, None)
                     entry = None
                 else:
-                    try:
-                        cur = entry["conn"].cursor()
-                        cur.execute("SELECT 1")
-                        entry["last_used"] = now
-                        return entry["conn"]
-                    except Exception:
-                        logger.warning(f"[HorusSQLPool] Conexao morta para company={self.company_id}. Reconectando.")
+                    # Testar liveness com lock da conexao
+                    with entry["lock"]:
                         try:
-                            entry["conn"].close()
+                            with entry["conn"].cursor() as cur:
+                                cur.execute("SELECT 1")
+                                cur.fetchone()  # Drena resultado para evitar envio de TDS CANCEL
+                            entry["last_used"] = now
+                            return entry
                         except Exception:
-                            pass
-                        entry = None
+                            logger.warning(f"[HorusSQLPool] Conexao morta para company={self.company_id}. Reconectando.")
+                            try:
+                                entry["conn"].close()
+                            except Exception:
+                                pass
+                            _CONNECTION_POOL.pop(self._conn_key, None)
+                            entry = None
 
             # Criar nova conexao
             raw_host = self._settings.horus_sql_host.strip()
@@ -124,7 +129,7 @@ class HorusSQLClient:
             username = self._settings.horus_sql_username.strip()
             password = self._decrypt_password()
 
-            logger.info("[HorusSQLPool] Criando nova conexao (pytds): {username}@{host}:{port}/{database}")
+            logger.info(f"[HorusSQLPool] Criando nova conexao (pytds): {username}@{host}:{port}/{database}")
 
             try:
                 conn = pytds.connect(
@@ -134,26 +139,36 @@ class HorusSQLClient:
                     password=password,
                     database=database,
                     login_timeout=10,
+                    timeout=30,
+                    autocommit=True,
                     as_dict=True,
                 )
-                _CONNECTION_POOL[self._conn_key] = {
+                entry = {
                     "conn": conn,
+                    "lock": threading.Lock(),
                     "last_used": now,
                 }
-                logger.info("[HorusSQLPool] Conexao estabelecida para company={self.company_id}")
-                return conn
+                _CONNECTION_POOL[self._conn_key] = entry
+                logger.info(f"[HorusSQLPool] Conexao estabelecida para company={self.company_id}")
+                return entry
             finally:
                 password = ""  # limpar da memoria
+
+    def _get_connection(self):
+        """Retorna conexao pura do pool."""
+        entry = self._get_connection_entry()
+        return entry["conn"]
 
     def test_connection(self) -> dict:
         """
         Testa conectividade TCP + autenticacao + selecao do banco.
         """
         try:
-            conn = self._get_connection()
-            with conn.cursor() as cur:  # [M1] cursor fechado via context manager
-                cur.execute("SELECT @@VERSION AS version, DB_NAME() AS database_name, GETDATE() AS server_time")
-                row = cur.fetchone()
+            entry = self._get_connection_entry()
+            with entry["lock"]:
+                with entry["conn"].cursor() as cur:
+                    cur.execute("SELECT @@VERSION AS version, DB_NAME() AS database_name, GETDATE() AS server_time")
+                    row = cur.fetchone()
             return {
                 "status": "connected",
                 "database": row.get("database_name") if row else self._settings.horus_sql_database,
@@ -165,7 +180,7 @@ class HorusSQLClient:
         except Exception as e:
             with _POOL_LOCK:
                 _CONNECTION_POOL.pop(self._conn_key, None)
-            logger.error("[HorusSQLClient] Falha no test_connection company={self.company_id}: {e}")
+            logger.error(f"[HorusSQLClient] Falha no test_connection company={self.company_id}: {e}")
             return {"status": "error", "message": str(e)}
 
     def query(self, sql: str, params: Optional[tuple] = None, max_rows: int = 2000) -> List[Dict[str, Any]]:
@@ -174,20 +189,19 @@ class HorusSQLClient:
         Apenas SELECTs — nao execute DDL ou DML por este metodo.
 
         [PERF] max_rows limita retorno para evitar estourar memoria com queries sem LIMIT.
-        [M1]   Cursor fechado via context manager — evita acumulo de cursores no pool.
+        [M1]   Lock de conexao garante thread-safety e context manager garante fechamento do cursor.
         """
         try:
-            conn = self._get_connection()
-            with conn.cursor() as cur:  # [M1] context manager garante fechamento do cursor
-                if params:
-                    cur.execute(sql, params)
-                else:
-                    cur.execute(sql)
-                rows = cur.fetchmany(max_rows) if max_rows else cur.fetchall()
-            with _POOL_LOCK:
-                if self._conn_key in _CONNECTION_POOL:
-                    _CONNECTION_POOL[self._conn_key]["last_used"] = time.time()
-            return rows or []
+            entry = self._get_connection_entry()
+            with entry["lock"]:
+                with entry["conn"].cursor() as cur:
+                    if params:
+                        cur.execute(sql, params)
+                    else:
+                        cur.execute(sql)
+                    rows = cur.fetchmany(max_rows) if max_rows else cur.fetchall()
+                entry["last_used"] = time.time()
+                return rows or []
         except Exception as e:
             logger.error("[HorusSQLClient] Erro na query company=%s: %s", self.company_id, e)
             with _POOL_LOCK:
@@ -207,7 +221,7 @@ class HorusSQLClient:
                     entry["conn"].close()
                 except Exception:
                     pass
-                logger.info("[HorusSQLPool] Conexao invalidada para company={self.company_id}")
+                logger.info(f"[HorusSQLPool] Conexao invalidada para company={self.company_id}")
 
     @property
     def cod_empresa(self) -> str:

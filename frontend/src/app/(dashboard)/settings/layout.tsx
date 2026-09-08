@@ -26,6 +26,7 @@ interface Company {
   module_consignment: boolean;
   module_logistica_horus: boolean;
   module_horus_sql?: boolean;
+  modulo_autores_ativo?: boolean;
   active: boolean;
 }
 

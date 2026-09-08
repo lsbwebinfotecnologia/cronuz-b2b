@@ -18,10 +18,13 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 interface SummaryData {
   total_planilha_qtd: number;
   total_planilha_valor: number;
+  total_planilha_liq?: number;
   ready_qtd: number;
   ready_valor: number;
   divergence_qtd: number;
   divergence_valor: number;
+  divergence_diff_total?: number;
+  total_taxa_vindi?: number;
   already_paid_qtd: number;
   already_paid_valor?: number;
   abertos_qtd?: number;
@@ -55,6 +58,12 @@ interface ReleaseItem {
   documento: string;
   valor_vindi: number;
   valor_horus?: number;
+  valor_liquido?: number;
+  valor_bruto?: number;
+  taxa?: number;
+  diff_taxa?: number;
+  diff_taxa_abs?: number;
+  diferenca_valor_abs?: number;
   diferenca_valor?: number;
   data_pagamento: string;
   status_horus?: string;
@@ -140,6 +149,59 @@ export default function FinanceiroVindiPage() {
     } catch (e: any) {
       toast.error('Erro ao baixar modelo de planilha.');
     }
+  };
+
+  // Exportar itens visíveis (displayedItems) como CSV
+  const handleExport = (items: typeof displayedItems) => {
+    if (!items || items.length === 0) {
+      toast.error('Nenhum dado para exportar.');
+      return;
+    }
+
+    const headers = [
+      'Pedido Web', 'Pedido Horus', 'Filial', 'Lançamento', 'NF',
+      'Cliente', 'Forma Pagamento', 'Parcela', 'Vindi Bruto', 'Vindi Líq.',
+      'Valor Horus', 'Situação ERP', 'Borderô', 'Div. Título', 'Taxa Vindi', 'Motivo'
+    ];
+
+    const escape = (v: unknown) => {
+      const s = String(v ?? '').replace(/"/g, '""');
+      return `"${s}"`;
+    };
+    const fmtNum = (v: number | undefined) =>
+      v !== undefined ? v.toFixed(2).replace('.', ',') : '';
+
+    const rows = items.map(it => [
+      it.pedido_web,
+      it.cod_ped_venda ?? '',
+      it.cod_filial ?? '',
+      it.nro_lancamento ?? '',
+      it.nro_nota_fiscal ?? '',
+      it.cliente_nome ?? '',
+      it.forma_pagamento ?? '',
+      it.total_parcelas && it.total_parcelas > 1 ? `${it.parcela_num}/${it.total_parcelas}` : '',
+      fmtNum(it.valor_vindi),
+      fmtNum(it.valor_liquido),
+      fmtNum(it.valor_horus),
+      it.situacao_horus ?? it.status_horus ?? '',
+      it.cod_bordero ?? '',
+      fmtNum(it.diferenca_valor),
+      fmtNum(it.diff_taxa !== undefined ? Math.abs(it.diff_taxa) : (it.taxa ? it.taxa : undefined)),
+      it.motivo ?? '',
+    ].map(escape).join(';'));
+
+    const bom = '\uFEFF'; // BOM para Excel reconhecer UTF-8
+    const csv = bom + [headers.map(escape).join(';'), ...rows].join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `financeiro_vindi_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast.success(`${items.length} registros exportados com sucesso!`);
   };
 
   // Upload e Leitura da Planilha
@@ -536,7 +598,14 @@ export default function FinanceiroVindiPage() {
             <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
               <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total na Planilha</p>
               <p className="text-lg font-black text-slate-900 dark:text-white mt-1">{formatBRL(summary.total_planilha_valor)}</p>
-              <p className="text-xs text-slate-500 mt-0.5">{summary.total_planilha_qtd} títulos importados</p>
+              <div className="flex flex-col gap-1 mt-0.5 text-xs text-slate-500">
+                <span>{summary.total_planilha_qtd} títulos importados</span>
+                {summary.total_planilha_liq ? (
+                  <span className="text-violet-600 dark:text-violet-400 font-semibold" title="Soma do Valor Líquido na planilha">
+                    Líq: {formatBRL(summary.total_planilha_liq)}
+                  </span>
+                ) : null}
+              </div>
             </div>
 
             {/* Em Aberto */}
@@ -565,14 +634,18 @@ export default function FinanceiroVindiPage() {
               <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">{countPagos} já liquidados / no borderô</p>
             </div>
 
-            {/* Divergências / Não Encontrados */}
-            <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50/50 dark:border-amber-800/40 dark:bg-amber-950/20 shadow-sm">
+            {/* Taxa Vindi Total */}
+            <div className="p-4 rounded-2xl border border-violet-200 bg-violet-50/50 dark:border-violet-800/40 dark:bg-violet-950/20 shadow-sm">
               <div className="flex items-center justify-between">
-                <p className="text-[11px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">Divergências</p>
-                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <p className="text-[11px] font-bold text-violet-700 dark:text-violet-400 uppercase tracking-wider">Taxa Vindi Total</p>
+                <AlertTriangle className="h-4 w-4 text-violet-500" />
               </div>
-              <p className="text-lg font-black text-amber-700 dark:text-amber-300 mt-1">{formatBRL(summary.divergence_valor)}</p>
-              <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">{countDivergencias} com diferença de valor</p>
+              <p className="text-lg font-black text-violet-700 dark:text-violet-300 mt-1">
+                -{formatBRL(summary.total_taxa_vindi ?? 0)}
+              </p>
+              <p className="text-xs text-violet-600 dark:text-violet-400 mt-0.5">
+                Retido pela Vindi dos {(summary.ready_qtd ?? 0) + (summary.divergence_qtd ?? 0)} títulos
+              </p>
             </div>
           </div>
 
@@ -647,16 +720,32 @@ export default function FinanceiroVindiPage() {
                 </button>
               </div>
 
-              {/* Busca */}
-              <div className="relative w-full sm:w-64">
-                <Search className="h-3.5 w-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Buscar pedido, cliente, NF..."
-                  className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                />
+              {/* Busca + Exportar */}
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="relative w-full sm:w-64">
+                  <Search className="h-3.5 w-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Buscar pedido, cliente, NF..."
+                    className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleExport(displayedItems)}
+                  disabled={displayedItems.length === 0}
+                  title={`Exportar ${displayedItems.length} itens listados como CSV`}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all whitespace-nowrap ${
+                    displayedItems.length > 0
+                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200'
+                      : 'bg-slate-50 dark:bg-slate-900 text-slate-300 dark:text-slate-600 border-slate-100 dark:border-slate-800 cursor-not-allowed'
+                  }`}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Exportar ({displayedItems.length})
+                </button>
               </div>
             </div>
 
@@ -719,15 +808,17 @@ export default function FinanceiroVindiPage() {
                     <th className="p-3">NF</th>
                     <th className="p-3">Cliente / Sacado</th>
                     <th className="p-3 text-right">Valor Vindi</th>
+                    <th className="p-3 text-right text-violet-700 dark:text-violet-300">Vindi Líquido</th>
                     <th className="p-3 text-right">Valor Horus</th>
                     <th className="p-3 text-center">Situação no ERP</th>
-                    <th className="p-3 text-center">Status / Diferença</th>
+                    <th className="p-3 text-center text-amber-700 dark:text-amber-300" title="Divergência do título: Vindi Bruto vs Horus">Div. Título</th>
+                    <th className="p-3 text-center text-violet-700 dark:text-violet-300" title="Taxa retida pela Vindi: Bruto - Líquido">Taxa Vindi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {displayedItems.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="p-8 text-center text-slate-400">
+                      <td colSpan={13} className="p-8 text-center text-slate-400">
                         Nenhum lançamento corresponde ao filtro atual.
                       </td>
                     </tr>
@@ -736,7 +827,9 @@ export default function FinanceiroVindiPage() {
                       const isAberto = item.situacao_horus === 'ABERTO' || (!item.cod_bordero && item.status_horus === 'AB');
                       const isPago = item.situacao_horus === 'PAGO' || Boolean(item.cod_bordero) || (item.status_horus && item.status_horus !== 'AB');
                       const isNotFound = item.category === 'not_found';
-                      const hasDivergence = Boolean(item.diferenca_valor && item.diferenca_valor > 0);
+                      const hasDivergence = Boolean(item.diferenca_valor && Math.abs(item.diferenca_valor) > 0.05);
+                      const taxaVindi = item.diff_taxa ?? (item.taxa ? -item.taxa : 0);
+                      const hasTaxa = Math.abs(taxaVindi) > 0.01;
 
                       return (
                         <tr
@@ -851,12 +944,17 @@ export default function FinanceiroVindiPage() {
                             {formatBRL(item.valor_vindi)}
                           </td>
 
+                          {/* Valor Vindi Líquido */}
+                          <td className="p-3 text-right font-mono font-semibold text-violet-700 dark:text-violet-300">
+                            {item.valor_liquido !== undefined ? formatBRL(item.valor_liquido) : formatBRL(item.valor_vindi)}
+                          </td>
+
                           {/* Valor Horus */}
                           <td className="p-3 text-right font-mono text-slate-700 dark:text-slate-300">
                             {item.valor_horus !== undefined ? formatBRL(item.valor_horus) : '—'}
                           </td>
 
-                          {/* Situação no ERP (ABERTO / PAGO) */}
+                          {/* Situação no ERP */}
                           <td className="p-3 text-center">
                             {isAberto ? (
                               <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-100/70 dark:bg-emerald-950/40 dark:text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-800">
@@ -877,16 +975,41 @@ export default function FinanceiroVindiPage() {
                             )}
                           </td>
 
-                          {/* Status / Diferença */}
+                          {/* Div. Título — Vindi Bruto vs Horus */}
                           <td className="p-3 text-center">
                             {hasDivergence ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-100/70 dark:bg-amber-950/40 dark:text-amber-300 px-2 py-0.5 rounded-full border border-amber-300 dark:border-amber-800" title={item.motivo}>
-                                <AlertTriangle className="h-3 w-3 text-amber-600" /> Dif. R$ {item.diferenca_valor?.toFixed(2)}
+                              <span
+                                className={`inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+                                  (item.diferenca_valor || 0) < 0
+                                    ? 'text-rose-800 bg-rose-50 dark:bg-rose-950/40 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                                    : 'text-amber-800 bg-amber-100/70 dark:bg-amber-950/40 dark:text-amber-300 border-amber-300 dark:border-amber-800'
+                                }`}
+                                title={item.motivo}
+                              >
+                                <AlertTriangle className="h-3 w-3" />
+                                {(item.diferenca_valor || 0) > 0 ? '+' : ''}
+                                R$ {item.diferenca_valor?.toFixed(2)}
                               </span>
                             ) : !isNotFound ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500">
-                                <Check className="h-3 w-3 text-emerald-500" /> Valor confere
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                                <Check className="h-3 w-3" /> OK
                               </span>
+                            ) : (
+                              <span className="text-slate-400 text-[10px]">—</span>
+                            )}
+                          </td>
+
+                          {/* Taxa Vindi — desconto retido pela operadora */}
+                          <td className="p-3 text-center">
+                            {hasTaxa ? (
+                              <span
+                                className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border text-violet-800 bg-violet-50 dark:bg-violet-950/40 dark:text-violet-300 border-violet-200 dark:border-violet-800"
+                                title={`Taxa retida pela Vindi: R$ ${Math.abs(taxaVindi).toFixed(2)}`}
+                              >
+                                -{formatBRL(Math.abs(taxaVindi))}
+                              </span>
+                            ) : !isNotFound ? (
+                              <span className="text-slate-300 text-[10px]">—</span>
                             ) : (
                               <span className="text-slate-400 text-[10px]">{item.motivo || '-'}</span>
                             )}
@@ -896,6 +1019,50 @@ export default function FinanceiroVindiPage() {
                     })
                   )}
                 </tbody>
+                {/* Rodapé de totalização */}
+                {displayedItems.length > 0 && (() => {
+                  const totalDivTitulo = displayedItems.reduce((acc, it) => acc + (it.diferenca_valor || 0), 0);
+                  const totalTaxaVindi = displayedItems.reduce((acc, it) => {
+                    const taxa = it.diff_taxa ?? (it.taxa ? -it.taxa : 0);
+                    return acc + Math.abs(taxa);
+                  }, 0);
+                  const hasDivTitulo = Math.abs(totalDivTitulo) > 0.01;
+                  const hasTaxaVindi = totalTaxaVindi > 0.01;
+
+                  return (
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/50">
+                        <td colSpan={11} className="p-3 text-right">
+                          <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                            Totais ({displayedItems.length} itens listados)
+                          </span>
+                        </td>
+                        <td className="p-3 text-center">
+                          {hasDivTitulo ? (
+                            <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full border ${
+                              totalDivTitulo < 0
+                                ? 'text-rose-800 bg-rose-50 dark:bg-rose-950/40 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                                : 'text-amber-800 bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300 border-amber-300 dark:border-amber-800'
+                            }`}>
+                              {totalDivTitulo > 0 ? '+' : ''}{formatBRL(totalDivTitulo)}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">—</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-center">
+                          {hasTaxaVindi ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full border text-violet-800 bg-violet-50 dark:bg-violet-950/40 dark:text-violet-300 border-violet-200 dark:border-violet-800">
+                              -{formatBRL(totalTaxaVindi)}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  );
+                })()}
               </table>
             </div>
 

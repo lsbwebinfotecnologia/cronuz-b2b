@@ -158,6 +158,9 @@ def _process_table(header_raw: List[str], data_rows: List[List[Any]]) -> Tuple[L
         "pedido": -1,
         "cliente": -1,
         "documento": -1,
+        "valor_bruto": -1,
+        "valor_liquido": -1,
+        "taxa": -1,
         "valor": -1,
         "data_pagamento": -1,
         "status": -1,
@@ -185,9 +188,21 @@ def _process_table(header_raw: List[str], data_rows: List[List[Any]]) -> Tuple[L
         if any(k in h for k in ["documento", "cpf", "cnpj", "cpf_cnpj", "identificacao"]) and col_map["documento"] == -1:
             col_map["documento"] = idx
 
-        # Valor
+        # Valor Bruto / Valor Total (no ERP Horus, títulos a receber são pelo valor nominal/bruto)
+        if any(k in h for k in ["valor_bruto", "vlr_bruto", "total_bruto", "bruto"]) and col_map["valor_bruto"] == -1:
+            col_map["valor_bruto"] = idx
+
+        # Valor Líquido (após retenção de taxa Vindi)
+        if any(k in h for k in ["valor_liquido", "vlr_liquido", "valor_liq", "vlr_liq", "liquido", "net_amount"]) and col_map["valor_liquido"] == -1:
+            col_map["valor_liquido"] = idx
+
+        # Taxa / Retenção
+        if any(k in h for k in ["taxa", "retencao", "tarifa", "fee"]) and col_map["taxa"] == -1:
+            col_map["taxa"] = idx
+
+        # Valor genérico / pago
         if any(k in h for k in [
-            "valor_pago", "valor_liquido", "valor_total", "valor", "vlr_total",
+            "valor_pago", "valor_total", "valor", "vlr_total",
             "vlr_pago", "total", "amount", "valor_da_fatura"
         ]) and col_map["valor"] == -1:
             col_map["valor"] = idx
@@ -220,11 +235,20 @@ def _process_table(header_raw: List[str], data_rows: List[List[Any]]) -> Tuple[L
         col_map["pedido"] = 0
         errors.append("Coluna de Pedido/Referência não identificada com precisão. Utilizando a 1ª coluna.")
 
-    if col_map["valor"] == -1:
+    # Escolhe a melhor coluna para o valor de conciliação com o ERP:
+    # Prioriza Valor Bruto (pois LANCTOS_CRECEBER no Horus guarda o valor bruto da transação)
+    target_val_col = -1
+    if col_map["valor_bruto"] >= 0:
+        target_val_col = col_map["valor_bruto"]
+    elif col_map["valor"] >= 0:
+        target_val_col = col_map["valor"]
+    elif col_map["valor_liquido"] >= 0:
+        target_val_col = col_map["valor_liquido"]
+    else:
         # Procura primeira coluna com 'valor' ou número
         for idx, h in enumerate(headers_norm):
             if "val" in h or "vlr" in h or "tot" in h or "preco" in h:
-                col_map["valor"] = idx
+                target_val_col = idx
                 break
 
     records: List[Dict[str, Any]] = []
@@ -245,14 +269,23 @@ def _process_table(header_raw: List[str], data_rows: List[List[Any]]) -> Tuple[L
         # Normaliza número do pedido (ex: #1234 -> 1234, WEB-1234 -> WEB-1234)
         pedido_clean = raw_pedido.lstrip("#").strip()
 
-        valor_float = _parse_currency(get_val(col_map["valor"])) if col_map["valor"] >= 0 else 0.0
+        valor_bruto_float = _parse_currency(get_val(col_map["valor_bruto"])) if col_map["valor_bruto"] >= 0 else 0.0
+        valor_liq_float = _parse_currency(get_val(col_map["valor_liquido"])) if col_map["valor_liquido"] >= 0 else 0.0
+        taxa_float = _parse_currency(get_val(col_map["taxa"])) if col_map["taxa"] >= 0 else 0.0
+        valor_gen_float = _parse_currency(get_val(col_map["valor"])) if col_map["valor"] >= 0 else 0.0
+
+        final_bruto = valor_bruto_float or valor_gen_float or valor_liq_float
+        final_liq = valor_liq_float or valor_gen_float or valor_bruto_float
 
         records.append({
             "linha": line_idx,
             "pedido_web": pedido_clean,
             "cliente_nome": get_val(col_map["cliente"]) or "-",
             "documento": get_val(col_map["documento"]) or "-",
-            "valor": round(valor_float, 2),
+            "valor": round(final_bruto, 2),
+            "valor_bruto": round(final_bruto, 2),
+            "valor_liquido": round(final_liq, 2),
+            "taxa": round(taxa_float, 2),
             "data_pagamento": get_val(col_map["data_pagamento"]) or "-",
             "status_vindi": get_val(col_map["status"]) or "paid",
             "forma_pagamento": get_val(col_map["forma_pagamento"]) or "-",

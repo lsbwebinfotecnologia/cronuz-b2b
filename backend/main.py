@@ -32,6 +32,7 @@ from app.models import dropship_manifest as dropship_manifest_models
 from app.models import order_conference as order_conference_models
 from app.models import alert as alert_models
 from app.models import hosted_site as hosted_site_models
+from app.models import author as author_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -75,6 +76,9 @@ from app.api import product_search
 from app.api import hosted_sites as hosted_sites_api
 from app.api import horus_sql as horus_sql_api
 from app.api import horus_financial
+from app.api import horus_orders
+from app.api import authors_admin
+from app.api import author_portal
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -112,6 +116,7 @@ order_conference_models.Base.metadata.create_all(bind=engine)
 dropship_models.Base.metadata.create_all(bind=engine)
 alert_models.Base.metadata.create_all(bind=engine)
 hosted_site_models.Base.metadata.create_all(bind=engine)
+author_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -189,6 +194,9 @@ app.include_router(product_search.router, prefix="/product-search", tags=["produ
 app.include_router(hosted_sites_api.router)
 app.include_router(horus_sql_api.router, tags=["horus-sql"])
 app.include_router(horus_financial.router, tags=["horus-financial"])
+app.include_router(horus_orders.router, tags=["horus-orders"])
+app.include_router(authors_admin.router)
+app.include_router(author_portal.router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -380,6 +388,7 @@ class ModuleUpdate(BaseModel):
     module_notifications: Optional[bool] = None
     module_busca_preco: Optional[bool] = None
     module_horus_sql: Optional[bool] = None
+    modulo_autores_ativo: Optional[bool] = None
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(

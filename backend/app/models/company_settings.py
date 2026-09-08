@@ -121,6 +121,7 @@ class CompanySettings(Base):
 
     # ── Horus SQL — Sub-funcionalidades habilitadas pelo Master ──────────────
     horus_sql_feature_vindi_baixa = Column(Boolean, nullable=False, default=False)  # Baixa financeira com Vindi
+    horus_sql_feature_pedidos     = Column(Boolean, nullable=False, default=False)  # Pedidos no Horus Direct
 
     # ── Horus SQL — Parâmetros Bancários para Borderô Financeiro ─────────────
     horus_banco_forma_pagto = Column(String(50), nullable=True)  # Código forma de pagamento (ex: 01, DIN, CAR)
@@ -128,6 +129,9 @@ class CompanySettings(Base):
     horus_banco_agencia     = Column(String(20), nullable=True)  # Código da agência
     horus_banco_conta       = Column(String(30), nullable=True)  # Número da conta corrente
     horus_banco_carteira    = Column(String(20), nullable=True)  # Número da carteira bancária
+
+    # ── Horus SQL — Parâmetros de Vendas ─────────────────────────────────────
+    horus_vendas_metodo     = Column(String(50), nullable=True)  # Método de venda padrão no Horus (COD_METODO)
 
     # ────────────────────────────────────────────────────────────────────────────
 
