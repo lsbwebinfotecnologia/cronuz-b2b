@@ -416,10 +416,10 @@ export default function ProductSearchPage() {
               )}
 
               {/* ── Grid principal: card produto + estoque ── */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 items-start">
 
                 {/* ── Coluna esquerda: card do produto (sticky) ── */}
-                <div className="lg:col-span-1 lg:sticky lg:top-4">
+                <div className="lg:col-span-2 lg:sticky lg:top-4">
                   {product ? (
                     <motion.div
                       key={product.COD_ITEM}
@@ -506,7 +506,7 @@ export default function ProductSearchPage() {
                 </div>
 
                 {/* ── Coluna direita: estoque Horus + distribuidores (empilhados) ── */}
-                <div className="lg:col-span-2 space-y-4">
+                <div className="lg:col-span-3 space-y-4">
 
                   {/* Estoque por Filial (Horus) */}
                   <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
@@ -537,55 +537,54 @@ export default function ProductSearchPage() {
                     )}
 
                     {!stockLoading && product && stockData.length > 0 && (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="text-xs text-slate-400 uppercase tracking-wider border-b border-slate-100 dark:border-slate-800">
-                              <th className="px-4 py-3 text-left font-medium">Filial</th>
-                              <th className="px-4 py-3 text-center font-medium">Empresa</th>
-                              <th className="px-4 py-3 text-center font-medium">Filial</th>
-                              <th className="px-4 py-3 text-center font-medium">Situação</th>
-                              <th className="px-4 py-3 text-right font-medium">Saldo</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
-                            {stockData.map((b, idx) => {
-                              const sit = situacaoLabel(b.situacao_item);
-                              return (
-                                <motion.tr
-                                  key={idx}
-                                  initial={{ opacity: 0, x: 10 }}
-                                  animate={{ opacity: 1, x: 0 }}
-                                  transition={{ delay: idx * 0.04 }}
-                                  className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
-                                >
-                                  <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-100">
-                                    {b.filial_nome}
-                                    {b.erro && <p className="text-xs text-red-500 font-normal mt-0.5">{b.erro}</p>}
-                                  </td>
-                                  <td className="px-4 py-3 text-center text-slate-500">{b.cod_empresa || '—'}</td>
-                                  <td className="px-4 py-3 text-center text-slate-500">{b.cod_filial || '—'}</td>
-                                  <td className="px-4 py-3 text-center">
-                                    {b.situacao_item ? (
-                                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${sit.color}`}>
-                                        {sit.label}
-                                      </span>
-                                    ) : (
-                                      <span className="text-slate-300">—</span>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    <span className={`inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-bold min-w-[2.5rem]
-                                      ${b.saldo > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                                      {b.saldo} un
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-[11px] text-slate-400 uppercase tracking-wider border-b border-slate-100 dark:border-slate-800">
+                            <th className="px-4 py-2.5 text-left font-medium">Filial</th>
+                            <th className="px-4 py-2.5 text-center font-medium">Situação</th>
+                            <th className="px-4 py-2.5 text-right font-medium">Saldo</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+                          {stockData.map((b, idx) => {
+                            const sit = situacaoLabel(b.situacao_item);
+                            return (
+                              <motion.tr
+                                key={idx}
+                                initial={{ opacity: 0, x: 8 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                transition={{ delay: idx * 0.04 }}
+                                className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                              >
+                                <td className="px-4 py-2.5">
+                                  <p className="font-medium text-slate-800 dark:text-slate-100">{b.filial_nome}</p>
+                                  {(b.cod_empresa || b.cod_filial) && (
+                                    <p className="text-[10px] text-slate-400 mt-0.5">
+                                      Emp {b.cod_empresa || '—'} · Fil {b.cod_filial || '—'}
+                                    </p>
+                                  )}
+                                  {b.erro && <p className="text-[10px] text-red-500 mt-0.5">{b.erro}</p>}
+                                </td>
+                                <td className="px-4 py-2.5 text-center">
+                                  {b.situacao_item ? (
+                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${sit.color}`}>
+                                      {sit.label}
                                     </span>
-                                  </td>
-                                </motion.tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
+                                  ) : (
+                                    <span className="text-slate-300 text-xs">—</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-2.5 text-right">
+                                  <span className={`inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-bold min-w-[2.5rem]
+                                    ${b.saldo > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                    {b.saldo} un
+                                  </span>
+                                </td>
+                              </motion.tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     )}
 
                     {!stockLoading && product && stockData.length === 0 && (
