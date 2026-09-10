@@ -73,6 +73,8 @@ from app.api import dropship
 from app.api import sefaz_download
 from app.api import alerts as alerts_api
 from app.api import product_search
+from app.api import distributors as distributors_api
+from app.models import distributor as distributor_models
 from app.api import hosted_sites as hosted_sites_api
 from app.api import horus_sql as horus_sql_api
 from app.api import horus_financial
@@ -191,6 +193,7 @@ app.include_router(dropship.router, prefix="/dropship", tags=["dropship"])
 app.include_router(sefaz_download.router)
 app.include_router(alerts_api.router)
 app.include_router(product_search.router, prefix="/product-search", tags=["product-search"])
+app.include_router(distributors_api.router, tags=["distributors"])
 app.include_router(hosted_sites_api.router)
 app.include_router(horus_sql_api.router, tags=["horus-sql"])
 app.include_router(horus_financial.router, tags=["horus-financial"])

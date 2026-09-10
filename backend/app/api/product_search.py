@@ -190,3 +190,142 @@ async def get_stock_by_branch(
         "cod_item": cod_item,
         "branches": results,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. Estoque de Distribuidores (Catavento, Disal, …)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.get("/distributor-stock")
+async def get_distributor_stock(
+    isbn: str = Query(..., description="ISBN / código de barras do produto"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Consulta o estoque nos distribuidores habilitados para o seller.
+
+    Executa as consultas em paralelo (asyncio.gather) e retorna uma lista
+    com o resultado de cada distribuidor habilitado.
+
+    Retorna:
+        {
+          "isbn": "...",
+          "distributors": [
+            {
+              "slug": "catavento",
+              "name": "Catavento",
+              "enabled": true,
+              "found": true,
+              "saldo": 12,
+              "preco": 49.90,
+              "titulo": "...",
+              "error": null
+            },
+            ...
+          ]
+        }
+    """
+    import asyncio
+    from app.models.distributor import DistributorCredential
+    from app.integrators.catavento_client import CataventoClient
+    from app.integrators.disal_client import DisalClient
+
+    company_id = current_user.company_id
+
+    # Carrega distribuidores habilitados do seller
+    distributors = (
+        db.query(DistributorCredential)
+        .filter(
+            DistributorCredential.company_id == company_id,
+            DistributorCredential.enabled == True,
+        )
+        .order_by(DistributorCredential.slug)
+        .all()
+    )
+
+    if not distributors:
+        return {"isbn": isbn, "distributors": []}
+
+    async def query_catavento(dist: DistributorCredential):
+        client = CataventoClient(
+            base_url=dist.base_url or "",
+            username=dist.username or "",
+            password=dist.password or "",
+            token=dist.token,
+            token_expires=dist.token_expires,
+        )
+        result = await client.get_stock_by_isbn(isbn)
+
+        # Persiste token renovado no banco (sem bloquear a resposta)
+        if client.token_renewed:
+            try:
+                dist_db = db.query(DistributorCredential).filter(DistributorCredential.id == dist.id).first()
+                if dist_db:
+                    dist_db.token        = client.new_token
+                    dist_db.token_expires = client.token_expires
+                    db.commit()
+            except Exception:
+                pass
+
+        return {
+            "slug":   dist.slug,
+            "name":   dist.name,
+            "enabled": True,
+            "found":  result.get("found", False),
+            "saldo":  result.get("saldo", 0),
+            "preco":  result.get("preco"),
+            "titulo": result.get("titulo"),
+            "error":  result.get("error"),
+        }
+
+    async def query_disal(dist: DistributorCredential):
+        client = DisalClient(
+            base_url=dist.base_url or "",
+            api_key=dist.api_key or "",
+        )
+        result = await client.get_stock_by_isbn(isbn)
+        return {
+            "slug":   dist.slug,
+            "name":   dist.name,
+            "enabled": True,
+            "found":  result.get("found", False),
+            "saldo":  result.get("saldo", 0),
+            "preco":  result.get("preco"),
+            "titulo": result.get("titulo"),
+            "error":  result.get("error"),
+        }
+
+    # Monta coroutines por distribuidor
+    tasks = []
+    for dist in distributors:
+        if dist.slug == "catavento":
+            tasks.append(query_catavento(dist))
+        elif dist.slug == "disal":
+            tasks.append(query_disal(dist))
+        else:
+            # Distribuidor futuro sem integrador implementado — retorna stub
+            async def _not_implemented(d=dist):
+                return {
+                    "slug":    d.slug,
+                    "name":    d.name,
+                    "enabled": True,
+                    "found":   False,
+                    "saldo":   0,
+                    "preco":   None,
+                    "titulo":  None,
+                    "error":   "Integrador não implementado.",
+                }
+            tasks.append(_not_implemented())
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    output = []
+    for r in results:
+        if isinstance(r, Exception):
+            output.append({"slug": "?", "name": "?", "enabled": True, "found": False, "saldo": 0, "error": str(r)})
+        else:
+            output.append(r)
+
+    return {"isbn": isbn, "distributors": output}
+

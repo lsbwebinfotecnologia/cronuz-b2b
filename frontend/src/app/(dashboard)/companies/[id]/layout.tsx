@@ -3,7 +3,7 @@
 import { useEffect, useState, createContext, useContext } from 'react';
 import Link from 'next/link';
 import { usePathname, useParams, useRouter } from 'next/navigation';
-import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, DatabaseZap, Boxes, Settings, BookOpen, PackageCheck, Bell } from 'lucide-react';
+import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, DatabaseZap, Boxes, Settings, BookOpen, PackageCheck, Bell, Truck } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 
 interface Company {
@@ -110,6 +110,7 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
     { name: 'Contratos', path: `/companies/${companyId}/contracts`, icon: FileSignature, isContract: true },
     { name: 'Faturas', path: `/companies/${companyId}/invoices`, icon: Receipt },
     { name: 'Integrações', path: `/companies/${companyId}/integrations`, icon: Plug },
+    { name: 'Distribuidores', path: `/companies/${companyId}/distributors`, icon: Truck },
     { name: 'Configurações', path: `/companies/${companyId}/settings`, icon: Settings },
   ];
 

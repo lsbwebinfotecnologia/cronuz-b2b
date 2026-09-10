@@ -17,6 +17,7 @@ import {
   Minimize2,
   X,
   Building2,
+  Truck,
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -67,6 +68,17 @@ type BranchStock = {
   erro?: string;
 };
 
+type DistributorResult = {
+  slug: string;
+  name: string;
+  enabled: boolean;
+  found: boolean;
+  saldo: number;
+  preco?: number | null;
+  titulo?: string | null;
+  error?: string | null;
+};
+
 // ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
@@ -104,6 +116,10 @@ export default function ProductSearchPage() {
   const [products, setProducts]   = useState<HorusProduct[]>([]);
   const [stockData, setStockData] = useState<BranchStock[]>([]);
   const [searched, setSearched]   = useState(false);
+
+  // Distribuidores
+  const [distLoading, setDistLoading] = useState(false);
+  const [distData,    setDistData]    = useState<DistributorResult[]>([]);
 
   // Dados do seller
   const [companyName, setCompanyName]   = useState('');
@@ -183,22 +199,44 @@ export default function ProductSearchPage() {
   const selectProduct = useCallback(async (p: HorusProduct) => {
     setProduct(p);
     setStockData([]);
+    setDistData([]);
     if (!p.COD_ITEM) return;
 
+    const token = getToken();
+
+    // Horus stock + distribuidor em paralelo
     setStockLoading(true);
-    try {
-      const token = getToken();
-      const res = await fetch(`${apiUrl}/product-search/stock?cod_item=${p.COD_ITEM}`, {
+    setDistLoading(true);
+
+    const isbn = p.COD_BARRA_ITEM || p.COD_ISBN_ITEM || '';
+
+    const [horusRes, distRes] = await Promise.allSettled([
+      fetch(`${apiUrl}/product-search/stock?cod_item=${p.COD_ITEM}`, {
         headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); toast.error(err.detail || 'Erro ao buscar estoque.'); return; }
-      const data = await res.json();
+      }),
+      isbn
+        ? fetch(`${apiUrl}/product-search/distributor-stock?isbn=${encodeURIComponent(isbn)}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    // Horus
+    if (horusRes.status === 'fulfilled' && horusRes.value?.ok) {
+      const data = await horusRes.value.json();
       setStockData(data.branches || []);
-    } catch {
-      toast.error('Erro ao consultar estoque.');
-    } finally {
-      setStockLoading(false);
+    } else {
+      toast.error('Erro ao consultar estoque no Horus.');
     }
+    setStockLoading(false);
+
+    // Distribuidores
+    if (distRes.status === 'fulfilled' && distRes.value && (distRes.value as Response).ok) {
+      const data = await (distRes.value as Response).json();
+      setDistData(data.distributors || []);
+    }
+    setDistLoading(false);
+
   }, [apiUrl]);
 
   // ──────────────────────────────────────────
@@ -319,204 +357,333 @@ export default function ProductSearchPage() {
               className="grid grid-cols-1 lg:grid-cols-3 gap-6"
             >
               {/* ── Coluna produto ── */}
-              <div className="lg:col-span-1 space-y-4">
 
-                {/* Lista múltiplos resultados */}
-                {products.length > 1 && (
-                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm divide-y divide-slate-100 dark:divide-slate-800">
-                    <p className="px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      {products.length} resultados
+              {/* ── Strip horizontal de múltiplos resultados ── */}
+              {products.length > 1 && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden"
+                >
+                  <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
+                    <Search className="w-3.5 h-3.5 text-slate-400" />
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      {products.length} resultados encontrados — selecione um:
                     </p>
-                    {products.map(p => (
-                      <button
-                        key={p.COD_ITEM}
-                        onClick={() => selectProduct(p)}
-                        className={`w-full text-left px-4 py-3 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors
-                          ${product?.COD_ITEM === p.COD_ITEM ? 'bg-[#00b4b4]/5 border-l-2 border-[#00b4b4]' : ''}`}
-                      >
-                        <p className="font-medium text-slate-800 dark:text-slate-100 line-clamp-1">{p.NOM_ITEM}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">{p.COD_BARRA_ITEM || `Cód ${p.COD_ITEM}`}</p>
-                      </button>
-                    ))}
                   </div>
-                )}
+                  <div className="flex gap-2 overflow-x-auto px-4 py-3 scrollbar-thin scrollbar-thumb-slate-200">
+                    {products.map(p => {
+                      const isActive = product?.COD_ITEM === p.COD_ITEM;
+                      return (
+                        <button
+                          key={p.COD_ITEM}
+                          onClick={() => selectProduct(p)}
+                          className={`flex-shrink-0 flex flex-col items-start text-left rounded-xl border px-3 py-2.5 min-w-[180px] max-w-[220px] transition-all duration-150
+                            ${isActive
+                              ? 'border-[#00b4b4] bg-[#00b4b4]/5 shadow-sm ring-1 ring-[#00b4b4]/30'
+                              : 'border-slate-200 dark:border-slate-700 hover:border-[#00b4b4]/40 hover:bg-slate-50 dark:hover:bg-slate-800'
+                            }`}
+                        >
+                          {/* Mini capa */}
+                          {p.COVER_URL ? (
+                            <img
+                              src={p.COVER_URL}
+                              alt=""
+                              className="w-8 h-10 object-contain rounded mb-1.5 bg-slate-50"
+                              onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                            />
+                          ) : (
+                            <div className="w-8 h-10 rounded mb-1.5 bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+                              <BookOpen className="w-3.5 h-3.5 text-slate-300" />
+                            </div>
+                          )}
+                          <p className="text-xs font-semibold text-slate-800 dark:text-slate-100 line-clamp-2 leading-tight">
+                            {p.NOM_ITEM}
+                          </p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 truncate w-full">
+                            {p.COD_BARRA_ITEM || `#${p.COD_ITEM}`}
+                          </p>
+                          {isActive && (
+                            <span className="mt-1.5 text-[9px] font-bold uppercase tracking-wider text-[#00b4b4]">
+                              ● Selecionado
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
 
-                {/* Card do produto */}
-                {product ? (
-                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
-                    <div className="bg-slate-50 dark:bg-slate-800 px-4 py-3 border-b border-slate-200 dark:border-slate-700">
-                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                        <BookOpen className="w-3.5 h-3.5" />
-                        Resultado da Pesquisa
-                      </p>
-                    </div>
+              {/* ── Grid principal: card produto + estoque ── */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
 
-                    <div className="p-4 space-y-4">
-                      {/* Capa */}
-                      {product.COVER_URL && (
-                        <div className="flex justify-center">
-                          <img
-                            src={product.COVER_URL}
-                            alt={`Capa de ${product.NOM_ITEM}`}
-                            className="h-48 object-contain rounded-lg shadow-md border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800"
-                            onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                          />
-                        </div>
-                      )}
-
-                      {/* Título e preço */}
-                      <div>
-                        <h2 className="font-bold text-slate-800 dark:text-slate-100 leading-snug">{product.NOM_ITEM}</h2>
-                        {product.VLR_CAPA && (
-                          <p className="text-xl font-bold text-[#00b4b4] mt-1">{formatPrice(product.VLR_CAPA)}</p>
-                        )}
+                {/* ── Coluna esquerda: card do produto (sticky) ── */}
+                <div className="lg:col-span-1 lg:sticky lg:top-4">
+                  {product ? (
+                    <motion.div
+                      key={product.COD_ITEM}
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden"
+                    >
+                      <div className="bg-slate-50 dark:bg-slate-800 px-4 py-3 border-b border-slate-200 dark:border-slate-700">
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                          <BookOpen className="w-3.5 h-3.5" />
+                          Produto Selecionado
+                        </p>
                       </div>
 
-                      {/* Situação */}
-                      {product.SITUACAO_ITEM && (
-                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${situacaoLabel(product.SITUACAO_ITEM).color}`}>
-                          {situacaoLabel(product.SITUACAO_ITEM).label}
-                        </span>
-                      )}
+                      <div className="p-4 space-y-4">
+                        {/* Capa */}
+                        {product.COVER_URL && (
+                          <div className="flex justify-center">
+                            <img
+                              src={product.COVER_URL}
+                              alt={`Capa de ${product.NOM_ITEM}`}
+                              className="h-48 object-contain rounded-lg shadow-md border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800"
+                              onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                            />
+                          </div>
+                        )}
 
-                      {/* Metadados */}
-                      <div className="space-y-1.5 text-sm text-slate-600 dark:text-slate-300">
-                        {product.COD_BARRA_ITEM && <p><span className="text-slate-400">ISBN:</span> {product.COD_BARRA_ITEM}</p>}
-                        {product.NOM_EDITORA    && <p><span className="text-slate-400">Editora:</span> {product.NOM_EDITORA}</p>}
-                        {product.SELO           && <p><span className="text-slate-400">Selo:</span> {product.SELO}</p>}
-                        {product.TIPO           && <p><span className="text-slate-400">Tipo:</span> {product.TIPO}</p>}
-                        {product.GENERO_NIVEL_1 && (
-                          <p>
-                            <span className="text-slate-400">Gênero:</span>{' '}
-                            {[product.GENERO_NIVEL_1, product.GENERO_NIVEL_2].filter(Boolean).join(' › ')}
+                        {/* Título e preço */}
+                        <div>
+                          <h2 className="font-bold text-slate-800 dark:text-slate-100 leading-snug">{product.NOM_ITEM}</h2>
+                          {product.VLR_CAPA && (
+                            <p className="text-xl font-bold text-[#00b4b4] mt-1">{formatPrice(product.VLR_CAPA)}</p>
+                          )}
+                        </div>
+
+                        {/* Situação */}
+                        {product.SITUACAO_ITEM && (
+                          <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${situacaoLabel(product.SITUACAO_ITEM).color}`}>
+                            {situacaoLabel(product.SITUACAO_ITEM).label}
+                          </span>
+                        )}
+
+                        {/* Metadados */}
+                        <div className="space-y-1.5 text-sm text-slate-600 dark:text-slate-300">
+                          {product.COD_BARRA_ITEM && <p><span className="text-slate-400">ISBN:</span> {product.COD_BARRA_ITEM}</p>}
+                          {product.NOM_EDITORA    && <p><span className="text-slate-400">Editora:</span> {product.NOM_EDITORA}</p>}
+                          {product.SELO           && <p><span className="text-slate-400">Selo:</span> {product.SELO}</p>}
+                          {product.TIPO           && <p><span className="text-slate-400">Tipo:</span> {product.TIPO}</p>}
+                          {product.GENERO_NIVEL_1 && (
+                            <p>
+                              <span className="text-slate-400">Gênero:</span>{' '}
+                              {[product.GENERO_NIVEL_1, product.GENERO_NIVEL_2].filter(Boolean).join(' › ')}
+                            </p>
+                          )}
+                          {product.COD_ITEM && <p><span className="text-slate-400">Cód. Horus:</span> {product.COD_ITEM}</p>}
+                        </div>
+
+                        {/* Saldo geral */}
+                        {product.SALDO_DISPONIVEL !== undefined && (
+                          <div className="flex items-center gap-2 rounded-lg bg-slate-50 dark:bg-slate-800 px-3 py-2">
+                            <Package className="w-4 h-4 text-slate-400 shrink-0" />
+                            <div>
+                              <p className="text-xs text-slate-400">Saldo geral (Horus)</p>
+                              <p className="font-semibold text-slate-800 dark:text-slate-100">{product.SALDO_DISPONIVEL} un.</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Sinopse */}
+                        {product.DESC_SINOPSE && (
+                          <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed line-clamp-5">
+                            {product.DESC_SINOPSE}
                           </p>
                         )}
-                        {product.COD_ITEM && <p><span className="text-slate-400">Cód. Horus:</span> {product.COD_ITEM}</p>}
                       </div>
-
-                      {/* Saldo geral */}
-                      {product.SALDO_DISPONIVEL !== undefined && (
-                        <div className="flex items-center gap-2 rounded-lg bg-slate-50 dark:bg-slate-800 px-3 py-2">
-                          <Package className="w-4 h-4 text-slate-400 shrink-0" />
-                          <div>
-                            <p className="text-xs text-slate-400">Saldo geral (Horus)</p>
-                            <p className="font-semibold text-slate-800 dark:text-slate-100">{product.SALDO_DISPONIVEL} un.</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Sinopse */}
-                      {product.DESC_SINOPSE && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed line-clamp-5">
-                          {product.DESC_SINOPSE}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm p-8 flex flex-col items-center justify-center text-center gap-2 text-slate-400">
-                    <AlertCircle className="w-8 h-8" />
-                    <p className="text-sm">Nenhum produto encontrado.</p>
-                    <p className="text-xs">Tente outro termo ou opção de busca.</p>
-                  </div>
-                )}
-              </div>
-
-              {/* ── Coluna estoque ── */}
-              <div className="lg:col-span-2">
-                <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden h-full">
-                  <div className="bg-slate-50 dark:bg-slate-800 px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                      <BarChart3 className="w-3.5 h-3.5" />
-                      Estoque por Filial
-                    </p>
-                    {product && (
-                      <span className="text-xs text-slate-400">
-                        Produto: <strong className="text-slate-600 dark:text-slate-300">#{product.COD_ITEM}</strong>
-                      </span>
-                    )}
-                  </div>
-
-                  {stockLoading && (
-                    <div className="flex items-center justify-center gap-2 py-16 text-slate-400">
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      <span className="text-sm">Consultando saldo nas filiais…</span>
-                    </div>
-                  )}
-
-                  {!stockLoading && !product && (
-                    <div className="flex flex-col items-center justify-center py-16 gap-2 text-slate-400">
-                      <MapPin className="w-8 h-8" />
-                      <p className="text-sm">Realize uma busca para ver o saldo por filial.</p>
-                    </div>
-                  )}
-
-                  {!stockLoading && product && stockData.length > 0 && (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="text-xs text-slate-400 uppercase tracking-wider border-b border-slate-100 dark:border-slate-800">
-                            <th className="px-4 py-3 text-left font-medium">Filial</th>
-                            <th className="px-4 py-3 text-center font-medium">Empresa</th>
-                            <th className="px-4 py-3 text-center font-medium">Filial</th>
-                            <th className="px-4 py-3 text-center font-medium">Situação</th>
-                            <th className="px-4 py-3 text-right font-medium">Saldo</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
-                          {stockData.map((b, idx) => {
-                            const sit = situacaoLabel(b.situacao_item);
-                            return (
-                              <motion.tr
-                                key={idx}
-                                initial={{ opacity: 0, x: 10 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                transition={{ delay: idx * 0.04 }}
-                                className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
-                              >
-                                <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-100">
-                                  {b.filial_nome}
-                                  {b.erro && <p className="text-xs text-red-500 font-normal mt-0.5">{b.erro}</p>}
-                                </td>
-                                <td className="px-4 py-3 text-center text-slate-500">{b.cod_empresa || '—'}</td>
-                                <td className="px-4 py-3 text-center text-slate-500">{b.cod_filial || '—'}</td>
-                                <td className="px-4 py-3 text-center">
-                                  {b.situacao_item ? (
-                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${sit.color}`}>
-                                      {sit.label}
-                                    </span>
-                                  ) : (
-                                    <span className="text-slate-300">—</span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-3 text-right">
-                                  <span className={`inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-bold min-w-[2.5rem]
-                                    ${b.saldo > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                                    {b.saldo} un
-                                  </span>
-                                </td>
-                              </motion.tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {!stockLoading && product && stockData.length === 0 && (
-                    <div className="flex flex-col items-center justify-center py-16 gap-2 text-slate-400">
-                      <MapPin className="w-8 h-8" />
-                      <p className="text-sm">Nenhuma filial configurada ou sem dados de estoque.</p>
-                      <p className="text-xs">
-                        Configure em{' '}
-                        <a href="/logistics/branches" className="text-[#00b4b4] underline hover:no-underline">
-                          Logística Horus → Filiais do Seller
-                        </a>.
-                      </p>
+                    </motion.div>
+                  ) : (
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm p-8 flex flex-col items-center justify-center text-center gap-2 text-slate-400">
+                      <AlertCircle className="w-8 h-8" />
+                      <p className="text-sm">Nenhum produto encontrado.</p>
+                      <p className="text-xs">Tente outro termo ou opção de busca.</p>
                     </div>
                   )}
                 </div>
+
+                {/* ── Coluna direita: estoque Horus + distribuidores (empilhados) ── */}
+                <div className="lg:col-span-2 space-y-4">
+
+                  {/* Estoque por Filial (Horus) */}
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+                    <div className="bg-slate-50 dark:bg-slate-800 px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                        <BarChart3 className="w-3.5 h-3.5" />
+                        Estoque por Filial
+                      </p>
+                      {product && (
+                        <span className="text-xs text-slate-400">
+                          Produto: <strong className="text-slate-600 dark:text-slate-300">#{product.COD_ITEM}</strong>
+                        </span>
+                      )}
+                    </div>
+
+                    {stockLoading && (
+                      <div className="flex items-center justify-center gap-2 py-16 text-slate-400">
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span className="text-sm">Consultando saldo nas filiais…</span>
+                      </div>
+                    )}
+
+                    {!stockLoading && !product && (
+                      <div className="flex flex-col items-center justify-center py-16 gap-2 text-slate-400">
+                        <MapPin className="w-8 h-8" />
+                        <p className="text-sm">Realize uma busca para ver o saldo por filial.</p>
+                      </div>
+                    )}
+
+                    {!stockLoading && product && stockData.length > 0 && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-xs text-slate-400 uppercase tracking-wider border-b border-slate-100 dark:border-slate-800">
+                              <th className="px-4 py-3 text-left font-medium">Filial</th>
+                              <th className="px-4 py-3 text-center font-medium">Empresa</th>
+                              <th className="px-4 py-3 text-center font-medium">Filial</th>
+                              <th className="px-4 py-3 text-center font-medium">Situação</th>
+                              <th className="px-4 py-3 text-right font-medium">Saldo</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+                            {stockData.map((b, idx) => {
+                              const sit = situacaoLabel(b.situacao_item);
+                              return (
+                                <motion.tr
+                                  key={idx}
+                                  initial={{ opacity: 0, x: 10 }}
+                                  animate={{ opacity: 1, x: 0 }}
+                                  transition={{ delay: idx * 0.04 }}
+                                  className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                                >
+                                  <td className="px-4 py-3 font-medium text-slate-800 dark:text-slate-100">
+                                    {b.filial_nome}
+                                    {b.erro && <p className="text-xs text-red-500 font-normal mt-0.5">{b.erro}</p>}
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-slate-500">{b.cod_empresa || '—'}</td>
+                                  <td className="px-4 py-3 text-center text-slate-500">{b.cod_filial || '—'}</td>
+                                  <td className="px-4 py-3 text-center">
+                                    {b.situacao_item ? (
+                                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${sit.color}`}>
+                                        {sit.label}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-300">—</span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className={`inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-bold min-w-[2.5rem]
+                                      ${b.saldo > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                      {b.saldo} un
+                                    </span>
+                                  </td>
+                                </motion.tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {!stockLoading && product && stockData.length === 0 && (
+                      <div className="flex flex-col items-center justify-center py-16 gap-2 text-slate-400">
+                        <MapPin className="w-8 h-8" />
+                        <p className="text-sm">Nenhuma filial configurada ou sem dados de estoque.</p>
+                        <p className="text-xs">
+                          Configure em{' '}
+                          <a href="/logistics/branches" className="text-[#00b4b4] underline hover:no-underline">
+                            Logística Horus → Filiais do Seller
+                          </a>.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Estoque Distribuidores — diretamente abaixo das filiais */}
+                  {(distLoading || distData.length > 0) && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden"
+                    >
+                      <div className="bg-slate-50 dark:bg-slate-800 px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center gap-2">
+                        <Truck className="w-3.5 h-3.5 text-slate-400" />
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                          Estoque Distribuidores
+                        </p>
+                        {distLoading && <Loader2 className="w-3 h-3 animate-spin text-slate-400 ml-1" />}
+                      </div>
+
+                      {distLoading ? (
+                        <div className="flex items-center justify-center gap-2 py-8 text-slate-400">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span className="text-sm">Consultando distribuidores…</span>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-slate-50 dark:divide-slate-800">
+                          {distData.map((d, i) => {
+                            const colors: Record<string, string> = {
+                              catavento: '#16a34a',
+                              disal:     '#2563eb',
+                            };
+                            const color = colors[d.slug] || '#00b4b4';
+                            return (
+                              <motion.div
+                                key={i}
+                                initial={{ opacity: 0, x: 10 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                transition={{ delay: i * 0.06 }}
+                                className="flex items-center justify-between px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                              >
+                                {/* Nome + detalhe */}
+                                <div className="flex items-center gap-3">
+                                  <span
+                                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                                    style={{ background: color }}
+                                  />
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{d.name}</p>
+                                    <p className="text-[11px] text-slate-400 mt-0.5">
+                                      {d.error ? (
+                                        <span className="text-red-500 flex items-center gap-1">
+                                          <AlertCircle className="w-3 h-3 shrink-0" />{d.error}
+                                        </span>
+                                      ) : !d.found ? (
+                                        'Produto não encontrado neste distribuidor'
+                                      ) : (
+                                        <>
+                                          Disponível
+                                          {d.preco ? ` · R$ ${d.preco.toFixed(2).replace('.', ',')}` : ''}
+                                        </>
+                                      )}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {/* Saldo badge */}
+                                <span
+                                  className="inline-flex items-center rounded-full px-3 py-1 text-sm font-bold flex-shrink-0"
+                                  style={{
+                                    background: d.saldo > 0 ? `${color}18` : '#f1f5f9',
+                                    color:      d.saldo > 0 ? color : '#94a3b8',
+                                  }}
+                                >
+                                  {d.saldo} un
+                                </span>
+                              </motion.div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+
+                </div>
               </div>
+
             </motion.div>
           )}
         </AnimatePresence>
