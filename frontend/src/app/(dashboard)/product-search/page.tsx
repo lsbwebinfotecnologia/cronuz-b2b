@@ -416,10 +416,10 @@ export default function ProductSearchPage() {
               )}
 
               {/* ── Grid principal: card produto + estoque ── */}
-              <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 items-start">
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr', gap: '20px', alignItems: 'start' }}>
 
                 {/* ── Coluna esquerda: card do produto (sticky) ── */}
-                <div className="lg:col-span-2 lg:sticky lg:top-4">
+                <div style={{ position: 'sticky', top: '16px' }}>
                   {product ? (
                     <motion.div
                       key={product.COD_ITEM}
@@ -506,7 +506,7 @@ export default function ProductSearchPage() {
                 </div>
 
                 {/* ── Coluna direita: estoque Horus + distribuidores (empilhados) ── */}
-                <div className="lg:col-span-3 space-y-4">
+                <div className="space-y-4 min-w-0">
 
                   {/* Estoque por Filial (Horus) */}
                   <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
