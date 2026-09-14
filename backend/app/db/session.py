@@ -1,10 +1,12 @@
 import os
 import sys
 import logging
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 os.environ["PGCLIENTENCODING"] = "UTF8"
