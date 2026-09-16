@@ -20,8 +20,10 @@ import {
   BookOpen,
   Building2,
   PlusCircle,
-  X
+  X,
+  Camera
 } from 'lucide-react';
+import CameraBarcodeScanner from '@/components/inventory/CameraBarcodeScanner';
 import { toast } from 'sonner';
 import { 
   openInventoryDb, 
@@ -90,6 +92,7 @@ export default function PublicOperatorPage() {
 
   // Bipagem
   const [barcodeInput, setBarcodeInput] = useState('');
+  const [useCamera, setUseCamera] = useState(false);
   const [lastScanned, setLastScanned] = useState<LastScanned | null>(null);
   const [sessionScannedCount, setSessionScannedCount] = useState(0);
 
@@ -325,9 +328,8 @@ export default function PublicOperatorPage() {
     }
   }
 
-  async function handleBarcodeSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const isbnRaw = barcodeInput.trim();
+  async function processBarcodeScan(rawCode: string) {
+    const isbnRaw = rawCode.trim();
     if (!isbnRaw || !session || !inventory) return;
 
     setBarcodeInput('');
@@ -396,6 +398,11 @@ export default function PublicOperatorPage() {
     if (isOnline) {
       flushPendingScans();
     }
+  }
+
+  async function handleBarcodeSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    processBarcodeScan(barcodeInput);
   }
 
   async function handleConfirmUnregisteredItem(e: React.FormEvent) {
@@ -704,6 +711,50 @@ export default function PublicOperatorPage() {
                 <span className="text-[11px] text-slate-400">peças bipadas nesta sessão</span>
               </div>
 
+              {/* Seletor de Modo: Leitor Físico / Câmera do Celular */}
+              <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 shadow-inner">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUseCamera(false);
+                    setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                  }}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                    !useCamera
+                      ? 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-400 shadow-sm border border-slate-200/80 dark:border-slate-700'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  <ScanBarcode className="h-4 w-4" />
+                  <span>Leitor / Teclado</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setUseCamera(true)}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                    useCamera
+                      ? 'bg-teal-600 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  <Camera className="h-4 w-4" />
+                  <span>Câmera do Celular</span>
+                </button>
+              </div>
+
+              {/* Viewport da Câmera (quando ativado modo Câmera) */}
+              {useCamera && (
+                <CameraBarcodeScanner
+                  isActive={useCamera}
+                  onScan={(code) => processBarcodeScan(code)}
+                  onClose={() => {
+                    setUseCamera(false);
+                    setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                  }}
+                />
+              )}
+
               {/* Input com Foco Travado */}
               <form onSubmit={handleBarcodeSubmit} className="space-y-1">
                 <div className="relative">
@@ -712,14 +763,14 @@ export default function PublicOperatorPage() {
                     ref={barcodeInputRef}
                     type="text"
                     inputMode="numeric"
-                    placeholder="Bipe o código de barras ou ISBN..."
+                    placeholder={useCamera ? "Aponte a câmera ou digite aqui..." : "Bipe o código de barras ou ISBN..."}
                     value={barcodeInput}
                     onChange={(e) => setBarcodeInput(e.target.value)}
                     className="w-full pl-11 pr-4 py-3.5 rounded-2xl border-2 border-teal-500 bg-white dark:bg-slate-900 text-base font-mono font-bold tracking-wider shadow-md focus:outline-none focus:ring-4 focus:ring-teal-500/20"
                   />
                 </div>
                 <p className="text-[10px] text-center text-slate-400">
-                  Foco travado para leitor físico ou scanner.
+                  {useCamera ? "A câmera lê automaticamente ao enquadrar o código." : "Foco travado para leitor físico Bluetooth/USB."}
                 </p>
               </form>
 
