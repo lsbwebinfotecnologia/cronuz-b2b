@@ -104,7 +104,7 @@ export function middleware(request: NextRequest) {
   
   const isLoginPage = url.pathname === '/login';
   const isUploads = url.pathname.startsWith('/uploads');
-  const isPublicPage = url.pathname.startsWith('/h/') || url.pathname.startsWith('/marketing') || url.pathname.startsWith('/public/') || url.pathname.startsWith('/portal-autor');
+  const isPublicPage = url.pathname.startsWith('/h/') || url.pathname.startsWith('/marketing') || url.pathname.startsWith('/public/') || url.pathname.startsWith('/portal-autor') || url.pathname.startsWith('/inventory/op/');
 
   // Skip auth checks for public routes hitting the app domain directly
   if (isUploads || isPublicPage) {

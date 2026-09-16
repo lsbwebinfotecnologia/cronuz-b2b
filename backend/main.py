@@ -33,6 +33,7 @@ from app.models import order_conference as order_conference_models
 from app.models import alert as alert_models
 from app.models import hosted_site as hosted_site_models
 from app.models import author as author_models
+from app.models import inventory as inventory_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -81,6 +82,7 @@ from app.api import horus_financial
 from app.api import horus_orders
 from app.api import authors_admin
 from app.api import author_portal
+from app.api import inventory as inventory_api
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -119,6 +121,7 @@ dropship_models.Base.metadata.create_all(bind=engine)
 alert_models.Base.metadata.create_all(bind=engine)
 hosted_site_models.Base.metadata.create_all(bind=engine)
 author_models.Base.metadata.create_all(bind=engine)
+inventory_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -200,6 +203,8 @@ app.include_router(horus_financial.router, tags=["horus-financial"])
 app.include_router(horus_orders.router, tags=["horus-orders"])
 app.include_router(authors_admin.router)
 app.include_router(author_portal.router)
+app.include_router(inventory_api.router)
+app.include_router(inventory_api.public_router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -392,6 +397,7 @@ class ModuleUpdate(BaseModel):
     module_busca_preco: Optional[bool] = None
     module_horus_sql: Optional[bool] = None
     modulo_autores_ativo: Optional[bool] = None
+    has_inventory_module: Optional[bool] = None
 
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(

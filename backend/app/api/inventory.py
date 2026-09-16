@@ -1,0 +1,1216 @@
+import io
+import csv
+import secrets
+import logging
+from datetime import datetime
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import func, text, desc, case
+import openpyxl
+
+from app.db.session import get_db
+from app.core import dependencies
+from app.models import user as user_models
+from app.models.company import Company
+from app.models.inventory import (
+    Inventory,
+    InventoryItem,
+    InventorySession,
+    InventoryScan,
+    InventoryStatus,
+    SessionStatus,
+    SessionType,
+)
+from app.schemas import inventory as inv_schemas
+
+router = APIRouter(prefix="/companies/{company_id}/inventory", tags=["inventory"])
+public_router = APIRouter(prefix="/inventory/public", tags=["inventory-public"])
+logger = logging.getLogger("cronuz.inventory")
+
+
+def _assert_inventory_access(current_user: user_models.User, company_id: int, db: Session) -> Company:
+    """Valida se o usuário tem permissão para acessar o inventário da empresa."""
+    user_type = getattr(current_user.type, "value", str(current_user.type))
+    if user_type != "MASTER" and current_user.company_id != company_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso restrito a esta empresa.")
+    
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada.")
+    
+    if user_type != "MASTER" and not getattr(company, "has_inventory_module", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Módulo de Inventário não está ativo para esta empresa. Contate o administrador."
+        )
+    
+    return company
+
+
+def _get_inventory_by_token(access_token: str, db: Session) -> Inventory:
+    """Busca o inventário pelo token público garantindo que o acesso esteja ativo."""
+    inv = db.query(Inventory).filter(Inventory.access_token == access_token).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link de inventário inválido ou inexistente.")
+    if not getattr(inv, "is_public_access_enabled", True):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="O acesso rápido por link a este inventário foi desativado pelo gestor.")
+    return inv
+
+
+# ======================================================================
+# ROTAS AUTENTICADAS DO GESTOR (ROUTER)
+# ======================================================================
+
+# ----------------------------------------------------------------------
+# 1. Listagem e Criação de Inventários
+# ----------------------------------------------------------------------
+@router.get("", response_model=List[inv_schemas.InventoryResponse])
+def list_inventories(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    
+    inventories = (
+        db.query(Inventory)
+        .filter(Inventory.company_id == company_id)
+        .order_by(desc(Inventory.created_at))
+        .all()
+    )
+    
+    result = []
+    for inv in inventories:
+        total_scanned = (
+            db.query(func.coalesce(func.sum(InventoryScan.quantity), 0))
+            .filter(InventoryScan.inventory_id == inv.id)
+            .scalar()
+        )
+        total_sessions = db.query(func.count(InventorySession.id)).filter(InventorySession.inventory_id == inv.id).scalar()
+        open_sessions = (
+            db.query(func.count(InventorySession.id))
+            .filter(InventorySession.inventory_id == inv.id, InventorySession.status == SessionStatus.ABERTA.value)
+            .scalar()
+        )
+        
+        # Garante token se inventário for antigo
+        if not inv.access_token:
+            inv.access_token = secrets.token_urlsafe(32)
+            db.commit()
+
+        inv_dict = {
+            "id": inv.id,
+            "company_id": inv.company_id,
+            "code": inv.code,
+            "name": inv.name,
+            "status": inv.status,
+            "description": inv.description,
+            "total_expected_skus": inv.total_expected_skus,
+            "total_scanned_items": int(total_scanned or 0),
+            "total_sessions": int(total_sessions or 0),
+            "open_sessions": int(open_sessions or 0),
+            "access_token": inv.access_token,
+            "is_public_access_enabled": inv.is_public_access_enabled,
+            "created_by_user_id": inv.created_by_user_id,
+            "finalized_by_user_id": inv.finalized_by_user_id,
+            "finalized_at": inv.finalized_at,
+            "created_at": inv.created_at,
+            "updated_at": inv.updated_at,
+        }
+        result.append(inv_schemas.InventoryResponse(**inv_dict))
+        
+    return result
+
+
+@router.post("", response_model=inv_schemas.InventoryResponse)
+def create_inventory(
+    company_id: int,
+    payload: inv_schemas.InventoryCreate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    
+    code = payload.code
+    if not code or not code.strip():
+        now = datetime.now()
+        count_year = (
+            db.query(func.count(Inventory.id))
+            .filter(Inventory.company_id == company_id)
+            .scalar()
+            or 0
+        )
+        code = f"INV-{now.year}-{str(count_year + 1).zfill(3)}"
+    
+    access_token = secrets.token_urlsafe(32)
+
+    new_inv = Inventory(
+        company_id=company_id,
+        code=code.strip(),
+        name=payload.name.strip(),
+        description=payload.description.strip() if payload.description else None,
+        status=InventoryStatus.EM_ANDAMENTO.value,
+        total_expected_skus=0,
+        access_token=access_token,
+        is_public_access_enabled=True,
+        created_by_user_id=current_user.id,
+    )
+    db.add(new_inv)
+    db.commit()
+    db.refresh(new_inv)
+    
+    return inv_schemas.InventoryResponse(
+        id=new_inv.id,
+        company_id=new_inv.company_id,
+        code=new_inv.code,
+        name=new_inv.name,
+        status=new_inv.status,
+        description=new_inv.description,
+        total_expected_skus=new_inv.total_expected_skus,
+        total_scanned_items=0,
+        total_sessions=0,
+        open_sessions=0,
+        access_token=new_inv.access_token,
+        is_public_access_enabled=new_inv.is_public_access_enabled,
+        created_by_user_id=new_inv.created_by_user_id,
+        finalized_by_user_id=None,
+        finalized_at=None,
+        created_at=new_inv.created_at,
+        updated_at=new_inv.updated_at,
+    )
+
+
+# ----------------------------------------------------------------------
+# 2. Detalhes de um Inventário Específico
+# ----------------------------------------------------------------------
+@router.get("/{inventory_id}", response_model=inv_schemas.InventoryResponse)
+def get_inventory(
+    company_id: int,
+    inventory_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    
+    # Garante token se estiver vazio
+    if not inv.access_token:
+        inv.access_token = secrets.token_urlsafe(32)
+        db.commit()
+
+    total_scanned = (
+        db.query(func.coalesce(func.sum(InventoryScan.quantity), 0))
+        .filter(InventoryScan.inventory_id == inv.id)
+        .scalar()
+    )
+    total_sessions = db.query(func.count(InventorySession.id)).filter(InventorySession.inventory_id == inv.id).scalar()
+    open_sessions = (
+        db.query(func.count(InventorySession.id))
+        .filter(InventorySession.inventory_id == inv.id, InventorySession.status == SessionStatus.ABERTA.value)
+        .scalar()
+    )
+    
+    return inv_schemas.InventoryResponse(
+        id=inv.id,
+        company_id=inv.company_id,
+        code=inv.code,
+        name=inv.name,
+        status=inv.status,
+        description=inv.description,
+        total_expected_skus=inv.total_expected_skus,
+        total_scanned_items=int(total_scanned or 0),
+        total_sessions=int(total_sessions or 0),
+        open_sessions=int(open_sessions or 0),
+        access_token=inv.access_token,
+        is_public_access_enabled=inv.is_public_access_enabled,
+        created_by_user_id=inv.created_by_user_id,
+        finalized_by_user_id=inv.finalized_by_user_id,
+        finalized_at=inv.finalized_at,
+        created_at=inv.created_at,
+        updated_at=inv.updated_at,
+    )
+
+
+@router.post("/{inventory_id}/regenerate-token")
+def regenerate_inventory_token(
+    company_id: int,
+    inventory_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    
+    inv.access_token = secrets.token_urlsafe(32)
+    db.commit()
+    db.refresh(inv)
+    return {"access_token": inv.access_token}
+
+
+# ----------------------------------------------------------------------
+# 3. Carga da Base com Validação Estrita de Duplicidade
+# ----------------------------------------------------------------------
+@router.post("/{inventory_id}/upload-sheet")
+async def upload_inventory_sheet(
+    company_id: int,
+    inventory_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    
+    if inv.status == InventoryStatus.FINALIZADO.value:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Inventário finalizado. Não é permitido carregar novos itens."
+        )
+    
+    filename = file.filename.lower()
+    content = await file.read()
+    
+    raw_rows = []
+    
+    if filename.endswith(".xlsx"):
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        sheet = wb.active
+        headers = [str(cell.value).strip().lower() if cell.value is not None else "" for cell in sheet[1]]
+        
+        isbn_idx = next((i for i, h in enumerate(headers) if h in ["isbn", "ean", "codigo", "codigo de barras"]), None)
+        title_idx = next((i for i, h in enumerate(headers) if h in ["titulo", "título", "nome", "descricao", "descrição"]), None)
+        publisher_idx = next((i for i, h in enumerate(headers) if h in ["editora", "marca", "fabricante"]), None)
+        category_idx = next((i for i, h in enumerate(headers) if h in ["categoria", "secao", "seção"]), None)
+        location_idx = next((i for i, h in enumerate(headers) if h in ["endereco", "endereço", "local", "localizacao", "localização", "prateleira"]), None)
+        
+        if isbn_idx is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Coluna 'ISBN' ou 'Código de Barras' não encontrada na planilha.")
+        
+        for line_num, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+            if not row or not any(row):
+                continue
+            isbn_val = str(row[isbn_idx]).strip() if row[isbn_idx] is not None else ""
+            if not isbn_val or isbn_val == "None":
+                continue
+            if isbn_val.endswith(".0"):
+                isbn_val = isbn_val[:-2]
+            
+            title_val = str(row[title_idx]).strip() if title_idx is not None and row[title_idx] is not None else "Sem Título"
+            pub_val = str(row[publisher_idx]).strip() if publisher_idx is not None and row[publisher_idx] is not None else None
+            cat_val = str(row[category_idx]).strip() if category_idx is not None and row[category_idx] is not None else None
+            loc_val = str(row[location_idx]).strip() if location_idx is not None and row[location_idx] is not None else None
+            
+            raw_rows.append({
+                "line": line_num,
+                "isbn": isbn_val,
+                "title": title_val[:255],
+                "publisher": pub_val[:255] if pub_val else None,
+                "category": cat_val[:100] if cat_val else None,
+                "default_location": loc_val[:100] if loc_val else None,
+            })
+            
+    elif filename.endswith(".csv"):
+        text_content = ""
+        for encoding in ["utf-8-sig", "utf-8", "latin-1"]:
+            try:
+                text_content = content.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if not text_content:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codificação do arquivo CSV não suportada.")
+            
+        csv_reader = csv.reader(io.StringIO(text_content), delimiter=";" if ";" in text_content[:200] else ",")
+        rows_list = list(csv_reader)
+        if not rows_list:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Arquivo CSV vazio.")
+            
+        headers = [h.strip().lower() for h in rows_list[0]]
+        isbn_idx = next((i for i, h in enumerate(headers) if h in ["isbn", "ean", "codigo", "codigo de barras"]), None)
+        title_idx = next((i for i, h in enumerate(headers) if h in ["titulo", "título", "nome", "descricao", "descrição"]), None)
+        publisher_idx = next((i for i, h in enumerate(headers) if h in ["editora", "marca", "fabricante"]), None)
+        category_idx = next((i for i, h in enumerate(headers) if h in ["categoria", "secao", "seção"]), None)
+        location_idx = next((i for i, h in enumerate(headers) if h in ["endereco", "endereço", "local", "localizacao", "localização", "prateleira"]), None)
+        
+        if isbn_idx is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Coluna 'ISBN' não encontrada no arquivo CSV.")
+            
+        for line_num, row in enumerate(rows_list[1:], start=2):
+            if not row or len(row) <= isbn_idx:
+                continue
+            isbn_val = str(row[isbn_idx]).strip()
+            if not isbn_val:
+                continue
+            title_val = str(row[title_idx]).strip() if title_idx is not None and len(row) > title_idx else "Sem Título"
+            pub_val = str(row[publisher_idx]).strip() if publisher_idx is not None and len(row) > publisher_idx else None
+            cat_val = str(row[category_idx]).strip() if category_idx is not None and len(row) > category_idx else None
+            loc_val = str(row[location_idx]).strip() if location_idx is not None and len(row) > location_idx else None
+            
+            raw_rows.append({
+                "line": line_num,
+                "isbn": isbn_val,
+                "title": title_val[:255],
+                "publisher": pub_val[:255] if pub_val else None,
+                "category": cat_val[:100] if cat_val else None,
+                "default_location": loc_val[:100] if loc_val else None,
+            })
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Formato de arquivo inválido. Envie um arquivo .xlsx ou .csv.")
+
+    if not raw_rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nenhum item válido encontrado no arquivo.")
+
+    # [REGRA OBRIGATÓRIA] 1. Não permitir carregar o mesmo ISBN duplicado dentro da planilha
+    seen_isbns = set()
+    duplicate_isbns = set()
+    for item in raw_rows:
+        isbn = item["isbn"]
+        if isbn in seen_isbns:
+            duplicate_isbns.add(isbn)
+        else:
+            seen_isbns.add(isbn)
+
+    if duplicate_isbns:
+        sample = list(duplicate_isbns)[:5]
+        more = f" e mais {len(duplicate_isbns) - 5}..." if len(duplicate_isbns) > 5 else ""
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"A planilha contém {len(duplicate_isbns)} ISBN(s) duplicado(s). Não é permitido carregar registros com mesmo ISBN. Exemplos: {', '.join(sample)}{more}. Remova as duplicidades da planilha e tente novamente."
+        )
+
+    # [REGRA OBRIGATÓRIA] 2. Não permitir carregar ISBNs que já existem na base deste inventário
+    existing_in_db = set(
+        x[0] for x in db.query(InventoryItem.isbn)
+        .filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn.in_(seen_isbns), InventoryItem.is_unregistered == False)
+        .all()
+    )
+    if existing_in_db:
+        sample = list(existing_in_db)[:5]
+        more = f" e mais {len(existing_in_db) - 5}..." if len(existing_in_db) > 5 else ""
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"A planilha contém {len(existing_in_db)} ISBN(s) que já foram cadastrados neste inventário. Exemplos: {', '.join(sample)}{more}. Remova os itens já existentes para prosseguir."
+        )
+
+    # Inserção no PostgreSQL em lote
+    batch_size = 500
+    for i in range(0, len(raw_rows), batch_size):
+        chunk = raw_rows[i:i + batch_size]
+        for it in chunk:
+            db.add(InventoryItem(
+                inventory_id=inventory_id,
+                company_id=company_id,
+                isbn=it["isbn"],
+                title=it["title"],
+                publisher=it["publisher"],
+                category=it["category"],
+                default_location=it["default_location"],
+                is_unregistered=False
+            ))
+        db.commit()
+
+    total_skus = db.query(func.count(InventoryItem.id)).filter(InventoryItem.inventory_id == inventory_id).scalar()
+    inv.total_expected_skus = total_skus or 0
+    db.commit()
+
+    return {
+        "message": f"{len(raw_rows)} produtos carregados com sucesso sem duplicidades.",
+        "total_expected_skus": inv.total_expected_skus
+    }
+
+
+# ----------------------------------------------------------------------
+# 4. Catálogo e Verificação de Prateleira (Autenticado)
+# ----------------------------------------------------------------------
+@router.get("/{inventory_id}/catalog-cache")
+def get_catalog_cache(
+    company_id: int,
+    inventory_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    items = (
+        db.query(
+            InventoryItem.isbn,
+            InventoryItem.title,
+            InventoryItem.publisher,
+            InventoryItem.category,
+            InventoryItem.default_location
+        )
+        .filter(InventoryItem.inventory_id == inventory_id)
+        .all()
+    )
+    return [
+        {
+            "isbn": it[0],
+            "title": it[1],
+            "publisher": it[2] or "",
+            "category": it[3] or "",
+            "default_location": it[4] or "",
+        }
+        for it in items
+    ]
+
+
+@router.get("/{inventory_id}/sessions/check-location", response_model=inv_schemas.LocationCheckResponse)
+def check_location(
+    company_id: int,
+    inventory_id: int,
+    location: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    clean_loc = location.strip().upper()
+    existing_session = (
+        db.query(InventorySession)
+        .filter(
+            InventorySession.inventory_id == inventory_id,
+            func.upper(InventorySession.location) == clean_loc,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .order_by(desc(InventorySession.id))
+        .first()
+    )
+    if not existing_session:
+        return inv_schemas.LocationCheckResponse(
+            location=clean_loc,
+            exists=False,
+            status=None,
+            last_operator_name=None,
+            last_operator_id=None,
+            last_counted_at=None,
+            total_scans_previous=0,
+            session_id=None,
+        )
+    
+    op_name = existing_session.operator_name
+    if not op_name and existing_session.user_id:
+        operator = db.query(user_models.User).filter(user_models.User.id == existing_session.user_id).first()
+        op_name = operator.name if operator else None
+    if not op_name:
+        op_name = f"Operador #{existing_session.id}"
+    
+    return inv_schemas.LocationCheckResponse(
+        location=clean_loc,
+        exists=True,
+        status=existing_session.status,
+        last_operator_name=op_name,
+        last_operator_id=existing_session.user_id,
+        last_counted_at=existing_session.closed_at or existing_session.started_at,
+        total_scans_previous=existing_session.total_scans,
+        session_id=existing_session.id,
+    )
+
+
+@router.post("/{inventory_id}/sessions", response_model=inv_schemas.InventorySessionResponse)
+def open_session(
+    company_id: int,
+    inventory_id: int,
+    payload: inv_schemas.InventorySessionCreate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    if inv.status != InventoryStatus.EM_ANDAMENTO.value:
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="Inventário não está em andamento.")
+    
+    clean_loc = payload.location.strip().upper()
+    if not clean_loc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Localização é obrigatória.")
+    
+    existing_sessions = (
+        db.query(InventorySession)
+        .filter(
+            InventorySession.inventory_id == inventory_id,
+            func.upper(InventorySession.location) == clean_loc,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .all()
+    )
+    session_type = SessionType.CONTAGEM.value
+    round_number = 1
+    if existing_sessions:
+        session_type = SessionType.RECONTAGEM_AUDITORIA.value
+        max_round = max(s.round_number for s in existing_sessions)
+        round_number = max_round + 1
+    
+    new_session = InventorySession(
+        inventory_id=inventory_id,
+        company_id=company_id,
+        user_id=current_user.id,
+        operator_name=payload.operator_name or current_user.name,
+        location=clean_loc,
+        session_type=session_type,
+        round_number=round_number,
+        status=SessionStatus.ABERTA.value,
+        total_scans=0,
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+    
+    return inv_schemas.InventorySessionResponse(
+        id=new_session.id,
+        inventory_id=new_session.inventory_id,
+        company_id=new_session.company_id,
+        user_id=new_session.user_id,
+        user_name=current_user.name,
+        operator_name=new_session.operator_name,
+        location=new_session.location,
+        session_type=new_session.session_type,
+        round_number=new_session.round_number,
+        status=new_session.status,
+        total_scans=new_session.total_scans,
+        started_at=new_session.started_at,
+        closed_at=new_session.closed_at,
+    )
+
+
+@router.post("/{inventory_id}/sessions/{session_id}/scans/batch", response_model=inv_schemas.InventoryScanBatchResponse)
+def sync_scans_batch(
+    company_id: int,
+    inventory_id: int,
+    session_id: int,
+    payload: inv_schemas.InventoryScanBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv or inv.status != InventoryStatus.EM_ANDAMENTO.value:
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="Inventário finalizado ou inexistente.")
+    
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inventory_id).first()
+    if not sess:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sessão não encontrada.")
+    if sess.status == SessionStatus.CONCLUIDA.value:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta sessão já foi concluída.")
+    
+    if not payload.scans:
+        return inv_schemas.InventoryScanBatchResponse(synced_count=0, ignored_duplicate_count=0, session_total_scans=sess.total_scans)
+    
+    client_uuids = [s.client_uuid for s in payload.scans]
+    existing_uuids = set(
+        x[0] for x in db.query(InventoryScan.client_uuid)
+        .filter(InventoryScan.session_id == session_id, InventoryScan.client_uuid.in_(client_uuids))
+        .all()
+    )
+    
+    synced_count = 0
+    ignored_count = 0
+    
+    for item in payload.scans:
+        if item.client_uuid in existing_uuids:
+            ignored_count += 1
+            continue
+        isbn_clean = item.isbn.strip()
+        if not isbn_clean:
+            continue
+        
+        item_expected = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn == isbn_clean).first()
+        if not item_expected:
+            db.add(InventoryItem(
+                inventory_id=inventory_id,
+                company_id=company_id,
+                isbn=isbn_clean,
+                title=f"Item Avulso ({isbn_clean})",
+                default_location=sess.location,
+                is_unregistered=True
+            ))
+            db.flush()
+        
+        new_scan = InventoryScan(
+            session_id=session_id,
+            inventory_id=inventory_id,
+            company_id=company_id,
+            user_id=current_user.id,
+            operator_name=item.operator_name or current_user.name,
+            isbn=isbn_clean,
+            location=sess.location,
+            quantity=item.quantity if item.quantity > 0 else 1,
+            client_uuid=item.client_uuid,
+            scanned_at=item.scanned_at,
+        )
+        db.add(new_scan)
+        existing_uuids.add(item.client_uuid)
+        synced_count += 1
+    
+    db.commit()
+    new_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == session_id).scalar()
+    sess.total_scans = int(new_total or 0)
+    db.commit()
+    
+    return inv_schemas.InventoryScanBatchResponse(
+        synced_count=synced_count,
+        ignored_duplicate_count=ignored_count,
+        session_total_scans=sess.total_scans
+    )
+
+
+@router.put("/{inventory_id}/sessions/{session_id}/close", response_model=inv_schemas.InventorySessionResponse)
+def close_session(
+    company_id: int,
+    inventory_id: int,
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inventory_id).first()
+    if not sess:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sessão não encontrada.")
+    
+    sess.status = SessionStatus.CONCLUIDA.value
+    sess.closed_at = func.now()
+    total_scans = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == session_id).scalar()
+    sess.total_scans = int(total_scans or 0)
+    db.commit()
+    db.refresh(sess)
+    
+    return inv_schemas.InventorySessionResponse(
+        id=sess.id,
+        inventory_id=sess.inventory_id,
+        company_id=sess.company_id,
+        user_id=sess.user_id,
+        user_name=current_user.name,
+        operator_name=sess.operator_name,
+        location=sess.location,
+        session_type=sess.session_type,
+        round_number=sess.round_number,
+        status=sess.status,
+        total_scans=sess.total_scans,
+        started_at=sess.started_at,
+        closed_at=sess.closed_at,
+    )
+
+
+@router.put("/{inventory_id}/finalize", response_model=inv_schemas.InventoryResponse)
+def finalize_inventory(
+    company_id: int,
+    inventory_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    if inv.status == InventoryStatus.FINALIZADO.value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Este inventário já se encontra finalizado.")
+    
+    open_sessions = (
+        db.query(InventorySession)
+        .filter(InventorySession.inventory_id == inventory_id, InventorySession.status == SessionStatus.ABERTA.value)
+        .all()
+    )
+    for s in open_sessions:
+        s.status = SessionStatus.CONCLUIDA.value
+        s.closed_at = func.now()
+    
+    inv.status = InventoryStatus.FINALIZADO.value
+    inv.finalized_by_user_id = current_user.id
+    inv.finalized_at = func.now()
+    db.commit()
+    db.refresh(inv)
+    
+    total_scanned = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.inventory_id == inv.id).scalar()
+    total_sessions = db.query(func.count(InventorySession.id)).filter(InventorySession.inventory_id == inv.id).scalar()
+    
+    return inv_schemas.InventoryResponse(
+        id=inv.id,
+        company_id=inv.company_id,
+        code=inv.code,
+        name=inv.name,
+        status=inv.status,
+        description=inv.description,
+        total_expected_skus=inv.total_expected_skus,
+        total_scanned_items=int(total_scanned or 0),
+        total_sessions=int(total_sessions or 0),
+        open_sessions=0,
+        access_token=inv.access_token,
+        is_public_access_enabled=inv.is_public_access_enabled,
+        created_by_user_id=inv.created_by_user_id,
+        finalized_by_user_id=inv.finalized_by_user_id,
+        finalized_at=inv.finalized_at,
+        created_at=inv.created_at,
+        updated_at=inv.updated_at,
+    )
+
+
+@router.get("/{inventory_id}/sessions-list")
+def list_inventory_sessions(
+    company_id: int,
+    inventory_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    sessions = (
+        db.query(
+            InventorySession.id,
+            InventorySession.location,
+            InventorySession.session_type,
+            InventorySession.round_number,
+            InventorySession.status,
+            InventorySession.total_scans,
+            InventorySession.started_at,
+            InventorySession.closed_at,
+            InventorySession.operator_name,
+            user_models.User.name.label("user_name")
+        )
+        .outerjoin(user_models.User, InventorySession.user_id == user_models.User.id)
+        .filter(InventorySession.inventory_id == inventory_id)
+        .order_by(InventorySession.location, InventorySession.round_number)
+        .all()
+    )
+    
+    return [
+        {
+            "id": s.id,
+            "location": s.location,
+            "session_type": s.session_type,
+            "round_number": s.round_number,
+            "status": s.status,
+            "total_scans": s.total_scans,
+            "started_at": s.started_at,
+            "closed_at": s.closed_at,
+            "operator_name": s.operator_name or s.user_name or f"Operador #{s.id}",
+        }
+        for s in sessions
+    ]
+
+
+@router.get("/{inventory_id}/discrepancies", response_model=List[inv_schemas.DiscrepancyItemResponse])
+def get_discrepancies(
+    company_id: int,
+    inventory_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    query = text("""
+        SELECT 
+            s.location,
+            s.round_number,
+            sc.isbn,
+            SUM(sc.quantity) as qty
+        FROM inv_inventory_scan sc
+        JOIN inv_inventory_session s ON sc.session_id = s.id
+        WHERE sc.inventory_id = :inv_id
+        GROUP BY s.location, s.round_number, sc.isbn
+    """)
+    rows = db.execute(query, {"inv_id": inventory_id}).fetchall()
+    
+    counts_map = {}
+    for r in rows:
+        loc, round_num, isbn, qty = r[0], r[1], r[2], int(r[3])
+        key = (loc, isbn)
+        if key not in counts_map:
+            counts_map[key] = {1: 0, 2: 0}
+        counts_map[key][round_num] = counts_map[key].get(round_num, 0) + qty
+        
+    items_meta = {
+        it.isbn: it for it in db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).all()
+    }
+    
+    results = []
+    for (loc, isbn), rounds in counts_map.items():
+        c1 = rounds.get(1, 0)
+        c2 = rounds.get(2, 0)
+        meta = items_meta.get(isbn)
+        diff = c1 - c2
+        has_div = (c2 > 0 and c1 != c2)
+        
+        results.append(inv_schemas.DiscrepancyItemResponse(
+            isbn=isbn,
+            title=meta.title if meta else f"Item {isbn}",
+            publisher=meta.publisher if meta else None,
+            category=meta.category if meta else None,
+            default_location=meta.default_location if meta else None,
+            location=loc,
+            count_1_qty=c1,
+            count_2_qty=c2,
+            difference=diff,
+            has_divergence=has_div
+        ))
+        
+    return sorted(results, key=lambda x: (x.location, x.isbn))
+
+
+@router.get("/{inventory_id}/export-excel")
+def export_inventory_excel(
+    company_id: int,
+    inventory_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    
+    wb = openpyxl.Workbook()
+    
+    ws1 = wb.active
+    ws1.title = "Consolidado Geral"
+    ws1.append([
+        "ISBN / Código de Barras",
+        "Título",
+        "Editora",
+        "Categoria",
+        "Endereço Padrão",
+        "Qtd 1ª Contagem",
+        "Qtd Recontagem/Auditoria",
+        "Divergência",
+        "Total Geral Apurado",
+        "Status Cadastral"
+    ])
+    
+    query_isbn = text("""
+        SELECT 
+            sc.isbn,
+            SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
+            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2,
+            SUM(sc.quantity) as total_scanned
+        FROM inv_inventory_scan sc
+        JOIN inv_inventory_session s ON sc.session_id = s.id
+        WHERE sc.inventory_id = :inv_id
+        GROUP BY sc.isbn
+    """)
+    scan_rows = {r[0]: (int(r[1]), int(r[2]), int(r[3])) for r in db.execute(query_isbn, {"inv_id": inventory_id}).fetchall()}
+    items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).order_by(InventoryItem.isbn).all()
+    
+    for it in items:
+        c1, c2, total = scan_rows.get(it.isbn, (0, 0, 0))
+        diff = c1 - c2 if c2 > 0 else 0
+        status_cad = "Item Novo (Fora da Base)" if it.is_unregistered else "Cadastrado"
+        ws1.append([
+            it.isbn, it.title, it.publisher or "", it.category or "", it.default_location or "",
+            c1, c2, diff, total, status_cad
+        ])
+        
+    ws2 = wb.create_sheet(title="Detalhamento por Prateleira")
+    ws2.append([
+        "ID Sessão", "Prateleira / Localização", "Tipo de Contagem", "Rodada", "Status",
+        "Operador", "Início", "Término", "Total Peças Bipadas"
+    ])
+    
+    sessions = (
+        db.query(
+            InventorySession.id,
+            InventorySession.location,
+            InventorySession.session_type,
+            InventorySession.round_number,
+            InventorySession.status,
+            InventorySession.operator_name,
+            user_models.User.name.label("user_name"),
+            InventorySession.started_at,
+            InventorySession.closed_at,
+            InventorySession.total_scans
+        )
+        .outerjoin(user_models.User, InventorySession.user_id == user_models.User.id)
+        .filter(InventorySession.inventory_id == inventory_id)
+        .order_by(InventorySession.location, InventorySession.round_number)
+        .all()
+    )
+    
+    for s in sessions:
+        op = s.operator_name or s.user_name or f"Operador #{s.id}"
+        ws2.append([
+            s.id, s.location, s.session_type, s.round_number, s.status, op,
+            s.started_at.strftime("%d/%m/%Y %H:%M:%S") if s.started_at else "",
+            s.closed_at.strftime("%d/%m/%Y %H:%M:%S") if s.closed_at else "",
+            s.total_scans
+        ])
+        
+    ws3 = wb.create_sheet(title="Itens Fora da Base")
+    ws3.append(["ISBN / Código", "Título", "Localização Bipada", "Qtd Total"])
+    
+    unreg_items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id, InventoryItem.is_unregistered == True).all()
+    for un in unreg_items:
+        _, _, total = scan_rows.get(un.isbn, (0, 0, 0))
+        ws3.append([un.isbn, un.title, un.default_location or "", total])
+        
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    filename = f"Relatorio_Inventario_{inv.code}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+# ======================================================================
+# ROTAS PÚBLICAS / LINK DIRETO DO OPERADOR (SEM LOGIN)
+# ======================================================================
+
+@public_router.get("/{access_token}", response_model=inv_schemas.PublicInventoryInfo)
+def get_public_inventory_info(access_token: str, db: Session = Depends(get_db)):
+    inv = _get_inventory_by_token(access_token, db)
+    company = db.query(Company).filter(Company.id == inv.company_id).first()
+    return inv_schemas.PublicInventoryInfo(
+        id=inv.id,
+        company_id=inv.company_id,
+        company_name=company.name if company else "Empresa",
+        code=inv.code,
+        name=inv.name,
+        description=inv.description,
+        status=inv.status,
+        total_expected_skus=inv.total_expected_skus,
+    )
+
+
+@public_router.get("/{access_token}/catalog-cache")
+def get_public_catalog_cache(access_token: str, db: Session = Depends(get_db)):
+    inv = _get_inventory_by_token(access_token, db)
+    items = (
+        db.query(
+            InventoryItem.isbn,
+            InventoryItem.title,
+            InventoryItem.publisher,
+            InventoryItem.category,
+            InventoryItem.default_location
+        )
+        .filter(InventoryItem.inventory_id == inv.id)
+        .all()
+    )
+    return [
+        {
+            "isbn": it[0],
+            "title": it[1],
+            "publisher": it[2] or "",
+            "category": it[3] or "",
+            "default_location": it[4] or "",
+        }
+        for it in items
+    ]
+
+
+@public_router.get("/{access_token}/check-location", response_model=inv_schemas.LocationCheckResponse)
+def check_public_location(access_token: str, location: str = Query(..., min_length=1), db: Session = Depends(get_db)):
+    inv = _get_inventory_by_token(access_token, db)
+    clean_loc = location.strip().upper()
+    existing_session = (
+        db.query(InventorySession)
+        .filter(
+            InventorySession.inventory_id == inv.id,
+            func.upper(InventorySession.location) == clean_loc,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .order_by(desc(InventorySession.id))
+        .first()
+    )
+    if not existing_session:
+        return inv_schemas.LocationCheckResponse(
+            location=clean_loc,
+            exists=False,
+            status=None,
+            last_operator_name=None,
+            last_operator_id=None,
+            last_counted_at=None,
+            total_scans_previous=0,
+            session_id=None,
+        )
+    
+    op_name = existing_session.operator_name
+    if not op_name and existing_session.user_id:
+        user = db.query(user_models.User).filter(user_models.User.id == existing_session.user_id).first()
+        if user:
+            op_name = user.name
+    if not op_name:
+        op_name = f"Operador #{existing_session.id}"
+        
+    return inv_schemas.LocationCheckResponse(
+        location=clean_loc,
+        exists=True,
+        status=existing_session.status,
+        last_operator_name=op_name,
+        last_operator_id=existing_session.user_id,
+        last_counted_at=existing_session.closed_at or existing_session.started_at,
+        total_scans_previous=existing_session.total_scans,
+        session_id=existing_session.id,
+    )
+
+
+@public_router.post("/{access_token}/sessions", response_model=inv_schemas.InventorySessionResponse)
+def open_public_session(access_token: str, payload: inv_schemas.PublicSessionCreate, db: Session = Depends(get_db)):
+    inv = _get_inventory_by_token(access_token, db)
+    if inv.status != InventoryStatus.EM_ANDAMENTO.value:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Inventário finalizado. Nenhuma nova contagem pode ser iniciada."
+        )
+    clean_loc = payload.location.strip().upper()
+    clean_op = payload.operator_name.strip()
+    if not clean_loc:
+        raise HTTPException(status_code=400, detail="Localização é obrigatória.")
+    if not clean_op:
+        raise HTTPException(status_code=400, detail="Nome do operador é obrigatório.")
+
+    existing_sessions = (
+        db.query(InventorySession)
+        .filter(
+            InventorySession.inventory_id == inv.id,
+            func.upper(InventorySession.location) == clean_loc,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .all()
+    )
+    session_type = SessionType.CONTAGEM.value
+    round_number = 1
+    if existing_sessions:
+        session_type = SessionType.RECONTAGEM_AUDITORIA.value
+        max_round = max(s.round_number for s in existing_sessions)
+        round_number = max_round + 1
+
+    new_session = InventorySession(
+        inventory_id=inv.id,
+        company_id=inv.company_id,
+        user_id=None,
+        operator_name=clean_op,
+        location=clean_loc,
+        session_type=session_type,
+        round_number=round_number,
+        status=SessionStatus.ABERTA.value,
+        total_scans=0,
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+
+    return inv_schemas.InventorySessionResponse(
+        id=new_session.id,
+        inventory_id=new_session.inventory_id,
+        company_id=new_session.company_id,
+        user_id=None,
+        user_name=clean_op,
+        operator_name=clean_op,
+        location=new_session.location,
+        session_type=new_session.session_type,
+        round_number=new_session.round_number,
+        status=new_session.status,
+        total_scans=new_session.total_scans,
+        started_at=new_session.started_at,
+        closed_at=new_session.closed_at,
+    )
+
+
+@public_router.post("/{access_token}/sessions/{session_id}/scans/batch", response_model=inv_schemas.InventoryScanBatchResponse)
+def sync_public_scans_batch(access_token: str, session_id: int, payload: inv_schemas.InventoryScanBatchRequest, db: Session = Depends(get_db)):
+    inv = _get_inventory_by_token(access_token, db)
+    if inv.status != InventoryStatus.EM_ANDAMENTO.value:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Inventário finalizado. Não é permitida a gravação de novos bips."
+        )
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inv.id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+    if sess.status == SessionStatus.CONCLUIDA.value:
+        raise HTTPException(status_code=409, detail="Esta sessão já foi concluída e não aceita mais leituras.")
+    
+    if not payload.scans:
+        return inv_schemas.InventoryScanBatchResponse(synced_count=0, ignored_duplicate_count=0, session_total_scans=sess.total_scans)
+
+    client_uuids = [s.client_uuid for s in payload.scans]
+    existing_uuids = set(
+        x[0] for x in db.query(InventoryScan.client_uuid)
+        .filter(InventoryScan.session_id == session_id, InventoryScan.client_uuid.in_(client_uuids))
+        .all()
+    )
+
+    synced_count = 0
+    ignored_count = 0
+    for item in payload.scans:
+        if item.client_uuid in existing_uuids:
+            ignored_count += 1
+            continue
+        isbn_clean = item.isbn.strip()
+        if not isbn_clean:
+            continue
+        
+        item_expected = db.query(InventoryItem).filter(InventoryItem.inventory_id == inv.id, InventoryItem.isbn == isbn_clean).first()
+        if not item_expected:
+            db.add(InventoryItem(
+                inventory_id=inv.id,
+                company_id=inv.company_id,
+                isbn=isbn_clean,
+                title=f"Item Avulso ({isbn_clean})",
+                default_location=sess.location,
+                is_unregistered=True
+            ))
+            db.flush()
+
+        db.add(InventoryScan(
+            session_id=session_id,
+            inventory_id=inv.id,
+            company_id=inv.company_id,
+            user_id=None,
+            operator_name=item.operator_name or sess.operator_name,
+            isbn=isbn_clean,
+            location=sess.location,
+            quantity=item.quantity if item.quantity > 0 else 1,
+            client_uuid=item.client_uuid,
+            scanned_at=item.scanned_at,
+        ))
+        existing_uuids.add(item.client_uuid)
+        synced_count += 1
+
+    db.commit()
+    new_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == session_id).scalar()
+    sess.total_scans = int(new_total or 0)
+    db.commit()
+
+    return inv_schemas.InventoryScanBatchResponse(
+        synced_count=synced_count,
+        ignored_duplicate_count=ignored_count,
+        session_total_scans=sess.total_scans
+    )
+
+
+@public_router.put("/{access_token}/sessions/{session_id}/close", response_model=inv_schemas.InventorySessionResponse)
+def close_public_session(access_token: str, session_id: int, db: Session = Depends(get_db)):
+    inv = _get_inventory_by_token(access_token, db)
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inv.id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+    sess.status = SessionStatus.CONCLUIDA.value
+    sess.closed_at = func.now()
+    total_scans = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == session_id).scalar()
+    sess.total_scans = int(total_scans or 0)
+    db.commit()
+    db.refresh(sess)
+
+    return inv_schemas.InventorySessionResponse(
+        id=sess.id,
+        inventory_id=sess.inventory_id,
+        company_id=sess.company_id,
+        user_id=None,
+        user_name=sess.operator_name,
+        operator_name=sess.operator_name,
+        location=sess.location,
+        session_type=sess.session_type,
+        round_number=sess.round_number,
+        status=sess.status,
+        total_scans=sess.total_scans,
+        started_at=sess.started_at,
+        closed_at=sess.closed_at,
+    )
