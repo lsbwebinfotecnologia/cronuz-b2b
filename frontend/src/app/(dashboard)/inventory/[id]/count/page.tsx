@@ -19,13 +19,17 @@ import {
   BookOpen, 
   Layers,
   Sparkles,
-  Camera
+  Camera,
+  Building2,
+  PlusCircle,
+  X
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { 
   openInventoryDb, 
   saveCatalogItems, 
+  upsertCatalogItem,
   findCatalogItem, 
   savePendingScan, 
   getPendingScans, 
@@ -75,6 +79,18 @@ export default function InventoryCountPage() {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [lastScanned, setLastScanned] = useState<LastScanned | null>(null);
   const [sessionScannedCount, setSessionScannedCount] = useState(0);
+
+  // Modal Item Não Cadastrado
+  const [unregisteredModal, setUnregisteredModal] = useState<{
+    isOpen: boolean;
+    isbn: string;
+    clientUuid: string;
+    nowIso: string;
+  } | null>(null);
+  const [unregisteredTitle, setUnregisteredTitle] = useState('');
+  const [unregisteredPublisher, setUnregisteredPublisher] = useState('');
+  const [savingUnregistered, setSavingUnregistered] = useState(false);
+  const unregTitleInputRef = useRef<HTMLInputElement>(null);
 
   // Estados de Rede & Offline
   const [isOnline, setIsOnline] = useState(true);
@@ -129,17 +145,18 @@ export default function InventoryCountPage() {
     };
   }, [companyId, inventoryId]);
 
-  // Manter foco permanente no input quando a sessão estiver aberta
+  // Manter foco permanente no input quando a sessão estiver aberta (se modal não estiver aberto)
   useEffect(() => {
-    if (session && session.status === 'ABERTA') {
+    if (session && session.status === 'ABERTA' && !unregisteredModal) {
       const timer = setTimeout(() => {
         barcodeInputRef.current?.focus();
       }, 100);
 
       const handleGlobalClick = (e: MouseEvent) => {
+        if (unregisteredModal) return;
         // Se não clicou em um botão de ação, devolve foco ao input
         const target = e.target as HTMLElement;
-        if (!target.closest('button') && !target.closest('a')) {
+        if (!target.closest('button') && !target.closest('a') && !target.closest('input')) {
           barcodeInputRef.current?.focus();
         }
       };
@@ -150,7 +167,7 @@ export default function InventoryCountPage() {
         window.removeEventListener('click', handleGlobalClick);
       };
     }
-  }, [session]);
+  }, [session, unregisteredModal]);
 
   // Timer de sincronização em background a cada 3 segundos
   useEffect(() => {
@@ -178,7 +195,9 @@ export default function InventoryCountPage() {
           isbn: p.isbn,
           location: p.location,
           quantity: p.quantity,
-          scanned_at: p.scanned_at
+          scanned_at: p.scanned_at,
+          title: p.title,
+          publisher: p.publisher
         }))
       };
 
@@ -310,15 +329,25 @@ export default function InventoryCountPage() {
       console.warn('[IndexedDB] Erro na busca local:', err);
     }
 
-    const isUnregistered = !itemMeta;
-
-    // Feedback Sonoro e Visual Imediato
-    if (isUnregistered) {
+    // Se o item NÃO estiver cadastrado, solicita Nome e Editora antes de contabilizar
+    if (!itemMeta) {
       playWarningBeep();
-      toast.warning(`Item fora da base: ${isbnRaw}`, { duration: 1500 });
-    } else {
-      playSuccessBeep();
+      setUnregisteredTitle('');
+      setUnregisteredPublisher('');
+      setUnregisteredModal({
+        isOpen: true,
+        isbn: isbnRaw,
+        clientUuid,
+        nowIso
+      });
+      setTimeout(() => {
+        unregTitleInputRef.current?.focus();
+      }, 120);
+      return;
     }
+
+    // Item cadastrado: fluxo normal
+    playSuccessBeep();
 
     const scanRecord: PendingScanRecord = {
       client_uuid: clientUuid,
@@ -343,10 +372,10 @@ export default function InventoryCountPage() {
     setSessionScannedCount(prev => prev + 1);
     setLastScanned({
       isbn: isbnRaw,
-      title: itemMeta ? itemMeta.title : 'Item Não Cadastrado na Base',
-      publisher: itemMeta?.publisher,
-      category: itemMeta?.category,
-      isUnregistered,
+      title: itemMeta.title,
+      publisher: itemMeta.publisher,
+      category: itemMeta.category,
+      isUnregistered: false,
       timestamp: new Date().toLocaleTimeString('pt-BR')
     });
 
@@ -354,6 +383,94 @@ export default function InventoryCountPage() {
     if (isOnline) {
       flushPendingScans();
     }
+  }
+
+  async function handleConfirmUnregisteredItem(e: React.FormEvent) {
+    e.preventDefault();
+    if (!unregisteredModal || !session) return;
+
+    const titleClean = unregisteredTitle.trim();
+    const pubClean = unregisteredPublisher.trim();
+
+    if (!titleClean) {
+      toast.error('Informe o nome / título do item.');
+      unregTitleInputRef.current?.focus();
+      return;
+    }
+
+    if (!pubClean) {
+      toast.error('Informe a editora do item.');
+      return;
+    }
+
+    setSavingUnregistered(true);
+    try {
+      // 1. Salvar no catálogo do IndexedDB para que os próximos bips reconheçam
+      await upsertCatalogItem({
+        inventory_id: inventoryId,
+        isbn: unregisteredModal.isbn,
+        title: titleClean,
+        publisher: pubClean,
+        category: 'Item Fora da Base',
+        default_location: session.location
+      });
+
+      // 2. Gravar bip no IndexedDB com os metadados
+      const scanRecord: PendingScanRecord = {
+        client_uuid: unregisteredModal.clientUuid,
+        session_id: session.id,
+        inventory_id: inventoryId,
+        isbn: unregisteredModal.isbn,
+        location: session.location,
+        quantity: 1,
+        scanned_at: unregisteredModal.nowIso,
+        status: 'pending',
+        title: titleClean,
+        publisher: pubClean
+      };
+
+      await savePendingScan(scanRecord);
+      setPendingSyncCount(prev => prev + 1);
+      setSessionScannedCount(prev => prev + 1);
+
+      setLastScanned({
+        isbn: unregisteredModal.isbn,
+        title: titleClean,
+        publisher: pubClean,
+        category: 'Item Fora da Base',
+        isUnregistered: true,
+        timestamp: new Date().toLocaleTimeString('pt-BR')
+      });
+
+      playSuccessBeep();
+      toast.success(`Item "${titleClean}" cadastrado e contabilizado!`);
+
+      if (isOnline) {
+        flushPendingScans();
+      }
+
+      setUnregisteredModal(null);
+      setUnregisteredTitle('');
+      setUnregisteredPublisher('');
+
+      setTimeout(() => {
+        barcodeInputRef.current?.focus();
+      }, 100);
+    } catch (err) {
+      toast.error('Erro ao registrar item avulso.');
+    } finally {
+      setSavingUnregistered(false);
+    }
+  }
+
+  function handleCancelUnregistered() {
+    setUnregisteredModal(null);
+    setUnregisteredTitle('');
+    setUnregisteredPublisher('');
+    toast.info('Item não contabilizado.');
+    setTimeout(() => {
+      barcodeInputRef.current?.focus();
+    }, 100);
   }
 
   // 6. Fechamento Obrigatório da Sessão
@@ -646,6 +763,107 @@ export default function InventoryCountPage() {
                 Voltar e Mudar Prateleira
               </button>
             </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* ─── Modal Item Não Cadastrado na Base ─── */}
+      {unregisteredModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+            className="rounded-3xl border border-amber-200 dark:border-amber-500/30 bg-white dark:bg-slate-900 shadow-2xl max-w-sm w-full p-6 space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <div className="p-2 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center gap-2">
+                <BookOpen className="h-5 w-5" />
+                <span className="text-xs font-bold uppercase tracking-wider">Item Fora da Base</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelUnregistered}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Item Não Cadastrado</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Para contabilizar este item na contagem física, informe o nome e a editora:
+              </p>
+              <div className="mt-2.5 inline-flex items-center gap-1.5 font-mono text-xs font-bold text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800">
+                <ScanBarcode className="h-3.5 w-3.5" />
+                <span>{unregisteredModal.isbn}</span>
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirmUnregisteredItem} className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                  Nome / Título da Obra <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <BookOpen className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    ref={unregTitleInputRef}
+                    type="text"
+                    required
+                    value={unregisteredTitle}
+                    onChange={(e) => setUnregisteredTitle(e.target.value)}
+                    placeholder="Ex: Livro ou Produto Exemplo"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                  Editora <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    required
+                    value={unregisteredPublisher}
+                    onChange={(e) => setUnregisteredPublisher(e.target.value)}
+                    placeholder="Ex: Editora Vida / Marca"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 space-y-2">
+                <button
+                  type="submit"
+                  disabled={savingUnregistered || !unregisteredTitle.trim() || !unregisteredPublisher.trim()}
+                  className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-md shadow-teal-600/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {savingUnregistered ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Salvando e contabilizando...
+                    </>
+                  ) : (
+                    <>
+                      <PlusCircle className="h-4 w-4" />
+                      Confirmar e Contabilizar (+1)
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelUnregistered}
+                  className="w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                >
+                  Cancelar (Não Contabilizar)
+                </button>
+              </div>
+            </form>
           </motion.div>
         </div>
       )}

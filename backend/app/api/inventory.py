@@ -624,16 +624,25 @@ def sync_scans_batch(
             continue
         
         item_expected = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn == isbn_clean).first()
+        clean_title = (item.title.strip() if item.title and item.title.strip() else f"Item Avulso ({isbn_clean})")
+        clean_publisher = (item.publisher.strip() if item.publisher and item.publisher.strip() else None)
+
         if not item_expected:
             db.add(InventoryItem(
                 inventory_id=inventory_id,
                 company_id=company_id,
                 isbn=isbn_clean,
-                title=f"Item Avulso ({isbn_clean})",
+                title=clean_title,
+                publisher=clean_publisher,
                 default_location=sess.location,
                 is_unregistered=True
             ))
             db.flush()
+        elif item_expected.is_unregistered:
+            if item.title and item.title.strip() and (item_expected.title.startswith("Item Avulso") or not item_expected.title):
+                item_expected.title = item.title.strip()
+            if item.publisher and item.publisher.strip() and not item_expected.publisher:
+                item_expected.publisher = item.publisher.strip()
         
         new_scan = InventoryScan(
             session_id=session_id,
@@ -1148,16 +1157,25 @@ def sync_public_scans_batch(access_token: str, session_id: int, payload: inv_sch
             continue
         
         item_expected = db.query(InventoryItem).filter(InventoryItem.inventory_id == inv.id, InventoryItem.isbn == isbn_clean).first()
+        clean_title = (item.title.strip() if item.title and item.title.strip() else f"Item Avulso ({isbn_clean})")
+        clean_publisher = (item.publisher.strip() if item.publisher and item.publisher.strip() else None)
+
         if not item_expected:
             db.add(InventoryItem(
                 inventory_id=inv.id,
                 company_id=inv.company_id,
                 isbn=isbn_clean,
-                title=f"Item Avulso ({isbn_clean})",
+                title=clean_title,
+                publisher=clean_publisher,
                 default_location=sess.location,
                 is_unregistered=True
             ))
             db.flush()
+        elif item_expected.is_unregistered:
+            if item.title and item.title.strip() and (item_expected.title.startswith("Item Avulso") or not item_expected.title):
+                item_expected.title = item.title.strip()
+            if item.publisher and item.publisher.strip() and not item_expected.publisher:
+                item_expected.publisher = item.publisher.strip()
 
         db.add(InventoryScan(
             session_id=session_id,

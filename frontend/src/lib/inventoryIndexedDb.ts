@@ -23,6 +23,8 @@ export interface PendingScanRecord {
   quantity: number;
   scanned_at: string;
   status: 'pending' | 'synced';
+  title?: string;
+  publisher?: string;
 }
 
 function getIndexedDB(): IDBFactory | null {
@@ -81,6 +83,24 @@ export async function saveCatalogItems(inventoryId: number, items: any[]): Promi
       });
     }
 
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function upsertCatalogItem(item: CatalogItemRecord): Promise<void> {
+  const db = await openInventoryDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('catalog', 'readwrite');
+    const store = tx.objectStore('catalog');
+    store.put({
+      inventory_id: item.inventory_id,
+      isbn: String(item.isbn).trim(),
+      title: item.title || 'Sem Título',
+      publisher: item.publisher || '',
+      category: item.category || '',
+      default_location: item.default_location || '',
+    });
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });

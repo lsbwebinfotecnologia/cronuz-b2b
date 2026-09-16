@@ -120,6 +120,8 @@ class InventoryScanItem(BaseModel):
     quantity: int = 1
     operator_name: Optional[str] = None
     scanned_at: datetime
+    title: Optional[str] = None
+    publisher: Optional[str] = None
 
 class InventoryScanBatchRequest(BaseModel):
     scans: List[InventoryScanItem]
