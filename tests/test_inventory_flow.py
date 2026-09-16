@@ -90,42 +90,38 @@ def run_tests():
         inv_id = inv_data["id"]
         print(f" -> Inventário criado: ID {inv_id}, Código {inv_data['code']}")
 
-        print("[TEST 2] Upload de CSV de produtos...")
-        # 2a. Teste de rejeição de ISBN duplicado na mesma planilha
-        csv_duplicado = (
-            "ISBN;Titulo;Editora;Categoria;Endereco\n"
-            "9788535914849;Livro 1984;Companhia das Letras;Ficção;Prateleira A-01\n"
-            "9788535914849;Livro 1984 Duplicado;Companhia das Letras;Ficção;Prateleira A-01\n"
-        )
-        files_dupl = {"file": ("duplicado.csv", io.BytesIO(csv_duplicado.encode("utf-8")), "text/csv")}
-        res_fail = client.post(f"/companies/{company.id}/inventory/{inv_id}/upload-sheet", files=files_dupl, headers=headers1)
-        assert res_fail.status_code == 400, f"Deveria ter rejeitado planilha com ISBN duplicado: {res_fail.text}"
-        assert "duplicado" in res_fail.text.lower()
-        print(f" -> Bloqueio de ISBN duplicado na planilha validado com sucesso: {res_fail.json()['detail']}")
-
-        # 2b. Upload válido sem duplicatas
+        # 2a. Upload inicial da 1ª planilha
         csv_content = (
             "ISBN;Titulo;Editora;Categoria;Endereco\n"
             "9788535914849;Livro 1984;Companhia das Letras;Ficção;Prateleira A-01\n"
             "9788576572008;Duna;Aleph;Ficção;Prateleira A-02\n"
             "9788595081512;O Hobbit;HarperCollins;Fantasia;Prateleira B-01\n"
         )
-        files = {"file": ("carga.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
+        files = {"file": ("carga_inicial.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
         res_upload = client.post(f"/companies/{company.id}/inventory/{inv_id}/upload-sheet", files=files, headers=headers1)
-        assert res_upload.status_code == 200, f"Falha no upload: {res_upload.text}"
-        print(f" -> Upload concluído: {res_upload.json()}")
+        assert res_upload.status_code == 200, f"Falha no upload inicial: {res_upload.text}"
+        assert res_upload.json()["inserted_count"] == 3
+        print(f" -> Carga inicial concluída: {res_upload.json()}")
 
-        # 2c. Teste de rejeição de ISBN que já existe no inventário
-        files_ja_existe = {"file": ("ja_existe.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-        res_fail_exist = client.post(f"/companies/{company.id}/inventory/{inv_id}/upload-sheet", files=files_ja_existe, headers=headers1)
-        assert res_fail_exist.status_code == 400, f"Deveria rejeitar ISBNs já cadastrados: {res_fail_exist.text}"
-        print(f" -> Rejeição de ISBN já existente no inventário validada: {res_fail_exist.json()['detail']}")
+        # 2b. Upload de planilha complementar (contendo 1 ISBN que já existe e 1 novo ISBN)
+        csv_complementar = (
+            "ISBN;Titulo;Editora;Categoria;Endereco\n"
+            "9788535914849;Livro 1984 (Já Cadastrado);Companhia das Letras;Ficção;Prateleira A-01\n"
+            "9788535288230;Fahrenheit 451 (Novo);Biblioteca Azul;Ficção;Prateleira B-02\n"
+        )
+        files_comp = {"file": ("carga_complementar.csv", io.BytesIO(csv_complementar.encode("utf-8")), "text/csv")}
+        res_comp = client.post(f"/companies/{company.id}/inventory/{inv_id}/upload-sheet", files=files_comp, headers=headers1)
+        assert res_comp.status_code == 200, f"Falha na carga complementar: {res_comp.text}"
+        data_comp = res_comp.json()
+        assert data_comp["inserted_count"] == 1
+        assert data_comp["ignored_count"] == 1
+        print(f" -> Carga complementar validada com sucesso! Cadastrou 1 novo, ignorou 1 duplicado: {data_comp['message']}")
 
         print("[TEST 3] Buscar Catálogo Leve (Offline-First cache)...")
         res_cache = client.get(f"/companies/{company.id}/inventory/{inv_id}/catalog-cache", headers=headers1)
         assert res_cache.status_code == 200
         catalog = res_cache.json()
-        assert len(catalog) == 3
+        assert len(catalog) == 4
         print(f" -> Catálogo cache recebido com {len(catalog)} itens.")
 
         print("[TEST 4] Checar Localização 'PRATELEIRA A-01' antes de contar...")
@@ -217,10 +213,10 @@ def run_tests():
         assert pub_info["code"] == inv_data["code"]
         print(f" -> Info pública obtida com sucesso: {pub_info['name']}")
 
-        # 10b. Obter catálogo cache sem autenticação (3 cadastrados + 1 avulso detectado no scan)
+        # 10b. Obter catálogo cache sem autenticação (4 cadastrados + 1 avulso detectado no scan)
         res_pub_cat = client.get(f"/inventory/public/{access_token}/catalog-cache")
         assert res_pub_cat.status_code == 200
-        assert len(res_pub_cat.json()) == 4
+        assert len(res_pub_cat.json()) == 5
         print(f" -> Catálogo público obtido com sucesso: {len(res_pub_cat.json())} itens (incluindo avulso)")
 
         # 10c. Abrir sessão pública de operador (informando apenas nome e prateleira)

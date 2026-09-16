@@ -24,7 +24,8 @@ import {
   QrCode,
   Copy,
   Check,
-  ExternalLink
+  ExternalLink,
+  ShieldCheck
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -36,6 +37,7 @@ interface InventoryDetail {
   name: string;
   status: 'EM_ANDAMENTO' | 'FINALIZADO' | 'CANCELADO';
   description?: string;
+  supervisor_pin?: string;
   total_expected_skus: number;
   total_scanned_items: number;
   total_sessions: number;
@@ -293,7 +295,7 @@ export default function InventoryDetailPage() {
       {/* Header Principal */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
         <div className="space-y-1">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <span className="font-mono text-xs font-bold text-teal-600 dark:text-teal-400 bg-teal-500/10 px-2.5 py-1 rounded-md">
               {inventory.code}
             </span>
@@ -304,6 +306,10 @@ export default function InventoryDetailPage() {
             }`}>
               {isEmAndamento && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
               {inventory.status === 'EM_ANDAMENTO' ? 'Em Andamento' : 'Finalizado'}
+            </span>
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20" title="Senha de Supervisor para manutenções na contagem">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              PIN Supervisor: {inventory.supervisor_pin || '1234'}
             </span>
           </div>
 

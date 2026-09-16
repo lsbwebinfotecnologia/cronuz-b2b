@@ -32,6 +32,7 @@ class Inventory(Base):
     total_expected_skus = Column(Integer, default=0, nullable=False)
     access_token = Column(String(64), unique=True, index=True, nullable=True)
     is_public_access_enabled = Column(Boolean, default=True, nullable=False)
+    supervisor_pin = Column(String(50), default="1234", nullable=True)
     
     created_by_user_id = Column(Integer, ForeignKey("usr_user.id"), nullable=True)
     finalized_by_user_id = Column(Integer, ForeignKey("usr_user.id"), nullable=True)

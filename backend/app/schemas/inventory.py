@@ -24,7 +24,7 @@ class InventoryBase(BaseModel):
     code: Optional[str] = None
 
 class InventoryCreate(InventoryBase):
-    pass
+    supervisor_pin: Optional[str] = "1234"
 
 class InventoryResponse(InventoryBase):
     id: int
@@ -37,6 +37,7 @@ class InventoryResponse(InventoryBase):
     open_sessions: Optional[int] = 0
     access_token: Optional[str] = None
     is_public_access_enabled: Optional[bool] = True
+    supervisor_pin: Optional[str] = "1234"
     created_by_user_id: Optional[int] = None
     finalized_by_user_id: Optional[int] = None
     finalized_at: Optional[datetime] = None
@@ -45,6 +46,28 @@ class InventoryResponse(InventoryBase):
 
     class Config:
         from_attributes = True
+
+class PinVerifyRequest(BaseModel):
+    pin: str
+
+class PinVerifyResponse(BaseModel):
+    success: bool
+    message: str
+
+class SessionItemSummary(BaseModel):
+    isbn: str
+    title: str
+    publisher: Optional[str] = None
+    category: Optional[str] = None
+    total_quantity: int
+    last_scanned_at: Optional[datetime] = None
+
+class SessionItemUpdateRequest(BaseModel):
+    pin: str
+    new_quantity: int
+
+class SessionItemDeleteRequest(BaseModel):
+    pin: str
 
 # --- Inventory Item (Catalog / Expected) Schemas ---
 class InventoryItemBase(BaseModel):

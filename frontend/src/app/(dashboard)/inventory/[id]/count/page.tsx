@@ -13,28 +13,32 @@ import {
   AlertTriangle, 
   Loader2, 
   RotateCcw, 
-  LogOut, 
-  Search, 
   MapPin, 
   BookOpen, 
   Layers,
-  Sparkles,
+  PlusCircle,
+  X,
+  Undo2,
+  Trash2,
+  Pencil,
+  Hash,
   Camera,
   Building2,
-  PlusCircle,
-  X
+  Search
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import CameraBarcodeScanner from '@/components/inventory/CameraBarcodeScanner';
+import SupervisorPinModal from '@/components/inventory/SupervisorPinModal';
 import { 
-  openInventoryDb, 
   saveCatalogItems, 
   upsertCatalogItem,
   findCatalogItem, 
   savePendingScan, 
   getPendingScans, 
   markScansSynced, 
+  deleteLastPendingScan,
+  clearPendingScansForIsbn,
   playSuccessBeep, 
   playWarningBeep,
   CatalogItemRecord,
@@ -79,8 +83,33 @@ export default function InventoryCountPage() {
   // Estados de Bipagem
   const [barcodeInput, setBarcodeInput] = useState('');
   const [useCamera, setUseCamera] = useState(false);
+  const [quantityMode, setQuantityMode] = useState<'unit' | 'custom'>('unit');
+  const [customQuantity, setCustomQuantity] = useState<number>(1);
   const [lastScanned, setLastScanned] = useState<LastScanned | null>(null);
   const [sessionScannedCount, setSessionScannedCount] = useState(0);
+  const [undoingLastScan, setUndoingLastScan] = useState(false);
+
+  // Navegação da Sessão (Abas) & Manutenção
+  const [sessionTab, setSessionTab] = useState<'scan' | 'items'>('scan');
+  const [sessionItems, setSessionItems] = useState<Array<{
+    isbn: string;
+    title: string;
+    publisher?: string;
+    category?: string;
+    total_quantity: number;
+  }>>([]);
+  const [loadingSessionItems, setLoadingSessionItems] = useState(false);
+  const [searchItemQuery, setSearchItemQuery] = useState('');
+
+  // Supervisor PIN & Modal
+  const [authorizedPin, setAuthorizedPin] = useState<string | null>(null);
+  const [pinModal, setPinModal] = useState<{
+    isOpen: boolean;
+    action: 'edit' | 'delete';
+    targetIsbn: string;
+    targetTitle: string;
+    currentQty: number;
+  } | null>(null);
 
   // Modal Item Não Cadastrado
   const [unregisteredModal, setUnregisteredModal] = useState<{
@@ -149,14 +178,13 @@ export default function InventoryCountPage() {
 
   // Manter foco permanente no input quando a sessão estiver aberta (se modal não estiver aberto)
   useEffect(() => {
-    if (session && session.status === 'ABERTA' && !unregisteredModal) {
+    if (session && session.status === 'ABERTA' && !unregisteredModal && !pinModal) {
       const timer = setTimeout(() => {
         barcodeInputRef.current?.focus();
       }, 100);
 
       const handleGlobalClick = (e: MouseEvent) => {
-        if (unregisteredModal) return;
-        // Se não clicou em um botão de ação, devolve foco ao input
+        if (unregisteredModal || pinModal) return;
         const target = e.target as HTMLElement;
         if (!target.closest('button') && !target.closest('a') && !target.closest('input')) {
           barcodeInputRef.current?.focus();
@@ -169,7 +197,7 @@ export default function InventoryCountPage() {
         window.removeEventListener('click', handleGlobalClick);
       };
     }
-  }, [session, unregisteredModal]);
+  }, [session, unregisteredModal, pinModal]);
 
   // Timer de sincronização em background a cada 3 segundos
   useEffect(() => {
@@ -251,21 +279,18 @@ export default function InventoryCountPage() {
       if (res.ok) {
         const data = await res.json();
         if (data.exists) {
-          // Avisa sobre contagem prévia e pergunta se deseja auditoria
           setLocationAuditWarning({
             exists: true,
             last_operator_name: data.last_operator_name,
             total_scans_previous: data.total_scans_previous
           });
         } else {
-          // Abre sessão normal
           await startSession(loc, false);
         }
       } else {
         toast.error('Erro ao validar localização.');
       }
     } catch (err) {
-      // Se estiver offline, permite abrir sessão localmente
       toast.warning('Offline: Abrindo sessão localmente.');
       await startSession(loc, false);
     } finally {
@@ -308,21 +333,20 @@ export default function InventoryCountPage() {
   }
 
   // 5. Bipagem de Código de Barras (Físico ou Câmera)
-  async function processBarcodeScan(rawCode: string) {
+  async function processBarcodeScan(rawCode: string, overrideQty?: number) {
     const isbnRaw = rawCode.trim();
     if (!isbnRaw || !session) return;
 
-    // Limpar campo imediatamente para o próximo bip
+    const qtyToApply = overrideQty || (quantityMode === 'custom' ? Math.max(1, Number(customQuantity) || 1) : 1);
+
     setBarcodeInput('');
 
-    // Gerar UUIDv4 para idempotência estrita
     const clientUuid = (typeof crypto !== 'undefined' && crypto.randomUUID) 
       ? crypto.randomUUID() 
       : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
     const nowIso = new Date().toISOString();
 
-    // Buscar no catálogo local do IndexedDB
     let itemMeta: CatalogItemRecord | null = null;
     try {
       itemMeta = await findCatalogItem(inventoryId, isbnRaw);
@@ -330,7 +354,6 @@ export default function InventoryCountPage() {
       console.warn('[IndexedDB] Erro na busca local:', err);
     }
 
-    // Se o item NÃO estiver cadastrado, solicita Nome e Editora antes de contabilizar
     if (!itemMeta) {
       playWarningBeep();
       setUnregisteredTitle('');
@@ -347,7 +370,6 @@ export default function InventoryCountPage() {
       return;
     }
 
-    // Item cadastrado: fluxo normal
     playSuccessBeep();
 
     const scanRecord: PendingScanRecord = {
@@ -356,12 +378,11 @@ export default function InventoryCountPage() {
       inventory_id: inventoryId,
       isbn: isbnRaw,
       location: session.location,
-      quantity: 1,
+      quantity: qtyToApply,
       scanned_at: nowIso,
       status: 'pending'
     };
 
-    // 1. Salva instantaneamente no IndexedDB
     try {
       await savePendingScan(scanRecord);
       setPendingSyncCount(prev => prev + 1);
@@ -369,8 +390,7 @@ export default function InventoryCountPage() {
       console.error('[IndexedDB] Falha ao persistir bip:', err);
     }
 
-    // 2. Atualiza estado da tela
-    setSessionScannedCount(prev => prev + 1);
+    setSessionScannedCount(prev => prev + qtyToApply);
     setLastScanned({
       isbn: isbnRaw,
       title: itemMeta.title,
@@ -380,10 +400,132 @@ export default function InventoryCountPage() {
       timestamp: new Date().toLocaleTimeString('pt-BR')
     });
 
-    // 3. Tenta sincronização rápida se estiver online
     if (isOnline) {
       flushPendingScans();
     }
+  }
+
+  async function handleUndoLastScan() {
+    if (!session || undoingLastScan) return;
+    setUndoingLastScan(true);
+    try {
+      const token = getToken();
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      if (isOnline) {
+        const res = await fetch(`${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/${session.id}/scans/last`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSessionScannedCount(data.session_total_scans);
+          toast.success(data.message || 'Último bip cancelado!');
+          setLastScanned(null);
+          await deleteLastPendingScan(session.id);
+          setUndoingLastScan(false);
+          return;
+        }
+      }
+
+      // Offline fallback
+      const removedLocal = await deleteLastPendingScan(session.id);
+      if (removedLocal) {
+        setSessionScannedCount(prev => Math.max(0, prev - removedLocal.quantity));
+        setPendingSyncCount(prev => Math.max(0, prev - 1));
+        toast.success(`Bip do ISBN ${removedLocal.isbn} (${removedLocal.quantity} un) desfeito localmente!`);
+        setLastScanned(null);
+      } else {
+        toast.info('Nenhum bip recente para desfazer.');
+      }
+    } catch (err) {
+      toast.error('Erro ao desfazer bip.');
+    } finally {
+      setUndoingLastScan(false);
+    }
+  }
+
+  async function loadSessionItemsSummary() {
+    if (!session) return;
+    setLoadingSessionItems(true);
+    try {
+      const token = getToken();
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(
+        `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/${session.id}/items`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setSessionItems(data);
+      }
+    } catch (err) {
+      console.warn('Erro ao carregar resumo de itens da sessão:', err);
+    } finally {
+      setLoadingSessionItems(false);
+    }
+  }
+
+  async function handleVerifySupervisorPin(pin: string): Promise<boolean> {
+    const token = getToken();
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const res = await fetch(
+      `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/verify-pin`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ pin })
+      }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Senha do Supervisor incorreta.');
+    }
+    setAuthorizedPin(pin);
+    return true;
+  }
+
+  async function handleExecuteMaintenance(pinToUse: string, action: 'edit' | 'delete', targetIsbn: string, newQty: number) {
+    if (!session) return;
+    const token = getToken();
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    
+    if (action === 'delete' || newQty <= 0) {
+      const res = await fetch(
+        `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/${session.id}/items/${targetIsbn}?pin=${encodeURIComponent(pinToUse)}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Erro ao remover item.');
+      }
+      const data = await res.json();
+      await clearPendingScansForIsbn(session.id, targetIsbn);
+      setSessionScannedCount(data.new_total_scans);
+      toast.success(`Item ${targetIsbn} removido da contagem.`);
+    } else {
+      const res = await fetch(
+        `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/${session.id}/items/${targetIsbn}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ pin: pinToUse, new_quantity: newQty })
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Erro ao atualizar quantidade.');
+      }
+      const data = await res.json();
+      await clearPendingScansForIsbn(session.id, targetIsbn);
+      setSessionScannedCount(data.new_total_scans);
+      toast.success(`Quantidade do ISBN ${targetIsbn} atualizada para ${newQty} un!`);
+    }
+
+    loadSessionItemsSummary();
+    setPinModal(null);
   }
 
   async function handleBarcodeSubmit(e: React.FormEvent) {
@@ -411,7 +553,6 @@ export default function InventoryCountPage() {
 
     setSavingUnregistered(true);
     try {
-      // 1. Salvar no catálogo do IndexedDB para que os próximos bips reconheçam
       await upsertCatalogItem({
         inventory_id: inventoryId,
         isbn: unregisteredModal.isbn,
@@ -421,7 +562,6 @@ export default function InventoryCountPage() {
         default_location: session.location
       });
 
-      // 2. Gravar bip no IndexedDB com os metadados
       const scanRecord: PendingScanRecord = {
         client_uuid: unregisteredModal.clientUuid,
         session_id: session.id,
@@ -485,7 +625,6 @@ export default function InventoryCountPage() {
     setClosingSession(true);
 
     try {
-      // Forçar envio dos últimos bips
       await flushPendingScans();
 
       const token = getToken();
@@ -515,7 +654,7 @@ export default function InventoryCountPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between text-slate-900 dark:text-slate-100">
       {/* ─── Top Bar Mobile ──────────────────────────────────────────────── */}
       <div className="p-3 sm:p-4 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30 shadow-sm flex items-center justify-between gap-3">
         <Link
@@ -638,113 +777,317 @@ export default function InventoryCountPage() {
                 </p>
               </div>
 
-              {/* Seletor de Modo: Leitor Físico / Câmera do Celular */}
-              <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 shadow-inner">
+              {/* Navegação de Abas da Sessão */}
+              <div className="flex items-center justify-around border-b border-slate-200 dark:border-slate-800 pb-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setUseCamera(false);
-                    setTimeout(() => barcodeInputRef.current?.focus(), 150);
-                  }}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
-                    !useCamera
-                      ? 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-400 shadow-sm border border-slate-200/80 dark:border-slate-700'
-                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  onClick={() => setSessionTab('scan')}
+                  className={`flex items-center gap-1.5 py-1.5 px-3 text-xs font-bold rounded-lg transition-colors ${
+                    sessionTab === 'scan'
+                      ? 'bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/30'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                   }`}
                 >
                   <ScanBarcode className="h-4 w-4" />
-                  <span>Leitor Físico / Teclado</span>
+                  <span>Bipagem</span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setUseCamera(true)}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
-                    useCamera
-                      ? 'bg-teal-600 text-white shadow-sm'
-                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  onClick={() => {
+                    setSessionTab('items');
+                    loadSessionItemsSummary();
+                  }}
+                  className={`flex items-center gap-1.5 py-1.5 px-3 text-xs font-bold rounded-lg transition-colors ${
+                    sessionTab === 'items'
+                      ? 'bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/30'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                   }`}
                 >
-                  <Camera className="h-4 w-4" />
-                  <span>Usar Câmera do Celular</span>
+                  <Layers className="h-4 w-4" />
+                  <span>Itens Contados</span>
                 </button>
               </div>
 
-              {/* Viewport da Câmera (quando ativado modo Câmera) */}
-              {useCamera && (
-                <CameraBarcodeScanner
-                  isActive={useCamera}
-                  onScan={(code) => processBarcodeScan(code)}
-                  onClose={() => {
-                    setUseCamera(false);
-                    setTimeout(() => barcodeInputRef.current?.focus(), 150);
-                  }}
-                />
-              )}
+              {sessionTab === 'scan' ? (
+                <>
+                  {/* Seletor de Modo: Leitor Físico / Câmera do Celular */}
+                  <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 shadow-inner">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUseCamera(false);
+                        setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                      }}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                        !useCamera
+                          ? 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-400 shadow-sm border border-slate-200/80 dark:border-slate-700'
+                          : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                      }`}
+                    >
+                      <ScanBarcode className="h-4 w-4" />
+                      <span>Leitor Físico / Teclado</span>
+                    </button>
 
-              {/* Input Foco Contínuo para Leitor USB/Bluetooth/Câmera */}
-              <form onSubmit={handleBarcodeSubmit} className="space-y-2">
-                <div className="relative">
-                  <ScanBarcode className="h-5 w-5 absolute left-3.5 top-3.5 text-teal-600" />
-                  <input
-                    ref={barcodeInputRef}
-                    type="text"
-                    inputMode="numeric"
-                    placeholder={useCamera ? "Aponte a câmera ou digite aqui..." : "Bipe o código de barras ou ISBN..."}
-                    value={barcodeInput}
-                    onChange={(e) => setBarcodeInput(e.target.value)}
-                    className="w-full pl-11 pr-4 py-3.5 rounded-2xl border-2 border-teal-500 bg-white dark:bg-slate-900 text-base font-mono font-bold tracking-wider text-slate-900 dark:text-white shadow-md focus:outline-none focus:ring-4 focus:ring-teal-500/20"
-                  />
+                    <button
+                      type="button"
+                      onClick={() => setUseCamera(true)}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                        useCamera
+                          ? 'bg-teal-600 text-white shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                      }`}
+                    >
+                      <Camera className="h-4 w-4" />
+                      <span>Usar Câmera do Celular</span>
+                    </button>
+                  </div>
+
+                  {/* Seletor de Modo de Quantidade: Bipou Contou (+1) vs Digitar Qtd */}
+                  <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60">
+                    <button
+                      type="button"
+                      onClick={() => setQuantityMode('unit')}
+                      className={`flex-1 py-1.5 px-3 rounded-xl text-[11px] font-bold transition-all ${
+                        quantityMode === 'unit'
+                          ? 'bg-teal-600 text-white shadow-xs'
+                          : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                      }`}
+                    >
+                      ➕ Bipou = Contou (+1)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setQuantityMode('custom')}
+                      className={`flex-1 py-1.5 px-3 rounded-xl text-[11px] font-bold transition-all ${
+                        quantityMode === 'custom'
+                          ? 'bg-teal-600 text-white shadow-xs'
+                          : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                      }`}
+                    >
+                      🔢 Digitar Quantidade
+                    </button>
+                  </div>
+
+                  {/* Campo de Quantidade Personalizada (quando ativo modo custom) */}
+                  {quantityMode === 'custom' && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-3 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-between gap-3"
+                    >
+                      <span className="text-xs font-bold text-teal-800 dark:text-teal-300 flex items-center gap-1.5">
+                        <Hash className="h-4 w-4 text-teal-600" /> Qtd por bip:
+                      </span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={customQuantity}
+                        onChange={(e) => setCustomQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-24 text-center text-lg font-mono font-bold px-3 py-1.5 rounded-xl border-2 border-teal-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none"
+                      />
+                    </motion.div>
+                  )}
+
+                  {/* Viewport da Câmera (quando ativado modo Câmera) */}
+                  {useCamera && (
+                    <CameraBarcodeScanner
+                      isActive={useCamera}
+                      onScan={(code) => processBarcodeScan(code)}
+                      onClose={() => {
+                        setUseCamera(false);
+                        setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                      }}
+                    />
+                  )}
+
+                  {/* Input Foco Contínuo para Leitor USB/Bluetooth/Câmera */}
+                  <form onSubmit={handleBarcodeSubmit} className="space-y-2">
+                    <div className="relative">
+                      <ScanBarcode className="h-5 w-5 absolute left-3.5 top-3.5 text-teal-600" />
+                      <input
+                        ref={barcodeInputRef}
+                        type="text"
+                        inputMode="numeric"
+                        placeholder={useCamera ? "Aponte a câmera ou digite aqui..." : "Bipe o código de barras ou ISBN..."}
+                        value={barcodeInput}
+                        onChange={(e) => setBarcodeInput(e.target.value)}
+                        className="w-full pl-11 pr-4 py-3.5 rounded-2xl border-2 border-teal-500 bg-white dark:bg-slate-900 text-base font-mono font-bold tracking-wider text-slate-900 dark:text-white shadow-md focus:outline-none focus:ring-4 focus:ring-teal-500/20"
+                      />
+                    </div>
+                    <p className="text-[11px] text-center text-slate-400">
+                      {useCamera ? "A câmera lê automaticamente ao enquadrar o código." : "O foco fica travado neste campo para leitores automáticos Bluetooth/USB."}
+                    </p>
+                  </form>
+
+                  {/* Card com o Último Item Bipado + Botão Desfazer */}
+                  <AnimatePresence mode="wait">
+                    {lastScanned && (
+                      <motion.div
+                        key={lastScanned.isbn + lastScanned.timestamp}
+                        initial={{ scale: 0.95, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className={`p-4 rounded-2xl border ${
+                          lastScanned.isUnregistered
+                            ? 'border-amber-300 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-950/20'
+                            : 'border-emerald-300 dark:border-emerald-500/30 bg-emerald-50/60 dark:bg-emerald-950/20'
+                        } shadow-sm space-y-2`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-xs font-bold text-slate-700 dark:text-slate-300 bg-white/60 dark:bg-black/20 px-2 py-0.5 rounded">
+                            {lastScanned.isbn}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            {lastScanned.timestamp}
+                          </span>
+                        </div>
+
+                        <h4 className="font-bold text-slate-900 dark:text-white text-sm line-clamp-2">
+                          {lastScanned.title}
+                        </h4>
+
+                        <div className="flex items-center justify-between pt-1 border-t border-slate-200/50 dark:border-slate-800 font-medium">
+                          {lastScanned.publisher && (
+                            <span className="text-xs text-slate-500">
+                              Editora: <strong>{lastScanned.publisher}</strong>
+                            </span>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={handleUndoLastScan}
+                            disabled={undoingLastScan}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-bold transition-colors ml-auto border border-rose-500/20"
+                          >
+                            {undoingLastScan ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Undo2 className="h-3.5 w-3.5" />}
+                            Desfazer Bip
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </>
+              ) : (
+                /* Aba: Resumo dos Itens Contados na Sessão (com busca e manutenção PIN) */
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                      Resumo da Prateleira
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={loadSessionItemsSummary}
+                      className="text-xs text-teal-600 hover:underline font-semibold"
+                    >
+                      Atualizar
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <Search className="h-4 w-4 absolute left-3 top-3 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Buscar por ISBN ou título..."
+                      value={searchItemQuery}
+                      onChange={(e) => setSearchItemQuery(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium focus:outline-none focus:border-teal-500"
+                    />
+                  </div>
+
+                  {loadingSessionItems ? (
+                    <div className="p-6 text-center text-slate-400">
+                      <Loader2 className="h-5 w-5 animate-spin mx-auto mb-1 text-teal-600" />
+                      <p className="text-xs">Carregando itens...</p>
+                    </div>
+                  ) : sessionItems.length === 0 ? (
+                    <div className="p-6 text-center text-slate-400 bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
+                      <p className="text-xs font-medium">Nenhum produto bipado nesta prateleira ainda.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                      {sessionItems
+                        .filter(it => 
+                          it.isbn.toLowerCase().includes(searchItemQuery.toLowerCase()) || 
+                          it.title.toLowerCase().includes(searchItemQuery.toLowerCase())
+                        )
+                        .map((it) => (
+                          <div
+                            key={it.isbn}
+                            className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs flex items-center justify-between gap-3"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <span className="font-mono text-[10px] font-bold text-teal-600 bg-teal-500/10 px-1.5 py-0.5 rounded">
+                                {it.isbn}
+                              </span>
+                              <h5 className="font-bold text-xs truncate mt-0.5">{it.title}</h5>
+                              {it.publisher && <p className="text-[10px] text-slate-400 truncate">{it.publisher}</p>}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-sm font-black text-teal-900 dark:text-teal-100 bg-teal-500/10 px-2.5 py-1 rounded-xl">
+                                {it.total_quantity} un
+                              </span>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const newQStr = window.prompt(`Informe a nova quantidade para o ISBN ${it.isbn}:`, String(it.total_quantity));
+                                  if (newQStr === null) return;
+                                  const newQ = parseInt(newQStr, 10);
+                                  if (isNaN(newQ) || newQ < 0) {
+                                    toast.error('Quantidade inválida.');
+                                    return;
+                                  }
+
+                                  if (authorizedPin) {
+                                    handleExecuteMaintenance(authorizedPin, 'edit', it.isbn, newQ);
+                                  } else {
+                                    setPinModal({
+                                      isOpen: true,
+                                      action: 'edit',
+                                      targetIsbn: it.isbn,
+                                      targetTitle: it.title,
+                                      currentQty: newQ
+                                    });
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors"
+                                title="Editar quantidade (Requer PIN do Supervisor)"
+                              >
+                                <Pencil className="h-3.5 w-3.5 text-teal-600" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (authorizedPin) {
+                                    if (window.confirm(`Remover o item ${it.title} (${it.isbn}) da contagem?`)) {
+                                      handleExecuteMaintenance(authorizedPin, 'delete', it.isbn, 0);
+                                    }
+                                  } else {
+                                    setPinModal({
+                                      isOpen: true,
+                                      action: 'delete',
+                                      targetIsbn: it.isbn,
+                                      targetTitle: it.title,
+                                      currentQty: 0
+                                    });
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg border border-rose-500/20 hover:bg-rose-500/10 text-rose-600 transition-colors"
+                                title="Excluir item (Requer PIN do Supervisor)"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  )}
                 </div>
-                <p className="text-[11px] text-center text-slate-400">
-                  {useCamera ? "A câmera lê automaticamente ao enquadrar o código." : "O foco fica travado neste campo para leitores automáticos Bluetooth/USB."}
-                </p>
-              </form>
-
-              {/* Card com o Último Item Bipado */}
-              <AnimatePresence mode="wait">
-                {lastScanned && (
-                  <motion.div
-                    key={lastScanned.isbn + lastScanned.timestamp}
-                    initial={{ scale: 0.95, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className={`p-4 rounded-2xl border ${
-                      lastScanned.isUnregistered
-                        ? 'border-amber-300 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-950/20'
-                        : 'border-emerald-300 dark:border-emerald-500/30 bg-emerald-50/60 dark:bg-emerald-950/20'
-                    } shadow-sm space-y-2`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-xs font-bold text-slate-700 dark:text-slate-300 bg-white/60 dark:bg-black/20 px-2 py-0.5 rounded">
-                        {lastScanned.isbn}
-                      </span>
-                      <span className="text-[10px] text-slate-400 font-medium">
-                        {lastScanned.timestamp}
-                      </span>
-                    </div>
-
-                    <h4 className="font-bold text-slate-900 dark:text-white text-sm line-clamp-2">
-                      {lastScanned.title}
-                    </h4>
-
-                    <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/50 dark:border-slate-800">
-                      <span className="text-slate-500">{lastScanned.publisher || 'Editora N/A'}</span>
-                      {lastScanned.isUnregistered ? (
-                        <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1">
-                          <AlertTriangle className="h-3 w-3" />
-                          Fora da base (+1)
-                        </span>
-                      ) : (
-                        <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
-                          <CheckCircle2 className="h-3 w-3" />
-                          Contado (+1)
-                        </span>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              )}
             </div>
 
             {/* ─── Botão Obrigatório de Conclusão da Prateleira ─── */}
@@ -916,6 +1259,20 @@ export default function InventoryCountPage() {
             </form>
           </motion.div>
         </div>
+      )}
+
+      {/* ─── Modal de Senha do Supervisor para Manutenção ─── */}
+      {pinModal && (
+        <SupervisorPinModal
+          isOpen={pinModal.isOpen}
+          title={pinModal.action === 'delete' ? 'Excluir Item Contado' : 'Editar Quantidade Contada'}
+          description={`Autorize com a senha do supervisor a manutenção do produto: ${pinModal.targetTitle} (${pinModal.targetIsbn}).`}
+          onClose={() => setPinModal(null)}
+          onConfirm={async (pin) => {
+            await handleVerifySupervisorPin(pin);
+            await handleExecuteMaintenance(pin, pinModal.action, pinModal.targetIsbn, pinModal.currentQty);
+          }}
+        />
       )}
     </div>
   );

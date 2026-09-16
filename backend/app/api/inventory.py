@@ -155,6 +155,7 @@ def create_inventory(
         total_expected_skus=0,
         access_token=access_token,
         is_public_access_enabled=True,
+        supervisor_pin=payload.supervisor_pin.strip() if payload.supervisor_pin else "1234",
         created_by_user_id=current_user.id,
     )
     db.add(new_inv)
@@ -174,6 +175,7 @@ def create_inventory(
         open_sessions=0,
         access_token=new_inv.access_token,
         is_public_access_enabled=new_inv.is_public_access_enabled,
+        supervisor_pin=new_inv.supervisor_pin or "1234",
         created_by_user_id=new_inv.created_by_user_id,
         finalized_by_user_id=None,
         finalized_at=None,
@@ -228,6 +230,7 @@ def get_inventory(
         open_sessions=int(open_sessions or 0),
         access_token=inv.access_token,
         is_public_access_enabled=inv.is_public_access_enabled,
+        supervisor_pin=inv.supervisor_pin or "1234",
         created_by_user_id=inv.created_by_user_id,
         finalized_by_user_id=inv.finalized_by_user_id,
         finalized_at=inv.finalized_at,
@@ -371,61 +374,77 @@ async def upload_inventory_sheet(
     if not raw_rows:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nenhum item válido encontrado no arquivo.")
 
-    # [REGRA OBRIGATÓRIA] 1. Não permitir carregar o mesmo ISBN duplicado dentro da planilha
+    # 1. Deduplica linhas da própria planilha mantendo a 1ª ocorrência de cada ISBN
+    unique_raw_rows = []
     seen_isbns = set()
-    duplicate_isbns = set()
     for item in raw_rows:
         isbn = item["isbn"]
-        if isbn in seen_isbns:
-            duplicate_isbns.add(isbn)
-        else:
+        if isbn not in seen_isbns:
             seen_isbns.add(isbn)
+            unique_raw_rows.append(item)
 
-    if duplicate_isbns:
-        sample = list(duplicate_isbns)[:5]
-        more = f" e mais {len(duplicate_isbns) - 5}..." if len(duplicate_isbns) > 5 else ""
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"A planilha contém {len(duplicate_isbns)} ISBN(s) duplicado(s). Não é permitido carregar registros com mesmo ISBN. Exemplos: {', '.join(sample)}{more}. Remova as duplicidades da planilha e tente novamente."
-        )
-
-    # [REGRA OBRIGATÓRIA] 2. Não permitir carregar ISBNs que já existem na base deste inventário
-    existing_in_db = set(
-        x[0] for x in db.query(InventoryItem.isbn)
-        .filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn.in_(seen_isbns), InventoryItem.is_unregistered == False)
+    # 2. Busca itens que já existem no banco de dados para este inventário
+    existing_items = (
+        db.query(InventoryItem)
+        .filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn.in_(seen_isbns))
         .all()
     )
-    if existing_in_db:
-        sample = list(existing_in_db)[:5]
-        more = f" e mais {len(existing_in_db) - 5}..." if len(existing_in_db) > 5 else ""
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"A planilha contém {len(existing_in_db)} ISBN(s) que já foram cadastrados neste inventário. Exemplos: {', '.join(sample)}{more}. Remova os itens já existentes para prosseguir."
-        )
+    existing_map = {item.isbn: item for item in existing_items}
 
-    # Inserção no PostgreSQL em lote
-    batch_size = 500
-    for i in range(0, len(raw_rows), batch_size):
-        chunk = raw_rows[i:i + batch_size]
-        for it in chunk:
+    inserted_count = 0
+    updated_unregistered_count = 0
+    ignored_count = 0
+
+    for it in unique_raw_rows:
+        isbn = it["isbn"]
+        if isbn in existing_map:
+            db_item = existing_map[isbn]
+            if db_item.is_unregistered:
+                # Atualiza metadados do item que havia sido bipado como avulso previamente
+                db_item.title = it["title"]
+                db_item.publisher = it["publisher"]
+                db_item.category = it["category"]
+                db_item.default_location = it["default_location"]
+                db_item.is_unregistered = False
+                updated_unregistered_count += 1
+            else:
+                # Já cadastrado oficialmente: ignora conforme solicitado pelo usuário
+                ignored_count += 1
+        else:
+            # Novo cadastro
             db.add(InventoryItem(
                 inventory_id=inventory_id,
                 company_id=company_id,
-                isbn=it["isbn"],
+                isbn=isbn,
                 title=it["title"],
                 publisher=it["publisher"],
                 category=it["category"],
                 default_location=it["default_location"],
                 is_unregistered=False
             ))
-        db.commit()
+            inserted_count += 1
+
+    db.commit()
 
     total_skus = db.query(func.count(InventoryItem.id)).filter(InventoryItem.inventory_id == inventory_id).scalar()
     inv.total_expected_skus = total_skus or 0
     db.commit()
 
+    msg_parts = []
+    if inserted_count > 0:
+        msg_parts.append(f"{inserted_count} novo(s) produto(s) cadastrado(s)")
+    if updated_unregistered_count > 0:
+        msg_parts.append(f"{updated_unregistered_count} item(ns) avulso(s) atualizado(s)")
+    if ignored_count > 0:
+        msg_parts.append(f"{ignored_count} produto(s) já cadastrado(s) ignorado(s)")
+    
+    final_message = "; ".join(msg_parts) + "." if msg_parts else "Nenhum novo produto para cadastrar."
+
     return {
-        "message": f"{len(raw_rows)} produtos carregados com sucesso sem duplicidades.",
+        "message": final_message,
+        "inserted_count": inserted_count,
+        "ignored_count": ignored_count,
+        "updated_unregistered_count": updated_unregistered_count,
         "total_expected_skus": inv.total_expected_skus
     }
 
@@ -1232,3 +1251,269 @@ def close_public_session(access_token: str, session_id: int, db: Session = Depen
         started_at=sess.started_at,
         closed_at=sess.closed_at,
     )
+
+
+# ----------------------------------------------------------------------
+# 13. Endpoints de Manutenção & Senha de Supervisor (PIN)
+# ----------------------------------------------------------------------
+
+# Validação de PIN (Autenticado)
+@router.post("/{inventory_id}/verify-pin", response_model=inv_schemas.PinVerifyResponse)
+def verify_inventory_pin(
+    company_id: int,
+    inventory_id: int,
+    payload: inv_schemas.PinVerifyRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventário não encontrado.")
+    
+    expected_pin = inv.supervisor_pin or "1234"
+    if payload.pin.strip() != expected_pin:
+        raise HTTPException(status_code=401, detail="Senha do Supervisor incorreta.")
+    
+    return inv_schemas.PinVerifyResponse(success=True, message="Senha do Supervisor autorizada!")
+
+
+# Validação de PIN (Público via Token)
+@public_router.post("/{access_token}/verify-pin", response_model=inv_schemas.PinVerifyResponse)
+def verify_public_inventory_pin(
+    access_token: str,
+    payload: inv_schemas.PinVerifyRequest,
+    db: Session = Depends(get_db)
+):
+    inv = _get_inventory_by_token(access_token, db)
+    expected_pin = inv.supervisor_pin or "1234"
+    if payload.pin.strip() != expected_pin:
+        raise HTTPException(status_code=401, detail="Senha do Supervisor incorreta.")
+    
+    return inv_schemas.PinVerifyResponse(success=True, message="Senha do Supervisor autorizada!")
+
+
+# Listar Itens Agregados por Sessão (Autenticado)
+@router.get("/{inventory_id}/sessions/{session_id}/items", response_model=List[inv_schemas.SessionItemSummary])
+def get_session_items_summary(
+    company_id: int,
+    inventory_id: int,
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    return _fetch_session_items_summary_db(inventory_id, session_id, db)
+
+
+# Listar Itens Agregados por Sessão (Público)
+@public_router.get("/{access_token}/sessions/{session_id}/items", response_model=List[inv_schemas.SessionItemSummary])
+def get_public_session_items_summary(
+    access_token: str,
+    session_id: int,
+    db: Session = Depends(get_db),
+):
+    inv = _get_inventory_by_token(access_token, db)
+    return _fetch_session_items_summary_db(inv.id, session_id, db)
+
+
+def _fetch_session_items_summary_db(inventory_id: int, session_id: int, db: Session) -> List[inv_schemas.SessionItemSummary]:
+    scans_sub = (
+        db.query(
+            InventoryScan.isbn,
+            func.sum(InventoryScan.quantity).label("total_quantity"),
+            func.max(InventoryScan.scanned_at).label("last_scanned_at")
+        )
+        .filter(InventoryScan.inventory_id == inventory_id, InventoryScan.session_id == session_id)
+        .group_by(InventoryScan.isbn)
+        .all()
+    )
+
+    if not scans_sub:
+        return []
+
+    isbns = [s.isbn for s in scans_sub]
+    catalog_items = (
+        db.query(InventoryItem)
+        .filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn.in_(isbns))
+        .all()
+    )
+    cat_map = {ci.isbn: ci for ci in catalog_items}
+
+    result = []
+    for row in scans_sub:
+        ci = cat_map.get(row.isbn)
+        title = ci.title if ci else f"Item ({row.isbn})"
+        publisher = ci.publisher if ci else None
+        category = ci.category if ci else None
+        
+        result.append(inv_schemas.SessionItemSummary(
+            isbn=row.isbn,
+            title=title,
+            publisher=publisher,
+            category=category,
+            total_quantity=int(row.total_quantity or 0),
+            last_scanned_at=row.last_scanned_at
+        ))
+
+    result.sort(key=lambda x: x.last_scanned_at or datetime.min, reverse=True)
+    return result
+
+
+# Atualizar Quantidade de um Item na Sessão (com PIN do Supervisor)
+@router.put("/{inventory_id}/sessions/{session_id}/items/{isbn}")
+def update_session_item_quantity(
+    company_id: int,
+    inventory_id: int,
+    session_id: int,
+    isbn: str,
+    payload: inv_schemas.SessionItemUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventário não encontrado.")
+    return _apply_session_item_update(inv, session_id, isbn, payload.pin, payload.new_quantity, db)
+
+
+@public_router.put("/{access_token}/sessions/{session_id}/items/{isbn}")
+def update_public_session_item_quantity(
+    access_token: str,
+    session_id: int,
+    isbn: str,
+    payload: inv_schemas.SessionItemUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    inv = _get_inventory_by_token(access_token, db)
+    return _apply_session_item_update(inv, session_id, isbn, payload.pin, payload.new_quantity, db)
+
+
+def _apply_session_item_update(inv: Inventory, session_id: int, isbn: str, pin: str, new_qty: int, db: Session):
+    expected_pin = inv.supervisor_pin or "1234"
+    if pin.strip() != expected_pin:
+        raise HTTPException(status_code=401, detail="Senha do Supervisor incorreta.")
+    
+    if new_qty < 0:
+        raise HTTPException(status_code=400, detail="Quantidade não pode ser negativa.")
+
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inv.id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+
+    # Remove bips existentes deste ISBN nesta sessão
+    db.query(InventoryScan).filter(
+        InventoryScan.inventory_id == inv.id,
+        InventoryScan.session_id == session_id,
+        InventoryScan.isbn == isbn.strip()
+    ).delete()
+
+    # Se a nova quantidade for maior que zero, cria um registro consolidado
+    if new_qty > 0:
+        import uuid
+        db.add(InventoryScan(
+            inventory_id=inv.id,
+            company_id=inv.company_id,
+            session_id=session_id,
+            operator_name=sess.operator_name or "Supervisor",
+            isbn=isbn.strip(),
+            location=sess.location,
+            quantity=new_qty,
+            client_uuid=f"maint-{uuid.uuid4()}",
+            scanned_at=func.now()
+        ))
+
+    db.commit()
+
+    # Recalcula total da sessão
+    new_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == session_id).scalar()
+    sess.total_scans = int(new_total or 0)
+    db.commit()
+
+    return {"message": "Manutenção realizada com sucesso!", "new_total_scans": sess.total_scans}
+
+
+# Excluir Item da Sessão (com PIN do Supervisor)
+@router.delete("/{inventory_id}/sessions/{session_id}/items/{isbn}")
+def delete_session_item(
+    company_id: int,
+    inventory_id: int,
+    session_id: int,
+    isbn: str,
+    pin: str,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventário não encontrado.")
+    return _apply_session_item_update(inv, session_id, isbn, pin, 0, db)
+
+
+@public_router.delete("/{access_token}/sessions/{session_id}/items/{isbn}")
+def delete_public_session_item(
+    access_token: str,
+    session_id: int,
+    isbn: str,
+    pin: str,
+    db: Session = Depends(get_db),
+):
+    inv = _get_inventory_by_token(access_token, db)
+    return _apply_session_item_update(inv, session_id, isbn, pin, 0, db)
+
+
+# Desfazer Último Bip da Sessão
+@router.delete("/{inventory_id}/sessions/{session_id}/scans/last")
+def undo_last_scan(
+    company_id: int,
+    inventory_id: int,
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventário não encontrado.")
+    return _apply_undo_last_scan(inv, session_id, db)
+
+
+@public_router.delete("/{access_token}/sessions/{session_id}/scans/last")
+def undo_public_last_scan(
+    access_token: str,
+    session_id: int,
+    db: Session = Depends(get_db),
+):
+    inv = _get_inventory_by_token(access_token, db)
+    return _apply_undo_last_scan(inv, session_id, db)
+
+
+def _apply_undo_last_scan(inv: Inventory, session_id: int, db: Session):
+    last_scan = (
+        db.query(InventoryScan)
+        .filter(InventoryScan.inventory_id == inv.id, InventoryScan.session_id == session_id)
+        .order_by(InventoryScan.id.desc())
+        .first()
+    )
+    if not last_scan:
+        raise HTTPException(status_code=404, detail="Nenhum bip encontrado nesta sessão para desfazer.")
+
+    removed_isbn = last_scan.isbn
+    removed_qty = last_scan.quantity
+    db.delete(last_scan)
+    db.commit()
+
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id).first()
+    if sess:
+        new_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == session_id).scalar()
+        sess.total_scans = int(new_total or 0)
+        db.commit()
+
+    return {
+        "message": f"Último bip do ISBN {removed_isbn} ({removed_qty} un) foi desfeito!",
+        "removed_isbn": removed_isbn,
+        "removed_quantity": removed_qty,
+        "session_total_scans": sess.total_scans if sess else 0
+    }

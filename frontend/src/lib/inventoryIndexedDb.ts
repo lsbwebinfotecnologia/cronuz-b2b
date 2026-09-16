@@ -168,6 +168,49 @@ export async function markScansSynced(clientUuids: string[]): Promise<void> {
   });
 }
 
+export async function deleteLastPendingScan(sessionId: number): Promise<PendingScanRecord | null> {
+  const db = await openInventoryDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('pending_scans', 'readwrite');
+    const store = tx.objectStore('pending_scans');
+    const index = store.index('session_id');
+    const request = index.getAll(sessionId);
+
+    request.onsuccess = () => {
+      const scans: PendingScanRecord[] = request.result || [];
+      if (scans.length === 0) {
+        resolve(null);
+        return;
+      }
+      const last = scans[scans.length - 1];
+      store.delete(last.client_uuid);
+      tx.oncomplete = () => resolve(last);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function clearPendingScansForIsbn(sessionId: number, isbn: string): Promise<void> {
+  const db = await openInventoryDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('pending_scans', 'readwrite');
+    const store = tx.objectStore('pending_scans');
+    const index = store.index('session_id');
+    const request = index.getAll(sessionId);
+
+    request.onsuccess = () => {
+      const scans: PendingScanRecord[] = request.result || [];
+      for (const s of scans) {
+        if (s.isbn === isbn) {
+          store.delete(s.client_uuid);
+        }
+      }
+      tx.oncomplete = () => resolve();
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
 export async function getUnsyncedCount(sessionId: number): Promise<number> {
   try {
     const scans = await getPendingScans(sessionId);
