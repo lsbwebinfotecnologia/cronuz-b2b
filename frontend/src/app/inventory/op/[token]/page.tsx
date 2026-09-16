@@ -29,7 +29,8 @@ import {
   ShieldCheck,
   Layers,
   Search,
-  Building2
+  Building2,
+  Check
 } from 'lucide-react';
 import CameraBarcodeScanner from '@/components/inventory/CameraBarcodeScanner';
 import SupervisorPinModal from '@/components/inventory/SupervisorPinModal';
@@ -105,10 +106,22 @@ export default function PublicOperatorPage() {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [useCamera, setUseCamera] = useState(false);
   const [quantityMode, setQuantityMode] = useState<'unit' | 'custom'>('unit');
-  const [customQuantity, setCustomQuantity] = useState<number>(1);
   const [lastScanned, setLastScanned] = useState<LastScanned | null>(null);
   const [sessionScannedCount, setSessionScannedCount] = useState(0);
   const [undoingLastScan, setUndoingLastScan] = useState(false);
+
+  // Modal de Digitar Quantidade por Bip (em modo custom)
+  const [qtyPromptModal, setQtyPromptModal] = useState<{
+    isOpen: boolean;
+    isbn: string;
+    title: string;
+    publisher?: string;
+    category?: string;
+    clientUuid: string;
+    nowIso: string;
+  } | null>(null);
+  const [promptQuantity, setPromptQuantity] = useState<number>(1);
+  const promptQtyInputRef = useRef<HTMLInputElement>(null);
 
   // Navegação da Sessão (Abas) & Manutenção
   const [sessionTab, setSessionTab] = useState<'scan' | 'items' | 'audit'>('scan');
@@ -151,6 +164,7 @@ export default function PublicOperatorPage() {
   } | null>(null);
   const [unregisteredTitle, setUnregisteredTitle] = useState('');
   const [unregisteredPublisher, setUnregisteredPublisher] = useState('');
+  const [unregisteredQuantity, setUnregisteredQuantity] = useState<number>(1);
   const [savingUnregistered, setSavingUnregistered] = useState(false);
   const unregTitleInputRef = useRef<HTMLInputElement>(null);
 
@@ -179,7 +193,6 @@ export default function PublicOperatorPage() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Recuperar nome do operador salvo anteriormente
     const savedName = localStorage.getItem('cronuz_inventory_op_name');
     if (savedName) {
       setOperatorName(savedName);
@@ -198,7 +211,6 @@ export default function PublicOperatorPage() {
         const data = await res.json();
         setInventory(data);
 
-        // Baixar catálogo leve para o IndexedDB
         try {
           const cacheRes = await fetch(`${baseUrl}/inventory/public/${token}/catalog-cache`);
           if (cacheRes.ok) {
@@ -224,15 +236,15 @@ export default function PublicOperatorPage() {
     };
   }, [token]);
 
-  // Foco contínuo no campo de bipagem (apenas quando o modal não estiver ativo)
+  // Foco contínuo no campo de bipagem (apenas quando nenhum modal estiver ativo)
   useEffect(() => {
-    if (session && session.status === 'ABERTA' && !unregisteredModal) {
+    if (session && session.status === 'ABERTA' && !unregisteredModal && !pinModal && !qtyPromptModal) {
       const timer = setTimeout(() => {
         barcodeInputRef.current?.focus();
       }, 100);
 
       const handleGlobalClick = (e: MouseEvent) => {
-        if (unregisteredModal) return;
+        if (unregisteredModal || pinModal || qtyPromptModal) return;
         const target = e.target as HTMLElement;
         if (!target.closest('button') && !target.closest('a') && !target.closest('input')) {
           barcodeInputRef.current?.focus();
@@ -245,7 +257,18 @@ export default function PublicOperatorPage() {
         window.removeEventListener('click', handleGlobalClick);
       };
     }
-  }, [session, unregisteredModal]);
+  }, [session, unregisteredModal, pinModal, qtyPromptModal]);
+
+  // Auto-focar no campo de quantidade quando o modal de bipagem em quantidade abrir
+  useEffect(() => {
+    if (qtyPromptModal?.isOpen) {
+      const timer = setTimeout(() => {
+        promptQtyInputRef.current?.focus();
+        promptQtyInputRef.current?.select();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [qtyPromptModal]);
 
   // Sincronização periódica em background
   useEffect(() => {
@@ -374,11 +397,54 @@ export default function PublicOperatorPage() {
     }
   }
 
-  async function processBarcodeScan(rawCode: string, overrideQty?: number) {
+  async function recordScan(
+    isbnRaw: string,
+    title: string,
+    publisher: string | undefined,
+    category: string | undefined,
+    isUnregistered: boolean,
+    qtyToApply: number,
+    clientUuid: string,
+    nowIso: string
+  ) {
+    playSuccessBeep();
+
+    const scanRecord: PendingScanRecord = {
+      client_uuid: clientUuid,
+      session_id: session!.id,
+      inventory_id: inventory!.id,
+      isbn: isbnRaw,
+      location: session!.location,
+      quantity: qtyToApply,
+      scanned_at: nowIso,
+      status: 'pending'
+    };
+
+    try {
+      await savePendingScan(scanRecord);
+      setPendingSyncCount(prev => prev + 1);
+    } catch (err) {
+      console.error('[IndexedDB] Erro ao gravar bip:', err);
+    }
+
+    setSessionScannedCount(prev => prev + qtyToApply);
+    setLastScanned({
+      isbn: isbnRaw,
+      title,
+      publisher,
+      category,
+      isUnregistered,
+      timestamp: new Date().toLocaleTimeString('pt-BR')
+    });
+
+    if (isOnline) {
+      flushPendingScans();
+    }
+  }
+
+  async function processBarcodeScan(rawCode: string) {
     const isbnRaw = rawCode.trim();
     if (!isbnRaw || !session || !inventory) return;
-
-    const qtyToApply = overrideQty || (quantityMode === 'custom' ? Math.max(1, Number(customQuantity) || 1) : 1);
 
     setBarcodeInput('');
 
@@ -395,11 +461,12 @@ export default function PublicOperatorPage() {
       console.warn('[IndexedDB] Erro local:', err);
     }
 
-    // Se o item NÃO estiver na base, solicita Nome e Editora antes de contabilizar
+    // 1. Item Não Cadastrado
     if (!itemMeta) {
       playWarningBeep();
       setUnregisteredTitle('');
       setUnregisteredPublisher('');
+      setUnregisteredQuantity(1);
       setUnregisteredModal({
         isOpen: true,
         isbn: isbnRaw,
@@ -412,40 +479,49 @@ export default function PublicOperatorPage() {
       return;
     }
 
-    // Item cadastrado: fluxo normal
-    playSuccessBeep();
-
-    const scanRecord: PendingScanRecord = {
-      client_uuid: clientUuid,
-      session_id: session.id,
-      inventory_id: inventory.id,
-      isbn: isbnRaw,
-      location: session.location,
-      quantity: qtyToApply,
-      scanned_at: nowIso,
-      status: 'pending'
-    };
-
-    try {
-      await savePendingScan(scanRecord);
-      setPendingSyncCount(prev => prev + 1);
-    } catch (err) {
-      console.error('[IndexedDB] Erro ao gravar bip:', err);
+    // 2. Se for modo "Digitar Quantidade", abre o modal para o usuário informar a qtd e confirmar
+    if (quantityMode === 'custom') {
+      playWarningBeep();
+      setPromptQuantity(1);
+      setQtyPromptModal({
+        isOpen: true,
+        isbn: isbnRaw,
+        title: itemMeta.title,
+        publisher: itemMeta.publisher,
+        category: itemMeta.category,
+        clientUuid,
+        nowIso
+      });
+      return;
     }
 
-    setSessionScannedCount(prev => prev + qtyToApply);
-    setLastScanned({
-      isbn: isbnRaw,
-      title: itemMeta.title,
-      publisher: itemMeta.publisher,
-      category: itemMeta.category,
-      isUnregistered: false,
-      timestamp: new Date().toLocaleTimeString('pt-BR')
-    });
+    // 3. Modo "unit" (Bipou = Contou +1)
+    await recordScan(isbnRaw, itemMeta.title, itemMeta.publisher, itemMeta.category, false, 1, clientUuid, nowIso);
+  }
 
-    if (isOnline) {
-      flushPendingScans();
-    }
+  async function handleConfirmQtyPrompt(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    if (!qtyPromptModal || !session) return;
+
+    const qtyToApply = Math.max(1, Number(promptQuantity) || 1);
+
+    await recordScan(
+      qtyPromptModal.isbn,
+      qtyPromptModal.title,
+      qtyPromptModal.publisher,
+      qtyPromptModal.category,
+      false,
+      qtyToApply,
+      qtyPromptModal.clientUuid,
+      qtyPromptModal.nowIso
+    );
+
+    toast.success(`${qtyToApply} un contabilizada(s) para "${qtyPromptModal.title}"!`);
+    setQtyPromptModal(null);
+
+    setTimeout(() => {
+      barcodeInputRef.current?.focus();
+    }, 100);
   }
 
   async function handleUndoLastScan() {
@@ -564,6 +640,7 @@ export default function PublicOperatorPage() {
 
     const titleClean = unregisteredTitle.trim();
     const pubClean = unregisteredPublisher.trim();
+    const qtyToApply = Math.max(1, Number(unregisteredQuantity) || 1);
 
     if (!titleClean) {
       toast.error('Informe o nome / título do item.');
@@ -578,7 +655,6 @@ export default function PublicOperatorPage() {
 
     setSavingUnregistered(true);
     try {
-      // 1. Salvar no catálogo do IndexedDB para que os próximos bips reconheçam
       await upsertCatalogItem({
         inventory_id: inventory.id,
         isbn: unregisteredModal.isbn,
@@ -588,43 +664,23 @@ export default function PublicOperatorPage() {
         default_location: session.location
       });
 
-      // 2. Gravar bip no IndexedDB com os metadados
-      const scanRecord: PendingScanRecord = {
-        client_uuid: unregisteredModal.clientUuid,
-        session_id: session.id,
-        inventory_id: inventory.id,
-        isbn: unregisteredModal.isbn,
-        location: session.location,
-        quantity: 1,
-        scanned_at: unregisteredModal.nowIso,
-        status: 'pending',
-        title: titleClean,
-        publisher: pubClean
-      };
+      await recordScan(
+        unregisteredModal.isbn,
+        titleClean,
+        pubClean,
+        'Item Fora da Base',
+        true,
+        qtyToApply,
+        unregisteredModal.clientUuid,
+        unregisteredModal.nowIso
+      );
 
-      await savePendingScan(scanRecord);
-      setPendingSyncCount(prev => prev + 1);
-      setSessionScannedCount(prev => prev + 1);
-
-      setLastScanned({
-        isbn: unregisteredModal.isbn,
-        title: titleClean,
-        publisher: pubClean,
-        category: 'Item Fora da Base',
-        isUnregistered: true,
-        timestamp: new Date().toLocaleTimeString('pt-BR')
-      });
-
-      playSuccessBeep();
-      toast.success(`Item "${titleClean}" cadastrado e contabilizado!`);
-
-      if (isOnline) {
-        flushPendingScans();
-      }
+      toast.success(`Item "${titleClean}" cadastrado (${qtyToApply} un)!`);
 
       setUnregisteredModal(null);
       setUnregisteredTitle('');
       setUnregisteredPublisher('');
+      setUnregisteredQuantity(1);
 
       setTimeout(() => {
         barcodeInputRef.current?.focus();
@@ -640,6 +696,7 @@ export default function PublicOperatorPage() {
     setUnregisteredModal(null);
     setUnregisteredTitle('');
     setUnregisteredPublisher('');
+    setUnregisteredQuantity(1);
     toast.info('Item não contabilizado.');
     setTimeout(() => {
       barcodeInputRef.current?.focus();
@@ -759,7 +816,7 @@ export default function PublicOperatorPage() {
 
       {/* ─── Conteúdo Principal ───────────────────────────────────────── */}
       <div className="flex-1 p-4 max-w-md mx-auto w-full flex flex-col justify-center">
-        {/* PASSO 1: Identificação do Operador (se ainda não preencheu) */}
+        {/* PASSO 1: Identificação do Operador */}
         {!operatorName || isEditingName ? (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
@@ -935,7 +992,7 @@ export default function PublicOperatorPage() {
                     <button
                       type="button"
                       onClick={() => setQuantityMode('unit')}
-                      className={`flex-1 py-1.5 px-3 rounded-xl text-[11px] font-bold transition-all ${
+                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
                         quantityMode === 'unit'
                           ? 'bg-teal-600 text-white shadow-xs'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -947,7 +1004,7 @@ export default function PublicOperatorPage() {
                     <button
                       type="button"
                       onClick={() => setQuantityMode('custom')}
-                      className={`flex-1 py-1.5 px-3 rounded-xl text-[11px] font-bold transition-all ${
+                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
                         quantityMode === 'custom'
                           ? 'bg-teal-600 text-white shadow-xs'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -957,24 +1014,12 @@ export default function PublicOperatorPage() {
                     </button>
                   </div>
 
-                  {/* Campo de Quantidade Personalizada (quando ativo modo custom) */}
                   {quantityMode === 'custom' && (
-                    <motion.div
-                      initial={{ opacity: 0, y: -5 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="p-3 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-between gap-3"
-                    >
-                      <span className="text-xs font-bold text-teal-800 dark:text-teal-300 flex items-center gap-1.5">
-                        <Hash className="h-4 w-4 text-teal-600" /> Qtd por bip:
-                      </span>
-                      <input
-                        type="number"
-                        min="1"
-                        value={customQuantity}
-                        onChange={(e) => setCustomQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-24 text-center text-lg font-mono font-bold px-3 py-1.5 rounded-xl border-2 border-teal-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none"
-                      />
-                    </motion.div>
+                    <div className="p-2.5 rounded-2xl bg-teal-500/10 border border-teal-500/30 text-center">
+                      <p className="text-xs font-semibold text-teal-800 dark:text-teal-300">
+                        Modo "Digitar Quantidade" ativo: Ao bipar o produto, a tela de quantidade abrirá com o cursor focado para confirmação.
+                      </p>
+                    </div>
                   )}
 
                   {/* Viewport da Câmera (quando ativado modo Câmera) */}
@@ -1035,7 +1080,7 @@ export default function PublicOperatorPage() {
                           {lastScanned.title}
                         </h4>
 
-                        <div className="flex items-center justify-between pt-1 border-t border-slate-200/50 dark:border-slate-800/50">
+                        <div className="flex items-center justify-between pt-1 border-t border-slate-200/50 dark:border-slate-800/50 font-medium">
                           {lastScanned.publisher && (
                             <span className="text-xs text-slate-500">
                               Editora: <strong>{lastScanned.publisher}</strong>
@@ -1102,7 +1147,7 @@ export default function PublicOperatorPage() {
                         .map((it) => (
                           <div
                             key={it.isbn}
-                            className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs flex items-center justify-between gap-3"
+                            className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs flex items-center justify-between gap-3"
                           >
                             <div className="flex-1 min-w-0">
                               <span className="font-mono text-[10px] font-bold text-teal-600 bg-teal-500/10 px-1.5 py-0.5 rounded">
@@ -1201,6 +1246,89 @@ export default function PublicOperatorPage() {
           </div>
         )}
       </div>
+
+      {/* ─── Modal de Digitar Quantidade por Bip ─── */}
+      {qtyPromptModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+            className="rounded-3xl border border-teal-500/30 bg-white dark:bg-slate-900 shadow-2xl max-w-sm w-full p-6 space-y-4 text-slate-900 dark:text-white"
+          >
+            <div className="flex items-center justify-between">
+              <div className="p-2 rounded-2xl bg-teal-500/10 text-teal-600 flex items-center gap-2">
+                <Hash className="h-5 w-5" />
+                <span className="text-xs font-bold uppercase tracking-wider">Informe a Quantidade</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setQtyPromptModal(null);
+                  setTimeout(() => barcodeInputRef.current?.focus(), 100);
+                }}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1">
+              <span className="font-mono text-xs font-bold text-teal-600 dark:text-teal-400 bg-teal-500/10 px-2 py-0.5 rounded">
+                {qtyPromptModal.isbn}
+              </span>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white line-clamp-2 mt-1">
+                {qtyPromptModal.title}
+              </h3>
+              {qtyPromptModal.publisher && (
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Editora: <strong>{qtyPromptModal.publisher}</strong>
+                </p>
+              )}
+            </div>
+
+            <form onSubmit={handleConfirmQtyPrompt} className="space-y-4 pt-2">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-center">
+                  Quantidade de Peças Bipadas
+                </label>
+                <input
+                  ref={promptQtyInputRef}
+                  type="number"
+                  min="1"
+                  required
+                  inputMode="numeric"
+                  value={promptQuantity}
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => setPromptQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-full text-center text-3xl font-mono font-black py-3 rounded-2xl border-2 border-teal-500 bg-teal-500/5 dark:bg-slate-950 text-slate-900 dark:text-white focus:outline-none focus:ring-4 focus:ring-teal-500/20 shadow-inner"
+                />
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <button
+                  type="submit"
+                  className="w-full py-3.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-bold shadow-md shadow-teal-600/20 transition-all flex items-center justify-center gap-2"
+                >
+                  <Check className="h-5 w-5" />
+                  Confirmar Contagem (+{promptQuantity} un)
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQtyPromptModal(null);
+                    setTimeout(() => barcodeInputRef.current?.focus(), 100);
+                  }}
+                  className="w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                >
+                  Cancelar Bip
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
 
       {/* Modal Aviso de Auditoria */}
       {locationAuditWarning && (
@@ -1315,6 +1443,24 @@ export default function PublicOperatorPage() {
                 </div>
               </div>
 
+              {quantityMode === 'custom' && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
+                    Quantidade de Peças <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    inputMode="numeric"
+                    value={unregisteredQuantity}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setUnregisteredQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full px-3 py-2.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-900 dark:text-white"
+                  />
+                </div>
+              )}
+
               <div className="pt-2 space-y-2">
                 <button
                   type="submit"
@@ -1329,7 +1475,7 @@ export default function PublicOperatorPage() {
                   ) : (
                     <>
                       <PlusCircle className="h-4 w-4" />
-                      Confirmar e Contabilizar (+1)
+                      Confirmar e Contabilizar (+{unregisteredQuantity} un)
                     </>
                   )}
                 </button>
