@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Loader2, Search, ClipboardCheck, Box, Package, ShieldCheck, 
   Printer, CheckCircle2, AlertTriangle, Play, Check, ChevronRight, X, Plus,
-  Trash2, RotateCcw
+  Trash2, RotateCcw, Download
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -736,7 +736,55 @@ export default function OrderConferencePage() {
     }
   }
 
+  async function handleExportExcel() {
+    if (!session) return;
+
+    try {
+      const XLSX = await import('xlsx');
+
+      // Montar linhas: uma por item por caixa (apenas volumes não cancelados)
+      const rows: { Caixa: string; ISBN: string; Título: string; Quantidade: number }[] = [];
+      const activeVolumes = session.volumes.filter(v => v.status !== 'CANCELLED');
+
+      for (const vol of activeVolumes) {
+        for (const item of vol.items) {
+          rows.push({
+            Caixa: `Caixa ${vol.volume_number}`,
+            ISBN: item.isbn,
+            Título: item.name,
+            Quantidade: item.quantity,
+          });
+        }
+      }
+
+      if (rows.length === 0) {
+        toast.warning('Nenhum item conferido para exportar.');
+        return;
+      }
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+
+      // Ajustar largura das colunas
+      ws['!cols'] = [
+        { wch: 12 },  // Caixa
+        { wch: 18 },  // ISBN
+        { wch: 55 },  // Título
+        { wch: 12 },  // Quantidade
+      ];
+
+      const wb = XLSX.utils.book_new();
+      const pedido = session.cod_pedido_origem || `conf_${session.id}`;
+      XLSX.utils.book_append_sheet(wb, ws, 'Itens Conferidos');
+
+      XLSX.writeFile(wb, `conferencia_pedido_${pedido}.xlsx`);
+      toast.success('Excel exportado com sucesso!');
+    } catch (err: any) {
+      toast.error('Erro ao exportar Excel: ' + (err.message || err));
+    }
+  }
+
   // Handle label print layout rendering
+
   function triggerPrint(vol: Volume) {
     const branch = branches.find(b => b.id.toString() === selectedBranchId);
     
@@ -1354,24 +1402,37 @@ export default function OrderConferencePage() {
               <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                   <h3 className="font-bold text-slate-900 dark:text-white text-base">Volumes / Caixas ({totalBoxes})</h3>
-                  {session.status === 'IN_PROGRESS' && (
-                    <button
-                      onClick={handleFinalizeSession}
-                      disabled={finalizingSession}
-                      className={`px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-sm flex items-center justify-center gap-1.5 ${
-                        finalizingSession ? 'opacity-50 cursor-not-allowed' : ''
-                      }`}
-                    >
-                      {finalizingSession ? (
-                        <>
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          Finalizando...
-                        </>
-                      ) : (
-                        'Finalizar Conferência'
-                      )}
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {/* Botão Exportar Excel — sempre visível se houver volumes */}
+                    {session.volumes && session.volumes.length > 0 && (
+                      <button
+                        onClick={handleExportExcel}
+                        className="px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:border-emerald-800 rounded-lg transition shadow-sm flex items-center gap-1.5"
+                        title="Exportar itens conferidos para Excel"
+                      >
+                        <Download className="h-3 w-3" />
+                        Exportar Excel
+                      </button>
+                    )}
+                    {session.status === 'IN_PROGRESS' && (
+                      <button
+                        onClick={handleFinalizeSession}
+                        disabled={finalizingSession}
+                        className={`px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-sm flex items-center justify-center gap-1.5 ${
+                          finalizingSession ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
+                      >
+                        {finalizingSession ? (
+                          <>
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Finalizando...
+                          </>
+                        ) : (
+                          'Finalizar Conferência'
+                        )}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {(!session.volumes || session.volumes.length === 0) ? (
