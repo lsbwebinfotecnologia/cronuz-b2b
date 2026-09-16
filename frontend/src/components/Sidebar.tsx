@@ -40,7 +40,8 @@ import {
   Globe,
   DatabaseZap,
   CreditCard,
-  Feather
+  Feather,
+  Boxes
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -172,6 +173,7 @@ export function Sidebar() {
   const [horusSqlVindiBaixa, setHorusSqlVindiBaixa] = useState(false);
   const [horusSqlPedidos, setHorusSqlPedidos] = useState(true);
   const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
+  const [hasInventoryModule, setHasInventoryModule] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   // [PERF] Garante que fetchSettings() é executado apenas UMA VEZ por montagem
   // Evita re-fetch desnecessário a cada mudança de pathname (navegação interna).
@@ -226,6 +228,7 @@ export function Sidebar() {
                setHorusSqlVindiBaixa(data.horus_sql_feature_vindi_baixa || false);
                setHorusSqlPedidos(data.horus_sql_feature_pedidos ?? true);
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
+               setHasInventoryModule(data.has_inventory_module || false);
             }
          } catch (e) {}
        };
@@ -395,6 +398,16 @@ export function Sidebar() {
       name: 'Autores',
       href: '/authors',
       icon: Feather,
+    });
+  }
+
+  if (hasInventoryModule) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Inventário',
+      href: '/inventory',
+      icon: Boxes,
     });
   }
 

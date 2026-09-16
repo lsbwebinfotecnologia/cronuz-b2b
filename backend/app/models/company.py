@@ -65,6 +65,7 @@ class Company(Base):
     module_busca_preco = Column(Boolean, default=False, nullable=False)    # Módulo Busca Preço — consulta produto e estoque por filial via Horus
     module_horus_sql = Column(Boolean, default=False, nullable=False)     # Módulo Horus SQL Direct — conexão direta ao SQL Server do Horus
     modulo_autores_ativo = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo Portal do Autor
+    has_inventory_module = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo de Inventário
 
     
     # Mobile App Modules (per-seller, managed by MASTER)

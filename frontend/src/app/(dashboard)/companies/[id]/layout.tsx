@@ -51,6 +51,7 @@ interface Company {
   module_busca_preco: boolean;
   module_horus_sql?: boolean;
   modulo_autores_ativo?: boolean;
+  has_inventory_module?: boolean;
   active: boolean;
 }
 
