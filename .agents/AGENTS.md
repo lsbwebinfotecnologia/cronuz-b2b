@@ -146,3 +146,21 @@ git push origin --delete feature/nome-da-funcionalidade
 > [!IMPORTANT]
 > Esta regra se aplica tanto ao desenvolvimento no **Windows** quanto no **Mac**. Nenhum agente ou desenvolvedor deve fazer commits diretos na `main` sem passar pelo fluxo de feature branch.
 
+---
+
+## 📱 6. Padrão de UI e Responsividade — Mobile First
+
+> [!IMPORTANT]
+> **Todo e qualquer desenvolvimento de interface (UI/UX) daqui em diante DEVE obrigatoriamente seguir o modelo Mobile First.**
+> Esta regra se aplica a **todo o projeto**: Painel Administrativo (Seller e Master), Storefront (Loja B2B) e Portais Públicos.
+
+### Diretrizes Obrigatórias para Novas Telas e Componentes:
+1. **Abordagem Mobile First**: Qualquer tela, modal, tabela, formulário ou componente criado ou modificado deve ser desenhado e testado primeiramente pensando na usabilidade em telas móveis (smartphones e tablets).
+2. **Preservação da Experiência Desktop**: O código responsivo deve utilizar classes condicionais do Tailwind CSS (ex: `hidden md:flex`, `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4`, `p-3 md:p-6`), garantindo que a visão em monitores e laptops permaneça limpa, espaçosa e inalterada.
+3. **Navegação e Touch Targets**:
+   - Menus laterais em mobile devem utilizar gaveta deslizante (`Mobile Drawer`) ou abas roláveis horizontais.
+   - Botões, campos de entrada e áreas clicáveis devem ter dimensões adequadas para toque em telas de celular.
+4. **Tabelas e Listagens**:
+   - Todas as tabelas de dados no dashboard ou loja devem ser contidas em elementos com `overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800` para evitar estouros de tela em celulares.
+
+
