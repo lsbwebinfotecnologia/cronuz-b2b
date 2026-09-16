@@ -134,19 +134,19 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
 
   return (
     <CompanyContext.Provider value={{ company, loading, refreshCompany: fetchCompany }}>
-      <div className="flex flex-col md:flex-row gap-6 max-w-7xl mx-auto h-[max(calc(100vh-8rem),700px)]">
-        {/* Sidebar */}
+      <div className="flex flex-col md:flex-row gap-4 md:gap-6 max-w-7xl mx-auto min-h-0">
+        {/* Sidebar da Empresa */}
         <div className="w-full md:w-72 md:shrink-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl flex flex-col overflow-hidden shadow-sm">
-           <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
+           <div className="p-3 sm:p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
              <Link 
                 href="/companies"
-                className="mb-4 inline-flex items-center gap-2 text-xs font-semibold text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
+                className="mb-2 sm:mb-4 inline-flex items-center gap-2 text-xs font-semibold text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
              >
                 <ArrowLeft className="w-3.5 h-3.5" /> Voltar para lista
              </Link>
-             <button className="flex items-center justify-between w-full text-left focus:outline-none">
-                <div className="flex flex-col">
-                  <span className="text-sm font-bold text-slate-900 dark:text-white leading-tight break-words">
+             <div className="flex items-center justify-between w-full text-left">
+                <div className="flex flex-col min-w-0">
+                  <span className="text-sm font-bold text-slate-900 dark:text-white leading-tight truncate">
                     #{company.id} {company.name}
                   </span>
                   <div className="flex items-center gap-1.5 mt-1">
@@ -161,12 +161,11 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
                      )}
                   </div>
                 </div>
-                <ChevronDown className="w-4 h-4 text-slate-400 shrink-0 mx-2" />
-             </button>
+             </div>
            </div>
            
-           <div className="flex-1 overflow-y-auto py-2">
-             <nav className="flex flex-col">
+           <div className="overflow-x-auto md:overflow-y-auto py-2 px-2 md:px-0 no-scrollbar">
+             <nav className="flex flex-row md:flex-col gap-1 md:gap-0">
                {menuItems.map((item) => {
                  const isActive = pathname.startsWith(item.path);
                  const Icon = item.icon;
@@ -174,13 +173,13 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
                    <Link
                      key={item.path}
                      href={item.path}
-                     className={`flex items-center gap-3 px-5 py-3 text-sm font-medium transition-colors border-l-2 ${
+                     className={`flex items-center gap-2 md:gap-3 px-3.5 md:px-5 py-2 md:py-3 text-xs md:text-sm font-medium transition-colors whitespace-nowrap rounded-xl md:rounded-none md:border-l-2 ${
                        isActive 
-                         ? 'border-[var(--color-primary-base)] text-[var(--color-primary-base)] bg-[var(--color-primary-base)]/5 dark:bg-[var(--color-primary-base)]/10 dark:text-[var(--color-primary-base)]' 
-                         : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-white'
+                         ? 'bg-[var(--color-primary-base)] text-white md:bg-[var(--color-primary-base)]/5 md:text-[var(--color-primary-base)] md:border-[var(--color-primary-base)] shadow-sm md:shadow-none' 
+                         : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-white border-transparent'
                      }`}
                    >
-                     <Icon className={`w-4 h-4 ${isActive ? 'text-[var(--color-primary-base)]' : 'text-slate-400 dark:text-slate-500'}`} />
+                     <Icon className={`w-3.5 h-3.5 md:w-4 md:h-4 ${isActive ? 'text-white md:text-[var(--color-primary-base)]' : 'text-slate-400 dark:text-slate-500'}`} />
                      {item.name}
                    </Link>
                  );
@@ -190,10 +189,11 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
         </div>
 
         {/* Child Content */}
-        <div className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden flex flex-col">
+        <div className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden flex flex-col min-w-0">
            {children}
         </div>
       </div>
     </CompanyContext.Provider>
   );
+
 }

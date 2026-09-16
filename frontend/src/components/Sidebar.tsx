@@ -147,7 +147,12 @@ const agentNavigation: NavItem[] = [
   { name: 'Propostas', href: '/proposals', icon: FileText },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  isMobileOpen?: boolean;
+  onCloseMobile?: () => void;
+}
+
+export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<UserData | null>(null);
@@ -175,14 +180,11 @@ export function Sidebar() {
   const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
   const [hasInventoryModule, setHasInventoryModule] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
-  // [PERF] Garante que fetchSettings() é executado apenas UMA VEZ por montagem
-  // Evita re-fetch desnecessário a cada mudança de pathname (navegação interna).
   const _settingsFetchedRef = useRef(false);
 
   useEffect(() => {
     const currentUser = getUser();
     setUser(currentUser);
-    // Auto open matching 
     const isSeller = currentUser?.type === 'SELLER';
     if (isSeller) {
        const initialOpen: Record<string, boolean> = {};
@@ -305,7 +307,6 @@ export function Sidebar() {
   }
   
   if (moduleSubscriptions) {
-    // Insert Assinaturas before Configurações
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
     filteredSellerNavigation.splice(targetIndex, 0, { 
@@ -320,7 +321,6 @@ export function Sidebar() {
   }
 
   if (moduleLogisticaHorus) {
-    // Insert Logística Horus before Configurações
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
     filteredSellerNavigation.splice(targetIndex, 0, { 
@@ -335,7 +335,6 @@ export function Sidebar() {
   }
 
   if (moduleDropship) {
-    // Insert Dropship before Configurações
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
     filteredSellerNavigation.splice(targetIndex, 0, {
@@ -351,7 +350,6 @@ export function Sidebar() {
   }
 
   if (moduleNotifications) {
-    // Insert Notificações before Configurações
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
     filteredSellerNavigation.splice(targetIndex, 0, {
@@ -362,7 +360,6 @@ export function Sidebar() {
   }
 
   if (moduleBuscaPreco) {
-    // Insert Busca Preço before Configurações
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
     filteredSellerNavigation.splice(targetIndex, 0, {
@@ -373,7 +370,6 @@ export function Sidebar() {
   }
 
   if (moduleHorusSql) {
-    // Insert Horus Direct before Configurações
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
     const subItems: { name: string; href: string; icon?: any }[] = [];
@@ -411,7 +407,6 @@ export function Sidebar() {
     });
   }
 
-
   const dynamicMasterNavigation = masterNavigation.map(item => {
     if (item.name === 'Leads') {
       return { ...item, badge: unreadLeads };
@@ -444,23 +439,39 @@ export function Sidebar() {
     router.refresh();
   };
 
-  return (
-    <div className="flex h-screen flex-col justify-between border-r border-slate-200 bg-white/50 dark:border-slate-800 dark:bg-slate-950/50 backdrop-blur-xl w-64 p-4 transition-colors overflow-y-auto no-scrollbar">
+  const renderNavContent = (isMobile: boolean = false) => (
+    <div className="flex h-full flex-col justify-between">
       <div>
-        <Link href="/" className="flex items-center gap-3 px-2 py-4 mb-6 hover:opacity-80 transition-opacity">
-          <div className="relative h-10 w-28 flex-shrink-0">
-            <img 
-              src="/images/cronuz-logo.png" 
-              alt="Cronuz Logo" 
-              className="object-contain w-full h-full cronuz-logo"
-            />
-            <img 
-              src="/images/logo-square-horus.png" 
-              alt="Horus Logo" 
-              className="object-contain w-full h-full hidden horus-logo"
-            />
-          </div>
-        </Link>
+        <div className="flex items-center justify-between px-2 py-4 mb-6">
+          <Link 
+            href="/" 
+            onClick={() => isMobile && onCloseMobile?.()} 
+            className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+          >
+            <div className="relative h-10 w-28 flex-shrink-0">
+              <img 
+                src="/images/cronuz-logo.png" 
+                alt="Cronuz Logo" 
+                className="object-contain w-full h-full cronuz-logo"
+              />
+              <img 
+                src="/images/logo-square-horus.png" 
+                alt="Horus Logo" 
+                className="object-contain w-full h-full hidden horus-logo"
+              />
+            </div>
+          </Link>
+
+          {isMobile && (
+            <button
+              onClick={onCloseMobile}
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              title="Fechar Menu"
+            >
+              <LogOut className="h-5 w-5 rotate-180" />
+            </button>
+          )}
+        </div>
 
         <nav className="space-y-1">
           {dynamicNavigation.map((item) => {
@@ -491,6 +502,7 @@ export function Sidebar() {
                 ) : (
                    <Link
                       href={item.href}
+                      onClick={() => isMobile && onCloseMobile?.()}
                       className={cn(
                         'group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200',
                         isActive 
@@ -536,6 +548,7 @@ export function Sidebar() {
                                <Link
                                  key={sub.name}
                                  href={sub.href}
+                                 onClick={() => isMobile && onCloseMobile?.()}
                                  className={cn(
                                    'block rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                                    isSubActive
@@ -560,7 +573,7 @@ export function Sidebar() {
         </nav>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800/80">
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 relative overflow-hidden group hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/50 dark:hover:border-slate-700 transition-colors">
           <div className="absolute inset-0 bg-gradient-to-br from-[var(--color-primary-base)]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
@@ -573,7 +586,11 @@ export function Sidebar() {
              {user?.company_name || (user?.type === 'MASTER' ? 'Sede Parceiro' : 'Empresa Vendedora')}
           </p>
           {user?.type === 'MASTER' && (
-            <Link href="/companies" className="text-xs text-[var(--color-primary-base)] mt-2 flex items-center gap-1 hover:text-[var(--color-primary-base)] transition-colors">
+            <Link 
+              href="/companies" 
+              onClick={() => isMobile && onCloseMobile?.()} 
+              className="text-xs text-[var(--color-primary-base)] mt-2 flex items-center gap-1 hover:text-[var(--color-primary-base)] transition-colors"
+            >
               Trocar organização <ChevronRight className="h-3 w-3" />
             </Link>
           )}
@@ -601,4 +618,40 @@ export function Sidebar() {
       </div>
     </div>
   );
+
+  return (
+    <>
+      {/* Sidebar Desktop Fixa */}
+      <aside className="hidden md:flex h-screen flex-col border-r border-slate-200 bg-white/50 dark:border-slate-800 dark:bg-slate-950/50 backdrop-blur-xl w-64 p-4 transition-colors overflow-y-auto no-scrollbar shrink-0">
+        {renderNavContent(false)}
+      </aside>
+
+      {/* Drawer Sidebar Mobile Flutuante */}
+      <AnimatePresence>
+        {isMobileOpen && (
+          <>
+            <motion.div
+              key="sidebar-mobile-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={onCloseMobile}
+              className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs md:hidden"
+            />
+            <motion.div
+              key="sidebar-mobile-drawer"
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+              className="fixed inset-y-0 left-0 z-50 w-72 h-full bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 p-4 flex flex-col justify-between overflow-y-auto md:hidden shadow-2xl"
+            >
+              {renderNavContent(true)}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </>
+  );
 }
+

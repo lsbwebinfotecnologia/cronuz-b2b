@@ -84,7 +84,7 @@ function SearchResults() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12">
         {loading ? (
-             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+             <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-6">
                 {[...Array(10)].map((_, i) => (
                   <div key={i} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 animate-pulse dark:bg-slate-900/50 dark:border-slate-800">
                     <div className="bg-slate-200 dark:bg-slate-800 rounded-xl h-48 w-full mb-4"></div>
@@ -95,7 +95,7 @@ function SearchResults() {
              </div>
         ) : products.length > 0 ? (
           <div className="flex flex-col gap-8">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-6">
               {products.map(p => (
                 <ProductCard 
                   key={p.id} 

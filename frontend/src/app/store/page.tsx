@@ -17,7 +17,7 @@ import { getImageUrl } from '@/lib/image_helper';
 // Placeholder Component for the Product Grid
 function ProductGridSkeleton() {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-6">
       {[...Array(5)].map((_, i) => (
         <div key={i} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 animate-pulse dark:bg-slate-900/50 dark:border-slate-800">
           <div className="bg-slate-200 dark:bg-slate-800 rounded-xl h-48 w-full mb-4"></div>
@@ -259,7 +259,7 @@ function ShowcaseRenderRow({ title, products, colorIndicator }: { title: string,
               {title}
            </h2>
          </div>
-         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+         <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-6">
            {products.map((p: any) => (
               <ProductCard key={p.id} product={p} />
            ))}
