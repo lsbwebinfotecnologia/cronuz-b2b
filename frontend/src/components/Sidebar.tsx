@@ -49,6 +49,7 @@ import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { removeToken, getUser, getToken } from '@/lib/auth';
 import { useEffect, useState, useRef } from 'react';
+import { getImageUrl } from '@/lib/image_helper';
 
 type NavItem = {
   name: string;
@@ -180,6 +181,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
   const [hasInventoryModule, setHasInventoryModule] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
+  const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const _settingsFetchedRef = useRef(false);
 
   useEffect(() => {
@@ -231,10 +233,12 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setHorusSqlPedidos(data.horus_sql_feature_pedidos ?? true);
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
                setHasInventoryModule(data.has_inventory_module || false);
+               if (data.company_logo) setCompanyLogo(data.company_logo);
             }
          } catch (e) {}
        };
        fetchSettings();
+
     } else if (currentUser?.type === 'MASTER') {
        const fetchLeadsSummary = async () => {
          try {
@@ -448,17 +452,27 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
             onClick={() => isMobile && onCloseMobile?.()} 
             className="flex items-center gap-3 hover:opacity-80 transition-opacity"
           >
-            <div className="relative h-10 w-28 flex-shrink-0">
-              <img 
-                src="/images/cronuz-logo.png" 
-                alt="Cronuz Logo" 
-                className="object-contain w-full h-full cronuz-logo"
-              />
-              <img 
-                src="/images/logo-square-horus.png" 
-                alt="Horus Logo" 
-                className="object-contain w-full h-full hidden horus-logo"
-              />
+            <div className="relative h-10 w-28 flex-shrink-0 flex items-center">
+              {companyLogo ? (
+                <img 
+                  src={getImageUrl(companyLogo)} 
+                  alt={user?.company_name || 'Logo'} 
+                  className="object-contain max-h-10 w-auto max-w-full"
+                />
+              ) : (
+                <>
+                  <img 
+                    src="/images/cronuz-logo.png" 
+                    alt="Cronuz Logo" 
+                    className="object-contain w-full h-full cronuz-logo"
+                  />
+                  <img 
+                    src="/images/logo-square-horus.png" 
+                    alt="Horus Logo" 
+                    className="object-contain w-full h-full hidden horus-logo"
+                  />
+                </>
+              )}
             </div>
           </Link>
 

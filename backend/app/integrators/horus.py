@@ -55,16 +55,19 @@ class HorusClient:
         if "/Horus/api/TServerB2B" not in base_url:
              base_url += "Horus/api/TServerB2B/"
              
-        auth = (self._settings.horus_username, self._settings.horus_password)
+        import base64
+        auth_str = f"{self._settings.horus_username}:{self._settings.horus_password}"
+        b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
         
         headers = {
             "Accept": "application/json",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Authorization": f"Basic {b64_auth}"
         }
         
         return httpx.AsyncClient(
             base_url=base_url,
-            auth=auth,
             headers=headers,
             # Horus ERP pode ser lento — timeout generoso para não perder requisições
             timeout=httpx.Timeout(
@@ -75,6 +78,7 @@ class HorusClient:
             ),
             follow_redirects=True
         )
+
     
     async def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
         import logging
