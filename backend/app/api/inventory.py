@@ -864,6 +864,7 @@ def get_discrepancies(
         meta = items_meta.get(isbn)
         diff = c1 - c2
         has_div = (c2 > 0 and c1 != c2)
+        val_qty = c2 if c2 > 0 else c1
         
         results.append(inv_schemas.DiscrepancyItemResponse(
             isbn=isbn,
@@ -875,10 +876,103 @@ def get_discrepancies(
             count_1_qty=c1,
             count_2_qty=c2,
             difference=diff,
-            has_divergence=has_div
+            has_divergence=has_div,
+            validated_qty=val_qty
         ))
         
     return sorted(results, key=lambda x: (x.location, x.isbn))
+
+
+@router.post("/{inventory_id}/audit-adjust")
+def adjust_audit_quantity(
+    company_id: int,
+    inventory_id: int,
+    payload: inv_schemas.AuditAdjustmentRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    
+    expected_pin = inv.supervisor_pin or "1234"
+    if payload.pin.strip() != expected_pin:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Senha do Supervisor incorreta.")
+    
+    loc_clean = payload.location.strip().upper()
+    
+    sess_query = db.query(InventorySession).filter(
+        InventorySession.inventory_id == inventory_id,
+        InventorySession.location == loc_clean
+    )
+    if payload.round_number:
+        sess = sess_query.filter(InventorySession.round_number == payload.round_number).first()
+    else:
+        sess = sess_query.order_by(InventorySession.round_number.desc()).first()
+        
+    if not sess:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Nenhuma sessão encontrada para a prateleira '{loc_clean}'.")
+    
+    db.query(InventoryScan).filter(
+        InventoryScan.session_id == sess.id,
+        InventoryScan.isbn == payload.isbn
+    ).delete(synchronize_session=False)
+    
+    if payload.new_quantity > 0:
+        client_uuid = str(uuid.uuid4())
+        scan = InventoryScan(
+            client_uuid=client_uuid,
+            inventory_id=inventory_id,
+            session_id=sess.id,
+            company_id=company_id,
+            user_id=current_user.id,
+            isbn=payload.isbn,
+            location=loc_clean,
+            quantity=payload.new_quantity,
+            scanned_at=datetime.utcnow()
+        )
+        db.add(scan)
+        
+    db.commit()
+    
+    new_sess_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == sess.id).scalar()
+    sess.total_scans = int(new_sess_total)
+    
+    new_inv_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.inventory_id == inventory_id).scalar()
+    inv.total_scanned_items = int(new_inv_total)
+    db.commit()
+    
+    return {
+        "message": f"Quantidade do ISBN {payload.isbn} na prateleira {loc_clean} ajustada para {payload.new_quantity} un!",
+        "new_session_total": sess.total_scans,
+        "new_inventory_total": inv.total_scanned_items
+    }
+
+
+@router.put("/{inventory_id}/items/{isbn}")
+def update_inventory_item_meta(
+    company_id: int,
+    inventory_id: int,
+    isbn: str,
+    payload: inv_schemas.InventoryItemUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    item = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn == isbn).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item não encontrado no inventário.")
+    
+    if payload.title is not None and payload.title.strip():
+        item.title = payload.title.strip()
+    if payload.publisher is not None:
+        item.publisher = payload.publisher.strip()
+    if payload.category is not None:
+        item.category = payload.category.strip()
+        
+    db.commit()
+    return {"message": f"Dados do produto {isbn} atualizados com sucesso!", "title": item.title, "publisher": item.publisher}
 
 
 @router.get("/{inventory_id}/export-excel")
@@ -895,18 +989,62 @@ def export_inventory_excel(
     
     wb = openpyxl.Workbook()
     
-    ws1 = wb.active
-    ws1.title = "Consolidado Geral"
+    # Aba 1 (PRINCIPAL): Saldos Validados (Título, ISBN, Marca, Quantidade)
+    ws_val = wb.active
+    ws_val.title = "Saldos Validados"
+    ws_val.append([
+        "Título",
+        "ISBN",
+        "Marca",
+        "Quantidade Validada"
+    ])
+    
+    # Query de contagens por localização e rodada
+    query_loc_scans = text("""
+        SELECT 
+            s.location,
+            sc.isbn,
+            SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
+            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2
+        FROM inv_inventory_scan sc
+        JOIN inv_inventory_session s ON sc.session_id = s.id
+        WHERE sc.inventory_id = :inv_id
+        GROUP BY s.location, sc.isbn
+    """)
+    loc_rows = db.execute(query_loc_scans, {"inv_id": inventory_id}).fetchall()
+    
+    # Calcula saldo validado por ISBN (Recontagem se houver, senão 1ª Contagem)
+    isbn_validated_totals = {}
+    for r in loc_rows:
+        isbn, c1, c2 = r[1], int(r[2]), int(r[3])
+        val_loc = c2 if c2 > 0 else c1
+        isbn_validated_totals[isbn] = isbn_validated_totals.get(isbn, 0) + val_loc
+
+    items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).order_by(InventoryItem.title).all()
+    
+    for it in items:
+        val_qty = isbn_validated_totals.get(it.isbn, 0)
+        marca = it.publisher or it.category or "N/A"
+        ws_val.append([
+            it.title,
+            it.isbn,
+            marca,
+            val_qty
+        ])
+        
+    # Aba 2: Consolidado Geral
+    ws1 = wb.create_sheet(title="Consolidado Geral")
     ws1.append([
         "ISBN / Código de Barras",
         "Título",
-        "Editora",
+        "Editora / Marca",
         "Categoria",
         "Endereço Padrão",
         "Qtd 1ª Contagem",
         "Qtd Recontagem/Auditoria",
         "Divergência",
         "Total Geral Apurado",
+        "Saldo Validado Final",
         "Status Cadastral"
     ])
     
@@ -922,17 +1060,18 @@ def export_inventory_excel(
         GROUP BY sc.isbn
     """)
     scan_rows = {r[0]: (int(r[1]), int(r[2]), int(r[3])) for r in db.execute(query_isbn, {"inv_id": inventory_id}).fetchall()}
-    items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).order_by(InventoryItem.isbn).all()
     
     for it in items:
         c1, c2, total = scan_rows.get(it.isbn, (0, 0, 0))
         diff = c1 - c2 if c2 > 0 else 0
+        val_qty = isbn_validated_totals.get(it.isbn, 0)
         status_cad = "Item Novo (Fora da Base)" if it.is_unregistered else "Cadastrado"
         ws1.append([
             it.isbn, it.title, it.publisher or "", it.category or "", it.default_location or "",
-            c1, c2, diff, total, status_cad
+            c1, c2, diff, total, val_qty, status_cad
         ])
         
+    # Aba 3: Detalhamento por Prateleira
     ws2 = wb.create_sheet(title="Detalhamento por Prateleira")
     ws2.append([
         "ID Sessão", "Prateleira / Localização", "Tipo de Contagem", "Rodada", "Status",
@@ -967,13 +1106,14 @@ def export_inventory_excel(
             s.total_scans
         ])
         
+    # Aba 4: Itens Fora da Base
     ws3 = wb.create_sheet(title="Itens Fora da Base")
-    ws3.append(["ISBN / Código", "Título", "Localização Bipada", "Qtd Total"])
+    ws3.append(["ISBN / Código", "Título", "Marca / Editora", "Localização Bipada", "Qtd Validada"])
     
     unreg_items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id, InventoryItem.is_unregistered == True).all()
     for un in unreg_items:
-        _, _, total = scan_rows.get(un.isbn, (0, 0, 0))
-        ws3.append([un.isbn, un.title, un.default_location or "", total])
+        val_qty = isbn_validated_totals.get(un.isbn, 0)
+        ws3.append([un.isbn, un.title, un.publisher or "", un.default_location or "", val_qty])
         
     buffer = io.BytesIO()
     wb.save(buffer)

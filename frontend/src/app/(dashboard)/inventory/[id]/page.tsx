@@ -25,7 +25,9 @@ import {
   Copy,
   Check,
   ExternalLink,
-  ShieldCheck
+  ShieldCheck,
+  Pencil,
+  Edit3
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -71,6 +73,7 @@ interface DiscrepancyItem {
   count_2_qty: number;
   difference: number;
   has_divergence: boolean;
+  validated_qty: number;
 }
 
 export default function InventoryDetailPage() {
@@ -98,6 +101,28 @@ export default function InventoryDetailPage() {
 
   // Filtros
   const [searchQuery, setSearchQuery] = useState('');
+  const [onlyDivergent, setOnlyDivergent] = useState(false);
+
+  // Modais de Manutenção na Auditoria
+  const [adjustItem, setAdjustItem] = useState<{
+    location: string;
+    isbn: string;
+    title: string;
+    round_number: number;
+    current_qty: number;
+  } | null>(null);
+  const [adjustPin, setAdjustPin] = useState('');
+  const [adjustNewQty, setAdjustNewQty] = useState<number>(0);
+  const [submittingAdjust, setSubmittingAdjust] = useState(false);
+
+  const [editProductItem, setEditProductItem] = useState<{
+    isbn: string;
+    title: string;
+    publisher: string;
+  } | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editPublisher, setEditPublisher] = useState('');
+  const [submittingProductEdit, setSubmittingProductEdit] = useState(false);
 
   function handleCopyLink(url: string) {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -189,6 +214,88 @@ export default function InventoryDetailPage() {
       toast.error(err.message || 'Falha ao finalizar inventário.');
     } finally {
       setFinalizing(false);
+    }
+  }
+
+  async function handleAdjustQuantity(e: React.FormEvent) {
+    e.preventDefault();
+    if (!adjustItem || !companyId || !inventoryId) return;
+    if (!adjustPin.trim()) {
+      toast.error('Digite a senha do supervisor.');
+      return;
+    }
+    setSubmittingAdjust(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/inventory/${inventoryId}/audit-adjust`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            pin: adjustPin.trim(),
+            location: adjustItem.location,
+            isbn: adjustItem.isbn,
+            round_number: adjustItem.round_number,
+            new_quantity: adjustNewQty
+          })
+        }
+      );
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Erro ao ajustar quantidade.');
+      }
+
+      const data = await res.json();
+      toast.success(data.message || 'Quantidade ajustada com sucesso!');
+      setAdjustItem(null);
+      setAdjustPin('');
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao ajustar quantidade.');
+    } finally {
+      setSubmittingAdjust(false);
+    }
+  }
+
+  async function handleUpdateProduct(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editProductItem || !companyId || !inventoryId) return;
+    setSubmittingProductEdit(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/inventory/${inventoryId}/items/${editProductItem.isbn}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            title: editTitle.trim(),
+            publisher: editPublisher.trim()
+          })
+        }
+      );
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Erro ao atualizar produto.');
+      }
+
+      const data = await res.json();
+      toast.success(data.message || 'Produto atualizado com sucesso!');
+      setEditProductItem(null);
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao atualizar produto.');
+    } finally {
+      setSubmittingProductEdit(false);
     }
   }
 
@@ -536,28 +643,43 @@ export default function InventoryDetailPage() {
           <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                Comparativo de Dupla Checagem (1ª Contagem vs Recontagem)
+                Auditoria, Saldos Validados e Manutenção
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                Prateleiras onde houve mais de uma rodada de contagem para validação de saldo.
+                Validação de saldos por prateleira e ajustamento de quantidades com PIN de supervisor.
               </p>
             </div>
 
-            <div className="relative w-full sm:w-64">
-              <Search className="h-4 w-4 absolute left-3 top-2.5 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Buscar por ISBN, prateleira..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent focus:outline-none focus:ring-1 focus:ring-teal-500"
-              />
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setOnlyDivergent(!onlyDivergent)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                  onlyDivergent
+                    ? 'bg-amber-500/10 text-amber-600 border-amber-500/30'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                }`}
+              >
+                <Filter className="h-3.5 w-3.5" />
+                {onlyDivergent ? 'Mostrando Apenas Divergentes' : 'Filtrar Divergências'}
+              </button>
+
+              <div className="relative w-full sm:w-60">
+                <Search className="h-4 w-4 absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar ISBN, obra, prateleira..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent focus:outline-none focus:ring-1 focus:ring-teal-500"
+                />
+              </div>
             </div>
           </div>
 
           {discrepancies.length === 0 ? (
             <div className="p-12 text-center text-slate-500 text-sm">
-              Nenhuma prateleira auditada com recontagem até o momento.
+              Nenhum item bipado ou auditado até o momento.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -566,21 +688,28 @@ export default function InventoryDetailPage() {
                   <tr>
                     <th className="px-4 py-3">Localização</th>
                     <th className="px-4 py-3">ISBN / Código</th>
-                    <th className="px-4 py-3">Título da Obra</th>
+                    <th className="px-4 py-3">Título / Marca</th>
                     <th className="px-4 py-3 text-center">1ª Contagem</th>
                     <th className="px-4 py-3 text-center">Recontagem</th>
+                    <th className="px-4 py-3 text-center">Saldo Validado</th>
                     <th className="px-4 py-3 text-center">Divergência</th>
                     <th className="px-4 py-3">Situação</th>
+                    <th className="px-4 py-3 text-right">Manutenção</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {discrepancies
-                    .filter(d => 
-                      !searchQuery || 
-                      d.isbn.includes(searchQuery) || 
-                      d.location.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                      d.title.toLowerCase().includes(searchQuery.toLowerCase())
-                    )
+                    .filter(d => {
+                      if (onlyDivergent && !d.has_divergence) return false;
+                      if (!searchQuery) return true;
+                      const q = searchQuery.toLowerCase();
+                      return (
+                        d.isbn.toLowerCase().includes(q) ||
+                        d.location.toLowerCase().includes(q) ||
+                        d.title.toLowerCase().includes(q) ||
+                        (d.publisher && d.publisher.toLowerCase().includes(q))
+                      );
+                    })
                     .map((d, i) => (
                       <tr key={i} className={`hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors ${
                         d.has_divergence ? 'bg-amber-50/30 dark:bg-amber-950/10' : ''
@@ -591,14 +720,18 @@ export default function InventoryDetailPage() {
                         <td className="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">
                           {d.isbn}
                         </td>
-                        <td className="px-4 py-3 text-slate-800 dark:text-slate-200 max-w-xs truncate" title={d.title}>
-                          {d.title}
+                        <td className="px-4 py-3 text-slate-800 dark:text-slate-200 max-w-xs">
+                          <div className="truncate font-medium" title={d.title}>{d.title}</div>
+                          <div className="text-xs text-slate-400">{d.publisher || d.category || 'Sem marca'}</div>
                         </td>
                         <td className="px-4 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">
                           {d.count_1_qty}
                         </td>
                         <td className="px-4 py-3 text-center font-semibold text-purple-600 dark:text-purple-400">
-                          {d.count_2_qty}
+                          {d.count_2_qty > 0 ? d.count_2_qty : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-center font-bold text-teal-600 dark:text-teal-400 bg-teal-500/5">
+                          {d.validated_qty}
                         </td>
                         <td className="px-4 py-3 text-center font-bold">
                           <span className={`px-2 py-0.5 rounded-md text-xs ${
@@ -624,12 +757,221 @@ export default function InventoryDetailPage() {
                             </span>
                           )}
                         </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* Botão de Ajuste de Quantidade (PIN Supervisor) */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAdjustItem({
+                                  location: d.location,
+                                  isbn: d.isbn,
+                                  title: d.title,
+                                  round_number: d.count_2_qty > 0 ? 2 : 1,
+                                  current_qty: d.validated_qty
+                                });
+                                setAdjustNewQty(d.validated_qty);
+                                setAdjustPin('');
+                              }}
+                              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-teal-50 dark:hover:bg-teal-950/30 text-slate-600 hover:text-teal-600 dark:text-slate-400 transition-colors"
+                              title="Ajustar quantidade contada (Requer PIN de Supervisor)"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+
+                            {/* Botão de Edição de Dados do Produto */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditProductItem({
+                                  isbn: d.isbn,
+                                  title: d.title,
+                                  publisher: d.publisher || ''
+                                });
+                                setEditTitle(d.title);
+                                setEditPublisher(d.publisher || '');
+                              }}
+                              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-blue-50 dark:hover:bg-blue-950/30 text-slate-600 hover:text-blue-600 dark:text-slate-400 transition-colors"
+                              title="Editar título e editora/marca do produto"
+                            >
+                              <Edit3 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                 </tbody>
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal de Manutenção de Quantidade com PIN de Supervisor */}
+      {adjustItem && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl max-w-md w-full p-6 space-y-5"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600">
+                  <ShieldCheck className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                    Manutenção de Contagem
+                  </h3>
+                  <p className="text-xs text-slate-500">Ajuste de quantidade com autorização</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAdjustItem(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 text-xs space-y-1">
+              <p><strong className="text-slate-700 dark:text-slate-300">Prateleira:</strong> {adjustItem.location}</p>
+              <p><strong className="text-slate-700 dark:text-slate-300">ISBN:</strong> {adjustItem.isbn}</p>
+              <p><strong className="text-slate-700 dark:text-slate-300">Obra:</strong> {adjustItem.title}</p>
+              <p><strong className="text-slate-700 dark:text-slate-300">Qtd Atual Validada:</strong> {adjustItem.current_qty} un</p>
+            </div>
+
+            <form onSubmit={handleAdjustQuantity} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Nova Quantidade para esta Prateleira:
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  required
+                  value={adjustNewQty}
+                  onChange={(e) => setAdjustNewQty(parseInt(e.target.value) || 0)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Senha do Supervisor (PIN):
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Digite o PIN de supervisor"
+                  value={adjustPin}
+                  onChange={(e) => setAdjustPin(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">PIN padrão do inventário: {inventory.supervisor_pin || '1234'}</p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAdjustItem(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingAdjust}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  {submittingAdjust ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+                  Confirmar Ajuste
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal de Edição de Produto (Título / Marca) */}
+      {editProductItem && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl max-w-md w-full p-6 space-y-5"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-600">
+                  <Edit3 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                    Editar Cadastro do Produto
+                  </h3>
+                  <p className="text-xs text-slate-500">Atualizar título ou marca/editora</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditProductItem(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              ISBN: <strong className="font-mono text-slate-800 dark:text-slate-200">{editProductItem.isbn}</strong>
+            </p>
+
+            <form onSubmit={handleUpdateProduct} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Título da Obra:
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Marca / Editora / Fabricante:
+                </label>
+                <input
+                  type="text"
+                  value={editPublisher}
+                  onChange={(e) => setEditPublisher(e.target.value)}
+                  placeholder="Ex: Companhia das Letras, Panini..."
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditProductItem(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingProductEdit}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  {submittingProductEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Edit3 className="h-4 w-4" />}
+                  Salvar Alterações
+                </button>
+              </div>
+            </form>
+          </motion.div>
         </div>
       )}
 

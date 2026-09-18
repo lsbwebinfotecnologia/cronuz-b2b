@@ -166,3 +166,17 @@ class DiscrepancyItemResponse(BaseModel):
     count_2_qty: int = 0
     difference: int = 0
     has_divergence: bool = False
+    validated_qty: int = 0
+
+class AuditAdjustmentRequest(BaseModel):
+    pin: str
+    location: str
+    isbn: str
+    round_number: Optional[int] = None
+    new_quantity: int
+
+class InventoryItemUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    publisher: Optional[str] = None
+    category: Optional[str] = None
+
