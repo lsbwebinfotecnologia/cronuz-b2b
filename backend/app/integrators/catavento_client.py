@@ -53,6 +53,7 @@ class CataventoClient:
         # persistido pelo chamador em dst_distributor.token
         self.token_renewed = False
         self.new_token: Optional[str] = None
+        self.last_auth_error: Optional[str] = None
 
     # ──────────────────────────────────────────────────────────────────
     # Autenticação
@@ -63,9 +64,13 @@ class CataventoClient:
         Retorna True se bem-sucedido, False se falhar.
         Token tem validade de ~23h (definida pelo servidor).
         """
+        if not self.username or not self.password:
+            self.last_auth_error = "E-mail ou senha da Catavento não configurados."
+            return False
+
         url = f"{self.base_url}/Sistema/Seguranca/Autenticar"
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     url,
                     json={"Email": self.username, "Senha": self.password},
@@ -79,10 +84,25 @@ class CataventoClient:
                     self._token_expires = datetime.now(timezone.utc) + timedelta(hours=23)
                     self.token_renewed  = True
                     self.new_token      = self._token
+                    self.last_auth_error = None
                     logger.info("[CataventoClient] Token renovado com sucesso.")
                     return True
-            logger.warning(f"[CataventoClient] Falha ao autenticar. Status: {resp.status_code}, Body: {resp.text[:200]}")
+                else:
+                    self.last_auth_error = data.get("Mensagem") or "Credenciais da Catavento recusadas."
+            elif resp.status_code in (401, 403):
+                self.last_auth_error = "E-mail ou senha da Catavento inválidos."
+            else:
+                self.last_auth_error = f"Falha na autenticação Catavento (HTTP {resp.status_code})."
+            
+            logger.warning(f"[CataventoClient] Falha ao autenticar. Status: {resp.status_code}, Msg: {self.last_auth_error}")
+        except httpx.TimeoutException:
+            self.last_auth_error = "Tempo limite esgotado ao autenticar na Catavento."
+            logger.error("[CataventoClient] Timeout na autenticação.")
+        except httpx.ConnectError:
+            self.last_auth_error = "Não foi possível conectar ao servidor da Catavento (serviço offline)."
+            logger.error("[CataventoClient] Falha de conexão ao servidor.")
         except Exception as e:
+            self.last_auth_error = f"Erro de conexão com a Catavento: {e}"
             logger.error(f"[CataventoClient] Erro ao autenticar: {e}")
         return False
 
@@ -108,25 +128,18 @@ class CataventoClient:
 
         GET /BDIApi/Produto/Buscar?codigo=<isbn>
         Header: API_TOKEN: <token>
-
-        Returns:
-            {
-              "found": bool,
-              "saldo": int,
-              "preco": float | None,
-              "situacao": int | None,
-              "titulo": str | None,
-              "editora": str | None,
-              "raw": dict,   # payload completo da API
-              "error": str | None,
-            }
         """
         if not await self._ensure_token():
-            return {"found": False, "saldo": 0, "error": "Falha ao autenticar na Catavento.", "raw": {}}
+            return {
+                "found": False,
+                "saldo": 0,
+                "error": self.last_auth_error or "Falha ao autenticar na Catavento.",
+                "raw": {},
+            }
 
         url = f"{self.base_url}/BDIApi/Produto/Buscar"
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     url,
                     params={"codigo": isbn},
@@ -141,10 +154,20 @@ class CataventoClient:
                 logger.warning("[CataventoClient] Token rejeitado (403), re-autenticando...")
                 if await self.authenticate():
                     return await self.get_stock_by_isbn(isbn)
-                return {"found": False, "saldo": 0, "error": "Token inválido (403).", "raw": {}}
+                return {
+                    "found": False,
+                    "saldo": 0,
+                    "error": self.last_auth_error or "Sessão expirada na Catavento (403).",
+                    "raw": {},
+                }
 
             if resp.status_code != 200:
-                return {"found": False, "saldo": 0, "error": f"HTTP {resp.status_code}", "raw": {}}
+                return {
+                    "found": False,
+                    "saldo": 0,
+                    "error": f"Serviço Catavento indisponível (HTTP {resp.status_code}).",
+                    "raw": {},
+                }
 
             data = resp.json()
             if not data:
@@ -165,6 +188,10 @@ class CataventoClient:
                 "error":    None,
             }
 
+        except httpx.TimeoutException:
+            return {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Catavento (Timeout).", "raw": {}}
+        except httpx.ConnectError:
+            return {"found": False, "saldo": 0, "error": "Servidor da Catavento inacessível no momento.", "raw": {}}
         except Exception as e:
             logger.error(f"[CataventoClient] Erro ao consultar ISBN {isbn}: {e}")
-            return {"found": False, "saldo": 0, "error": str(e), "raw": {}}
+            return {"found": False, "saldo": 0, "error": f"Erro na consulta Catavento: {str(e)}", "raw": {}}

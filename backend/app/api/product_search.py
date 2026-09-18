@@ -174,7 +174,12 @@ async def get_stock_by_branch(
     try:
         client = HorusProductSearch(db, current_user.company_id)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return {
+            "cod_item": cod_item,
+            "branches": [],
+            "status": "offline",
+            "error_message": f"Configuração do ERP Horus inacessível: {str(e)}",
+        }
 
     try:
         results = await client.busca_estoque_por_filiais(
@@ -182,13 +187,34 @@ async def get_stock_by_branch(
             branches=branches,
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Erro ao consultar estoque no Horus: {str(e)}")
+        return {
+            "cod_item": cod_item,
+            "branches": [],
+            "status": "offline",
+            "error_message": f"Falha ao conectar com o ERP Horus: {str(e)}",
+        }
     finally:
         await client.close()
+
+    # Diagnóstico de integridade das respostas das filiais
+    total_branches = len(results)
+    errors_count = sum(1 for r in results if r.get("erro"))
+
+    if errors_count == total_branches and total_branches > 0:
+        status = "offline"
+        error_message = "O servidor do ERP Horus não respondeu para nenhuma das filiais configuradas."
+    elif errors_count > 0:
+        status = "partial_error"
+        error_message = f"{errors_count} de {total_branches} filial(is) apresentaram instabilidade na consulta."
+    else:
+        status = "ok"
+        error_message = None
 
     return {
         "cod_item": cod_item,
         "branches": results,
+        "status": status,
+        "error_message": error_message,
     }
 
 
@@ -205,26 +231,7 @@ async def get_distributor_stock(
     """
     Consulta o estoque nos distribuidores habilitados para o seller.
 
-    Executa as consultas em paralelo (asyncio.gather) e retorna uma lista
-    com o resultado de cada distribuidor habilitado.
-
-    Retorna:
-        {
-          "isbn": "...",
-          "distributors": [
-            {
-              "slug": "catavento",
-              "name": "Catavento",
-              "enabled": true,
-              "found": true,
-              "saldo": 12,
-              "preco": 49.90,
-              "titulo": "...",
-              "error": null
-            },
-            ...
-          ]
-        }
+    Executa as consultas em paralelo com isolamento e timeout individual.
     """
     import asyncio
     from app.models.distributor import DistributorCredential
@@ -255,14 +262,19 @@ async def get_distributor_stock(
             token=dist.token,
             token_expires=dist.token_expires,
         )
-        result = await client.get_stock_by_isbn(isbn)
+        try:
+            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=12.0)
+        except asyncio.TimeoutError:
+            result = {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Catavento (Timeout)."}
+        except Exception as e:
+            result = {"found": False, "saldo": 0, "error": f"Erro de comunicação com a Catavento: {e}"}
 
         # Persiste token renovado no banco (sem bloquear a resposta)
         if client.token_renewed:
             try:
                 dist_db = db.query(DistributorCredential).filter(DistributorCredential.id == dist.id).first()
                 if dist_db:
-                    dist_db.token        = client.new_token
+                    dist_db.token         = client.new_token
                     dist_db.token_expires = client.token_expires
                     db.commit()
             except Exception:
@@ -284,7 +296,13 @@ async def get_distributor_stock(
             base_url=dist.base_url or "",
             api_key=dist.api_key or "",
         )
-        result = await client.get_stock_by_isbn(isbn)
+        try:
+            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=12.0)
+        except asyncio.TimeoutError:
+            result = {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Disal (Timeout)."}
+        except Exception as e:
+            result = {"found": False, "saldo": 0, "error": f"Erro de comunicação com a Disal: {e}"}
+
         return {
             "slug":   dist.slug,
             "name":   dist.name,
@@ -296,7 +314,7 @@ async def get_distributor_stock(
             "error":  result.get("error"),
         }
 
-    # Monta coroutines por distribuidor
+    # Monta coroutines por distribuidor com tratamento individual
     tasks = []
     for dist in distributors:
         if dist.slug == "catavento":
@@ -304,7 +322,7 @@ async def get_distributor_stock(
         elif dist.slug == "disal":
             tasks.append(query_disal(dist))
         else:
-            # Distribuidor futuro sem integrador implementado — retorna stub
+            # Distribuidor futuro sem integrador implementado
             async def _not_implemented(d=dist):
                 return {
                     "slug":    d.slug,
@@ -314,16 +332,25 @@ async def get_distributor_stock(
                     "saldo":   0,
                     "preco":   None,
                     "titulo":  None,
-                    "error":   "Integrador não implementado.",
+                    "error":   "Integrador ainda não implementado para este parceiro.",
                 }
             tasks.append(_not_implemented())
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     output = []
-    for r in results:
+    for idx, r in enumerate(results):
         if isinstance(r, Exception):
-            output.append({"slug": "?", "name": "?", "enabled": True, "found": False, "saldo": 0, "error": str(r)})
+            d_name = distributors[idx].name if idx < len(distributors) else "Parceiro"
+            d_slug = distributors[idx].slug if idx < len(distributors) else "?"
+            output.append({
+                "slug": d_slug,
+                "name": d_name,
+                "enabled": True,
+                "found": False,
+                "saldo": 0,
+                "error": f"Falha inesperada ao consultar {d_name}: {str(r)}",
+            })
         else:
             output.append(r)
 

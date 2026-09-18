@@ -18,6 +18,7 @@ import {
   X,
   Building2,
   Truck,
+  RefreshCw,
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -60,8 +61,8 @@ type HorusProduct = {
 
 type BranchStock = {
   filial_nome: string;
-  cod_empresa: string;
-  cod_filial: string;
+  cod_empresa?: string;
+  cod_filial?: string;
   saldo: number;
   situacao_item?: string;
   registros_retornados?: number;
@@ -74,29 +75,30 @@ type DistributorResult = {
   enabled: boolean;
   found: boolean;
   saldo: number;
-  preco?: number | null;
-  titulo?: string | null;
-  error?: string | null;
+  preco?: number;
+  titulo?: string;
+  error?: string;
 };
 
 // ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
-function situacaoLabel(code?: string | null): { label: string; color: string } {
-  const map: Record<string, { label: string; color: string }> = {
-    IN: { label: 'Item Normal',              color: 'bg-emerald-100 text-emerald-700' },
-    FD: { label: 'Em falta (Distrib.)',      color: 'bg-amber-100 text-amber-700' },
-    FE: { label: 'Em falta (Editora)',       color: 'bg-amber-100 text-amber-700' },
-    FC: { label: 'Fora de comercialização',  color: 'bg-red-100 text-red-700' },
-    IP: { label: 'No Prelo',                 color: 'bg-sky-100 text-sky-700' },
-  };
-  return map[code ?? ''] ?? { label: code ?? '—', color: 'bg-slate-100 text-slate-600' };
+function situacaoLabel(sit?: string): { label: string; color: string } {
+  switch (sit) {
+    case 'N': return { label: 'Item Normal',      color: 'bg-emerald-100 text-emerald-700' };
+    case 'F': return { label: 'Em Falta',          color: 'bg-amber-100 text-amber-700'   };
+    case 'E': return { label: 'Em falta (Editora)',color: 'bg-amber-100 text-amber-700'   };
+    case 'A': return { label: 'Aguard. Lançamento',color: 'bg-blue-100 text-blue-700'     };
+    case 'D': return { label: 'Descontinuado',     color: 'bg-red-100 text-red-700'       };
+    case 'C': return { label: 'Cancelado',         color: 'bg-slate-100 text-slate-600'   };
+    default:  return { label: sit || '—',          color: 'bg-slate-100 text-slate-500'   };
+  }
 }
 
-function formatPrice(raw?: string): string {
-  if (!raw) return '—';
-  const num = parseFloat(raw.replace(',', '.'));
-  if (isNaN(num)) return raw;
+function formatPrice(val?: string | number): string {
+  if (!val) return '—';
+  const num = typeof val === 'string' ? parseFloat(val.replace(',', '.')) : val;
+  if (isNaN(num)) return String(val);
   return num.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
@@ -115,6 +117,8 @@ export default function ProductSearchPage() {
   const [product, setProduct]     = useState<HorusProduct | null>(null);
   const [products, setProducts]   = useState<HorusProduct[]>([]);
   const [stockData, setStockData] = useState<BranchStock[]>([]);
+  const [stockStatus, setStockStatus] = useState<'ok' | 'partial_error' | 'offline' | null>(null);
+  const [stockErrorMessage, setStockErrorMessage] = useState<string | null>(null);
   const [searched, setSearched]   = useState(false);
 
   // Distribuidores
@@ -158,38 +162,54 @@ export default function ProductSearchPage() {
 
   // ── Busca produto ──────────────────────────
   const handleSearch = useCallback(async (e?: React.FormEvent) => {
-    e?.preventDefault();
+    if (e) e.preventDefault();
     const term = searchTerm.trim();
-    if (!term) { toast.error('Informe um valor para pesquisar.'); return; }
+    if (!term) {
+      toast.warning('Informe um termo para buscar.');
+      return;
+    }
 
     setSearchLoading(true);
-    setSearched(true);
     setProduct(null);
     setProducts([]);
     setStockData([]);
+    setStockStatus(null);
+    setStockErrorMessage(null);
+    setDistData([]);
+    setSearched(true);
 
     try {
       const token = getToken();
-      const params = new URLSearchParams({ term, search_option: selectedOption.value, limit: '10' });
+      const params = new URLSearchParams({
+        term,
+        search_option: selectedOption.value,
+        offset: '0',
+        limit: '10',
+      });
+
       const res = await fetch(`${apiUrl}/product-search/product?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        toast.error(err.detail || 'Nenhum produto encontrado.');
-        return;
+        throw new Error(err.detail || 'Erro ao buscar produto.');
       }
 
       const data = await res.json();
       const items: HorusProduct[] = data.items || [];
 
-      if (items.length === 0) { toast.error('Nenhum produto encontrado no Horus.'); return; }
-
-      setProducts(items);
-      selectProduct(items[0]);
-    } catch {
-      toast.error('Erro de conexão com a API.');
+      if (items.length === 0) {
+        toast.info('Nenhum produto encontrado para este termo.');
+      } else if (items.length === 1) {
+        setProducts(items);
+        await selectProduct(items[0]);
+      } else {
+        setProducts(items);
+        await selectProduct(items[0]);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Falha na busca.');
     } finally {
       setSearchLoading(false);
     }
@@ -199,6 +219,8 @@ export default function ProductSearchPage() {
   const selectProduct = useCallback(async (p: HorusProduct) => {
     setProduct(p);
     setStockData([]);
+    setStockStatus(null);
+    setStockErrorMessage(null);
     setDistData([]);
     if (!p.COD_ITEM) return;
 
@@ -225,8 +247,15 @@ export default function ProductSearchPage() {
     if (horusRes.status === 'fulfilled' && horusRes.value?.ok) {
       const data = await horusRes.value.json();
       setStockData(data.branches || []);
+      setStockStatus(data.status || 'ok');
+      setStockErrorMessage(data.error_message || null);
+      if (data.status === 'offline') {
+        toast.error('O servidor do Horus não respondeu para as filiais.');
+      }
     } else {
-      toast.error('Erro ao consultar estoque no Horus.');
+      setStockStatus('offline');
+      setStockErrorMessage('Não foi possível comunicar com o servidor do ERP Horus.');
+      toast.error('Falha de conexão ao consultar estoque no Horus.');
     }
     setStockLoading(false);
 
@@ -543,17 +572,59 @@ export default function ProductSearchPage() {
                           </p>
                         </div>
                       </div>
-                      {product && stockData.length > 0 && (
-                        <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
-                          {stockData.length} filial(is)
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {product && stockData.length > 0 && (
+                          <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                            {stockData.length} filial(is)
+                          </span>
+                        )}
+                        {product && !stockLoading && (
+                          <button
+                            onClick={() => selectProduct(product)}
+                            title="Recarregar saldos"
+                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 hover:text-[#00b4b4] transition-colors cursor-pointer"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
+
+                    {/* Alerta de instabilidade ou servidor offline */}
+                    {stockStatus === 'offline' && !stockLoading && (
+                      <div className="mx-6 mt-4 p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 flex items-start justify-between gap-3 text-amber-900 dark:text-amber-200">
+                        <div className="flex items-start gap-2.5">
+                          <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-xs font-bold uppercase tracking-wider">
+                              Servidor do ERP Horus Indisponível
+                            </p>
+                            <p className="text-xs mt-0.5 text-amber-700 dark:text-amber-300 leading-relaxed">
+                              {stockErrorMessage || 'Não foi possível estabelecer comunicação com o ERP Horus para obter o estoque das lojas.'}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => product && selectProduct(product)}
+                          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-xs transition-colors cursor-pointer"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                          Tentar novamente
+                        </button>
+                      </div>
+                    )}
+
+                    {stockStatus === 'partial_error' && !stockLoading && (
+                      <div className="mx-6 mt-3 p-3 rounded-xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/40 flex items-center gap-2 text-amber-800 dark:text-amber-300 text-xs">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>{stockErrorMessage || 'Algumas filiais apresentaram instabilidade de resposta.'}</span>
+                      </div>
+                    )}
 
                     {stockLoading && (
                       <div className="flex items-center justify-center gap-3 py-16 text-slate-400">
                         <Loader2 className="w-5 h-5 animate-spin text-[#00b4b4]" />
-                        <span className="text-sm font-medium">Consultando saldo nas filiais do Horus…</span>
+                        <span className="text-sm font-medium">Consultando saldo nas filiais do Horus de forma simultânea…</span>
                       </div>
                     )}
 
@@ -578,11 +649,17 @@ export default function ProductSearchPage() {
                           <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
                             {stockData.map((b, idx) => {
                               const sit = situacaoLabel(b.situacao_item);
+                              const hasError = Boolean(b.erro);
                               return (
                                 <tr key={idx} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                                   <td className="py-3 px-5">
                                     <p className="font-semibold text-slate-800 dark:text-slate-100">{b.filial_nome}</p>
-                                    {b.erro && <p className="text-[11px] text-red-500 mt-0.5">{b.erro}</p>}
+                                    {hasError && (
+                                      <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 flex items-start gap-1">
+                                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                        <span>{b.erro}</span>
+                                      </p>
+                                    )}
                                   </td>
                                   <td className="py-3 px-3 text-center">
                                     <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">
@@ -590,7 +667,11 @@ export default function ProductSearchPage() {
                                     </span>
                                   </td>
                                   <td className="py-3 px-3 text-center">
-                                    {b.situacao_item ? (
+                                    {hasError ? (
+                                      <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-400">
+                                        Indisponível
+                                      </span>
+                                    ) : b.situacao_item ? (
                                       <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${sit.color}`}>
                                         {sit.label}
                                       </span>
@@ -599,10 +680,16 @@ export default function ProductSearchPage() {
                                     )}
                                   </td>
                                   <td className="py-3 px-5 text-right">
-                                    <span className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-sm font-bold
-                                      ${b.saldo > 0 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'}`}>
-                                      {b.saldo} un
-                                    </span>
+                                    {hasError ? (
+                                      <span className="inline-flex items-center justify-center rounded-full px-3 py-1 text-sm font-bold bg-slate-100 text-slate-400 dark:bg-slate-800">
+                                        —
+                                      </span>
+                                    ) : (
+                                      <span className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-sm font-bold
+                                        ${b.saldo > 0 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'}`}>
+                                        {b.saldo} un
+                                      </span>
+                                    )}
                                   </td>
                                 </tr>
                               );
@@ -612,7 +699,7 @@ export default function ProductSearchPage() {
                       </div>
                     )}
 
-                    {!stockLoading && product && stockData.length === 0 && (
+                    {!stockLoading && product && stockData.length === 0 && stockStatus !== 'offline' && (
                       <div className="flex flex-col items-center justify-center py-12 gap-2 text-slate-400">
                         <MapPin className="w-8 h-8 opacity-40" />
                         <p className="text-sm font-medium">Nenhuma filial configurada ou sem dados de estoque.</p>
@@ -643,7 +730,7 @@ export default function ProductSearchPage() {
                         {distLoading && (
                           <div className="flex items-center gap-2 text-xs text-[#00b4b4] font-medium">
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            <span>Consultando…</span>
+                            <span>Consultando parceiros…</span>
                           </div>
                         )}
                       </div>
@@ -651,7 +738,7 @@ export default function ProductSearchPage() {
                       {distLoading && distData.length === 0 ? (
                         <div className="flex items-center justify-center gap-3 py-12 text-slate-400">
                           <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
-                          <span className="text-sm font-medium">Consultando saldo nos distribuidores…</span>
+                          <span className="text-sm font-medium">Consultando saldo nos distribuidores integrados…</span>
                         </div>
                       ) : (
                         <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -661,37 +748,48 @@ export default function ProductSearchPage() {
                               disal:     { border: '#2563eb', bg: 'rgba(37, 99, 235, 0.04)', badge: '#2563eb', text: '#1d4ed8' },
                             };
                             const conf = colors[d.slug] || { border: '#00b4b4', bg: 'rgba(0, 180, 180, 0.04)', badge: '#00b4b4', text: '#008a8a' };
+                            const hasDistError = Boolean(d.error);
 
                             return (
                               <div
                                 key={i}
                                 className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 flex flex-col justify-between gap-3 shadow-xs hover:shadow-md transition-shadow relative overflow-hidden"
-                                style={{ borderLeftColor: conf.border, borderLeftWidth: 4, backgroundColor: conf.bg }}
+                                style={{
+                                  borderLeftColor: hasDistError ? '#f59e0b' : conf.border,
+                                  borderLeftWidth: 4,
+                                  backgroundColor: hasDistError ? 'rgba(245, 158, 11, 0.03)' : conf.bg,
+                                }}
                               >
                                 <div className="flex items-start justify-between gap-2">
                                   <div>
                                     <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100">{d.name}</h4>
                                     <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Distribuidor</span>
                                   </div>
-                                  <span
-                                    className="inline-flex items-center rounded-full px-3 py-1 text-sm font-extrabold shrink-0"
-                                    style={{
-                                      background: d.saldo > 0 ? `${conf.badge}20` : '#f1f5f9',
-                                      color:      d.saldo > 0 ? conf.text : '#94a3b8',
-                                    }}
-                                  >
-                                    {d.saldo} un
-                                  </span>
+                                  {hasDistError ? (
+                                    <span className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300 shrink-0">
+                                      Indisponível
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className="inline-flex items-center rounded-full px-3 py-1 text-sm font-extrabold shrink-0"
+                                      style={{
+                                        background: d.saldo > 0 ? `${conf.badge}20` : '#f1f5f9',
+                                        color:      d.saldo > 0 ? conf.text : '#94a3b8',
+                                      }}
+                                    >
+                                      {d.saldo} un
+                                    </span>
+                                  )}
                                 </div>
 
-                                <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs">
-                                  {d.error ? (
-                                    <span className="text-red-500 flex items-center gap-1 text-[11px]">
-                                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                                      {d.error}
+                                <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs min-h-[22px]">
+                                  {hasDistError ? (
+                                    <span className="text-amber-700 dark:text-amber-400 flex items-start gap-1.5 text-[11px] leading-tight w-full">
+                                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600" />
+                                      <span>{d.error}</span>
                                     </span>
                                   ) : !d.found ? (
-                                    <span className="text-slate-400 text-[11px]">Não encontrado</span>
+                                    <span className="text-slate-400 text-[11px]">Não localizado no catálogo</span>
                                   ) : (
                                     <>
                                       <span className="text-emerald-600 dark:text-emerald-400 font-medium text-[11px] flex items-center gap-1">

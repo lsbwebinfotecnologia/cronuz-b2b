@@ -59,9 +59,17 @@ class DisalClient:
               "error": str | None,
             }
         """
+        if not self.api_key:
+            return {
+                "found": False,
+                "saldo": 0,
+                "error": "Chave de API da Disal não configurada.",
+                "raw": {},
+            }
+
         url = f"{self.base_url}/api/estoque/byEAN"
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     url,
                     params={"EAN": isbn},
@@ -69,7 +77,12 @@ class DisalClient:
                 )
 
             if resp.status_code == 401:
-                return {"found": False, "saldo": 0, "error": "Token Disal inválido (401).", "raw": {}}
+                return {
+                    "found": False,
+                    "saldo": 0,
+                    "error": "Chave de API da Disal inválida ou expirada (401).",
+                    "raw": {},
+                }
 
             if resp.status_code == 400:
                 body = {}
@@ -80,15 +93,25 @@ class DisalClient:
                 return {
                     "found": False,
                     "saldo": 0,
-                    "error": body.get("Message", f"Requisição inválida (400)."),
+                    "error": body.get("Message") or "Requisição rejeitada pela API Disal (400).",
                     "raw": body,
                 }
 
             if resp.status_code == 429:
-                return {"found": False, "saldo": 0, "error": "Rate limit Disal (429). Tente novamente em instantes.", "raw": {}}
+                return {
+                    "found": False,
+                    "saldo": 0,
+                    "error": "Limite de consultas excedido na Disal (Rate limit). Tente novamente em instantes.",
+                    "raw": {},
+                }
 
             if resp.status_code != 200:
-                return {"found": False, "saldo": 0, "error": f"HTTP {resp.status_code}", "raw": {}}
+                return {
+                    "found": False,
+                    "saldo": 0,
+                    "error": f"Serviço da Disal indisponível (HTTP {resp.status_code}).",
+                    "raw": {},
+                }
 
             data = resp.json()
             if not data:
@@ -111,6 +134,10 @@ class DisalClient:
                 "error":  None,
             }
 
+        except httpx.TimeoutException:
+            return {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Disal (Timeout).", "raw": {}}
+        except httpx.ConnectError:
+            return {"found": False, "saldo": 0, "error": "Servidor da Disal inacessível no momento.", "raw": {}}
         except Exception as e:
             logger.error(f"[DisalClient] Erro ao consultar ISBN {isbn}: {e}")
-            return {"found": False, "saldo": 0, "error": str(e), "raw": {}}
+            return {"found": False, "saldo": 0, "error": f"Erro na consulta Disal: {str(e)}", "raw": {}}
