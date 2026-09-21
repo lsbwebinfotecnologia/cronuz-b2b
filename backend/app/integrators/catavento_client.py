@@ -24,7 +24,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-CATAVENTO_DEFAULT_BASE_URL = "https://api.cataventobr.com.br"
+CATAVENTO_DEFAULT_BASE_URL = "http://api.cataventobr.com.br"
 
 
 class CataventoClient:
@@ -44,16 +44,25 @@ class CataventoClient:
         token: Optional[str] = None,
         token_expires: Optional[datetime] = None,
     ):
-        self.base_url      = (base_url or CATAVENTO_DEFAULT_BASE_URL).rstrip("/")
-        self.username      = username
-        self.password      = password
-        self._token        = token
+        raw_url = (base_url or CATAVENTO_DEFAULT_BASE_URL).strip().rstrip("/")
+        # O endpoint HTTPS da Catavento sofre com travamento/timeout de SSL na rota de busca.
+        # Forçamos http:// para garantir resposta imediata idêntica à integração PHP estável.
+        if "api.cataventobr.com.br" in raw_url and raw_url.startswith("https://"):
+            raw_url = "http://" + raw_url[len("https://"):]
+        self.base_url       = raw_url
+        self.username       = username
+        self.password       = password
+        self._token         = token
         self._token_expires = token_expires
         # Flag: se True, o token foi renovado nesta instância e deve ser
         # persistido pelo chamador em dst_distributor.token
-        self.token_renewed = False
+        self.token_renewed  = False
         self.new_token: Optional[str] = None
         self.last_auth_error: Optional[str] = None
+
+    @property
+    def token_expires(self) -> Optional[datetime]:
+        return self._token_expires
 
     # ──────────────────────────────────────────────────────────────────
     # Autenticação
@@ -70,7 +79,7 @@ class CataventoClient:
 
         url = f"{self.base_url}/Sistema/Seguranca/Autenticar"
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
                 resp = await client.post(
                     url,
                     json={"Email": self.username, "Senha": self.password},
@@ -139,7 +148,7 @@ class CataventoClient:
 
         url = f"{self.base_url}/BDIApi/Produto/Buscar"
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
                 resp = await client.get(
                     url,
                     params={"codigo": isbn},

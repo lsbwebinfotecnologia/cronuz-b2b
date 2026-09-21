@@ -453,26 +453,16 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
             className="flex items-center gap-3 hover:opacity-80 transition-opacity"
           >
             <div className="relative h-10 w-28 flex-shrink-0 flex items-center">
-              {companyLogo ? (
-                <img 
-                  src={getImageUrl(companyLogo)} 
-                  alt={user?.company_name || 'Logo'} 
-                  className="object-contain max-h-10 w-auto max-w-full"
-                />
-              ) : (
-                <>
-                  <img 
-                    src="/images/cronuz-logo.png" 
-                    alt="Cronuz Logo" 
-                    className="object-contain w-full h-full cronuz-logo"
-                  />
-                  <img 
-                    src="/images/logo-square-horus.png" 
-                    alt="Horus Logo" 
-                    className="object-contain w-full h-full hidden horus-logo"
-                  />
-                </>
-              )}
+              <img 
+                src="/images/cronuz-logo.png" 
+                alt="Cronuz Logo" 
+                className="object-contain w-full h-full cronuz-logo"
+              />
+              <img 
+                src="/images/logo-square-horus.png" 
+                alt="Horus Logo" 
+                className="object-contain w-full h-full hidden horus-logo"
+              />
             </div>
           </Link>
 

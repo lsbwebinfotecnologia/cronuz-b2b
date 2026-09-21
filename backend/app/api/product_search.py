@@ -263,7 +263,7 @@ async def get_distributor_stock(
             token_expires=dist.token_expires,
         )
         try:
-            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=12.0)
+            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=25.0)
         except asyncio.TimeoutError:
             result = {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Catavento (Timeout)."}
         except Exception as e:

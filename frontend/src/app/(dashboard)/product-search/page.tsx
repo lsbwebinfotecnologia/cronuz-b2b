@@ -19,8 +19,11 @@ import {
   Building2,
   Truck,
   RefreshCw,
+  Camera,
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
+import { getImageUrl } from '@/lib/image_helper';
+import CameraBarcodeScanner from '@/components/inventory/CameraBarcodeScanner';
 import { toast } from 'sonner';
 
 // ──────────────────────────────────────────────
@@ -125,11 +128,19 @@ export default function ProductSearchPage() {
   const [distLoading, setDistLoading] = useState(false);
   const [distData,    setDistData]    = useState<DistributorResult[]>([]);
 
+  // Camera Scanner Modal
+  const [showCameraScanner, setShowCameraScanner] = useState(false);
+
   // Dados do seller
   const [companyName, setCompanyName]   = useState('');
   const [companyLogo, setCompanyLogo]   = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Autofoco inicial no campo de busca
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   // Carrega logo e nome do seller via dashboard/metrics
   useEffect(() => {
@@ -159,61 +170,6 @@ export default function ProductSearchPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-
-  // ── Busca produto ──────────────────────────
-  const handleSearch = useCallback(async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const term = searchTerm.trim();
-    if (!term) {
-      toast.warning('Informe um termo para buscar.');
-      return;
-    }
-
-    setSearchLoading(true);
-    setProduct(null);
-    setProducts([]);
-    setStockData([]);
-    setStockStatus(null);
-    setStockErrorMessage(null);
-    setDistData([]);
-    setSearched(true);
-
-    try {
-      const token = getToken();
-      const params = new URLSearchParams({
-        term,
-        search_option: selectedOption.value,
-        offset: '0',
-        limit: '10',
-      });
-
-      const res = await fetch(`${apiUrl}/product-search/product?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Erro ao buscar produto.');
-      }
-
-      const data = await res.json();
-      const items: HorusProduct[] = data.items || [];
-
-      if (items.length === 0) {
-        toast.info('Nenhum produto encontrado para este termo.');
-      } else if (items.length === 1) {
-        setProducts(items);
-        await selectProduct(items[0]);
-      } else {
-        setProducts(items);
-        await selectProduct(items[0]);
-      }
-    } catch (err: any) {
-      toast.error(err.message || 'Falha na busca.');
-    } finally {
-      setSearchLoading(false);
-    }
-  }, [searchTerm, selectedOption, apiUrl]);
 
   // ── Seleciona produto e busca estoque ─────
   const selectProduct = useCallback(async (p: HorusProduct) => {
@@ -268,6 +224,129 @@ export default function ProductSearchPage() {
 
   }, [apiUrl]);
 
+  // ── Executa busca de produto ───────────────
+  const executeSearch = useCallback(async (customTerm?: string, customOption?: SearchOption['value']) => {
+    const term = (customTerm !== undefined ? customTerm : searchTerm).trim();
+    const optValue = customOption || selectedOption.value;
+
+    if (!term) {
+      toast.warning('Informe um termo para buscar.');
+      return;
+    }
+
+    setSearchLoading(true);
+    setProduct(null);
+    setProducts([]);
+    setStockData([]);
+    setStockStatus(null);
+    setStockErrorMessage(null);
+    setDistData([]);
+    setSearched(true);
+
+    try {
+      const token = getToken();
+      const params = new URLSearchParams({
+        term,
+        search_option: optValue,
+        offset: '0',
+        limit: '10',
+      });
+
+      const res = await fetch(`${apiUrl}/product-search/product?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Erro ao buscar produto.');
+      }
+
+      const data = await res.json();
+      const items: HorusProduct[] = data.items || [];
+
+      if (items.length === 0) {
+        toast.info('Nenhum produto encontrado para este termo.');
+      } else {
+        setProducts(items);
+        await selectProduct(items[0]);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Falha na busca.');
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [searchTerm, selectedOption, apiUrl, selectProduct]);
+
+  const handleSearch = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    executeSearch();
+  };
+
+  const handleCameraScan = (scannedCode: string) => {
+    setShowCameraScanner(false);
+    const clean = scannedCode.trim();
+    if (!clean) return;
+    setSearchTerm(clean);
+    const isbnOpt = SEARCH_OPTIONS.find(o => o.value === 'BARRAS_ISBN') || SEARCH_OPTIONS[0];
+    setSelectedOption(isbnOpt);
+    toast.success(`Código lido: ${clean}`);
+    executeSearch(clean, 'BARRAS_ISBN');
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const clean = searchTerm.trim();
+      if (!clean) return;
+      if (/^\d{10,14}$/.test(clean)) {
+        const isbnOpt = SEARCH_OPTIONS.find(o => o.value === 'BARRAS_ISBN') || SEARCH_OPTIONS[0];
+        setSelectedOption(isbnOpt);
+        executeSearch(clean, 'BARRAS_ISBN');
+      } else {
+        executeSearch(clean);
+      }
+    }
+  };
+
+  // Suporte a leitor de código de barras físico USB/Bluetooth mesmo fora do foco
+  useEffect(() => {
+    let barcodeBuffer = '';
+    let lastKeyTime = Date.now();
+
+    const onGlobalKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target === inputRef.current) return;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      const now = Date.now();
+      const elapsed = now - lastKeyTime;
+      lastKeyTime = now;
+
+      if (elapsed > 100) {
+        barcodeBuffer = '';
+      }
+
+      if (e.key === 'Enter') {
+        const candidate = barcodeBuffer.trim();
+        if (candidate.length >= 8 && /^\d+$/.test(candidate)) {
+          e.preventDefault();
+          setSearchTerm(candidate);
+          const isbnOpt = SEARCH_OPTIONS.find(o => o.value === 'BARRAS_ISBN') || SEARCH_OPTIONS[0];
+          setSelectedOption(isbnOpt);
+          executeSearch(candidate, 'BARRAS_ISBN');
+          barcodeBuffer = '';
+        }
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        barcodeBuffer += e.key;
+      }
+    };
+
+    window.addEventListener('keydown', onGlobalKeyDown);
+    return () => window.removeEventListener('keydown', onGlobalKeyDown);
+  }, [executeSearch]);
+
   // ──────────────────────────────────────────
   // Content (reutilizado em normal e fullscreen)
   // ──────────────────────────────────────────
@@ -285,7 +364,7 @@ export default function ProductSearchPage() {
             {companyLogo ? (
               <div className="w-11 h-11 rounded-lg overflow-hidden bg-white/20 backdrop-blur-sm shadow-md flex-shrink-0 flex items-center justify-center border border-white/30">
                 <img
-                  src={companyLogo}
+                  src={getImageUrl(companyLogo)}
                   alt={companyName}
                   className="w-full h-full object-contain p-1"
                   onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
@@ -354,20 +433,33 @@ export default function ProductSearchPage() {
           })}
         </div>
 
-        {/* Input + botão */}
+        {/* Input + botões */}
         <div className="flex flex-1 gap-2">
-          <input
-            ref={inputRef}
-            type={selectedOption.value === 'COD_ITEM' ? 'number' : 'text'}
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            placeholder={selectedOption.placeholder}
-            className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-2.5 text-sm shadow-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
-          />
+          <div className="relative flex-1">
+            <input
+              ref={inputRef}
+              type={selectedOption.value === 'COD_ITEM' ? 'number' : 'text'}
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              onFocus={e => e.target.select()}
+              onKeyDown={handleInputKeyDown}
+              placeholder={selectedOption.placeholder}
+              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 pl-4 pr-11 py-2.5 text-sm shadow-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+            />
+            {/* Botão de Leitor de Código de Barras via Câmera */}
+            <button
+              type="button"
+              onClick={() => setShowCameraScanner(true)}
+              title="Ler código de barras com a câmera do celular"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-slate-400 hover:text-[#00b4b4] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+          </div>
           <button
             type="submit"
             disabled={searchLoading}
-            className="inline-flex items-center gap-2 rounded-xl bg-[#00b4b4] hover:bg-[#009999] text-white px-5 py-2.5 text-sm font-medium shadow-sm transition-colors disabled:opacity-60 cursor-pointer"
+            className="inline-flex items-center gap-2 rounded-xl bg-[#00b4b4] hover:bg-[#009999] text-white px-5 py-2.5 text-sm font-medium shadow-sm transition-colors disabled:opacity-60 cursor-pointer shrink-0"
           >
             {searchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
             Buscar
@@ -883,6 +975,11 @@ export default function ProductSearchPage() {
     <>
       {FullscreenPortal}
       <div>{PageContent}</div>
+      <CameraBarcodeScanner
+        isActive={showCameraScanner}
+        onClose={() => setShowCameraScanner(false)}
+        onScan={handleCameraScan}
+      />
     </>
   );
 }
