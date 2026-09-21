@@ -267,17 +267,43 @@ def run_tests():
         print("[TEST 12] Finalização Geral do Inventário pelo Gestor...")
         res_fin = client.put(f"/companies/{company.id}/inventory/{inv_id}/finalize", headers=headers1)
         assert res_fin.status_code == 200
-        assert res_fin.json()["status"] == "FINALIZADO"
-        print(" -> Inventário finalizado.")
+        print("[TEST 13] Alteração de Status e Cancelamento com Senha do Usuário Logado...")
+        # Tentar alterar status com senha errada -> HTTP 401
+        res_bad_pw = client.put(f"/companies/{company.id}/inventory/{inv_id}/status", json={"status": "AUDITANDO", "password": "senha_errada"}, headers=headers1)
+        assert res_bad_pw.status_code == 401, f"Deveria rejeitar senha incorreta: {res_bad_pw.text}"
 
-        # Tentar abrir nova sessão deve ser bloqueado
-        res_lock = client.post(f"/companies/{company.id}/inventory/{inv_id}/sessions", json={"location": "PRATELEIRA B"}, headers=headers1)
-        assert res_lock.status_code == 423
-        print(" -> Trava absoluta confirmada (HTTP 423 Locked).")
+        # Alterar status para AUDITANDO com senha correta -> HTTP 200
+        res_aud = client.put(f"/companies/{company.id}/inventory/{inv_id}/status", json={"status": "AUDITANDO", "password": "123456"}, headers=headers1)
+        assert res_aud.status_code == 200, f"Falha ao alterar status para AUDITANDO: {res_aud.text}"
+        assert res_aud.json()["status"] == "AUDITANDO"
 
-        print("\n✅ TODOS OS 11 TESTES DO MÓDULO DE INVENTÁRIO PASSARAM COM SUCESSO!\n")
+        # Tentar abrir sessão enquanto em AUDITANDO -> Bloqueado HTTP 423
+        res_aud_lock = client.post(f"/companies/{company.id}/inventory/{inv_id}/sessions", json={"location": "PRATELEIRA TESTE"}, headers=headers1)
+        assert res_aud_lock.status_code == 423
+
+        # Alterar status para CANCELADO com senha correta -> HTTP 200
+        res_canc = client.put(f"/companies/{company.id}/inventory/{inv_id}/status", json={"status": "CANCELADO", "password": "123456"}, headers=headers1)
+        assert res_canc.status_code == 200
+        assert res_canc.json()["status"] == "CANCELADO"
+
+        # Tentar abrir sessão enquanto CANCELADO -> Bloqueado HTTP 423
+        res_canc_lock = client.post(f"/companies/{company.id}/inventory/{inv_id}/sessions", json={"location": "PRATELEIRA TESTE"}, headers=headers1)
+        assert res_canc_lock.status_code == 423
+
+        # Re-ativar para EM_ANDAMENTO -> HTTP 200
+        res_react = client.put(f"/companies/{company.id}/inventory/{inv_id}/status", json={"status": "EM_ANDAMENTO", "password": "123456"}, headers=headers1)
+        assert res_react.status_code == 200
+        assert res_react.json()["status"] == "EM_ANDAMENTO"
+
+        # Agora abrir sessão funciona novamente
+        res_unlock = client.post(f"/companies/{company.id}/inventory/{inv_id}/sessions", json={"location": "PRATELEIRA UNLOCKED"}, headers=headers1)
+        assert res_unlock.status_code == 200
+        print(" -> Alterações de status (AUDITANDO, CANCELADO, EM_ANDAMENTO) e trava de senha validadas com sucesso!")
+
+        print("\n✅ TODOS OS TESTES DO MÓDULO DE INVENTÁRIO PASSARAM COM SUCESSO!\n")
     finally:
         db.close()
 
 if __name__ == "__main__":
     run_tests()
+

@@ -369,7 +369,7 @@ export default function PublicOperatorPage() {
     }
   }
 
-  async function startSession(loc: string, isAudit: boolean) {
+  async function startSession(loc: string, isAudit: boolean, mode?: 'continue' | 'recount') {
     const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     try {
       const res = await fetch(`${baseUrl}/inventory/public/${token}/sessions`, {
@@ -378,7 +378,8 @@ export default function PublicOperatorPage() {
         body: JSON.stringify({
           location: loc,
           operator_name: operatorName,
-          is_audit: isAudit
+          is_audit: isAudit,
+          mode: mode
         })
       });
 
@@ -391,7 +392,7 @@ export default function PublicOperatorPage() {
       setSession(sessData);
       setSessionScannedCount(0);
       setLocationAuditWarning(null);
-      toast.success(`Prateleira ${loc} iniciada!`);
+      toast.success(mode === 'continue' ? `Contagem de ${loc} continuada!` : `Prateleira ${loc} iniciada!`);
     } catch (err: any) {
       toast.error(err.message || 'Falha ao iniciar contagem.');
     }
@@ -753,13 +754,18 @@ export default function PublicOperatorPage() {
     );
   }
 
-  if (inventory.status === 'FINALIZADO') {
+  if (inventory.status !== 'EM_ANDAMENTO') {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-6 text-center space-y-3">
-        <CheckCircle2 className="h-12 w-12 text-teal-600 mx-auto" />
-        <h2 className="text-xl font-bold text-slate-900 dark:text-white">Inventário Finalizado</h2>
+        <div className="p-4 rounded-full bg-amber-500/10 text-amber-600 border border-amber-500/20">
+          <AlertTriangle className="h-10 w-10 mx-auto" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white">Contagem Bloqueada</h2>
         <p className="text-sm text-slate-500 max-w-sm">
-          O inventário <strong>{inventory.name} ({inventory.code})</strong> já foi encerrado pelo gestor. Nenhuma nova contagem é permitida.
+          O inventário <strong>{inventory.name} ({inventory.code})</strong> encontra-se com o status <strong className="text-slate-800 dark:text-slate-200">'{inventory.status}'</strong>.
+        </p>
+        <p className="text-xs text-slate-400 max-w-sm">
+          Nenhuma nova contagem ou leitura de código de barras é permitida enquanto o inventário não estiver com o status 'Em Andamento'.
         </p>
       </div>
     );
@@ -1343,28 +1349,39 @@ export default function PublicOperatorPage() {
             </div>
 
             <div>
-              <h3 className="text-lg font-bold">Prateleira já Contada!</h3>
+              <h3 className="text-lg font-bold">Localização já Contada!</h3>
               <p className="text-xs text-slate-500 mt-1">
-                A prateleira <strong className="font-mono">{locationInput.toUpperCase()}</strong> já foi contada por <strong>{locationAuditWarning.last_operator_name}</strong> ({locationAuditWarning.total_scans_previous} peças).
+                A prateleira <strong className="font-mono">{locationInput.toUpperCase()}</strong> possui registros anteriores de <strong className="text-slate-800 dark:text-slate-200">{locationAuditWarning.last_operator_name}</strong> ({locationAuditWarning.total_scans_previous} peças).
               </p>
             </div>
 
-            <p className="text-xs text-purple-600 font-semibold bg-purple-50 dark:bg-purple-950/20 p-3 rounded-xl border border-purple-200 dark:border-purple-500/30">
-              Deseja abrir como <strong>Recontagem de Auditoria</strong>? As contagens ficarão isoladas para conferência pelo gestor.
+            <p className="text-xs text-slate-600 dark:text-slate-300 font-semibold bg-slate-100 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
+              Escolha como deseja proceder com esta localização:
             </p>
 
-            <div className="space-y-2 pt-2">
+            <div className="space-y-2 pt-1">
               <button
                 type="button"
-                onClick={() => startSession(locationInput.trim().toUpperCase(), true)}
-                className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-sm transition-colors"
+                onClick={() => startSession(locationInput.trim().toUpperCase(), false, 'continue')}
+                className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-sm transition-colors flex items-center justify-center gap-1.5"
               >
-                Sim, Abrir como Recontagem / Auditoria
+                <CheckCircle2 className="h-4 w-4" />
+                Continuar Contagem Existente
               </button>
+
+              <button
+                type="button"
+                onClick={() => startSession(locationInput.trim().toUpperCase(), true, 'recount')}
+                className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-sm transition-colors flex items-center justify-center gap-1.5"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Iniciar Nova Recontagem / Auditoria
+              </button>
+
               <button
                 type="button"
                 onClick={() => setLocationAuditWarning(null)}
-                className="w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-600 text-xs font-semibold hover:bg-slate-100 transition-colors"
+                className="w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-600 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
                 Voltar e Mudar Prateleira
               </button>

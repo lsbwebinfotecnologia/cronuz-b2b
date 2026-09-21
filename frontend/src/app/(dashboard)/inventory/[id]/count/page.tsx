@@ -323,7 +323,7 @@ export default function InventoryCountPage() {
   }
 
   // 4. Iniciar Sessão
-  async function startSession(loc: string, isAudit: boolean) {
+  async function startSession(loc: string, isAudit: boolean, mode?: 'continue' | 'recount') {
     const token = getToken();
     try {
       const res = await fetch(
@@ -336,7 +336,8 @@ export default function InventoryCountPage() {
           },
           body: JSON.stringify({
             location: loc,
-            is_audit: isAudit
+            is_audit: isAudit,
+            mode: mode
           })
         }
       );
@@ -350,7 +351,7 @@ export default function InventoryCountPage() {
       setSession(sessData);
       setSessionScannedCount(0);
       setLocationAuditWarning(null);
-      toast.success(`Sessão aberta na prateleira ${loc}!`);
+      toast.success(mode === 'continue' ? `Contagem de ${loc} continuada!` : `Sessão aberta na prateleira ${loc}!`);
     } catch (err: any) {
       toast.error(err.message || 'Erro ao iniciar contagem.');
     }
@@ -683,6 +684,28 @@ export default function InventoryCountPage() {
     }, 100);
   }
 
+  const [inventoryStatus, setInventoryStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadInventoryDetails() {
+      if (!companyId || !inventoryId) return;
+      try {
+        const token = getToken();
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/inventory/${inventoryId}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setInventoryStatus(data.status);
+        }
+      } catch (err) {
+        console.warn('Erro ao carregar detalhes do inventário:', err);
+      }
+    }
+    loadInventoryDetails();
+  }, [companyId, inventoryId]);
+
   // 6. Fechamento Obrigatório da Sessão
   async function handleCloseSession() {
     if (!session) return;
@@ -715,6 +738,29 @@ export default function InventoryCountPage() {
     } finally {
       setClosingSession(false);
     }
+  }
+
+  if (inventoryStatus && inventoryStatus !== 'EM_ANDAMENTO') {
+    return (
+      <div className="p-8 max-w-lg mx-auto text-center space-y-4 mt-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl">
+        <div className="p-4 rounded-2xl bg-amber-500/10 text-amber-600 w-fit mx-auto border border-amber-500/20">
+          <AlertTriangle className="h-10 w-10" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+          Contagem Bloqueada
+        </h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          Este inventário se encontra com o status <strong className="text-slate-800 dark:text-slate-200">'{inventoryStatus}'</strong> e não permite a abertura de sessões ou bipagens de novos itens.
+        </p>
+        <Link
+          href={`/inventory/${inventoryId}`}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-teal-600 text-white text-xs font-bold shadow-sm hover:bg-teal-700 transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Voltar para o Painel do Inventário
+        </Link>
+      </div>
+    );
   }
 
   return (
@@ -1264,25 +1310,36 @@ export default function InventoryCountPage() {
 
             <div>
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                Prateleira já Contada!
+                Localização já Contada!
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                A prateleira <strong className="text-slate-800 dark:text-slate-200 font-mono">{locationInput.toUpperCase()}</strong> já foi contada anteriormente por <strong className="text-slate-800 dark:text-slate-200">{locationAuditWarning.last_operator_name}</strong> ({locationAuditWarning.total_scans_previous} peças).
+                A prateleira <strong className="text-slate-800 dark:text-slate-200 font-mono">{locationInput.toUpperCase()}</strong> possui registros anteriores de <strong className="text-slate-800 dark:text-slate-200">{locationAuditWarning.last_operator_name}</strong> ({locationAuditWarning.total_scans_previous} peças).
               </p>
             </div>
 
-            <p className="text-xs text-purple-600 dark:text-purple-400 font-semibold bg-purple-50 dark:bg-purple-950/20 p-3 rounded-xl border border-purple-200 dark:border-purple-500/30">
-              Deseja abrir como <strong>Contagem de Auditoria / Recontagem</strong>? O sistema manterá os saldos isolados sem duplicar para conferência do gestor.
+            <p className="text-xs text-slate-600 dark:text-slate-300 font-semibold bg-slate-100 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
+              Escolha como deseja proceder com esta localização:
             </p>
 
-            <div className="space-y-2 pt-2">
+            <div className="space-y-2 pt-1">
               <button
                 type="button"
-                onClick={() => startSession(locationInput.trim().toUpperCase(), true)}
-                className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-sm transition-colors"
+                onClick={() => startSession(locationInput.trim().toUpperCase(), false, 'continue')}
+                className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-sm transition-colors flex items-center justify-center gap-1.5"
               >
-                Sim, Abrir como Recontagem / Auditoria
+                <CheckCircle2 className="h-4 w-4" />
+                Continuar Contagem Existente
               </button>
+
+              <button
+                type="button"
+                onClick={() => startSession(locationInput.trim().toUpperCase(), true, 'recount')}
+                className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-sm transition-colors flex items-center justify-center gap-1.5"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Iniciar Nova Recontagem / Auditoria
+              </button>
+
               <button
                 type="button"
                 onClick={() => setLocationAuditWarning(null)}

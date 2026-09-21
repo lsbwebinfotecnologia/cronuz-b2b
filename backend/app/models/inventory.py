@@ -6,6 +6,7 @@ import enum
 
 class InventoryStatus(str, enum.Enum):
     EM_ANDAMENTO = "EM_ANDAMENTO"
+    AUDITANDO = "AUDITANDO"
     FINALIZADO = "FINALIZADO"
     CANCELADO = "CANCELADO"
 

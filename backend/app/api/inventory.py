@@ -11,7 +11,7 @@ from sqlalchemy import func, text, desc, case
 import openpyxl
 
 from app.db.session import get_db
-from app.core import dependencies
+from app.core import dependencies, security
 from app.models import user as user_models
 from app.models.company import Company
 from app.models.inventory import (
@@ -274,10 +274,10 @@ async def upload_inventory_sheet(
     if not inv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
     
-    if inv.status == InventoryStatus.FINALIZADO.value:
+    if inv.status != InventoryStatus.EM_ANDAMENTO.value:
         raise HTTPException(
             status_code=status.HTTP_423_LOCKED,
-            detail="Inventário finalizado. Não é permitido carregar novos itens."
+            detail=f"Operação bloqueada. O inventário não está em andamento (Status atual: '{inv.status}')."
         )
     
     filename = file.filename.lower()
@@ -547,7 +547,10 @@ def open_session(
     if not inv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
     if inv.status != InventoryStatus.EM_ANDAMENTO.value:
-        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="Inventário não está em andamento.")
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"Contagem bloqueada. O inventário não está em andamento (Status atual: '{inv.status}')."
+        )
     
     clean_loc = payload.location.strip().upper()
     if not clean_loc:
@@ -562,6 +565,32 @@ def open_session(
         )
         .all()
     )
+
+    # Se o operador solicitou "continuar" contagem na prateleira existente
+    if payload.mode == "continue" and existing_sessions:
+        last_sess = max(existing_sessions, key=lambda s: s.id)
+        last_sess.status = SessionStatus.ABERTA.value
+        last_sess.closed_at = None
+        if payload.operator_name:
+            last_sess.operator_name = payload.operator_name
+        db.commit()
+        db.refresh(last_sess)
+        return inv_schemas.InventorySessionResponse(
+            id=last_sess.id,
+            inventory_id=last_sess.inventory_id,
+            company_id=last_sess.company_id,
+            user_id=last_sess.user_id,
+            user_name=current_user.name,
+            operator_name=last_sess.operator_name,
+            location=last_sess.location,
+            session_type=last_sess.session_type,
+            round_number=last_sess.round_number,
+            status=last_sess.status,
+            total_scans=last_sess.total_scans,
+            started_at=last_sess.started_at,
+            closed_at=last_sess.closed_at,
+        )
+
     session_type = SessionType.CONTAGEM.value
     round_number = 1
     if existing_sessions:
@@ -612,8 +641,13 @@ def sync_scans_batch(
 ):
     _assert_inventory_access(current_user, company_id, db)
     inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
-    if not inv or inv.status != InventoryStatus.EM_ANDAMENTO.value:
-        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="Inventário finalizado ou inexistente.")
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    if inv.status != InventoryStatus.EM_ANDAMENTO.value:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"Gravação de bips bloqueada. O inventário não está em andamento (Status atual: '{inv.status}')."
+        )
     
     sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inventory_id).first()
     if not sess:
@@ -781,6 +815,81 @@ def finalize_inventory(
     )
 
 
+@router.put("/{inventory_id}/status")
+def update_inventory_status(
+    company_id: int,
+    inventory_id: int,
+    payload: inv_schemas.InventoryStatusUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    
+    # 1. Verificação OBRIGATÓRIA da senha do usuário seller logado
+    if not payload.password or not security.verify_password(payload.password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Senha de usuário incorreta. Operação de alteração de status cancelada."
+        )
+    
+    new_status = payload.status.strip().upper()
+    valid_statuses = [s.value for s in InventoryStatus]
+    if new_status not in valid_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Status '{payload.status}' é inválido. Escolha entre: {', '.join(valid_statuses)}."
+        )
+    
+    inv.status = new_status
+    
+    # 2. Se for alterado para FINALIZADO ou CANCELADO, encerra automaticamente sessões em aberto
+    if new_status in [InventoryStatus.FINALIZADO.value, InventoryStatus.CANCELADO.value]:
+        open_sessions = (
+            db.query(InventorySession)
+            .filter(InventorySession.inventory_id == inventory_id, InventorySession.status == SessionStatus.ABERTA.value)
+            .all()
+        )
+        for s in open_sessions:
+            s.status = SessionStatus.CONCLUIDA.value if new_status == InventoryStatus.FINALIZADO.value else SessionStatus.CANCELADA.value
+            s.closed_at = func.now()
+            
+        if new_status == InventoryStatus.FINALIZADO.value:
+            inv.finalized_by_user_id = current_user.id
+            inv.finalized_at = func.now()
+            
+    db.commit()
+    db.refresh(inv)
+    
+    total_scanned = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.inventory_id == inv.id).scalar()
+    total_sessions = db.query(func.count(InventorySession.id)).filter(InventorySession.inventory_id == inv.id).scalar()
+    open_count = db.query(func.count(InventorySession.id)).filter(InventorySession.inventory_id == inv.id, InventorySession.status == SessionStatus.ABERTA.value).scalar()
+    
+    return inv_schemas.InventoryResponse(
+        id=inv.id,
+        company_id=inv.company_id,
+        code=inv.code,
+        name=inv.name,
+        status=inv.status,
+        description=inv.description,
+        total_expected_skus=inv.total_expected_skus,
+        total_scanned_items=int(total_scanned or 0),
+        total_sessions=int(total_sessions or 0),
+        open_sessions=int(open_count or 0),
+        access_token=inv.access_token,
+        is_public_access_enabled=inv.is_public_access_enabled,
+        supervisor_pin=inv.supervisor_pin,
+        created_by_user_id=inv.created_by_user_id,
+        finalized_by_user_id=inv.finalized_by_user_id,
+        finalized_at=inv.finalized_at,
+        created_at=inv.created_at,
+        updated_at=inv.updated_at,
+    )
+
+
 @router.get("/{inventory_id}/sessions-list")
 def list_inventory_sessions(
     company_id: int,
@@ -840,7 +949,7 @@ def get_discrepancies(
             SUM(sc.quantity) as qty
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
-        WHERE sc.inventory_id = :inv_id
+        WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
         GROUP BY s.location, s.round_number, sc.isbn
     """)
     rows = db.execute(query, {"inv_id": inventory_id}).fetchall()
@@ -881,6 +990,78 @@ def get_discrepancies(
         ))
         
     return sorted(results, key=lambda x: (x.location, x.isbn))
+
+
+@router.get("/{inventory_id}/sku-summary", response_model=List[inv_schemas.SkuSummaryResponse])
+def get_sku_summary(
+    company_id: int,
+    inventory_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    
+    query_loc_scans = text("""
+        SELECT 
+            s.location,
+            sc.isbn,
+            SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
+            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2
+        FROM inv_inventory_scan sc
+        JOIN inv_inventory_session s ON sc.session_id = s.id
+        WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
+        GROUP BY s.location, sc.isbn
+    """)
+    loc_rows = db.execute(query_loc_scans, {"inv_id": inventory_id}).fetchall()
+    
+    isbn_locs = {}
+    isbn_c1 = {}
+    isbn_c2 = {}
+    isbn_validated = {}
+    
+    for r in loc_rows:
+        loc, isbn, c1, c2 = r[0], r[1], int(r[2]), int(r[3])
+        val_loc = c2 if c2 > 0 else c1
+        
+        if isbn not in isbn_locs:
+            isbn_locs[isbn] = []
+            isbn_c1[isbn] = 0
+            isbn_c2[isbn] = 0
+            isbn_validated[isbn] = 0
+            
+        isbn_locs[isbn].append(loc)
+        isbn_c1[isbn] += c1
+        isbn_c2[isbn] += c2
+        isbn_validated[isbn] += val_loc
+
+    items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).all()
+    items_map = {it.isbn: it for it in items}
+    
+    all_isbns = set(items_map.keys()).union(set(isbn_validated.keys()))
+    
+    results = []
+    for isbn in all_isbns:
+        it = items_map.get(isbn)
+        c1 = isbn_c1.get(isbn, 0)
+        c2 = isbn_c2.get(isbn, 0)
+        val_qty = isbn_validated.get(isbn, 0)
+        locs = sorted(list(set(isbn_locs.get(isbn, []))))
+        has_div = (c2 > 0 and c1 != c2)
+        
+        results.append(inv_schemas.SkuSummaryResponse(
+            isbn=isbn,
+            title=it.title if it else f"Item {isbn}",
+            publisher=it.publisher if it else None,
+            category=it.category if it else None,
+            default_location=it.default_location if it else None,
+            locations_list=locs,
+            total_count_1=c1,
+            total_count_2=c2,
+            total_validated_qty=val_qty,
+            has_divergence=has_div
+        ))
+        
+    return sorted(results, key=lambda x: x.title)
 
 
 @router.post("/{inventory_id}/audit-adjust")
@@ -1008,7 +1189,7 @@ def export_inventory_excel(
             SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
-        WHERE sc.inventory_id = :inv_id
+        WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
         GROUP BY s.location, sc.isbn
     """)
     loc_rows = db.execute(query_loc_scans, {"inv_id": inventory_id}).fetchall()
@@ -1056,7 +1237,7 @@ def export_inventory_excel(
             SUM(sc.quantity) as total_scanned
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
-        WHERE sc.inventory_id = :inv_id
+        WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
         GROUP BY sc.isbn
     """)
     scan_rows = {r[0]: (int(r[1]), int(r[2]), int(r[3])) for r in db.execute(query_isbn, {"inv_id": inventory_id}).fetchall()}
@@ -1224,7 +1405,7 @@ def open_public_session(access_token: str, payload: inv_schemas.PublicSessionCre
     if inv.status != InventoryStatus.EM_ANDAMENTO.value:
         raise HTTPException(
             status_code=status.HTTP_423_LOCKED,
-            detail="Inventário finalizado. Nenhuma nova contagem pode ser iniciada."
+            detail=f"Contagem bloqueada. O inventário não está em andamento (Status atual: '{inv.status}')."
         )
     clean_loc = payload.location.strip().upper()
     clean_op = payload.operator_name.strip()
@@ -1242,6 +1423,31 @@ def open_public_session(access_token: str, payload: inv_schemas.PublicSessionCre
         )
         .all()
     )
+
+    if payload.mode == "continue" and existing_sessions:
+        last_sess = max(existing_sessions, key=lambda s: s.id)
+        last_sess.status = SessionStatus.ABERTA.value
+        last_sess.closed_at = None
+        if clean_op:
+            last_sess.operator_name = clean_op
+        db.commit()
+        db.refresh(last_sess)
+        return inv_schemas.InventorySessionResponse(
+            id=last_sess.id,
+            inventory_id=last_sess.inventory_id,
+            company_id=last_sess.company_id,
+            user_id=None,
+            user_name=clean_op,
+            operator_name=last_sess.operator_name,
+            location=last_sess.location,
+            session_type=last_sess.session_type,
+            round_number=last_sess.round_number,
+            status=last_sess.status,
+            total_scans=last_sess.total_scans,
+            started_at=last_sess.started_at,
+            closed_at=last_sess.closed_at,
+        )
+
     session_type = SessionType.CONTAGEM.value
     round_number = 1
     if existing_sessions:
@@ -1287,7 +1493,7 @@ def sync_public_scans_batch(access_token: str, session_id: int, payload: inv_sch
     if inv.status != InventoryStatus.EM_ANDAMENTO.value:
         raise HTTPException(
             status_code=status.HTTP_423_LOCKED,
-            detail="Inventário finalizado. Não é permitida a gravação de novos bips."
+            detail=f"Gravação de bips bloqueada. O inventário não está em andamento (Status atual: '{inv.status}')."
         )
     sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inv.id).first()
     if not sess:

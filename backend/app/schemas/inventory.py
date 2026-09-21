@@ -5,6 +5,7 @@ from enum import Enum
 
 class InventoryStatusEnum(str, Enum):
     EM_ANDAMENTO = "EM_ANDAMENTO"
+    AUDITANDO = "AUDITANDO"
     FINALIZADO = "FINALIZADO"
     CANCELADO = "CANCELADO"
 
@@ -91,11 +92,13 @@ class InventorySessionCreate(BaseModel):
     location: str
     operator_name: Optional[str] = None
     is_audit: Optional[bool] = False
+    mode: Optional[str] = None  # "continue" or "recount"
 
 class PublicSessionCreate(BaseModel):
     location: str
     operator_name: str
     is_audit: Optional[bool] = False
+    mode: Optional[str] = None  # "continue" or "recount"
 
 class PublicInventoryInfo(BaseModel):
     id: int
@@ -132,7 +135,7 @@ class LocationCheckResponse(BaseModel):
     last_operator_name: Optional[str] = None
     last_operator_id: Optional[int] = None
     last_counted_at: Optional[datetime] = None
-    total_scans_previous: Optional[int] = 0
+    total_scans_previous: int = 0
     session_id: Optional[int] = None
 
 # --- Scan Schemas ---
@@ -167,6 +170,19 @@ class DiscrepancyItemResponse(BaseModel):
     difference: int = 0
     has_divergence: bool = False
     validated_qty: int = 0
+    operator_name: Optional[str] = None
+
+class SkuSummaryResponse(BaseModel):
+    isbn: str
+    title: str
+    publisher: Optional[str] = None
+    category: Optional[str] = None
+    default_location: Optional[str] = None
+    locations_list: List[str] = []
+    total_count_1: int = 0
+    total_count_2: int = 0
+    total_validated_qty: int = 0
+    has_divergence: bool = False
 
 class AuditAdjustmentRequest(BaseModel):
     pin: str
@@ -179,4 +195,9 @@ class InventoryItemUpdateRequest(BaseModel):
     title: Optional[str] = None
     publisher: Optional[str] = None
     category: Optional[str] = None
+
+class InventoryStatusUpdateRequest(BaseModel):
+    status: str
+    password: str
+
 

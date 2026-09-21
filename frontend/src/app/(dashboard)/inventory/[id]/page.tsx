@@ -27,7 +27,10 @@ import {
   ExternalLink,
   ShieldCheck,
   Pencil,
-  Edit3
+  Edit3,
+  Ban,
+  Sliders,
+  MapPin
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -37,7 +40,7 @@ interface InventoryDetail {
   company_id: number;
   code: string;
   name: string;
-  status: 'EM_ANDAMENTO' | 'FINALIZADO' | 'CANCELADO';
+  status: 'EM_ANDAMENTO' | 'AUDITANDO' | 'FINALIZADO' | 'CANCELADO';
   description?: string;
   supervisor_pin?: string;
   total_expected_skus: number;
@@ -74,6 +77,20 @@ interface DiscrepancyItem {
   difference: number;
   has_divergence: boolean;
   validated_qty: number;
+  operator_name?: string;
+}
+
+interface SkuSummaryItem {
+  isbn: string;
+  title: string;
+  publisher?: string;
+  category?: string;
+  default_location?: string;
+  locations_list: string[];
+  total_count_1: number;
+  total_count_2: number;
+  total_validated_qty: number;
+  has_divergence: boolean;
 }
 
 export default function InventoryDetailPage() {
@@ -86,6 +103,8 @@ export default function InventoryDetailPage() {
   const [inventory, setInventory] = useState<InventoryDetail | null>(null);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [discrepancies, setDiscrepancies] = useState<DiscrepancyItem[]>([]);
+  const [skuSummaries, setSkuSummaries] = useState<SkuSummaryItem[]>([]);
+  const [auditSubTab, setAuditSubTab] = useState<'sku_summary' | 'location_detail'>('sku_summary');
   const [activeTab, setActiveTab] = useState<'sessions' | 'discrepancies' | 'upload'>('sessions');
   const [loading, setLoading] = useState(true);
   const [finalizing, setFinalizing] = useState(false);
@@ -94,6 +113,12 @@ export default function InventoryDetailPage() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [regeneratingToken, setRegeneratingToken] = useState(false);
+
+  // Modal de Status / Cancelamento com Senha de Usuário Seller
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [targetStatus, setTargetStatus] = useState<'EM_ANDAMENTO' | 'AUDITANDO' | 'FINALIZADO' | 'CANCELADO'>('EM_ANDAMENTO');
+  const [sellerPassword, setSellerPassword] = useState('');
+  const [submittingStatusChange, setSubmittingStatusChange] = useState(false);
 
   // Upload adicional
   const [extraFile, setExtraFile] = useState<File | null>(null);
@@ -169,15 +194,17 @@ export default function InventoryDetailPage() {
       const headers = { Authorization: `Bearer ${token}` };
       const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-      const [invRes, sessRes, divRes] = await Promise.all([
+      const [invRes, sessRes, divRes, skuRes] = await Promise.all([
         fetch(`${baseUrl}/companies/${companyId}/inventory/${inventoryId}`, { headers }),
         fetch(`${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions-list`, { headers }),
         fetch(`${baseUrl}/companies/${companyId}/inventory/${inventoryId}/discrepancies`, { headers }),
+        fetch(`${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sku-summary`, { headers }),
       ]);
 
       if (invRes.ok) setInventory(await invRes.json());
       if (sessRes.ok) setSessions(await sessRes.json());
       if (divRes.ok) setDiscrepancies(await divRes.json());
+      if (skuRes.ok) setSkuSummaries(await skuRes.json());
     } catch (err) {
       toast.error('Erro ao carregar dados do inventário.');
     } finally {
@@ -188,6 +215,48 @@ export default function InventoryDetailPage() {
   useEffect(() => {
     loadData();
   }, [companyId, inventoryId]);
+
+  async function handleUpdateStatus(e: React.FormEvent) {
+    e.preventDefault();
+    if (!companyId || !inventoryId) return;
+    if (!sellerPassword.trim()) {
+      toast.error('Digite a sua senha de usuário logado para confirmar.');
+      return;
+    }
+    setSubmittingStatusChange(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/inventory/${inventoryId}/status`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            status: targetStatus,
+            password: sellerPassword.trim()
+          })
+        }
+      );
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Erro ao alterar status.');
+      }
+
+      const data = await res.json();
+      toast.success(data.message || 'Status do inventário alterado com sucesso!');
+      setShowStatusModal(false);
+      setSellerPassword('');
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao alterar status.');
+    } finally {
+      setSubmittingStatusChange(false);
+    }
+  }
 
   async function handleFinalize() {
     if (!companyId || !inventoryId) return;
@@ -407,12 +476,16 @@ export default function InventoryDetailPage() {
               {inventory.code}
             </span>
             <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-              isEmAndamento 
+              inventory.status === 'EM_ANDAMENTO' 
                 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                : inventory.status === 'AUDITANDO'
+                ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                : inventory.status === 'CANCELADO'
+                ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
             }`}>
-              {isEmAndamento && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
-              {inventory.status === 'EM_ANDAMENTO' ? 'Em Andamento' : 'Finalizado'}
+              {inventory.status === 'EM_ANDAMENTO' && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
+              {inventory.status === 'EM_ANDAMENTO' ? 'Em Andamento' : inventory.status === 'AUDITANDO' ? 'Auditando' : inventory.status === 'CANCELADO' ? 'Cancelado' : 'Finalizado'}
             </span>
             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20" title="Senha de Supervisor para manutenções na contagem">
               <ShieldCheck className="h-3.5 w-3.5" />
@@ -450,6 +523,18 @@ export default function InventoryDetailPage() {
             Exportar Excel
           </button>
 
+          <button
+            onClick={() => {
+              setTargetStatus(inventory.status);
+              setSellerPassword('');
+              setShowStatusModal(true);
+            }}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-sm font-semibold shadow-sm transition-colors"
+          >
+            <Sliders className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            Alterar Status / Cancelar
+          </button>
+
           {isEmAndamento ? (
             <>
               {inventory.access_token && (
@@ -469,19 +554,11 @@ export default function InventoryDetailPage() {
                 <ScanBarcode className="h-4 w-4" />
                 Iniciar Bipagem / Contagem
               </Link>
-
-              <button
-                onClick={() => setShowFinalizeModal(true)}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-rose-600/10 hover:bg-rose-600/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 text-sm font-semibold transition-colors"
-              >
-                <Lock className="h-4 w-4" />
-                Finalizar Inventário
-              </button>
             </>
           ) : (
-            <div className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 text-xs font-medium">
+            <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 text-xs font-semibold border border-slate-200 dark:border-slate-700">
               <Lock className="h-3.5 w-3.5" />
-              Inventário Bloqueado (Read-Only)
+              Contagem Bloqueada ({inventory.status})
             </div>
           )}
         </div>
@@ -639,14 +716,15 @@ export default function InventoryDetailPage() {
 
       {/* Conteúdo da Tab 2: Auditoria & Divergências */}
       {activeTab === 'discrepancies' && (
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden space-y-4 p-4">
+          {/* Header da Aba Auditoria */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
             <div>
               <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
                 Auditoria, Saldos Validados e Manutenção
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                Validação de saldos por prateleira e ajustamento de quantidades com PIN de supervisor.
+                Alterne entre o Saldo Validado Consolidado por SKU (Geral da Loja) e o Detalhamento por Prateleira.
               </p>
             </div>
 
@@ -677,131 +755,257 @@ export default function InventoryDetailPage() {
             </div>
           </div>
 
-          {discrepancies.length === 0 ? (
-            <div className="p-12 text-center text-slate-500 text-sm">
-              Nenhum item bipado ou auditado até o momento.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
-                  <tr>
-                    <th className="px-4 py-3">Localização</th>
-                    <th className="px-4 py-3">ISBN / Código</th>
-                    <th className="px-4 py-3">Título / Marca</th>
-                    <th className="px-4 py-3 text-center">1ª Contagem</th>
-                    <th className="px-4 py-3 text-center">Recontagem</th>
-                    <th className="px-4 py-3 text-center">Saldo Validado</th>
-                    <th className="px-4 py-3 text-center">Divergência</th>
-                    <th className="px-4 py-3">Situação</th>
-                    <th className="px-4 py-3 text-right">Manutenção</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {discrepancies
-                    .filter(d => {
-                      if (onlyDivergent && !d.has_divergence) return false;
-                      if (!searchQuery) return true;
-                      const q = searchQuery.toLowerCase();
-                      return (
-                        d.isbn.toLowerCase().includes(q) ||
-                        d.location.toLowerCase().includes(q) ||
-                        d.title.toLowerCase().includes(q) ||
-                        (d.publisher && d.publisher.toLowerCase().includes(q))
-                      );
-                    })
-                    .map((d, i) => (
-                      <tr key={i} className={`hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors ${
-                        d.has_divergence ? 'bg-amber-50/30 dark:bg-amber-950/10' : ''
-                      }`}>
-                        <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
-                          {d.location}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">
-                          {d.isbn}
-                        </td>
-                        <td className="px-4 py-3 text-slate-800 dark:text-slate-200 max-w-xs">
-                          <div className="truncate font-medium" title={d.title}>{d.title}</div>
-                          <div className="text-xs text-slate-400">{d.publisher || d.category || 'Sem marca'}</div>
-                        </td>
-                        <td className="px-4 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">
-                          {d.count_1_qty}
-                        </td>
-                        <td className="px-4 py-3 text-center font-semibold text-purple-600 dark:text-purple-400">
-                          {d.count_2_qty > 0 ? d.count_2_qty : '-'}
-                        </td>
-                        <td className="px-4 py-3 text-center font-bold text-teal-600 dark:text-teal-400 bg-teal-500/5">
-                          {d.validated_qty}
-                        </td>
-                        <td className="px-4 py-3 text-center font-bold">
-                          <span className={`px-2 py-0.5 rounded-md text-xs ${
-                            d.difference === 0
-                              ? 'text-slate-500'
-                              : d.difference > 0
-                              ? 'bg-amber-500/10 text-amber-600'
-                              : 'bg-rose-500/10 text-rose-600'
-                          }`}>
-                            {d.difference > 0 ? `+${d.difference}` : d.difference}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          {d.has_divergence ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600 dark:text-amber-400">
-                              <AlertTriangle className="h-3.5 w-3.5" />
-                              Divergente
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              Validado
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            {/* Botão de Ajuste de Quantidade (PIN Supervisor) */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAdjustItem({
-                                  location: d.location,
-                                  isbn: d.isbn,
-                                  title: d.title,
-                                  round_number: d.count_2_qty > 0 ? 2 : 1,
-                                  current_qty: d.validated_qty
-                                });
-                                setAdjustNewQty(d.validated_qty);
-                                setAdjustPin('');
-                              }}
-                              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-teal-50 dark:hover:bg-teal-950/30 text-slate-600 hover:text-teal-600 dark:text-slate-400 transition-colors"
-                              title="Ajustar quantidade contada (Requer PIN de Supervisor)"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
+          {/* Sub-abas de Auditoria */}
+          <div className="flex border-b border-slate-200 dark:border-slate-800 gap-4 text-xs font-bold">
+            <button
+              type="button"
+              onClick={() => setAuditSubTab('sku_summary')}
+              className={`pb-2.5 border-b-2 transition-colors flex items-center gap-1.5 ${
+                auditSubTab === 'sku_summary'
+                  ? 'border-teal-600 text-teal-600 dark:text-teal-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+              }`}
+            >
+              <Boxes className="h-3.5 w-3.5" />
+              Saldos Validados por SKU (Consolidado Geral)
+            </button>
 
-                            {/* Botão de Edição de Dados do Produto */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditProductItem({
-                                  isbn: d.isbn,
-                                  title: d.title,
-                                  publisher: d.publisher || ''
-                                });
-                                setEditTitle(d.title);
-                                setEditPublisher(d.publisher || '');
-                              }}
-                              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-blue-50 dark:hover:bg-blue-950/30 text-slate-600 hover:text-blue-600 dark:text-slate-400 transition-colors"
-                              title="Editar título e editora/marca do produto"
-                            >
-                              <Edit3 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </td>
+            <button
+              type="button"
+              onClick={() => setAuditSubTab('location_detail')}
+              className={`pb-2.5 border-b-2 transition-colors flex items-center gap-1.5 ${
+                auditSubTab === 'location_detail'
+                  ? 'border-teal-600 text-teal-600 dark:text-teal-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+              }`}
+            >
+              <MapPin className="h-3.5 w-3.5" />
+              Detalhamento por Prateleira ({discrepancies.length})
+            </button>
+          </div>
+
+          {/* VISÃO 1: Consolidado Geral por SKU (Saldos Validados Excel Sheet 1) */}
+          {auditSubTab === 'sku_summary' && (
+            <div>
+              {skuSummaries.length === 0 ? (
+                <div className="p-12 text-center text-slate-500 text-sm">
+                  Nenhum item contabilizado para consolidação de SKU.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
+                      <tr>
+                        <th className="px-4 py-3">ISBN / Código</th>
+                        <th className="px-4 py-3">Título / Marca</th>
+                        <th className="px-4 py-3">Prateleiras Onde Foi Contado</th>
+                        <th className="px-4 py-3 text-center">1ª Contagem Total</th>
+                        <th className="px-4 py-3 text-center">Recontagem Total</th>
+                        <th className="px-4 py-3 text-center bg-teal-500/10 text-teal-700 dark:text-teal-300">
+                          Saldo Validado Final
+                        </th>
+                        <th className="px-4 py-3">Situação</th>
                       </tr>
-                    ))}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {skuSummaries
+                        .filter(s => {
+                          if (onlyDivergent && !s.has_divergence) return false;
+                          if (!searchQuery) return true;
+                          const q = searchQuery.toLowerCase();
+                          return (
+                            s.isbn.toLowerCase().includes(q) ||
+                            s.title.toLowerCase().includes(q) ||
+                            (s.publisher && s.publisher.toLowerCase().includes(q)) ||
+                            s.locations_list.some(l => l.toLowerCase().includes(q))
+                          );
+                        })
+                        .map((s, i) => (
+                          <tr key={i} className={`hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors ${
+                            s.has_divergence ? 'bg-amber-50/30 dark:bg-amber-950/10' : ''
+                          }`}>
+                            <td className="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300 font-bold">
+                              {s.isbn}
+                            </td>
+                            <td className="px-4 py-3 text-slate-800 dark:text-slate-200 max-w-xs">
+                              <div className="truncate font-medium" title={s.title}>{s.title}</div>
+                              <div className="text-xs text-slate-400">{s.publisher || s.category || 'Sem marca'}</div>
+                            </td>
+                            <td className="px-4 py-3 max-w-xs">
+                              <div className="flex flex-wrap gap-1">
+                                {s.locations_list.map((loc, idx) => (
+                                  <span key={idx} className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                    {loc}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">
+                              {s.total_count_1}
+                            </td>
+                            <td className="px-4 py-3 text-center font-semibold text-purple-600 dark:text-purple-400">
+                              {s.total_count_2 > 0 ? s.total_count_2 : '-'}
+                            </td>
+                            <td className="px-4 py-3 text-center font-black text-teal-600 dark:text-teal-400 text-base bg-teal-500/5">
+                              {s.total_validated_qty} un
+                            </td>
+                            <td className="px-4 py-3">
+                              {s.has_divergence ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600 dark:text-amber-400">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  Divergente
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  Validado
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* VISÃO 2: Detalhamento por Prateleira com Coluna de Operador */}
+          {auditSubTab === 'location_detail' && (
+            <div>
+              {discrepancies.length === 0 ? (
+                <div className="p-12 text-center text-slate-500 text-sm">
+                  Nenhum item bipado ou auditado até o momento.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
+                      <tr>
+                        <th className="px-4 py-3">Localização</th>
+                        <th className="px-4 py-3">Operador(es)</th>
+                        <th className="px-4 py-3">ISBN / Código</th>
+                        <th className="px-4 py-3">Título / Marca</th>
+                        <th className="px-4 py-3 text-center">1ª Contagem</th>
+                        <th className="px-4 py-3 text-center">Recontagem</th>
+                        <th className="px-4 py-3 text-center">Saldo Validado</th>
+                        <th className="px-4 py-3 text-center">Divergência</th>
+                        <th className="px-4 py-3">Situação</th>
+                        <th className="px-4 py-3 text-right">Manutenção</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {discrepancies
+                        .filter(d => {
+                          if (onlyDivergent && !d.has_divergence) return false;
+                          if (!searchQuery) return true;
+                          const q = searchQuery.toLowerCase();
+                          return (
+                            d.isbn.toLowerCase().includes(q) ||
+                            d.location.toLowerCase().includes(q) ||
+                            d.title.toLowerCase().includes(q) ||
+                            (d.operator_name && d.operator_name.toLowerCase().includes(q)) ||
+                            (d.publisher && d.publisher.toLowerCase().includes(q))
+                          );
+                        })
+                        .map((d, i) => (
+                          <tr key={i} className={`hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors ${
+                            d.has_divergence ? 'bg-amber-50/30 dark:bg-amber-950/10' : ''
+                          }`}>
+                            <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
+                              {d.location}
+                            </td>
+                            <td className="px-4 py-3 text-slate-700 dark:text-slate-300 text-xs font-semibold">
+                              {d.operator_name || '-'}
+                            </td>
+                            <td className="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">
+                              {d.isbn}
+                            </td>
+                            <td className="px-4 py-3 text-slate-800 dark:text-slate-200 max-w-xs">
+                              <div className="truncate font-medium" title={d.title}>{d.title}</div>
+                              <div className="text-xs text-slate-400">{d.publisher || d.category || 'Sem marca'}</div>
+                            </td>
+                            <td className="px-4 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">
+                              {d.count_1_qty}
+                            </td>
+                            <td className="px-4 py-3 text-center font-semibold text-purple-600 dark:text-purple-400">
+                              {d.count_2_qty > 0 ? d.count_2_qty : '-'}
+                            </td>
+                            <td className="px-4 py-3 text-center font-bold text-teal-600 dark:text-teal-400 bg-teal-500/5">
+                              {d.validated_qty}
+                            </td>
+                            <td className="px-4 py-3 text-center font-bold">
+                              <span className={`px-2 py-0.5 rounded-md text-xs ${
+                                d.difference === 0
+                                  ? 'text-slate-500'
+                                  : d.difference > 0
+                                  ? 'bg-amber-500/10 text-amber-600'
+                                  : 'bg-rose-500/10 text-rose-600'
+                              }`}>
+                                {d.difference > 0 ? `+${d.difference}` : d.difference}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              {d.has_divergence ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600 dark:text-amber-400">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  Divergente
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  Validado
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {/* Botão de Ajuste de Quantidade (PIN Supervisor) */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAdjustItem({
+                                      location: d.location,
+                                      isbn: d.isbn,
+                                      title: d.title,
+                                      round_number: d.count_2_qty > 0 ? 2 : 1,
+                                      current_qty: d.validated_qty
+                                    });
+                                    setAdjustNewQty(d.validated_qty);
+                                    setAdjustPin('');
+                                  }}
+                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-teal-50 dark:hover:bg-teal-950/30 text-slate-600 hover:text-teal-600 dark:text-slate-400 transition-colors"
+                                  title="Ajustar quantidade contada (Requer PIN de Supervisor)"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+
+                                {/* Botão de Edição de Dados do Produto */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditProductItem({
+                                      isbn: d.isbn,
+                                      title: d.title,
+                                      publisher: d.publisher || ''
+                                    });
+                                    setEditTitle(d.title);
+                                    setEditPublisher(d.publisher || '');
+                                  }}
+                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-blue-50 dark:hover:bg-blue-950/30 text-slate-600 hover:text-blue-600 dark:text-slate-400 transition-colors"
+                                  title="Editar título e editora/marca do produto"
+                                >
+                                  <Edit3 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1051,6 +1255,111 @@ export default function InventoryDetailPage() {
                 Confirmar e Travar Inventário
               </button>
             </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal de Alteração de Status / Cancelamento com Senha de Usuário Seller */}
+      {showStatusModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl max-w-md w-full p-6 space-y-5"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600">
+                  <Sliders className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                    Alterar Status do Inventário
+                  </h3>
+                  <p className="text-xs text-slate-500">Exige confirmação por senha de usuário</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowStatusModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateStatus} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                  Selecione o Novo Status:
+                </label>
+                <div className="space-y-2">
+                  {[
+                    { id: 'EM_ANDAMENTO', label: '🟢 Em Andamento', desc: 'Permite iniciar sessões e registrar bips' },
+                    { id: 'AUDITANDO', label: '🟡 Auditando', desc: 'Bloqueia bipagem para conferência e auditoria' },
+                    { id: 'FINALIZADO', label: '🔒 Finalizado', desc: 'Encerra o inventário e trava bipagens' },
+                    { id: 'CANCELADO', label: '🔴 Cancelado', desc: 'Cancela o inventário e rejeita bipagens' }
+                  ].map((st) => (
+                    <label
+                      key={st.id}
+                      className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                        targetStatus === st.id
+                          ? 'border-teal-500 bg-teal-500/5 dark:bg-teal-500/10'
+                          : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="status_option"
+                        value={st.id}
+                        checked={targetStatus === st.id}
+                        onChange={() => setTargetStatus(st.id as any)}
+                        className="mt-0.5 text-teal-600 focus:ring-teal-500"
+                      />
+                      <div>
+                        <span className="text-xs font-bold text-slate-900 dark:text-white block">{st.label}</span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">{st.desc}</span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Sua Senha de Usuário Seller Logado:
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Digite sua senha de login"
+                  value={sellerPassword}
+                  onChange={(e) => setSellerPassword(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Confirmação obrigatória para segurança do sistema.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowStatusModal(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingStatusChange}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  {submittingStatusChange ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Confirmar e Salvar Status
+                </button>
+              </div>
+            </form>
           </motion.div>
         </div>
       )}
