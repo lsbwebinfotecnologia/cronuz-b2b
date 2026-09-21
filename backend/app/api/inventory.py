@@ -1199,14 +1199,14 @@ def export_inventory_excel(
     
     wb = openpyxl.Workbook()
     
-    # Aba 1 (PRINCIPAL): Saldos Validados (Título, ISBN, Marca, Quantidade)
+    # Aba 1 (PRINCIPAL): Saldos Validados (Título, ISBN, Marca, Quantidade Validada)
     ws_val = wb.active
-    ws_val.title = "Saldos Validados"
+    ws_val.title = "Saldos Validados (Unificado)"
     ws_val.append([
         "Título",
         "ISBN",
-        "Marca",
-        "Quantidade Validada"
+        "Marca / Editora",
+        "Quantidade Validada Total"
     ])
     
     # Query de contagens por localização e rodada
@@ -1241,8 +1241,64 @@ def export_inventory_excel(
             marca,
             val_qty
         ])
+
+    # Aba 2: Detalhamento de Itens por Prateleira x SKU
+    ws_shelf = wb.create_sheet(title="Itens por Prateleira")
+    ws_shelf.append([
+        "Prateleira / Localização",
+        "Operador(es)",
+        "ISBN / Código de Barras",
+        "Título",
+        "Editora / Marca",
+        "Qtd 1ª Contagem",
+        "Qtd Recontagem / Auditoria",
+        "Saldo Validado na Prateleira",
+        "Situação"
+    ])
+
+    query_shelf_detail = text("""
+        SELECT 
+            s.location,
+            STRING_AGG(DISTINCT COALESCE(NULLIF(s.operator_name, ''), NULLIF(sc.operator_name, ''), u.name), ', ') as operators,
+            sc.isbn,
+            COALESCE(it.title, 'Item não cadastrado') as title,
+            COALESCE(it.publisher, it.category, 'N/A') as publisher,
+            SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
+            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2
+        FROM inv_inventory_scan sc
+        JOIN inv_inventory_session s ON sc.session_id = s.id
+        LEFT JOIN usr_user u ON s.user_id = u.id
+        LEFT JOIN inv_inventory_item it ON (sc.inventory_id = it.inventory_id AND sc.isbn = it.isbn)
+        WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
+        GROUP BY s.location, sc.isbn, COALESCE(it.title, 'Item não cadastrado'), COALESCE(it.publisher, it.category, 'N/A')
+        ORDER BY s.location, sc.isbn
+    """)
+    shelf_rows = db.execute(query_shelf_detail, {"inv_id": inventory_id}).fetchall()
+
+    for r in shelf_rows:
+        loc, ops, isbn, title, publisher, c1, c2 = r[0], r[1] or "Operador", r[2], r[3], r[4], int(r[5]), int(r[6])
+        val_loc = c2 if c2 > 0 else c1
+        if c2 > 0:
+            if c1 == c2:
+                situacao = "Recontado (Saldos Coincidentes)"
+            else:
+                situacao = f"Divergência Corrigida (1ª: {c1} -> Rec: {c2})"
+        else:
+            situacao = "1ª Contagem Validada"
+
+        ws_shelf.append([
+            loc,
+            ops,
+            isbn,
+            title,
+            publisher,
+            c1,
+            c2,
+            val_loc,
+            situacao
+        ])
         
-    # Aba 2: Consolidado Geral
+    # Aba 3: Consolidado Geral
     ws1 = wb.create_sheet(title="Consolidado Geral")
     ws1.append([
         "ISBN / Código de Barras",
@@ -1281,8 +1337,8 @@ def export_inventory_excel(
             c1, c2, diff, total, val_qty, status_cad
         ])
         
-    # Aba 3: Detalhamento por Prateleira
-    ws2 = wb.create_sheet(title="Detalhamento por Prateleira")
+    # Aba 4: Resumo de Sessões por Prateleira
+    ws2 = wb.create_sheet(title="Resumo de Sessões")
     ws2.append([
         "ID Sessão", "Prateleira / Localização", "Tipo de Contagem", "Rodada", "Status",
         "Operador", "Início", "Término", "Total Peças Bipadas"
@@ -1316,7 +1372,7 @@ def export_inventory_excel(
             s.total_scans
         ])
         
-    # Aba 4: Itens Fora da Base
+    # Aba 5: Itens Fora da Base
     ws3 = wb.create_sheet(title="Itens Fora da Base")
     ws3.append(["ISBN / Código", "Título", "Marca / Editora", "Localização Bipada", "Qtd Validada"])
     
@@ -1693,21 +1749,29 @@ def get_public_session_items_summary(
 
 
 def _fetch_session_items_summary_db(inventory_id: int, session_id: int, db: Session) -> List[inv_schemas.SessionItemSummary]:
-    scans_sub = (
-        db.query(
-            InventoryScan.isbn,
-            func.sum(InventoryScan.quantity).label("total_quantity"),
-            func.max(InventoryScan.scanned_at).label("last_scanned_at")
-        )
-        .filter(InventoryScan.inventory_id == inventory_id, InventoryScan.session_id == session_id)
-        .group_by(InventoryScan.isbn)
-        .all()
-    )
-
-    if not scans_sub:
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id).first()
+    if not sess:
         return []
 
-    isbns = [s.isbn for s in scans_sub]
+    # Buscar todas as bipagens da mesma localização nesta inventário (engloba 1ª contagem + recontagem/auditoria)
+    scans_query = text("""
+        SELECT 
+            sc.isbn,
+            SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
+            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2,
+            SUM(sc.quantity) as total_scanned,
+            MAX(sc.scanned_at) as last_scanned
+        FROM inv_inventory_scan sc
+        JOIN inv_inventory_session s ON sc.session_id = s.id
+        WHERE sc.inventory_id = :inv_id AND s.location = :loc AND s.status != 'CANCELADA'
+        GROUP BY sc.isbn
+    """)
+    rows = db.execute(scans_query, {"inv_id": inventory_id, "loc": sess.location}).fetchall()
+
+    if not rows:
+        return []
+
+    isbns = [r[0] for r in rows]
     catalog_items = (
         db.query(InventoryItem)
         .filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn.in_(isbns))
@@ -1716,19 +1780,30 @@ def _fetch_session_items_summary_db(inventory_id: int, session_id: int, db: Sess
     cat_map = {ci.isbn: ci for ci in catalog_items}
 
     result = []
-    for row in scans_sub:
-        ci = cat_map.get(row.isbn)
-        title = ci.title if ci else f"Item ({row.isbn})"
+    for r in rows:
+        isbn = r[0]
+        c1 = int(r[1] or 0)
+        c2 = int(r[2] or 0)
+        total_scanned = int(r[3] or 0)
+        last_scanned = r[4]
+        
+        ci = cat_map.get(isbn)
+        title = ci.title if ci else f"Item ({isbn})"
         publisher = ci.publisher if ci else None
         category = ci.category if ci else None
+        has_div = (c2 > 0 and c1 != c2)
+        val_qty = c2 if c2 > 0 else c1
         
         result.append(inv_schemas.SessionItemSummary(
-            isbn=row.isbn,
+            isbn=isbn,
             title=title,
             publisher=publisher,
             category=category,
-            total_quantity=int(row.total_quantity or 0),
-            last_scanned_at=row.last_scanned_at
+            total_quantity=val_qty,
+            count_1_qty=c1,
+            count_2_qty=c2,
+            has_divergence=has_div,
+            last_scanned_at=last_scanned
         ))
 
     result.sort(key=lambda x: x.last_scanned_at or datetime.min, reverse=True)

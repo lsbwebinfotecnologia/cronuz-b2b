@@ -61,6 +61,9 @@ class SessionItemSummary(BaseModel):
     publisher: Optional[str] = None
     category: Optional[str] = None
     total_quantity: int
+    count_1_qty: int = 0
+    count_2_qty: int = 0
+    has_divergence: bool = False
     last_scanned_at: Optional[datetime] = None
 
 class SessionItemUpdateRequest(BaseModel):
