@@ -30,7 +30,10 @@ import {
   Edit3,
   Ban,
   Sliders,
-  MapPin
+  MapPin,
+  ChevronLeft,
+  ChevronRight,
+  Eye
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -124,9 +127,39 @@ export default function InventoryDetailPage() {
   const [extraFile, setExtraFile] = useState<File | null>(null);
   const [uploadingExtra, setUploadingExtra] = useState(false);
 
-  // Filtros
+  // Filtros & Paginação High Performance
   const [searchQuery, setSearchQuery] = useState('');
   const [onlyDivergent, setOnlyDivergent] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [includeUncounted, setIncludeUncounted] = useState(false);
+  const [loadingSkuSummary, setLoadingSkuSummary] = useState(false);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, onlyDivergent, auditSubTab]);
+
+  async function handleToggleIncludeUncounted(include: boolean) {
+    setIncludeUncounted(include);
+    setCurrentPage(1);
+    if (!companyId || !inventoryId) return;
+    setLoadingSkuSummary(true);
+    try {
+      const token = getToken();
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(
+        `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sku-summary?include_uncounted=${include}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        setSkuSummaries(await res.json());
+      }
+    } catch (err) {
+      toast.error('Erro ao carregar itens da base.');
+    } finally {
+      setLoadingSkuSummary(false);
+    }
+  }
 
   // Modais de Manutenção na Auditoria
   const [adjustItem, setAdjustItem] = useState<{
@@ -715,112 +748,154 @@ export default function InventoryDetailPage() {
       )}
 
       {/* Conteúdo da Tab 2: Auditoria & Divergências */}
-      {activeTab === 'discrepancies' && (
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden space-y-4 p-4">
-          {/* Header da Aba Auditoria */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-            <div>
-              <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                Auditoria, Saldos Validados e Manutenção
-              </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Alterne entre o Saldo Validado Consolidado por SKU (Geral da Loja) e o Detalhamento por Prateleira.
-              </p>
-            </div>
+      {activeTab === 'discrepancies' && (() => {
+        const filteredDiscrepancies = discrepancies.filter(d => {
+          if (onlyDivergent && !d.has_divergence) return false;
+          if (!searchQuery) return true;
+          const q = searchQuery.toLowerCase();
+          return (
+            d.isbn.toLowerCase().includes(q) ||
+            d.location.toLowerCase().includes(q) ||
+            d.title.toLowerCase().includes(q) ||
+            (d.operator_name && d.operator_name.toLowerCase().includes(q)) ||
+            (d.publisher && d.publisher.toLowerCase().includes(q))
+          );
+        });
 
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                onClick={() => setOnlyDivergent(!onlyDivergent)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                  onlyDivergent
-                    ? 'bg-amber-500/10 text-amber-600 border-amber-500/30'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
-                }`}
-              >
-                <Filter className="h-3.5 w-3.5" />
-                {onlyDivergent ? 'Mostrando Apenas Divergentes' : 'Filtrar Divergências'}
-              </button>
+        const filteredSkuSummaries = skuSummaries.filter(s => {
+          if (onlyDivergent && !s.has_divergence) return false;
+          if (!searchQuery) return true;
+          const q = searchQuery.toLowerCase();
+          return (
+            s.isbn.toLowerCase().includes(q) ||
+            s.title.toLowerCase().includes(q) ||
+            (s.publisher && s.publisher.toLowerCase().includes(q)) ||
+            s.locations_list.some(l => l.toLowerCase().includes(q))
+          );
+        });
 
-              <div className="relative w-full sm:w-60">
-                <Search className="h-4 w-4 absolute left-3 top-2.5 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Buscar ISBN, obra, prateleira..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent focus:outline-none focus:ring-1 focus:ring-teal-500"
-                />
+        const totalItems = auditSubTab === 'sku_summary' ? filteredSkuSummaries.length : filteredDiscrepancies.length;
+        const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+        const startIndex = (currentPage - 1) * pageSize;
+        const endIndex = Math.min(startIndex + pageSize, totalItems);
+
+        const pageSkuSummaries = filteredSkuSummaries.slice(startIndex, endIndex);
+        const pageDiscrepancies = filteredDiscrepancies.slice(startIndex, endIndex);
+
+        return (
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden space-y-4 p-4">
+            {/* Header da Aba Auditoria */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
+                  Auditoria, Saldos Validados e Manutenção
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Visualização de alta performance com paginação e rastreabilidade total de operadores por prateleira.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOnlyDivergent(!onlyDivergent)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                    onlyDivergent
+                      ? 'bg-amber-500/10 text-amber-600 border-amber-500/30'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  <Filter className="h-3.5 w-3.5" />
+                  {onlyDivergent ? 'Mostrando Apenas Divergentes' : 'Filtrar Divergências'}
+                </button>
+
+                {auditSubTab === 'sku_summary' && (
+                  <button
+                    type="button"
+                    onClick={() => handleToggleIncludeUncounted(!includeUncounted)}
+                    disabled={loadingSkuSummary}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                      includeUncounted
+                        ? 'bg-purple-500/10 text-purple-600 border-purple-500/30'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    {loadingSkuSummary ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5" />
+                    )}
+                    {includeUncounted ? 'Ocultar Não Contados da Base' : 'Incluir Não Contados da Base'}
+                  </button>
+                )}
+
+                <div className="relative w-full sm:w-60">
+                  <Search className="h-4 w-4 absolute left-3 top-2.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Buscar ISBN, obra, prateleira, operador..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  />
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Sub-abas de Auditoria */}
-          <div className="flex border-b border-slate-200 dark:border-slate-800 gap-4 text-xs font-bold">
-            <button
-              type="button"
-              onClick={() => setAuditSubTab('sku_summary')}
-              className={`pb-2.5 border-b-2 transition-colors flex items-center gap-1.5 ${
-                auditSubTab === 'sku_summary'
-                  ? 'border-teal-600 text-teal-600 dark:text-teal-400'
-                  : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              <Boxes className="h-3.5 w-3.5" />
-              Saldos Validados por SKU (Consolidado Geral)
-            </button>
+            {/* Sub-abas de Auditoria */}
+            <div className="flex border-b border-slate-200 dark:border-slate-800 gap-4 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setAuditSubTab('location_detail')}
+                className={`pb-2.5 border-b-2 transition-colors flex items-center gap-1.5 ${
+                  auditSubTab === 'location_detail'
+                    ? 'border-teal-600 text-teal-600 dark:text-teal-400'
+                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                <MapPin className="h-3.5 w-3.5" />
+                Detalhamento por Prateleira ({discrepancies.length})
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setAuditSubTab('location_detail')}
-              className={`pb-2.5 border-b-2 transition-colors flex items-center gap-1.5 ${
-                auditSubTab === 'location_detail'
-                  ? 'border-teal-600 text-teal-600 dark:text-teal-400'
-                  : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              <MapPin className="h-3.5 w-3.5" />
-              Detalhamento por Prateleira ({discrepancies.length})
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => setAuditSubTab('sku_summary')}
+                className={`pb-2.5 border-b-2 transition-colors flex items-center gap-1.5 ${
+                  auditSubTab === 'sku_summary'
+                    ? 'border-teal-600 text-teal-600 dark:text-teal-400'
+                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                <Boxes className="h-3.5 w-3.5" />
+                Resumo Consolidado por SKU ({skuSummaries.length})
+              </button>
+            </div>
 
-          {/* VISÃO 1: Consolidado Geral por SKU (Saldos Validados Excel Sheet 1) */}
-          {auditSubTab === 'sku_summary' && (
-            <div>
-              {skuSummaries.length === 0 ? (
-                <div className="p-12 text-center text-slate-500 text-sm">
-                  Nenhum item contabilizado para consolidação de SKU.
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
-                      <tr>
-                        <th className="px-4 py-3">ISBN / Código</th>
-                        <th className="px-4 py-3">Título / Marca</th>
-                        <th className="px-4 py-3">Prateleiras Onde Foi Contado</th>
-                        <th className="px-4 py-3 text-center">1ª Contagem Total</th>
-                        <th className="px-4 py-3 text-center">Recontagem Total</th>
-                        <th className="px-4 py-3 text-center bg-teal-500/10 text-teal-700 dark:text-teal-300">
-                          Saldo Validado Final
-                        </th>
-                        <th className="px-4 py-3">Situação</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {skuSummaries
-                        .filter(s => {
-                          if (onlyDivergent && !s.has_divergence) return false;
-                          if (!searchQuery) return true;
-                          const q = searchQuery.toLowerCase();
-                          return (
-                            s.isbn.toLowerCase().includes(q) ||
-                            s.title.toLowerCase().includes(q) ||
-                            (s.publisher && s.publisher.toLowerCase().includes(q)) ||
-                            s.locations_list.some(l => l.toLowerCase().includes(q))
-                          );
-                        })
-                        .map((s, i) => (
+            {/* VISÃO 1: Consolidado Geral por SKU */}
+            {auditSubTab === 'sku_summary' && (
+              <div>
+                {filteredSkuSummaries.length === 0 ? (
+                  <div className="p-12 text-center text-slate-500 text-sm">
+                    Nenhum item encontrado para os filtros selecionados.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
+                        <tr>
+                          <th className="px-4 py-3">ISBN / Código</th>
+                          <th className="px-4 py-3">Título / Marca</th>
+                          <th className="px-4 py-3">Prateleiras Onde Foi Contado</th>
+                          <th className="px-4 py-3 text-center">1ª Contagem Total</th>
+                          <th className="px-4 py-3 text-center">Recontagem Total</th>
+                          <th className="px-4 py-3 text-center bg-teal-500/10 text-teal-700 dark:text-teal-300">
+                            Saldo Validado Final
+                          </th>
+                          <th className="px-4 py-3">Situação</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {pageSkuSummaries.map((s, i) => (
                           <tr key={i} className={`hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors ${
                             s.has_divergence ? 'bg-amber-50/30 dark:bg-amber-950/10' : ''
                           }`}>
@@ -833,11 +908,15 @@ export default function InventoryDetailPage() {
                             </td>
                             <td className="px-4 py-3 max-w-xs">
                               <div className="flex flex-wrap gap-1">
-                                {s.locations_list.map((loc, idx) => (
-                                  <span key={idx} className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                                    {loc}
-                                  </span>
-                                ))}
+                                {s.locations_list.length > 0 ? (
+                                  s.locations_list.map((loc, idx) => (
+                                    <span key={idx} className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                      {loc}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="text-xs text-rose-500 font-semibold italic">Não Contado</span>
+                                )}
                               </div>
                             </td>
                             <td className="px-4 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">
@@ -850,7 +929,11 @@ export default function InventoryDetailPage() {
                               {s.total_validated_qty} un
                             </td>
                             <td className="px-4 py-3">
-                              {s.has_divergence ? (
+                              {s.total_validated_qty === 0 ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-500">
+                                  Sem Bipagem
+                                </span>
+                              ) : s.has_divergence ? (
                                 <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600 dark:text-amber-400">
                                   <AlertTriangle className="h-3.5 w-3.5" />
                                   Divergente
@@ -864,52 +947,39 @@ export default function InventoryDetailPage() {
                             </td>
                           </tr>
                         ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
 
-          {/* VISÃO 2: Detalhamento por Prateleira com Coluna de Operador */}
-          {auditSubTab === 'location_detail' && (
-            <div>
-              {discrepancies.length === 0 ? (
-                <div className="p-12 text-center text-slate-500 text-sm">
-                  Nenhum item bipado ou auditado até o momento.
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
-                      <tr>
-                        <th className="px-4 py-3">Localização</th>
-                        <th className="px-4 py-3">Operador(es)</th>
-                        <th className="px-4 py-3">ISBN / Código</th>
-                        <th className="px-4 py-3">Título / Marca</th>
-                        <th className="px-4 py-3 text-center">1ª Contagem</th>
-                        <th className="px-4 py-3 text-center">Recontagem</th>
-                        <th className="px-4 py-3 text-center">Saldo Validado</th>
-                        <th className="px-4 py-3 text-center">Divergência</th>
-                        <th className="px-4 py-3">Situação</th>
-                        <th className="px-4 py-3 text-right">Manutenção</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {discrepancies
-                        .filter(d => {
-                          if (onlyDivergent && !d.has_divergence) return false;
-                          if (!searchQuery) return true;
-                          const q = searchQuery.toLowerCase();
-                          return (
-                            d.isbn.toLowerCase().includes(q) ||
-                            d.location.toLowerCase().includes(q) ||
-                            d.title.toLowerCase().includes(q) ||
-                            (d.operator_name && d.operator_name.toLowerCase().includes(q)) ||
-                            (d.publisher && d.publisher.toLowerCase().includes(q))
-                          );
-                        })
-                        .map((d, i) => (
+            {/* VISÃO 2: Detalhamento por Prateleira com Coluna de Operador */}
+            {auditSubTab === 'location_detail' && (
+              <div>
+                {filteredDiscrepancies.length === 0 ? (
+                  <div className="p-12 text-center text-slate-500 text-sm">
+                    Nenhum item bipado ou auditado até o momento.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
+                        <tr>
+                          <th className="px-4 py-3">Localização</th>
+                          <th className="px-4 py-3">Operador(es)</th>
+                          <th className="px-4 py-3">ISBN / Código</th>
+                          <th className="px-4 py-3">Título / Marca</th>
+                          <th className="px-4 py-3 text-center">1ª Contagem</th>
+                          <th className="px-4 py-3 text-center">Recontagem</th>
+                          <th className="px-4 py-3 text-center">Saldo Validado</th>
+                          <th className="px-4 py-3 text-center">Divergência</th>
+                          <th className="px-4 py-3">Situação</th>
+                          <th className="px-4 py-3 text-right">Manutenção</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {pageDiscrepancies.map((d, i) => (
                           <tr key={i} className={`hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors ${
                             d.has_divergence ? 'bg-amber-50/30 dark:bg-amber-950/10' : ''
                           }`}>
@@ -961,7 +1031,6 @@ export default function InventoryDetailPage() {
                             </td>
                             <td className="px-4 py-3 text-right">
                               <div className="flex items-center justify-end gap-1.5">
-                                {/* Botão de Ajuste de Quantidade (PIN Supervisor) */}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -981,7 +1050,6 @@ export default function InventoryDetailPage() {
                                   <Pencil className="h-3.5 w-3.5" />
                                 </button>
 
-                                {/* Botão de Edição de Dados do Produto */}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1002,14 +1070,63 @@ export default function InventoryDetailPage() {
                             </td>
                           </tr>
                         ))}
-                    </tbody>
-                  </table>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Paginação de Alta Performance */}
+            {totalItems > 0 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 px-1 text-xs text-slate-500 border-t border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2">
+                  <span>Exibindo <strong>{startIndex + 1}</strong> - <strong>{endIndex}</strong> de <strong>{totalItems}</strong> registros</span>
+                  <span className="text-slate-300 dark:text-slate-700">|</span>
+                  <span>Itens por página:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value));
+                      setCurrentPage(1);
+                    }}
+                    className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold focus:outline-none"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value={250}>250</option>
+                  </select>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+
+                  <span className="px-3 font-semibold text-slate-700 dark:text-slate-300">
+                    Página {currentPage} de {totalPages}
+                  </span>
+
+                  <button
+                    type="button"
+                    disabled={currentPage >= totalPages}
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Modal de Manutenção de Quantidade com PIN de Supervisor */}
       {adjustItem && (

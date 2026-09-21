@@ -946,21 +946,33 @@ def get_discrepancies(
             s.location,
             s.round_number,
             sc.isbn,
-            SUM(sc.quantity) as qty
+            SUM(sc.quantity) as qty,
+            STRING_AGG(DISTINCT COALESCE(NULLIF(s.operator_name, ''), NULLIF(sc.operator_name, ''), u.name), ', ') as operator_names
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
+        LEFT JOIN usr_user u ON s.user_id = u.id
         WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
         GROUP BY s.location, s.round_number, sc.isbn
     """)
     rows = db.execute(query, {"inv_id": inventory_id}).fetchall()
     
     counts_map = {}
+    operators_map = {}
     for r in rows:
-        loc, round_num, isbn, qty = r[0], r[1], r[2], int(r[3])
+        loc, round_num, isbn, qty = r[0], r[1], r[2], int(r[3] or 0)
+        op_names_str = r[4] if len(r) > 4 and r[4] else None
         key = (loc, isbn)
         if key not in counts_map:
             counts_map[key] = {1: 0, 2: 0}
         counts_map[key][round_num] = counts_map[key].get(round_num, 0) + qty
+        
+        if op_names_str:
+            if key not in operators_map:
+                operators_map[key] = set()
+            for name in op_names_str.split(','):
+                clean_name = name.strip()
+                if clean_name:
+                    operators_map[key].add(clean_name)
         
     items_meta = {
         it.isbn: it for it in db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).all()
@@ -975,6 +987,9 @@ def get_discrepancies(
         has_div = (c2 > 0 and c1 != c2)
         val_qty = c2 if c2 > 0 else c1
         
+        op_set = operators_map.get((loc, isbn), set())
+        op_label = ", ".join(sorted(list(op_set))) if op_set else None
+        
         results.append(inv_schemas.DiscrepancyItemResponse(
             isbn=isbn,
             title=meta.title if meta else f"Item {isbn}",
@@ -986,7 +1001,8 @@ def get_discrepancies(
             count_2_qty=c2,
             difference=diff,
             has_divergence=has_div,
-            validated_qty=val_qty
+            validated_qty=val_qty,
+            operator_name=op_label
         ))
         
     return sorted(results, key=lambda x: (x.location, x.isbn))
@@ -996,6 +1012,7 @@ def get_discrepancies(
 def get_sku_summary(
     company_id: int,
     inventory_id: int,
+    include_uncounted: bool = False,
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
@@ -1020,7 +1037,7 @@ def get_sku_summary(
     isbn_validated = {}
     
     for r in loc_rows:
-        loc, isbn, c1, c2 = r[0], r[1], int(r[2]), int(r[3])
+        loc, isbn, c1, c2 = r[0], r[1], int(r[2] or 0), int(r[3] or 0)
         val_loc = c2 if c2 > 0 else c1
         
         if isbn not in isbn_locs:
@@ -1034,10 +1051,22 @@ def get_sku_summary(
         isbn_c2[isbn] += c2
         isbn_validated[isbn] += val_loc
 
-    items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).all()
-    items_map = {it.isbn: it for it in items}
-    
-    all_isbns = set(items_map.keys()).union(set(isbn_validated.keys()))
+    # Buscar itens da base apenas se explicitamente solicitado (ou se for catálogo menor)
+    if include_uncounted:
+        items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).all()
+        items_map = {it.isbn: it for it in items}
+        all_isbns = set(items_map.keys()).union(set(isbn_validated.keys()))
+    else:
+        scanned_isbns = list(isbn_validated.keys())
+        if scanned_isbns:
+            items = db.query(InventoryItem).filter(
+                InventoryItem.inventory_id == inventory_id,
+                InventoryItem.isbn.in_(scanned_isbns)
+            ).all()
+            items_map = {it.isbn: it for it in items}
+        else:
+            items_map = {}
+        all_isbns = set(isbn_validated.keys())
     
     results = []
     for isbn in all_isbns:
