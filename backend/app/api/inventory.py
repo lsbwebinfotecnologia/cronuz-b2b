@@ -1176,33 +1176,41 @@ def adjust_audit_quantity(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Senha do Supervisor incorreta.")
     
     loc_clean = payload.location.strip().upper()
+    clean_isbn = payload.isbn.strip()
     
     sess_query = db.query(InventorySession).filter(
         InventorySession.inventory_id == inventory_id,
-        InventorySession.location == loc_clean
+        InventorySession.location == loc_clean,
+        InventorySession.status != SessionStatus.CANCELADA.value
     )
     if payload.round_number:
-        sess = sess_query.filter(InventorySession.round_number == payload.round_number).first()
+        target_sessions = sess_query.filter(InventorySession.round_number == payload.round_number).all()
     else:
-        sess = sess_query.order_by(InventorySession.round_number.desc()).first()
+        target_sessions = sess_query.all()
         
-    if not sess:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Nenhuma sessão encontrada para a prateleira '{loc_clean}'.")
+    if not target_sessions:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Nenhuma sessão ativa encontrada para a prateleira '{loc_clean}'.")
+    
+    target_session_ids = [s.id for s in target_sessions]
     
     db.query(InventoryScan).filter(
-        InventoryScan.session_id == sess.id,
-        InventoryScan.isbn == payload.isbn
+        InventoryScan.inventory_id == inventory_id,
+        InventoryScan.session_id.in_(target_session_ids),
+        InventoryScan.isbn == clean_isbn
     ).delete(synchronize_session=False)
     
     if payload.new_quantity > 0:
+        latest_sess = max(target_sessions, key=lambda s: s.id)
+        import uuid
         client_uuid = str(uuid.uuid4())
         scan = InventoryScan(
             client_uuid=client_uuid,
             inventory_id=inventory_id,
-            session_id=sess.id,
+            session_id=latest_sess.id,
             company_id=company_id,
             user_id=current_user.id,
-            isbn=payload.isbn,
+            operator_name=current_user.name or "Supervisor",
+            isbn=clean_isbn,
             location=loc_clean,
             quantity=payload.new_quantity,
             scanned_at=datetime.utcnow()
@@ -1211,16 +1219,25 @@ def adjust_audit_quantity(
         
     db.commit()
     
-    new_sess_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == sess.id).scalar()
-    sess.total_scans = int(new_sess_total)
+    for s in target_sessions:
+        new_sess_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == s.id).scalar()
+        s.total_scans = int(new_sess_total or 0)
     
-    new_inv_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.inventory_id == inventory_id).scalar()
-    inv.total_scanned_items = int(new_inv_total)
+    new_inv_total = (
+        db.query(func.coalesce(func.sum(InventoryScan.quantity), 0))
+        .join(InventorySession, InventoryScan.session_id == InventorySession.id)
+        .filter(
+            InventoryScan.inventory_id == inventory_id,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .scalar()
+    )
+    inv.total_scanned_items = int(new_inv_total or 0)
     db.commit()
     
     return {
-        "message": f"Quantidade do ISBN {payload.isbn} na prateleira {loc_clean} ajustada para {payload.new_quantity} un!",
-        "new_session_total": sess.total_scans,
+        "message": f"Quantidade do ISBN {clean_isbn} na prateleira {loc_clean} ajustada para {payload.new_quantity} un!",
+        "new_session_total": target_sessions[-1].total_scans,
         "new_inventory_total": inv.total_scanned_items
     }
 
@@ -2156,14 +2173,28 @@ def _apply_session_item_update(inv: Inventory, session_id: int, isbn: str, pin: 
     if not sess:
         raise HTTPException(status_code=404, detail="Sessão não encontrada.")
 
-    # Remove bips existentes deste ISBN nesta sessão
+    clean_isbn = isbn.strip()
+
+    # Buscar todas as sessões ativas da mesma localização neste inventário
+    active_sessions = (
+        db.query(InventorySession)
+        .filter(
+            InventorySession.inventory_id == inv.id,
+            InventorySession.location == sess.location,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .all()
+    )
+    active_session_ids = [s.id for s in active_sessions]
+
+    # Remove bips existentes deste ISBN em TODAS as sessões ativas desta localização
     db.query(InventoryScan).filter(
         InventoryScan.inventory_id == inv.id,
-        InventoryScan.session_id == session_id,
-        InventoryScan.isbn == isbn.strip()
-    ).delete()
+        InventoryScan.session_id.in_(active_session_ids),
+        InventoryScan.isbn == clean_isbn
+    ).delete(synchronize_session=False)
 
-    # Se a nova quantidade for maior que zero, cria um registro consolidado
+    # Se a nova quantidade for maior que zero, cria um registro consolidado na sessão atual
     if new_qty > 0:
         import uuid
         db.add(InventoryScan(
@@ -2171,7 +2202,7 @@ def _apply_session_item_update(inv: Inventory, session_id: int, isbn: str, pin: 
             company_id=inv.company_id,
             session_id=session_id,
             operator_name=sess.operator_name or "Supervisor",
-            isbn=isbn.strip(),
+            isbn=clean_isbn,
             location=sess.location,
             quantity=new_qty,
             client_uuid=f"maint-{uuid.uuid4()}",
@@ -2180,9 +2211,23 @@ def _apply_session_item_update(inv: Inventory, session_id: int, isbn: str, pin: 
 
     db.commit()
 
-    # Recalcula total da sessão
-    new_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == session_id).scalar()
-    sess.total_scans = int(new_total or 0)
+    # Recalcula total de bipagens de todas as sessões afetadas
+    for s in active_sessions:
+        new_total = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == s.id).scalar()
+        s.total_scans = int(new_total or 0)
+
+    # Recalcula total de itens do inventário
+    new_inv_total = (
+        db.query(func.coalesce(func.sum(InventoryScan.quantity), 0))
+        .join(InventorySession, InventoryScan.session_id == InventorySession.id)
+        .filter(
+            InventoryScan.inventory_id == inv.id,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .scalar()
+    )
+    inv.total_scanned_items = int(new_inv_total or 0)
+
     db.commit()
 
     return {"message": "Manutenção realizada com sucesso!", "new_total_scans": sess.total_scans}

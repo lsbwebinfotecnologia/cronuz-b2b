@@ -159,6 +159,27 @@ def run_test():
         assert disc_item.count_3_qty == 11, f"Expected count_3_qty=11, got {disc_item.count_3_qty}"
         assert disc_item.validated_qty == 11, f"Expected validated_qty=11 (from C3), got {disc_item.validated_qty}"
         
+        # 8.5 Test deleting item from Session 3 when item was scanned across sessions
+        from app.api.inventory import _apply_session_item_update
+        _apply_session_item_update(inv, s3.id, "9788535902777", "1234", 0, db)
+        disc_after_del = get_discrepancies(company_id=1, inventory_id=inv.id, db=db, current_user=MockUser())
+        print(f"Discrepancies count after deletion: {len(disc_after_del)}")
+        assert len(disc_after_del) == 0, "Item should be completely removed from location PRATELEIRA-01!"
+        print("SUCCESS: Item deletion across sessions verified!")
+
+        # Restore scan3 for finalization test
+        db.add(InventoryScan(
+            session_id=s3.id,
+            inventory_id=inv.id,
+            company_id=1,
+            isbn="9788535902777",
+            location="PRATELEIRA-01",
+            quantity=11,
+            client_uuid=f"uuid-r3-restore-{inv.id}",
+            scanned_at=datetime.now()
+        ))
+        db.commit()
+
         # 9. Finalize inventory now that Round 3 is completed
         res = finalize_inventory(company_id=1, inventory_id=inv.id, db=db, current_user=MockUser())
         print(f"Finalization status: {res.status}")
