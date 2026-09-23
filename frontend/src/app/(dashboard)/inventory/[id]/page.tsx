@@ -34,6 +34,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Eye,
+  EyeOff,
+  KeyRound,
   Trash2
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
@@ -149,6 +151,54 @@ export default function InventoryDetailPage() {
       toast.error('Erro ao conectar com o servidor.');
     } finally {
       setTogglingThirdCount(false);
+    }
+  }
+
+  // Modal de Edição da Senha do Supervisor (PIN)
+  const [showEditPinModal, setShowEditPinModal] = useState(false);
+  const [newPinInput, setNewPinInput] = useState('');
+  const [showNewPin, setShowNewPin] = useState(false);
+  const [submittingPinChange, setSubmittingPinChange] = useState(false);
+
+  // Visibilidade de senhas nos modais
+  const [showAdjustPin, setShowAdjustPin] = useState(false);
+  const [showCancelPassword, setShowCancelPassword] = useState(false);
+  const [showSellerPassword, setShowSellerPassword] = useState(false);
+
+  async function handleUpdatePin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!inventory || !companyId) return;
+    const cleanPin = newPinInput.trim();
+    if (!cleanPin) {
+      toast.error('Informe a nova senha do supervisor.');
+      return;
+    }
+    setSubmittingPinChange(true);
+    try {
+      const token = getToken();
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${baseUrl}/companies/${companyId}/inventory/${inventoryId}/supervisor-pin`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ supervisor_pin: cleanPin })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error(err.detail || 'Erro ao alterar a senha do supervisor.');
+        return;
+      }
+      const updated = await res.json();
+      setInventory(updated);
+      toast.success('Senha do supervisor (PIN) alterada com sucesso!');
+      setShowEditPinModal(false);
+    } catch (e: any) {
+      console.error(e);
+      toast.error('Erro ao conectar com o servidor.');
+    } finally {
+      setSubmittingPinChange(false);
     }
   }
 
@@ -678,9 +728,20 @@ export default function InventoryDetailPage() {
               {inventory.status === 'EM_ANDAMENTO' && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
               {inventory.status === 'EM_ANDAMENTO' ? 'Em Andamento' : inventory.status === 'AUDITANDO' ? 'Auditando' : inventory.status === 'CANCELADO' ? 'Cancelado' : 'Finalizado'}
             </span>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20" title="Senha de Supervisor para manutenções na contagem">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20" title="Senha de Supervisor para manutenções na contagem">
               <ShieldCheck className="h-3.5 w-3.5" />
               PIN Supervisor: {inventory.supervisor_pin || '1234'}
+              <button
+                type="button"
+                onClick={() => {
+                  setNewPinInput(inventory.supervisor_pin || '1234');
+                  setShowEditPinModal(true);
+                }}
+                className="ml-1 p-0.5 rounded hover:bg-amber-500/20 transition-colors"
+                title="Alterar PIN do Supervisor"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
             </span>
           </div>
 
@@ -1520,15 +1581,28 @@ export default function InventoryDetailPage() {
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Senha do Supervisor (PIN):
                 </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Digite o PIN de supervisor"
-                  value={adjustPin}
-                  onChange={(e) => setAdjustPin(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
-                />
-                <p className="text-[11px] text-slate-400 mt-1">PIN padrão do inventário: {inventory.supervisor_pin || '1234'}</p>
+                <div className="relative">
+                  <input
+                    type={showAdjustPin ? "text" : "password"}
+                    name="supervisor_pin_no_save"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    required
+                    placeholder="Digite o PIN de supervisor"
+                    value={adjustPin}
+                    onChange={(e) => setAdjustPin(e.target.value)}
+                    className="w-full pl-3.5 pr-10 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdjustPin(!showAdjustPin)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  >
+                    {showAdjustPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">PIN atual do inventário: {inventory.supervisor_pin || '1234'}</p>
               </div>
 
               <div className="flex items-center justify-end gap-2.5 pt-2">
@@ -1759,15 +1833,28 @@ export default function InventoryDetailPage() {
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Senha de Login ou PIN do Supervisor:
                 </label>
-                <input
-                  type="password"
-                  required
-                  autoFocus
-                  placeholder="Digite a senha do usuário ou PIN (ex: 1234)"
-                  value={cancelPasswordInput}
-                  onChange={(e) => setCancelPasswordInput(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
-                />
+                <div className="relative">
+                  <input
+                    type={showCancelPassword ? "text" : "password"}
+                    name="supervisor_pin_no_save"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    required
+                    autoFocus
+                    placeholder="Digite a senha do usuário ou PIN (ex: 1234)"
+                    value={cancelPasswordInput}
+                    onChange={(e) => setCancelPasswordInput(e.target.value)}
+                    className="w-full pl-3.5 pr-10 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCancelPassword(!showCancelPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  >
+                    {showCancelPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
                 <p className="text-[11px] text-slate-400 mt-1">
                   🔒 O histórico desta ação ficará armazenado com rastreabilidade total para auditoria.
                 </p>
@@ -1945,14 +2032,27 @@ export default function InventoryDetailPage() {
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Sua Senha de Usuário Seller Logado:
                 </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Digite sua senha de login"
-                  value={sellerPassword}
-                  onChange={(e) => setSellerPassword(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
-                />
+                <div className="relative">
+                  <input
+                    type={showSellerPassword ? "text" : "password"}
+                    name="seller_password_no_save"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    required
+                    placeholder="Digite sua senha de login"
+                    value={sellerPassword}
+                    onChange={(e) => setSellerPassword(e.target.value)}
+                    className="w-full pl-3.5 pr-10 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSellerPassword(!showSellerPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  >
+                    {showSellerPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
                 <p className="text-[11px] text-slate-400 mt-1">
                   Confirmação obrigatória para segurança do sistema.
                 </p>
@@ -2103,6 +2203,88 @@ export default function InventoryDetailPage() {
                 </div>
               );
             })()}
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal de Alteração de Senha do Supervisor (PIN) */}
+      {showEditPinModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl max-w-md w-full p-6 space-y-5"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600">
+                  <KeyRound className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                    Alterar PIN do Supervisor
+                  </h3>
+                  <p className="text-xs text-slate-500">Defina uma nova senha para manutenções e liberações</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEditPinModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdatePin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Nova Senha / PIN do Supervisor:
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewPin ? 'text' : 'password'}
+                    required
+                    name="supervisor_pin_no_save"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    placeholder="Digite a nova senha (ex: 1234)"
+                    value={newPinInput}
+                    onChange={(e) => setNewPinInput(e.target.value)}
+                    className="w-full pl-3.5 pr-10 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPin(!showNewPin)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  >
+                    {showNewPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Esta senha autoriza ajustes de quantidade e cancelamentos no painel do supervisor e mobile.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEditPinModal(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingPinChange}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  {submittingPinChange ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Salvar PIN
+                </button>
+              </div>
+            </form>
           </motion.div>
         </div>
       )}

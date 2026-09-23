@@ -858,6 +858,29 @@ def toggle_third_count(
     return get_inventory(company_id=company_id, inventory_id=inventory_id, db=db, current_user=current_user)
 
 
+@router.put("/{inventory_id}/supervisor-pin", response_model=inv_schemas.InventoryResponse)
+def update_supervisor_pin(
+    company_id: int,
+    inventory_id: int,
+    payload: inv_schemas.SupervisorPinUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    
+    new_pin = payload.supervisor_pin.strip()
+    if not new_pin:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A senha do supervisor não pode ser vazia.")
+    
+    inv.supervisor_pin = new_pin
+    db.commit()
+    db.refresh(inv)
+    return get_inventory(company_id=company_id, inventory_id=inventory_id, db=db, current_user=current_user)
+
+
 @router.put("/{inventory_id}/status")
 def update_inventory_status(
     company_id: int,

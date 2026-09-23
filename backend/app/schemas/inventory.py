@@ -56,6 +56,9 @@ class PinVerifyResponse(BaseModel):
     success: bool
     message: str
 
+class SupervisorPinUpdateRequest(BaseModel):
+    supervisor_pin: str
+
 class SessionItemSummary(BaseModel):
     isbn: str
     title: str

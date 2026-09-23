@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { ShieldCheck, KeyRound, Loader2, X } from 'lucide-react';
+import { ShieldCheck, KeyRound, Loader2, X, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface SupervisorPinModalProps {
@@ -21,6 +21,7 @@ export default function SupervisorPinModal({
   onConfirm
 }: SupervisorPinModalProps) {
   const [pinInput, setPinInput] = useState('');
+  const [showPin, setShowPin] = useState(false);
   const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
@@ -75,18 +76,30 @@ export default function SupervisorPinModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
           <div className="relative">
             <KeyRound className="h-5 w-5 absolute left-3.5 top-3.5 text-amber-500" />
             <input
-              type="password"
+              type={showPin ? "text" : "password"}
+              name="supervisor_pin_no_save"
+              autoComplete="new-password"
+              data-lpignore="true"
+              data-1p-ignore="true"
               autoFocus
               required
               placeholder="Digite a senha (PIN)..."
               value={pinInput}
               onChange={(e) => setPinInput(e.target.value)}
-              className="w-full pl-11 pr-4 py-3 rounded-xl border-2 border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono font-bold text-base tracking-widest focus:outline-none focus:border-amber-500"
+              className="w-full pl-11 pr-11 py-3 rounded-xl border-2 border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono font-bold text-base tracking-widest focus:outline-none focus:border-amber-500"
             />
+            <button
+              type="button"
+              onClick={() => setShowPin(!showPin)}
+              className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+              title={showPin ? "Ocultar senha" : "Ver senha"}
+            >
+              {showPin ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+            </button>
           </div>
 
           <div className="flex items-center justify-end gap-2.5 pt-1">
