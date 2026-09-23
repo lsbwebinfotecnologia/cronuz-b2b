@@ -160,7 +160,8 @@ export default function InventoryDetailPage() {
   const [showNewPin, setShowNewPin] = useState(false);
   const [submittingPinChange, setSubmittingPinChange] = useState(false);
 
-  // Visibilidade de senhas nos modais
+  // Visibilidade de senhas nos modais e cabeçalho
+  const [showHeaderPin, setShowHeaderPin] = useState(false);
   const [showAdjustPin, setShowAdjustPin] = useState(false);
   const [showCancelPassword, setShowCancelPassword] = useState(false);
   const [showSellerPassword, setShowSellerPassword] = useState(false);
@@ -730,14 +731,22 @@ export default function InventoryDetailPage() {
             </span>
             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20" title="Senha de Supervisor para manutenções na contagem">
               <ShieldCheck className="h-3.5 w-3.5" />
-              PIN Supervisor: {inventory.supervisor_pin || '1234'}
+              PIN Supervisor: {showHeaderPin ? (inventory.supervisor_pin || '1234') : '••••'}
+              <button
+                type="button"
+                onClick={() => setShowHeaderPin(!showHeaderPin)}
+                className="ml-1 p-0.5 rounded hover:bg-amber-500/20 transition-colors"
+                title={showHeaderPin ? "Ocultar PIN" : "Mostrar PIN"}
+              >
+                {showHeaderPin ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              </button>
               <button
                 type="button"
                 onClick={() => {
                   setNewPinInput(inventory.supervisor_pin || '1234');
                   setShowEditPinModal(true);
                 }}
-                className="ml-1 p-0.5 rounded hover:bg-amber-500/20 transition-colors"
+                className="p-0.5 rounded hover:bg-amber-500/20 transition-colors"
                 title="Alterar PIN do Supervisor"
               >
                 <Pencil className="h-3 w-3" />
@@ -1602,7 +1611,7 @@ export default function InventoryDetailPage() {
                     {showAdjustPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-                <p className="text-[11px] text-slate-400 mt-1">PIN atual do inventário: {inventory.supervisor_pin || '1234'}</p>
+                <p className="text-[11px] text-slate-400 mt-1">Informe a senha do supervisor autorizando o ajuste.</p>
               </div>
 
               <div className="flex items-center justify-end gap-2.5 pt-2">
