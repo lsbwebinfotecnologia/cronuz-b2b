@@ -7,7 +7,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text, desc, case
+from sqlalchemy import func, text, desc, case, or_
 import openpyxl
 
 from app.db.session import get_db
@@ -113,6 +113,8 @@ def list_inventories(
             "open_sessions": int(open_sessions or 0),
             "access_token": inv.access_token,
             "is_public_access_enabled": inv.is_public_access_enabled,
+            "supervisor_pin": inv.supervisor_pin or "1234",
+            "require_third_count": getattr(inv, "require_third_count", False),
             "created_by_user_id": inv.created_by_user_id,
             "finalized_by_user_id": inv.finalized_by_user_id,
             "finalized_at": inv.finalized_at,
@@ -176,6 +178,7 @@ def create_inventory(
         access_token=new_inv.access_token,
         is_public_access_enabled=new_inv.is_public_access_enabled,
         supervisor_pin=new_inv.supervisor_pin or "1234",
+        require_third_count=getattr(new_inv, "require_third_count", False),
         created_by_user_id=new_inv.created_by_user_id,
         finalized_by_user_id=None,
         finalized_at=None,
@@ -231,6 +234,7 @@ def get_inventory(
         access_token=inv.access_token,
         is_public_access_enabled=inv.is_public_access_enabled,
         supervisor_pin=inv.supervisor_pin or "1234",
+        require_third_count=getattr(inv, "require_third_count", False),
         created_by_user_id=inv.created_by_user_id,
         finalized_by_user_id=inv.finalized_by_user_id,
         finalized_at=inv.finalized_at,
@@ -776,6 +780,25 @@ def finalize_inventory(
     if inv.status == InventoryStatus.FINALIZADO.value:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Este inventário já se encontra finalizado.")
     
+    if getattr(inv, "require_third_count", False):
+        query_pending_c3 = text("""
+            SELECT s.location
+            FROM inv_inventory_scan sc
+            JOIN inv_inventory_session s ON sc.session_id = s.id
+            WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
+            GROUP BY s.location, sc.isbn
+            HAVING SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) != SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END)
+               AND SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END) > 0
+               AND COUNT(CASE WHEN s.round_number >= 3 THEN 1 END) = 0
+        """)
+        pending_rows = db.execute(query_pending_c3, {"inv_id": inventory_id}).fetchall()
+        if pending_rows:
+            pending_locs = sorted(list(set(r[0] for r in pending_rows)))
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Não é possível finalizar o inventário. Existem 3ªs contagens (desempate) pendentes nas prateleiras: {', '.join(pending_locs)}"
+            )
+
     open_sessions = (
         db.query(InventorySession)
         .filter(InventorySession.inventory_id == inventory_id, InventorySession.status == SessionStatus.ABERTA.value)
@@ -807,12 +830,32 @@ def finalize_inventory(
         open_sessions=0,
         access_token=inv.access_token,
         is_public_access_enabled=inv.is_public_access_enabled,
+        supervisor_pin=inv.supervisor_pin or "1234",
+        require_third_count=getattr(inv, "require_third_count", False),
         created_by_user_id=inv.created_by_user_id,
         finalized_by_user_id=inv.finalized_by_user_id,
         finalized_at=inv.finalized_at,
         created_at=inv.created_at,
         updated_at=inv.updated_at,
     )
+
+
+@router.put("/{inventory_id}/toggle-third-count", response_model=inv_schemas.InventoryResponse)
+def toggle_third_count(
+    company_id: int,
+    inventory_id: int,
+    payload: inv_schemas.ToggleThirdCountRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+    inv.require_third_count = payload.require_third_count
+    db.commit()
+    db.refresh(inv)
+    return get_inventory(company_id=company_id, inventory_id=inventory_id, db=db, current_user=current_user)
 
 
 @router.put("/{inventory_id}/status")
@@ -882,6 +925,7 @@ def update_inventory_status(
         access_token=inv.access_token,
         is_public_access_enabled=inv.is_public_access_enabled,
         supervisor_pin=inv.supervisor_pin,
+        require_third_count=getattr(inv, "require_third_count", False),
         created_by_user_id=inv.created_by_user_id,
         finalized_by_user_id=inv.finalized_by_user_id,
         finalized_at=inv.finalized_at,
@@ -982,11 +1026,20 @@ def get_discrepancies(
     for (loc, isbn), rounds in counts_map.items():
         c1 = rounds.get(1, 0)
         c2 = rounds.get(2, 0)
+        c3 = sum(qty for r_num, qty in rounds.items() if r_num >= 3)
         meta = items_meta.get(isbn)
-        diff = c1 - c2
-        has_div = (c2 > 0 and c1 != c2)
-        val_qty = c2 if c2 > 0 else c1
         
+        has_initial_div = (c2 > 0 and c1 != c2)
+        
+        if c3 > 0 or any(r_num >= 3 for r_num in rounds.keys()):
+            val_qty = c3
+            has_div = False
+            diff = c3 - c2 if c2 > 0 else c3 - c1
+        else:
+            val_qty = c2 if c2 > 0 else c1
+            diff = c1 - c2 if c2 > 0 else 0
+            has_div = has_initial_div
+            
         op_set = operators_map.get((loc, isbn), set())
         op_label = ", ".join(sorted(list(op_set))) if op_set else None
         
@@ -999,6 +1052,7 @@ def get_discrepancies(
             location=loc,
             count_1_qty=c1,
             count_2_qty=c2,
+            count_3_qty=c3,
             difference=diff,
             has_divergence=has_div,
             validated_qty=val_qty,
@@ -1023,7 +1077,9 @@ def get_sku_summary(
             s.location,
             sc.isbn,
             SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
-            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2
+            SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END) as c2,
+            SUM(CASE WHEN s.round_number >= 3 THEN sc.quantity ELSE 0 END) as c3,
+            MAX(CASE WHEN s.round_number >= 3 THEN 1 ELSE 0 END) as has_c3
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
         WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
@@ -1034,22 +1090,30 @@ def get_sku_summary(
     isbn_locs = {}
     isbn_c1 = {}
     isbn_c2 = {}
+    isbn_c3 = {}
     isbn_validated = {}
+    isbn_has_div = {}
     
     for r in loc_rows:
-        loc, isbn, c1, c2 = r[0], r[1], int(r[2] or 0), int(r[3] or 0)
-        val_loc = c2 if c2 > 0 else c1
+        loc, isbn, c1, c2, c3, has_c3 = r[0], r[1], int(r[2] or 0), int(r[3] or 0), int(r[4] or 0), int(r[5] or 0)
+        val_loc = c3 if (c3 > 0 or has_c3 == 1) else (c2 if c2 > 0 else c1)
+        loc_div = (c2 > 0 and c1 != c2 and has_c3 == 0)
         
         if isbn not in isbn_locs:
             isbn_locs[isbn] = []
             isbn_c1[isbn] = 0
             isbn_c2[isbn] = 0
+            isbn_c3[isbn] = 0
             isbn_validated[isbn] = 0
+            isbn_has_div[isbn] = False
             
         isbn_locs[isbn].append(loc)
         isbn_c1[isbn] += c1
         isbn_c2[isbn] += c2
+        isbn_c3[isbn] += c3
         isbn_validated[isbn] += val_loc
+        if loc_div:
+            isbn_has_div[isbn] = True
 
     # Buscar itens da base apenas se explicitamente solicitado (ou se for catálogo menor)
     if include_uncounted:
@@ -1073,9 +1137,9 @@ def get_sku_summary(
         it = items_map.get(isbn)
         c1 = isbn_c1.get(isbn, 0)
         c2 = isbn_c2.get(isbn, 0)
+        c3 = isbn_c3.get(isbn, 0)
         val_qty = isbn_validated.get(isbn, 0)
         locs = sorted(list(set(isbn_locs.get(isbn, []))))
-        has_div = (c2 > 0 and c1 != c2)
         
         results.append(inv_schemas.SkuSummaryResponse(
             isbn=isbn,
@@ -1086,8 +1150,9 @@ def get_sku_summary(
             locations_list=locs,
             total_count_1=c1,
             total_count_2=c2,
+            total_count_3=c3,
             total_validated_qty=val_qty,
-            has_divergence=has_div
+            has_divergence=isbn_has_div.get(isbn, False)
         ))
         
     return sorted(results, key=lambda x: x.title)
@@ -1170,19 +1235,240 @@ def update_inventory_item_meta(
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
     _assert_inventory_access(current_user, company_id, db)
-    item = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn == isbn).first()
+    clean_isbn = isbn.strip()
+    item = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn == clean_isbn).first()
     if not item:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item não encontrado no inventário.")
-    
-    if payload.title is not None and payload.title.strip():
-        item.title = payload.title.strip()
-    if payload.publisher is not None:
-        item.publisher = payload.publisher.strip()
-    if payload.category is not None:
-        item.category = payload.category.strip()
+        item = InventoryItem(
+            inventory_id=inventory_id,
+            company_id=company_id,
+            isbn=clean_isbn,
+            title=payload.title.strip() if payload.title else f"Produto {clean_isbn}",
+            publisher=payload.publisher.strip() if payload.publisher else None,
+            category=payload.category.strip() if payload.category else None,
+            is_unregistered=True
+        )
+        db.add(item)
+    else:
+        if payload.title is not None and payload.title.strip():
+            item.title = payload.title.strip()
+        if payload.publisher is not None:
+            item.publisher = payload.publisher.strip()
+        if payload.category is not None:
+            item.category = payload.category.strip()
+
+    # Atualiza também os bips já gravados para que a listagem reflita o novo título e marca imediatamente
+    db.query(InventoryScan).filter(
+        InventoryScan.inventory_id == inventory_id,
+        InventoryScan.isbn == clean_isbn
+    ).update({
+        InventoryScan.title: item.title,
+        InventoryScan.publisher: item.publisher
+    }, synchronize_session=False)
         
     db.commit()
-    return {"message": f"Dados do produto {isbn} atualizados com sucesso!", "title": item.title, "publisher": item.publisher}
+    return {"message": f"Dados do produto {clean_isbn} atualizados com sucesso!", "title": item.title, "publisher": item.publisher}
+
+
+def _verify_supervisor_pin_or_password(inv: Inventory, current_user: user_models.User, pin_or_password: str):
+    token = (pin_or_password or "").strip()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Senha ou PIN de confirmação é obrigatório.")
+    
+    expected_pin = inv.supervisor_pin or "1234"
+    if token == expected_pin:
+        return True
+        
+    if current_user and getattr(current_user, "hashed_password", None) and security.verify_password(token, current_user.hashed_password):
+        return True
+        
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Senha do usuário logado ou PIN do Supervisor incorreto.")
+
+
+# Cancelar Abertura de Prateleira (Soft Cancel com Senha/PIN)
+@router.put("/{inventory_id}/sessions/{session_id}/cancel")
+@router.delete("/{inventory_id}/sessions/{session_id}")
+def cancel_inventory_session(
+    company_id: int,
+    inventory_id: int,
+    session_id: int,
+    payload: Optional[inv_schemas.SessionCancelRequest] = None,
+    pin: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventário não encontrado.")
+    
+    auth_token = (payload.pin_or_password if payload else pin) or ""
+    _verify_supervisor_pin_or_password(inv, current_user, auth_token)
+    
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inventory_id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+    
+    loc = sess.location
+    sess.status = SessionStatus.CANCELADA.value
+    sess.closed_at = func.now()
+    db.commit()
+    
+    new_total = (
+        db.query(func.coalesce(func.sum(InventoryScan.quantity), 0))
+        .join(InventorySession, InventoryScan.session_id == InventorySession.id)
+        .filter(
+            InventoryScan.inventory_id == inventory_id,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .scalar()
+    )
+    inv.total_scanned_items = int(new_total or 0)
+    db.commit()
+
+    return {"message": f"Abertura da prateleira '{loc}' foi marcada como CANCELADA. O histórico foi preservado para auditoria."}
+
+
+# Cancelar Todas as Aberturas Zeradas (Soft Cancel em Lote com Senha/PIN)
+@router.post("/{inventory_id}/sessions/empty/cancel")
+@router.delete("/{inventory_id}/sessions/empty/clear")
+def cancel_empty_sessions(
+    company_id: int,
+    inventory_id: int,
+    payload: Optional[inv_schemas.BulkCancelEmptySessionsRequest] = None,
+    pin: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventário não encontrado.")
+        
+    auth_token = (payload.pin_or_password if payload else pin) or ""
+    _verify_supervisor_pin_or_password(inv, current_user, auth_token)
+
+    empty_sessions = (
+        db.query(InventorySession)
+        .filter(
+            InventorySession.inventory_id == inventory_id,
+            InventorySession.status != SessionStatus.CANCELADA.value,
+            or_(InventorySession.total_scans == 0, InventorySession.total_scans.is_(None))
+        )
+        .all()
+    )
+    canceled_count = len(empty_sessions)
+    for sess in empty_sessions:
+        sess.status = SessionStatus.CANCELADA.value
+        sess.closed_at = func.now()
+        
+    db.commit()
+    return {"message": f"{canceled_count} abertura(s) zerada(s) foram marcadas como CANCELADAS!", "canceled_count": canceled_count}
+
+
+# Cancelar Bipagens de um SKU (Soft Cancel de Sessões do Produto)
+@router.post("/{inventory_id}/sku/{isbn}/cancel-scans")
+@router.delete("/{inventory_id}/sku/{isbn}")
+def cancel_sku_scans(
+    company_id: int,
+    inventory_id: int,
+    isbn: str,
+    payload: Optional[inv_schemas.SkuCancelScansRequest] = None,
+    pin: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventário não encontrado.")
+        
+    auth_token = (payload.pin_or_password if payload else pin) or ""
+    _verify_supervisor_pin_or_password(inv, current_user, auth_token)
+    clean_isbn = isbn.strip()
+    
+    session_ids = [
+        row[0] for row in db.query(InventoryScan.session_id)
+        .filter(InventoryScan.inventory_id == inventory_id, InventoryScan.isbn == clean_isbn)
+        .distinct().all()
+    ]
+    
+    canceled_sessions = 0
+    for sid in session_ids:
+        sess = db.query(InventorySession).filter(InventorySession.id == sid, InventorySession.inventory_id == inventory_id).first()
+        if sess and sess.status != SessionStatus.CANCELADA.value:
+            sess.status = SessionStatus.CANCELADA.value
+            sess.closed_at = func.now()
+            canceled_sessions += 1
+            
+    new_total = (
+        db.query(func.coalesce(func.sum(InventoryScan.quantity), 0))
+        .join(InventorySession, InventoryScan.session_id == InventorySession.id)
+        .filter(
+            InventoryScan.inventory_id == inventory_id,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .scalar()
+    )
+    inv.total_scanned_items = int(new_total or 0)
+    db.commit()
+    
+    return {
+        "message": f"Contagens do SKU {clean_isbn} foram marcadas como CANCELADAS. Histórico mantido para auditoria!",
+        "canceled_sessions_count": canceled_sessions
+    }
+
+
+# Ajustar Quantidade Geral de um SKU
+@router.put("/{inventory_id}/sku/{isbn}/adjust-quantity")
+def adjust_sku_quantity(
+    company_id: int,
+    inventory_id: int,
+    isbn: str,
+    payload: inv_schemas.SkuQuantityAdjustRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventário não encontrado.")
+    
+    if payload.pin:
+        expected_pin = inv.supervisor_pin or "1234"
+        if payload.pin.strip() != expected_pin:
+            raise HTTPException(status_code=401, detail="Senha do Supervisor incorreta.")
+            
+    if payload.new_quantity < 0:
+        raise HTTPException(status_code=400, detail="Quantidade não pode ser negativa.")
+        
+    clean_isbn = isbn.strip()
+    loc = (payload.location or "").strip().upper()
+    if not loc:
+        first_scan = db.query(InventoryScan).filter(InventoryScan.inventory_id == inventory_id, InventoryScan.isbn == clean_isbn).first()
+        if first_scan:
+            loc = first_scan.location
+        else:
+            loc = "AJUSTE-GESTAO"
+            
+    sess = db.query(InventorySession).filter(InventorySession.inventory_id == inventory_id, InventorySession.location == loc).order_by(InventorySession.id.desc()).first()
+    if not sess:
+        sess = InventorySession(
+            inventory_id=inventory_id,
+            company_id=company_id,
+            user_id=current_user.id,
+            operator_name=current_user.name or "Gestor",
+            location=loc,
+            session_type="CONTAGEM",
+            round_number=1,
+            status="FECHADA",
+            started_at=func.now(),
+            closed_at=func.now()
+        )
+        db.add(sess)
+        db.flush()
+        
+    return _apply_session_item_update(inv, sess.id, clean_isbn, inv.supervisor_pin or "1234", payload.new_quantity, db)
+
 
 
 @router.get("/{inventory_id}/export-excel")
@@ -1215,7 +1501,9 @@ def export_inventory_excel(
             s.location,
             sc.isbn,
             SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
-            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2
+            SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END) as c2,
+            SUM(CASE WHEN s.round_number >= 3 THEN sc.quantity ELSE 0 END) as c3,
+            MAX(CASE WHEN s.round_number >= 3 THEN 1 ELSE 0 END) as has_c3
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
         WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
@@ -1223,11 +1511,11 @@ def export_inventory_excel(
     """)
     loc_rows = db.execute(query_loc_scans, {"inv_id": inventory_id}).fetchall()
     
-    # Calcula saldo validado por ISBN (Recontagem se houver, senão 1ª Contagem)
+    # Calcula saldo validado por ISBN (3ª Contagem se houver, senão 2ª se houver, senão 1ª)
     isbn_validated_totals = {}
     for r in loc_rows:
-        isbn, c1, c2 = r[1], int(r[2]), int(r[3])
-        val_loc = c2 if c2 > 0 else c1
+        isbn, c1, c2, c3, has_c3 = r[1], int(r[2] or 0), int(r[3] or 0), int(r[4] or 0), int(r[5] or 0)
+        val_loc = c3 if (c3 > 0 or has_c3 == 1) else (c2 if c2 > 0 else c1)
         isbn_validated_totals[isbn] = isbn_validated_totals.get(isbn, 0) + val_loc
 
     items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).order_by(InventoryItem.title).all()
@@ -1251,7 +1539,8 @@ def export_inventory_excel(
         "Título",
         "Editora / Marca",
         "Qtd 1ª Contagem",
-        "Qtd Recontagem / Auditoria",
+        "Qtd 2ª Contagem",
+        "Qtd 3ª Contagem (Desempate)",
         "Saldo Validado na Prateleira",
         "Situação"
     ])
@@ -1264,7 +1553,9 @@ def export_inventory_excel(
             COALESCE(it.title, 'Item não cadastrado') as title,
             COALESCE(it.publisher, it.category, 'N/A') as publisher,
             SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
-            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2
+            SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END) as c2,
+            SUM(CASE WHEN s.round_number >= 3 THEN sc.quantity ELSE 0 END) as c3,
+            MAX(CASE WHEN s.round_number >= 3 THEN 1 ELSE 0 END) as has_c3
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
         LEFT JOIN usr_user u ON s.user_id = u.id
@@ -1276,13 +1567,15 @@ def export_inventory_excel(
     shelf_rows = db.execute(query_shelf_detail, {"inv_id": inventory_id}).fetchall()
 
     for r in shelf_rows:
-        loc, ops, isbn, title, publisher, c1, c2 = r[0], r[1] or "Operador", r[2], r[3], r[4], int(r[5]), int(r[6])
-        val_loc = c2 if c2 > 0 else c1
-        if c2 > 0:
+        loc, ops, isbn, title, publisher, c1, c2, c3, has_c3 = r[0], r[1] or "Operador", r[2], r[3], r[4], int(r[5] or 0), int(r[6] or 0), int(r[7] or 0), int(r[8] or 0)
+        val_loc = c3 if (c3 > 0 or has_c3 == 1) else (c2 if c2 > 0 else c1)
+        if c3 > 0 or has_c3 == 1:
+            situacao = f"3ª Contagem / Desempate (1ª: {c1}, 2ª: {c2} -> 3ª: {c3})"
+        elif c2 > 0:
             if c1 == c2:
                 situacao = "Recontado (Saldos Coincidentes)"
             else:
-                situacao = f"Divergência Corrigida (1ª: {c1} -> Rec: {c2})"
+                situacao = f"Divergência Corrigida (1ª: {c1} -> 2ª: {c2})"
         else:
             situacao = "1ª Contagem Validada"
 
@@ -1294,6 +1587,7 @@ def export_inventory_excel(
             publisher,
             c1,
             c2,
+            c3,
             val_loc,
             situacao
         ])
@@ -1307,8 +1601,8 @@ def export_inventory_excel(
         "Categoria",
         "Endereço Padrão",
         "Qtd 1ª Contagem",
-        "Qtd Recontagem/Auditoria",
-        "Divergência",
+        "Qtd 2ª Contagem",
+        "Qtd 3ª Contagem (Desempate)",
         "Total Geral Apurado",
         "Saldo Validado Final",
         "Status Cadastral"
@@ -1318,23 +1612,23 @@ def export_inventory_excel(
         SELECT 
             sc.isbn,
             SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
-            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2,
+            SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END) as c2,
+            SUM(CASE WHEN s.round_number >= 3 THEN sc.quantity ELSE 0 END) as c3,
             SUM(sc.quantity) as total_scanned
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
         WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
         GROUP BY sc.isbn
     """)
-    scan_rows = {r[0]: (int(r[1]), int(r[2]), int(r[3])) for r in db.execute(query_isbn, {"inv_id": inventory_id}).fetchall()}
+    scan_rows = {r[0]: (int(r[1] or 0), int(r[2] or 0), int(r[3] or 0), int(r[4] or 0)) for r in db.execute(query_isbn, {"inv_id": inventory_id}).fetchall()}
     
     for it in items:
-        c1, c2, total = scan_rows.get(it.isbn, (0, 0, 0))
-        diff = c1 - c2 if c2 > 0 else 0
+        c1, c2, c3, total = scan_rows.get(it.isbn, (0, 0, 0, 0))
         val_qty = isbn_validated_totals.get(it.isbn, 0)
         status_cad = "Item Novo (Fora da Base)" if it.is_unregistered else "Cadastrado"
         ws1.append([
             it.isbn, it.title, it.publisher or "", it.category or "", it.default_location or "",
-            c1, c2, diff, total, val_qty, status_cad
+            c1, c2, c3, total, val_qty, status_cad
         ])
         
     # Aba 4: Resumo de Sessões por Prateleira
@@ -1758,7 +2052,9 @@ def _fetch_session_items_summary_db(inventory_id: int, session_id: int, db: Sess
         SELECT 
             sc.isbn,
             SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
-            SUM(CASE WHEN s.round_number > 1 THEN sc.quantity ELSE 0 END) as c2,
+            SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END) as c2,
+            SUM(CASE WHEN s.round_number >= 3 THEN sc.quantity ELSE 0 END) as c3,
+            MAX(CASE WHEN s.round_number >= 3 THEN 1 ELSE 0 END) as has_c3,
             SUM(sc.quantity) as total_scanned,
             MAX(sc.scanned_at) as last_scanned
         FROM inv_inventory_scan sc
@@ -1784,15 +2080,22 @@ def _fetch_session_items_summary_db(inventory_id: int, session_id: int, db: Sess
         isbn = r[0]
         c1 = int(r[1] or 0)
         c2 = int(r[2] or 0)
-        total_scanned = int(r[3] or 0)
-        last_scanned = r[4]
+        c3 = int(r[3] or 0)
+        has_c3 = int(r[4] or 0)
+        total_scanned = int(r[5] or 0)
+        last_scanned = r[6]
         
         ci = cat_map.get(isbn)
         title = ci.title if ci else f"Item ({isbn})"
         publisher = ci.publisher if ci else None
         category = ci.category if ci else None
-        has_div = (c2 > 0 and c1 != c2)
-        val_qty = c2 if c2 > 0 else c1
+        
+        if c3 > 0 or has_c3 == 1:
+            val_qty = c3
+            has_div = False
+        else:
+            val_qty = c2 if c2 > 0 else c1
+            has_div = (c2 > 0 and c1 != c2)
         
         result.append(inv_schemas.SessionItemSummary(
             isbn=isbn,
@@ -1802,6 +2105,7 @@ def _fetch_session_items_summary_db(inventory_id: int, session_id: int, db: Sess
             total_quantity=val_qty,
             count_1_qty=c1,
             count_2_qty=c2,
+            count_3_qty=c3,
             has_divergence=has_div,
             last_scanned_at=last_scanned
         ))

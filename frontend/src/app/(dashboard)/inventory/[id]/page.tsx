@@ -33,7 +33,8 @@ import {
   MapPin,
   ChevronLeft,
   ChevronRight,
-  Eye
+  Eye,
+  Trash2
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -52,6 +53,7 @@ interface InventoryDetail {
   open_sessions: number;
   access_token?: string;
   is_public_access_enabled?: boolean;
+  require_third_count?: boolean;
   created_at: string;
   finalized_at?: string;
 }
@@ -77,6 +79,7 @@ interface DiscrepancyItem {
   location: string;
   count_1_qty: number;
   count_2_qty: number;
+  count_3_qty?: number;
   difference: number;
   has_divergence: boolean;
   validated_qty: number;
@@ -92,6 +95,7 @@ interface SkuSummaryItem {
   locations_list: string[];
   total_count_1: number;
   total_count_2: number;
+  total_count_3?: number;
   total_validated_qty: number;
   has_divergence: boolean;
 }
@@ -116,6 +120,37 @@ export default function InventoryDetailPage() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [regeneratingToken, setRegeneratingToken] = useState(false);
+  const [togglingThirdCount, setTogglingThirdCount] = useState(false);
+
+  async function handleToggleThirdCount(require: boolean) {
+    if (!inventory || !companyId) return;
+    setTogglingThirdCount(true);
+    try {
+      const token = getToken();
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${baseUrl}/companies/${companyId}/inventory/${inventoryId}/toggle-third-count`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ require_third_count: require })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error(err.detail || 'Erro ao alterar opção de 3ª contagem.');
+        return;
+      }
+      const updated = await res.json();
+      setInventory(updated);
+      toast.success(require ? '3ª Contagem ativada para desempates!' : '3ª Contagem desativada.');
+    } catch (e: any) {
+      console.error(e);
+      toast.error('Erro ao conectar com o servidor.');
+    } finally {
+      setTogglingThirdCount(false);
+    }
+  }
 
   // Modal de Status / Cancelamento com Senha de Usuário Seller
   const [showStatusModal, setShowStatusModal] = useState(false);
@@ -130,6 +165,7 @@ export default function InventoryDetailPage() {
   // Filtros & Paginação High Performance
   const [searchQuery, setSearchQuery] = useState('');
   const [onlyDivergent, setOnlyDivergent] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'counted' | 'uncounted'>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [includeUncounted, setIncludeUncounted] = useState(false);
@@ -137,7 +173,129 @@ export default function InventoryDetailPage() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, onlyDivergent, auditSubTab]);
+  }, [searchQuery, onlyDivergent, statusFilter, auditSubTab]);
+
+  // Modal de Ajuste de Quantidade por SKU
+  const [skuAdjustModal, setSkuAdjustModal] = useState<{
+    isbn: string;
+    title: string;
+    current_qty: number;
+    locations: string[];
+  } | null>(null);
+  const [skuAdjustNewQty, setSkuAdjustNewQty] = useState<number>(0);
+  const [skuAdjustLocation, setSkuAdjustLocation] = useState<string>('');
+  const [submittingSkuAdjust, setSubmittingSkuAdjust] = useState(false);
+
+  // Modal de Confirmacao de Cancelamento com Senha/PIN
+  const [cancelModal, setCancelModal] = useState<{
+    type: 'session' | 'empty_sessions' | 'sku' | 'shelf_item';
+    title: string;
+    description: string;
+    targetId?: number;
+    location?: string;
+    isbn?: string;
+  } | null>(null);
+  const [cancelPasswordInput, setCancelPasswordInput] = useState('');
+  const [submittingCancel, setSubmittingCancel] = useState(false);
+
+  async function handleConfirmCancelWithPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!cancelModal || !companyId || !inventoryId) return;
+    if (!cancelPasswordInput.trim()) {
+      toast.error('Digite a senha de login ou PIN do supervisor para confirmar.');
+      return;
+    }
+    setSubmittingCancel(true);
+    try {
+      const token = getToken();
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      };
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const pin_or_password = cancelPasswordInput.trim();
+
+      let url = '';
+      let method = 'PUT';
+      let body: any = { pin_or_password };
+
+      if (cancelModal.type === 'session' && cancelModal.targetId) {
+        url = `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/${cancelModal.targetId}/cancel`;
+        method = 'PUT';
+      } else if (cancelModal.type === 'empty_sessions') {
+        url = `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/empty/cancel`;
+        method = 'POST';
+      } else if (cancelModal.type === 'sku' && cancelModal.isbn) {
+        url = `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sku/${cancelModal.isbn}/cancel-scans`;
+        method = 'POST';
+      } else if (cancelModal.type === 'shelf_item' && cancelModal.location && cancelModal.isbn) {
+        url = `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/audit-adjust`;
+        method = 'POST';
+        body = {
+          pin: pin_or_password,
+          location: cancelModal.location,
+          isbn: cancelModal.isbn,
+          new_quantity: 0
+        };
+      }
+
+      const res = await fetch(url, {
+        method,
+        headers,
+        body: JSON.stringify(body)
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Erro ao processar cancelamento.');
+      }
+
+      const data = await res.json();
+      toast.success(data.message || 'Cancelamento realizado com sucesso! O histórico foi preservado para auditoria.');
+      setCancelModal(null);
+      setCancelPasswordInput('');
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao processar cancelamento.');
+    } finally {
+      setSubmittingCancel(false);
+    }
+  }
+
+  async function handleSaveSkuAdjust(e: React.FormEvent) {
+    e.preventDefault();
+    if (!skuAdjustModal || !companyId || !inventoryId) return;
+    setSubmittingSkuAdjust(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/inventory/${inventoryId}/sku/${skuAdjustModal.isbn}/adjust-quantity`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            new_quantity: skuAdjustNewQty,
+            location: skuAdjustLocation.trim() || (skuAdjustModal.locations[0] || 'AJUSTE-GESTAO')
+          })
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Erro ao ajustar quantidade do SKU.');
+      }
+      const data = await res.json();
+      toast.success(data.message || 'Quantidade ajustada com sucesso!');
+      setSkuAdjustModal(null);
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao ajustar quantidade.');
+    } finally {
+      setSubmittingSkuAdjust(false);
+    }
+  }
 
   async function handleToggleIncludeUncounted(include: boolean) {
     setIncludeUncounted(include);
@@ -673,11 +831,32 @@ export default function InventoryDetailPage() {
       {/* Conteúdo da Tab 1: Sessões */}
       {activeTab === 'sessions' && (
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-            <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-              Histórico de Sessões por Prateleira
-            </h3>
-            <span className="text-xs text-slate-400">Total de {sessions.length} sessões registradas</span>
+          <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
+                Histórico de Sessões por Prateleira
+              </h3>
+              <span className="text-xs text-slate-400">Total de {sessions.length} sessões registradas</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCancelModal({
+                    type: 'empty_sessions',
+                    title: 'Cancelar Aberturas Zeradas',
+                    description: 'Esta ação marcará todas as aberturas sem bips como CANCELADAS. O histórico completo permanecerá registrado na auditoria.'
+                  });
+                  setCancelPasswordInput('');
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 border border-rose-500/20 transition-colors"
+                title="Cancelar todas as aberturas de prateleiras com zero bips (Preserva Histórico)"
+              >
+                <Ban className="h-3.5 w-3.5" />
+                Cancelar Aberturas Zeradas
+              </button>
+            </div>
           </div>
 
           {sessions.length === 0 ? (
@@ -697,6 +876,7 @@ export default function InventoryDetailPage() {
                     <th className="px-4 py-3">Total Bipado</th>
                     <th className="px-4 py-3">Início</th>
                     <th className="px-4 py-3">Conclusão</th>
+                    <th className="px-4 py-3 text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -719,7 +899,9 @@ export default function InventoryDetailPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-                          sess.status === 'ABERTA'
+                          sess.status === 'CANCELADA'
+                            ? 'bg-rose-500/10 text-rose-600 border border-rose-500/20 font-bold'
+                            : sess.status === 'ABERTA'
                             ? 'bg-amber-500/10 text-amber-600'
                             : 'bg-emerald-500/10 text-emerald-600'
                         }`}>
@@ -737,6 +919,30 @@ export default function InventoryDetailPage() {
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-500">
                         {sess.closed_at ? new Date(sess.closed_at).toLocaleString('pt-BR') : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {sess.status === 'CANCELADA' ? (
+                          <span className="text-xs text-rose-500 font-semibold italic">Cancelada</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCancelModal({
+                                type: 'session',
+                                title: `Cancelar Abertura: ${sess.location}`,
+                                description: `Deseja cancelar a abertura da prateleira '${sess.location}'? As bipagens desta sessão serão desconsideradas no saldo final, porém mantidas no histórico para auditoria.`,
+                                targetId: sess.id,
+                                location: sess.location
+                              });
+                              setCancelPasswordInput('');
+                            }}
+                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 hover:text-rose-600 dark:text-slate-400 transition-colors inline-flex items-center gap-1 text-xs"
+                            title="Cancelar esta abertura e manter no histórico"
+                          >
+                            <Ban className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Cancelar</span>
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -764,12 +970,15 @@ export default function InventoryDetailPage() {
 
         const filteredSkuSummaries = skuSummaries.filter(s => {
           if (onlyDivergent && !s.has_divergence) return false;
+          if (statusFilter === 'counted' && s.total_validated_qty === 0) return false;
+          if (statusFilter === 'uncounted' && s.total_validated_qty > 0) return false;
           if (!searchQuery) return true;
           const q = searchQuery.toLowerCase();
           return (
             s.isbn.toLowerCase().includes(q) ||
             s.title.toLowerCase().includes(q) ||
             (s.publisher && s.publisher.toLowerCase().includes(q)) ||
+            (s.category && s.category.toLowerCase().includes(q)) ||
             s.locations_list.some(l => l.toLowerCase().includes(q))
           );
         });
@@ -791,11 +1000,30 @@ export default function InventoryDetailPage() {
                   Auditoria, Saldos Validados e Manutenção
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Visualização de alta performance com paginação e rastreabilidade total de operadores por prateleira.
+                  Visualização de alta performance com edição direta, exclusão de itens e filtro avançado.
                 </p>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleToggleThirdCount(!inventory?.require_third_count)}
+                  disabled={togglingThirdCount}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                    inventory?.require_third_count
+                      ? 'bg-indigo-500/10 text-indigo-600 border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-400 dark:border-indigo-800'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                  }`}
+                  title="Quando ativado, caso haja divergência entre a 1ª e 2ª contagem, o sistema exige uma 3ª contagem (desempate) para permitir a finalização."
+                >
+                  {togglingThirdCount ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                  )}
+                  {inventory?.require_third_count ? '3ª Contagem Exigida (Ativo)' : 'Exigir 3ª Contagem (Desativado)'}
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setOnlyDivergent(!onlyDivergent)}
@@ -810,23 +1038,35 @@ export default function InventoryDetailPage() {
                 </button>
 
                 {auditSubTab === 'sku_summary' && (
-                  <button
-                    type="button"
-                    onClick={() => handleToggleIncludeUncounted(!includeUncounted)}
-                    disabled={loadingSkuSummary}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                      includeUncounted
-                        ? 'bg-purple-500/10 text-purple-600 border-purple-500/30'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
-                    }`}
-                  >
-                    {loadingSkuSummary ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Eye className="h-3.5 w-3.5" />
-                    )}
-                    {includeUncounted ? 'Ocultar Não Contados da Base' : 'Incluir Não Contados da Base'}
-                  </button>
+                  <>
+                    <select
+                      value={statusFilter}
+                      onChange={(e: any) => setStatusFilter(e.target.value)}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none"
+                    >
+                      <option value="all">Todos os Status</option>
+                      <option value="counted">Apenas Contados</option>
+                      <option value="uncounted">Apenas Não Contados da Base</option>
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => handleToggleIncludeUncounted(!includeUncounted)}
+                      disabled={loadingSkuSummary}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                        includeUncounted
+                          ? 'bg-purple-500/10 text-purple-600 border-purple-500/30'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      {loadingSkuSummary ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5" />
+                      )}
+                      {includeUncounted ? 'Ocultar Não Contados da Base' : 'Incluir Não Contados da Base'}
+                    </button>
+                  </>
                 )}
 
                 <div className="relative w-full sm:w-60">
@@ -846,19 +1086,6 @@ export default function InventoryDetailPage() {
             <div className="flex border-b border-slate-200 dark:border-slate-800 gap-4 text-xs font-bold">
               <button
                 type="button"
-                onClick={() => setAuditSubTab('location_detail')}
-                className={`pb-2.5 border-b-2 transition-colors flex items-center gap-1.5 ${
-                  auditSubTab === 'location_detail'
-                    ? 'border-teal-600 text-teal-600 dark:text-teal-400'
-                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                <MapPin className="h-3.5 w-3.5" />
-                Detalhamento por Prateleira ({discrepancies.length})
-              </button>
-
-              <button
-                type="button"
                 onClick={() => setAuditSubTab('sku_summary')}
                 className={`pb-2.5 border-b-2 transition-colors flex items-center gap-1.5 ${
                   auditSubTab === 'sku_summary'
@@ -868,6 +1095,19 @@ export default function InventoryDetailPage() {
               >
                 <Boxes className="h-3.5 w-3.5" />
                 Resumo Consolidado por SKU ({skuSummaries.length})
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAuditSubTab('location_detail')}
+                className={`pb-2.5 border-b-2 transition-colors flex items-center gap-1.5 ${
+                  auditSubTab === 'location_detail'
+                    ? 'border-teal-600 text-teal-600 dark:text-teal-400'
+                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                <MapPin className="h-3.5 w-3.5" />
+                Detalhamento por Prateleira ({discrepancies.length})
               </button>
             </div>
 
@@ -887,11 +1127,13 @@ export default function InventoryDetailPage() {
                           <th className="px-4 py-3">Título / Marca</th>
                           <th className="px-4 py-3">Prateleiras Onde Foi Contado</th>
                           <th className="px-4 py-3 text-center">1ª Contagem Total</th>
-                          <th className="px-4 py-3 text-center">Recontagem Total</th>
+                          <th className="px-4 py-3 text-center">2ª Contagem Total</th>
+                          <th className="px-4 py-3 text-center text-indigo-600 dark:text-indigo-400">3ª Contagem Total</th>
                           <th className="px-4 py-3 text-center bg-teal-500/10 text-teal-700 dark:text-teal-300">
                             Saldo Validado Final
                           </th>
                           <th className="px-4 py-3">Situação</th>
+                          <th className="px-4 py-3 text-right">Manutenção / Ações</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -925,6 +1167,9 @@ export default function InventoryDetailPage() {
                             <td className="px-4 py-3 text-center font-semibold text-purple-600 dark:text-purple-400">
                               {s.total_count_2 > 0 ? s.total_count_2 : '-'}
                             </td>
+                            <td className="px-4 py-3 text-center font-bold text-indigo-600 dark:text-indigo-400">
+                              {s.total_count_3 && s.total_count_3 > 0 ? s.total_count_3 : '-'}
+                            </td>
                             <td className="px-4 py-3 text-center font-black text-teal-600 dark:text-teal-400 text-base bg-teal-500/5">
                               {s.total_validated_qty} un
                             </td>
@@ -932,6 +1177,11 @@ export default function InventoryDetailPage() {
                               {s.total_validated_qty === 0 ? (
                                 <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-500">
                                   Sem Bipagem
+                                </span>
+                              ) : inventory?.require_third_count && s.has_divergence ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 dark:text-rose-400 animate-pulse">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  Pendente 3ª Contagem
                                 </span>
                               ) : s.has_divergence ? (
                                 <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600 dark:text-amber-400">
@@ -944,6 +1194,64 @@ export default function InventoryDetailPage() {
                                   Validado
                                 </span>
                               )}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {/* Editar Título e Marca */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditProductItem({
+                                      isbn: s.isbn,
+                                      title: s.title,
+                                      publisher: s.publisher || ''
+                                    });
+                                    setEditTitle(s.title);
+                                    setEditPublisher(s.publisher || '');
+                                  }}
+                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-blue-50 dark:hover:bg-blue-950/30 text-slate-600 hover:text-blue-600 dark:text-slate-400 transition-colors"
+                                  title="Editar nome e marca do produto"
+                                >
+                                  <Edit3 className="h-3.5 w-3.5" />
+                                </button>
+
+                                {/* Alterar Quantidade Validada */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSkuAdjustModal({
+                                      isbn: s.isbn,
+                                      title: s.title,
+                                      current_qty: s.total_validated_qty,
+                                      locations: s.locations_list
+                                    });
+                                    setSkuAdjustNewQty(s.total_validated_qty);
+                                    setSkuAdjustLocation(s.locations_list[0] || 'AJUSTE-GESTAO');
+                                  }}
+                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-teal-50 dark:hover:bg-teal-950/30 text-slate-600 hover:text-teal-600 dark:text-slate-400 transition-colors"
+                                  title="Alterar quantidade contada do SKU"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+
+                                {/* Cancelar bips do SKU */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCancelModal({
+                                      type: 'sku',
+                                      title: `Cancelar Bips do Produto`,
+                                      description: `Deseja cancelar todas as bipagens do produto "${s.title}" (ISBN: ${s.isbn})? O histórico completo será preservado para auditoria.`,
+                                      isbn: s.isbn
+                                    });
+                                    setCancelPasswordInput('');
+                                  }}
+                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 hover:text-rose-600 dark:text-slate-400 transition-colors"
+                                  title="Cancelar todas as contagens deste produto (Preserva Histórico)"
+                                >
+                                  <Ban className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -971,7 +1279,8 @@ export default function InventoryDetailPage() {
                           <th className="px-4 py-3">ISBN / Código</th>
                           <th className="px-4 py-3">Título / Marca</th>
                           <th className="px-4 py-3 text-center">1ª Contagem</th>
-                          <th className="px-4 py-3 text-center">Recontagem</th>
+                          <th className="px-4 py-3 text-center">2ª Contagem</th>
+                          <th className="px-4 py-3 text-center text-indigo-600 dark:text-indigo-400">3ª Contagem (Desempate)</th>
                           <th className="px-4 py-3 text-center">Saldo Validado</th>
                           <th className="px-4 py-3 text-center">Divergência</th>
                           <th className="px-4 py-3">Situação</th>
@@ -1002,6 +1311,9 @@ export default function InventoryDetailPage() {
                             <td className="px-4 py-3 text-center font-semibold text-purple-600 dark:text-purple-400">
                               {d.count_2_qty > 0 ? d.count_2_qty : '-'}
                             </td>
+                            <td className="px-4 py-3 text-center font-bold text-indigo-600 dark:text-indigo-400">
+                              {d.count_3_qty && d.count_3_qty > 0 ? d.count_3_qty : '-'}
+                            </td>
                             <td className="px-4 py-3 text-center font-bold text-teal-600 dark:text-teal-400 bg-teal-500/5">
                               {d.validated_qty}
                             </td>
@@ -1017,7 +1329,17 @@ export default function InventoryDetailPage() {
                               </span>
                             </td>
                             <td className="px-4 py-3">
-                              {d.has_divergence ? (
+                              {d.count_3_qty && d.count_3_qty > 0 ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  3ª Contagem OK
+                                </span>
+                              ) : inventory?.require_third_count && d.has_divergence ? (
+                                <span className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 dark:text-rose-400 animate-pulse">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  Pendente 3ª Contagem
+                                </span>
+                              ) : d.has_divergence ? (
                                 <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600 dark:text-amber-400">
                                   <AlertTriangle className="h-3.5 w-3.5" />
                                   Divergente
@@ -1066,6 +1388,24 @@ export default function InventoryDetailPage() {
                                 >
                                   <Edit3 className="h-3.5 w-3.5" />
                                 </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCancelModal({
+                                      type: 'shelf_item',
+                                      title: `Cancelar Bips na Prateleira`,
+                                      description: `Deseja cancelar as bipagens do produto "${d.title}" na prateleira ${d.location}? O histórico será preservado.`,
+                                      location: d.location,
+                                      isbn: d.isbn
+                                    });
+                                    setCancelPasswordInput('');
+                                  }}
+                                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 hover:text-rose-600 dark:text-slate-400 transition-colors"
+                                  title="Cancelar bips deste item nesta prateleira"
+                                >
+                                  <Ban className="h-3.5 w-3.5" />
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -1104,20 +1444,18 @@ export default function InventoryDetailPage() {
                     type="button"
                     disabled={currentPage === 1}
                     onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                    className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors"
+                    className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-30 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                   >
                     <ChevronLeft className="h-4 w-4" />
                   </button>
-
-                  <span className="px-3 font-semibold text-slate-700 dark:text-slate-300">
-                    Página {currentPage} de {totalPages}
+                  <span className="px-2 font-semibold text-slate-700 dark:text-slate-300">
+                    {currentPage} / {totalPages}
                   </span>
-
                   <button
                     type="button"
                     disabled={currentPage >= totalPages}
                     onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                    className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors"
+                    className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-30 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                   >
                     <ChevronRight className="h-4 w-4" />
                   </button>
@@ -1289,6 +1627,167 @@ export default function InventoryDetailPage() {
                 >
                   {submittingProductEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Edit3 className="h-4 w-4" />}
                   Salvar Alterações
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal de Ajuste de Quantidade por SKU */}
+      {skuAdjustModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl max-w-md w-full p-6 space-y-5"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-teal-500/10 text-teal-600">
+                  <Pencil className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                    Alterar Quantidade Contada
+                  </h3>
+                  <p className="text-xs text-slate-500">Manutenção direta de quantidade do SKU</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSkuAdjustModal(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-1 text-xs text-slate-500">
+              <p>Produto: <strong className="text-slate-800 dark:text-slate-200">{skuAdjustModal.title}</strong></p>
+              <p>ISBN: <strong className="font-mono text-slate-800 dark:text-slate-200">{skuAdjustModal.isbn}</strong></p>
+            </div>
+
+            <form onSubmit={handleSaveSkuAdjust} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Localização / Prateleira para Registro:
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: PRATELEIRA A-01 ou AJUSTE-GESTAO"
+                  value={skuAdjustLocation}
+                  onChange={(e) => setSkuAdjustLocation(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white uppercase focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Nova Quantidade Validada (Unidades):
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  required
+                  value={skuAdjustNewQty}
+                  onChange={(e) => setSkuAdjustNewQty(parseInt(e.target.value) || 0)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSkuAdjustModal(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingSkuAdjust}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  {submittingSkuAdjust ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Salvar Ajuste
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Cancelamento com Senha */}
+      {cancelModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl max-w-md w-full p-6 space-y-5"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-rose-500/10 text-rose-600">
+                  <ShieldCheck className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                    {cancelModal.title}
+                  </h3>
+                  <p className="text-xs text-rose-600 dark:text-rose-400 font-semibold">
+                    Confirmação de Segurança
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCancelModal(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              {cancelModal.description}
+            </p>
+
+            <form onSubmit={handleConfirmCancelWithPassword} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Senha de Login ou PIN do Supervisor:
+                </label>
+                <input
+                  type="password"
+                  required
+                  autoFocus
+                  placeholder="Digite a senha do usuário ou PIN (ex: 1234)"
+                  value={cancelPasswordInput}
+                  onChange={(e) => setCancelPasswordInput(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  🔒 O histórico desta ação ficará armazenado com rastreabilidade total para auditoria.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCancelModal(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingCancel}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors disabled:opacity-50 shadow-sm"
+                >
+                  {submittingCancel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+                  Confirmar Cancelamento
                 </button>
               </div>
             </form>

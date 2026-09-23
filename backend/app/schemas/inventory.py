@@ -39,6 +39,7 @@ class InventoryResponse(InventoryBase):
     access_token: Optional[str] = None
     is_public_access_enabled: Optional[bool] = True
     supervisor_pin: Optional[str] = "1234"
+    require_third_count: Optional[bool] = False
     created_by_user_id: Optional[int] = None
     finalized_by_user_id: Optional[int] = None
     finalized_at: Optional[datetime] = None
@@ -63,6 +64,7 @@ class SessionItemSummary(BaseModel):
     total_quantity: int
     count_1_qty: int = 0
     count_2_qty: int = 0
+    count_3_qty: int = 0
     has_divergence: bool = False
     last_scanned_at: Optional[datetime] = None
 
@@ -170,6 +172,7 @@ class DiscrepancyItemResponse(BaseModel):
     location: str
     count_1_qty: int = 0
     count_2_qty: int = 0
+    count_3_qty: int = 0
     difference: int = 0
     has_divergence: bool = False
     validated_qty: int = 0
@@ -184,8 +187,12 @@ class SkuSummaryResponse(BaseModel):
     locations_list: List[str] = []
     total_count_1: int = 0
     total_count_2: int = 0
+    total_count_3: int = 0
     total_validated_qty: int = 0
     has_divergence: bool = False
+
+class ToggleThirdCountRequest(BaseModel):
+    require_third_count: bool
 
 class AuditAdjustmentRequest(BaseModel):
     pin: str
@@ -202,5 +209,21 @@ class InventoryItemUpdateRequest(BaseModel):
 class InventoryStatusUpdateRequest(BaseModel):
     status: str
     password: str
+
+class SkuQuantityAdjustRequest(BaseModel):
+    new_quantity: int
+    location: Optional[str] = None
+    pin: Optional[str] = None
+
+class SessionCancelRequest(BaseModel):
+    pin_or_password: str
+    reason: Optional[str] = None
+
+class BulkCancelEmptySessionsRequest(BaseModel):
+    pin_or_password: str
+
+class SkuCancelScansRequest(BaseModel):
+    pin_or_password: str
+
 
 

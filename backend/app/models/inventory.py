@@ -34,6 +34,7 @@ class Inventory(Base):
     access_token = Column(String(64), unique=True, index=True, nullable=True)
     is_public_access_enabled = Column(Boolean, default=True, nullable=False)
     supervisor_pin = Column(String(50), default="1234", nullable=True)
+    require_third_count = Column(Boolean, default=False, nullable=False)
     
     created_by_user_id = Column(Integer, ForeignKey("usr_user.id"), nullable=True)
     finalized_by_user_id = Column(Integer, ForeignKey("usr_user.id"), nullable=True)

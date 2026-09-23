@@ -126,7 +126,19 @@ export default function ProductSearchPage() {
 
   // Distribuidores
   const [distLoading, setDistLoading] = useState(false);
+  const [distLoaded,  setDistLoaded]  = useState(false);
   const [distData,    setDistData]    = useState<DistributorResult[]>([]);
+  const [autoFetchDistributors, setAutoFetchDistributors] = useState<boolean>(false);
+
+  // Inicializa autoFetchDistributors do localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('cronuz_auto_dist_search');
+      if (saved !== null) {
+        setAutoFetchDistributors(saved === 'true');
+      }
+    } catch {}
+  }, []);
 
   // Camera Scanner Modal
   const [showCameraScanner, setShowCameraScanner] = useState(false);
@@ -171,6 +183,44 @@ export default function ProductSearchPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // ── Consulta distribuidores sob demanda ─────
+  const fetchDistributorStock = useCallback(async (isbnToFetch?: string) => {
+    const targetIsbn = isbnToFetch || product?.COD_BARRA_ITEM || product?.COD_ISBN_ITEM || '';
+    if (!targetIsbn) {
+      toast.info('Produto sem ISBN / Código de barras para consulta em fornecedores.');
+      return;
+    }
+    setDistLoading(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiUrl}/product-search/distributor-stock?isbn=${encodeURIComponent(targetIsbn)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDistData(data.distributors || []);
+        setDistLoaded(true);
+      } else {
+        toast.error('Erro ao consultar fornecedores parceiros.');
+      }
+    } catch {
+      toast.error('Falha de conexão ao consultar fornecedores.');
+    } finally {
+      setDistLoading(false);
+    }
+  }, [apiUrl, product]);
+
+  const handleToggleAutoDist = (checked: boolean) => {
+    setAutoFetchDistributors(checked);
+    try {
+      localStorage.setItem('cronuz_auto_dist_search', String(checked));
+    } catch {}
+    if (checked && product && !distLoaded && !distLoading) {
+      const isbn = product.COD_BARRA_ITEM || product.COD_ISBN_ITEM || '';
+      if (isbn) fetchDistributorStock(isbn);
+    }
+  };
+
   // ── Seleciona produto e busca estoque ─────
   const selectProduct = useCallback(async (p: HorusProduct) => {
     setProduct(p);
@@ -178,51 +228,60 @@ export default function ProductSearchPage() {
     setStockStatus(null);
     setStockErrorMessage(null);
     setDistData([]);
+    setDistLoaded(false);
     if (!p.COD_ITEM) return;
 
     const token = getToken();
-
-    // Horus stock + distribuidor em paralelo
-    setStockLoading(true);
-    setDistLoading(true);
-
     const isbn = p.COD_BARRA_ITEM || p.COD_ISBN_ITEM || '';
 
-    const [horusRes, distRes] = await Promise.allSettled([
-      fetch(`${apiUrl}/product-search/stock?cod_item=${p.COD_ITEM}`, {
+    // 1. HORUS STOCK: Dispara imediatamente sem bloquear a UI
+    setStockLoading(true);
+    fetch(`${apiUrl}/product-search/stock?cod_item=${p.COD_ITEM}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        if (res.ok) {
+          const data = await res.json();
+          setStockData(data.branches || []);
+          setStockStatus(data.status || 'ok');
+          setStockErrorMessage(data.error_message || null);
+          if (data.status === 'offline') {
+            toast.error('O servidor do Horus não respondeu para as filiais.');
+          }
+        } else {
+          setStockStatus('offline');
+          setStockErrorMessage('Não foi possível comunicar com o servidor do ERP Horus.');
+          toast.error('Falha de conexão ao consultar estoque no Horus.');
+        }
+      })
+      .catch(() => {
+        setStockStatus('offline');
+        setStockErrorMessage('Não foi possível comunicar com o servidor do ERP Horus.');
+        toast.error('Falha de conexão ao consultar estoque no Horus.');
+      })
+      .finally(() => {
+        setStockLoading(false);
+      });
+
+    // 2. FORNECEDORES: Se autoFetchDistributors estiver ligado, busca em segundo plano
+    if (autoFetchDistributors && isbn) {
+      setDistLoading(true);
+      fetch(`${apiUrl}/product-search/distributor-stock?isbn=${encodeURIComponent(isbn)}`, {
         headers: { Authorization: `Bearer ${token}` },
-      }),
-      isbn
-        ? fetch(`${apiUrl}/product-search/distributor-stock?isbn=${encodeURIComponent(isbn)}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          })
-        : Promise.resolve(null),
-    ]);
-
-    // Horus
-    if (horusRes.status === 'fulfilled' && horusRes.value?.ok) {
-      const data = await horusRes.value.json();
-      setStockData(data.branches || []);
-      setStockStatus(data.status || 'ok');
-      setStockErrorMessage(data.error_message || null);
-      if (data.status === 'offline') {
-        toast.error('O servidor do Horus não respondeu para as filiais.');
-      }
-    } else {
-      setStockStatus('offline');
-      setStockErrorMessage('Não foi possível comunicar com o servidor do ERP Horus.');
-      toast.error('Falha de conexão ao consultar estoque no Horus.');
+      })
+        .then(async (res) => {
+          if (res.ok) {
+            const data = await res.json();
+            setDistData(data.distributors || []);
+            setDistLoaded(true);
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          setDistLoading(false);
+        });
     }
-    setStockLoading(false);
-
-    // Distribuidores
-    if (distRes.status === 'fulfilled' && distRes.value && (distRes.value as Response).ok) {
-      const data = await (distRes.value as Response).json();
-      setDistData(data.distributors || []);
-    }
-    setDistLoading(false);
-
-  }, [apiUrl]);
+  }, [apiUrl, autoFetchDistributors]);
 
   // ── Executa busca de produto ───────────────
   const executeSearch = useCallback(async (customTerm?: string, customOption?: SearchOption['value']) => {
@@ -241,6 +300,7 @@ export default function ProductSearchPage() {
     setStockStatus(null);
     setStockErrorMessage(null);
     setDistData([]);
+    setDistLoaded(false);
     setSearched(true);
 
     try {
@@ -805,32 +865,97 @@ export default function ProductSearchPage() {
                     )}
                   </div>
 
-                  {/* 2. ESTOQUE DOS DISTRIBUIDORES */}
-                  {(distLoading || distData.length > 0) && (
+                  {/* 2. ESTOQUE DOS DISTRIBUIDORES / FORNECEDORES PARCEIROS */}
+                  {product && (
                     <div className="w-full rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
-                      <div className="bg-slate-50 dark:bg-slate-800/80 px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                      <div className="bg-slate-50 dark:bg-slate-800/80 px-4 sm:px-6 py-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-600">
                             <Truck className="w-4 h-4" />
                           </div>
                           <div>
-                            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
-                              Estoque Distribuidores Parceiros
+                            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                              Estoque Fornecedores Parceiros
+                              {distLoaded && !distLoading && (
+                                <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full">
+                                  Ao vivo
+                                </span>
+                              )}
                             </h3>
                           </div>
                         </div>
-                        {distLoading && (
-                          <div className="flex items-center gap-2 text-xs text-[#00b4b4] font-medium">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            <span>Consultando parceiros…</span>
-                          </div>
-                        )}
+
+                        {/* Controles de busca: Toggle automático e botão sob demanda */}
+                        <div className="flex items-center gap-3">
+                          <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs text-slate-500 dark:text-slate-400 font-medium select-none hover:text-slate-700 dark:hover:text-slate-200">
+                            <input
+                              type="checkbox"
+                              checked={autoFetchDistributors}
+                              onChange={e => handleToggleAutoDist(e.target.checked)}
+                              className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
+                            />
+                            <span>Buscar automático</span>
+                          </label>
+
+                          {distLoading ? (
+                            <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-medium bg-emerald-50 dark:bg-emerald-950/50 px-3 py-1.5 rounded-lg border border-emerald-200/50">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Consultando...</span>
+                            </div>
+                          ) : distLoaded ? (
+                            <button
+                              type="button"
+                              onClick={() => fetchDistributorStock()}
+                              title="Atualizar saldo nos parceiros"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-medium transition-colors cursor-pointer"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>Atualizar</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => fetchDistributorStock()}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                            >
+                              <Truck className="w-3.5 h-3.5" />
+                              <span>Consultar Fornecedores</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {distLoading && distData.length === 0 ? (
                         <div className="flex items-center justify-center gap-3 py-12 text-slate-400">
                           <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
-                          <span className="text-sm font-medium">Consultando saldo nos distribuidores integrados…</span>
+                          <span className="text-sm font-medium">Consultando saldo nos fornecedores integrados…</span>
+                        </div>
+                      ) : !distLoaded && distData.length === 0 ? (
+                        <div className="p-6 flex flex-col items-center justify-center text-center gap-2.5">
+                          <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 flex items-center justify-center">
+                            <Truck className="w-5 h-5" />
+                          </div>
+                          <div className="max-w-md">
+                            <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                              Consulta sob demanda
+                            </p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                              O estoque local das suas lojas já está disponível acima. Clique abaixo para consultar o saldo em tempo real nos fornecedores parceiros (Catavento, Disal, etc.) ou ative &quot;Buscar automático&quot;.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => fetchDistributorStock()}
+                            disabled={distLoading}
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all cursor-pointer mt-1"
+                          >
+                            <Truck className="w-4 h-4" />
+                            Consultar Estoque nos Fornecedores
+                          </button>
+                        </div>
+                      ) : distLoaded && distData.length === 0 ? (
+                        <div className="p-8 text-center text-slate-400 text-xs">
+                          Nenhum fornecedor parceiro habilitado ou com saldo para este produto.
                         </div>
                       ) : (
                         <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
