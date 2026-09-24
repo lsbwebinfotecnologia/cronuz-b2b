@@ -7,11 +7,14 @@ import {
   FileSpreadsheet, 
   CheckCircle2, 
   AlertCircle, 
+  AlertTriangle,
   Loader2, 
   Trash2, 
   RefreshCw,
   X,
-  FileCheck
+  FileCheck,
+  ArrowRight,
+  ShieldAlert
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -38,6 +41,14 @@ export default function POSCatalogLoadModal({
   const [activeTab, setActiveTab] = useState<'consignment' | 'cronuz' | 'spreadsheet'>('consignment');
   const [loading, setLoading] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
+  const [loadReport, setLoadReport] = useState<{
+    sourceName: string;
+    validCount: number;
+    duplicateCount: number;
+    zeroPriceCount: number;
+    duplicateSample?: string[];
+    zeroPriceSample?: string[];
+  } | null>(null);
 
   // Consignment state
   const [consignmentCustomerId, setConsignmentCustomerId] = useState('');
@@ -52,6 +63,48 @@ export default function POSCatalogLoadModal({
   const userStr = getUser();
   const currentUser = typeof userStr === 'string' ? JSON.parse(userStr) : userStr;
   const companyId = currentUser?.company_id;
+
+  function processLoadOutcome(
+    sourceName: string,
+    serverData: any,
+    localSaveRes: { savedCount: number; duplicateCount: number; zeroPriceCount: number }
+  ) {
+    const totalDuplicates = (serverData.duplicate_count || 0) + (localSaveRes.duplicateCount || 0);
+    const totalZeroPrice = (serverData.zero_price_count || 0) + (localSaveRes.zeroPriceCount || 0);
+    const validCount = localSaveRes.savedCount;
+
+    const report = {
+      sourceName,
+      validCount,
+      duplicateCount: totalDuplicates,
+      zeroPriceCount: totalZeroPrice,
+      duplicateSample: serverData.duplicate_sample || [],
+      zeroPriceSample: serverData.zero_price_sample || [],
+    };
+
+    setLoadReport(report);
+
+    if (validCount === 0 && (totalDuplicates > 0 || totalZeroPrice > 0)) {
+      toast.error(`Nenhum item válido importado de ${sourceName}. Verifique se há produtos com preço preenchido.`);
+      return;
+    }
+
+    if (totalDuplicates > 0 && totalZeroPrice > 0) {
+      toast.warning(
+        `Importados ${validCount} produtos únicos. ${totalDuplicates} duplicados ignorados e ${totalZeroPrice} com preço zerado descartados.`
+      );
+    } else if (totalDuplicates > 0) {
+      toast.warning(
+        `Importados ${validCount} produtos únicos. ${totalDuplicates} com ISBN duplicado foram ignorados.`
+      );
+    } else if (totalZeroPrice > 0) {
+      toast.warning(
+        `Importados ${validCount} produtos. ${totalZeroPrice} com preço zerado foram ignorados.`
+      );
+    } else {
+      toast.success(`${validCount} produtos carregados com sucesso no PDV offline!`);
+    }
+  }
 
   async function handleLoadFromCronuz() {
     if (!companyId) return;
@@ -72,11 +125,10 @@ export default function POSCatalogLoadModal({
 
       const data = await res.json();
       setProgressMsg(`Salvando ${data.items.length} itens no banco offline...`);
-      await saveCatalogItems(data.items);
+      const saveRes = await saveCatalogItems(data.items);
       const newCount = await getCatalogCount();
       onCatalogUpdated(newCount);
-      toast.success(`${data.items.length} produtos carregados com sucesso no PDV offline!`);
-      onClose();
+      processLoadOutcome('Catálogo Geral', data, saveRes);
     } catch (err: any) {
       toast.error(err.message || 'Erro ao carregar catálogo');
     } finally {
@@ -109,16 +161,19 @@ export default function POSCatalogLoadModal({
 
       const data = await res.json();
       if (!data.items || data.items.length === 0) {
+        if ((data.zero_price_count || 0) > 0 || (data.duplicate_count || 0) > 0) {
+          processLoadOutcome('Consignação Horus', data, { savedCount: 0, duplicateCount: 0, zeroPriceCount: 0 });
+          return;
+        }
         toast.warning('Nenhum item consignado encontrado neste contrato/cliente.');
         return;
       }
 
       setProgressMsg(`Salvando ${data.items.length} itens consignados no PDV offline...`);
-      await saveCatalogItems(data.items);
+      const saveRes = await saveCatalogItems(data.items);
       const newCount = await getCatalogCount();
       onCatalogUpdated(newCount);
-      toast.success(`${data.items.length} itens da consignação carregados com sucesso!`);
-      onClose();
+      processLoadOutcome('Consignação Horus', data, saveRes);
     } catch (err: any) {
       toast.error(err.message || 'Erro ao carregar consignação');
     } finally {
@@ -157,11 +212,10 @@ export default function POSCatalogLoadModal({
 
       const data = await res.json();
       setProgressMsg(`Gravando ${data.items.length} produtos na memória local...`);
-      await saveCatalogItems(data.items);
+      const saveRes = await saveCatalogItems(data.items);
       const newCount = await getCatalogCount();
       onCatalogUpdated(newCount);
-      toast.success(`${data.items.length} produtos importados da planilha com sucesso!`);
-      onClose();
+      processLoadOutcome('Planilha Excel/CSV', data, saveRes);
     } catch (err: any) {
       toast.error(err.message || 'Erro no upload da planilha');
     } finally {
@@ -248,101 +302,185 @@ export default function POSCatalogLoadModal({
 
         {/* Tab Body */}
         <div className="p-6 overflow-y-auto flex-1">
-          {activeTab === 'consignment' && (
-            <div className="space-y-4">
-              <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 rounded-xl text-xs text-amber-800 dark:text-amber-300">
-                Ideal para eventos e feiras: busca todos os itens, saldos e preços autorizados de um contrato de consignação aberto no Horus.
+          {loadReport ? (
+            <div className="space-y-4 animate-in fade-in duration-200">
+              <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
+                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Resultado da Carga: {loadReport.sourceName}
+                </h3>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  ID do Cliente no Cronuz / Horus *
-                </label>
-                <input
-                  type="number"
-                  placeholder="Ex: 142"
-                  value={consignmentCustomerId}
-                  onChange={(e) => setConsignmentCustomerId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                />
+              {/* Sucesso */}
+              <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 flex items-start gap-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                    {loadReport.validCount} produtos únicos carregados no PDV offline
+                  </h4>
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5">
+                    Estes itens estão salvos no banco local e prontos para busca instantânea e venda sem internet.
+                  </p>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Número do Contrato Horus (Opcional - se vazio busca o ativo)
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ex: 5042"
-                  value={consignmentCodCtr}
-                  onChange={(e) => setConsignmentCodCtr(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                />
-              </div>
+              {/* Alerta de Duplicados */}
+              {loadReport.duplicateCount > 0 && (
+                <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                      {loadReport.duplicateCount} item(ns) com ISBN repetido ignorado(s)
+                    </h4>
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                      Para evitar duplicidade de estoque e produtos repetidos no PDV, o sistema manteve apenas o 1º registro de cada ISBN e desconsiderou as repetições.
+                    </p>
+                    {loadReport.duplicateSample && loadReport.duplicateSample.length > 0 && (
+                      <p className="text-[10px] text-amber-800 dark:text-amber-300 mt-1 font-mono break-all">
+                        Exemplos: {loadReport.duplicateSample.join(', ')}
+                        {loadReport.duplicateCount > loadReport.duplicateSample.length ? '...' : ''}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
-              <button
-                onClick={handleLoadFromConsignment}
-                disabled={loading}
-                className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 transition disabled:opacity-50"
-              >
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                Carregar Itens da Consignação
-              </button>
-            </div>
-          )}
+              {/* Alerta de Preço Zerado */}
+              {loadReport.zeroPriceCount > 0 && (
+                <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/60 flex items-start gap-3">
+                  <ShieldAlert className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-xs font-bold text-rose-900 dark:text-rose-200">
+                      {loadReport.zeroPriceCount} item(ns) com preço zerado (R$ 0,00) descartado(s)
+                    </h4>
+                    <p className="text-[11px] text-rose-700 dark:text-rose-400 mt-0.5">
+                      Itens sem preço ou com valor R$ 0,00 foram bloqueados para evitar divergência de caixa e vendas incorretas no PDV.
+                    </p>
+                    {loadReport.zeroPriceSample && loadReport.zeroPriceSample.length > 0 && (
+                      <p className="text-[10px] text-rose-800 dark:text-rose-300 mt-1 font-mono break-all">
+                        Exemplos: {loadReport.zeroPriceSample.join(', ')}
+                        {loadReport.zeroPriceCount > loadReport.zeroPriceSample.length ? '...' : ''}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
-          {activeTab === 'cronuz' && (
-            <div className="space-y-4">
-              <div className="p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/40 rounded-xl text-xs text-blue-800 dark:text-blue-300">
-                Carrega todos os produtos ativos cadastrados no sistema Cronuz B2B da sua empresa para consulta e venda rápida.
-              </div>
-
-              <button
-                onClick={handleLoadFromCronuz}
-                disabled={loading}
-                className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 transition disabled:opacity-50"
-              >
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
-                Sincronizar Catálogo Geral para o PDV
-              </button>
-            </div>
-          )}
-
-          {activeTab === 'spreadsheet' && (
-            <div className="space-y-4">
-              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 rounded-xl text-xs text-emerald-800 dark:text-emerald-300">
-                Importe uma planilha Excel (.xlsx) ou CSV com as colunas: <strong>ISBN / Código de Barras</strong>, <strong>Título</strong>, <strong>Preço</strong> e <strong>Estoque</strong>.
-              </div>
-
-              <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl p-6 text-center hover:border-indigo-500 transition bg-slate-50 dark:bg-slate-800/50">
-                <input
-                  type="file"
-                  accept=".xlsx,.csv"
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
-                  className="hidden"
-                  id="spreadsheet-upload-input"
-                />
-                <label
-                  htmlFor="spreadsheet-upload-input"
-                  className="cursor-pointer flex flex-col items-center gap-2"
+              <div className="pt-2 flex flex-col sm:flex-row gap-2">
+                <button
+                  onClick={onClose}
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-indigo-500/20 transition"
                 >
-                  <FileSpreadsheet className="w-10 h-10 text-indigo-500" />
-                  <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                    {file ? file.name : 'Clique para selecionar a planilha'}
-                  </span>
-                  <span className="text-xs text-slate-400">Arquivos .xlsx ou .csv</span>
-                </label>
+                  <span>Concluir e Voltar ao PDV</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setLoadReport(null)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold transition"
+                >
+                  Carregar Outro Lote
+                </button>
               </div>
-
-              <button
-                onClick={handleUploadSpreadsheet}
-                disabled={loading || !file}
-                className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition disabled:opacity-50"
-              >
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                Importar Planilha no PDV
-              </button>
             </div>
+          ) : (
+            <>
+              {activeTab === 'consignment' && (
+                <div className="space-y-4">
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 rounded-xl text-xs text-amber-800 dark:text-amber-300">
+                    Ideal para eventos e feiras: busca todos os itens, saldos e preços autorizados de um contrato de consignação aberto no Horus.
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      ID do Cliente no Cronuz / Horus *
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="Ex: 142"
+                      value={consignmentCustomerId}
+                      onChange={(e) => setConsignmentCustomerId(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Número do Contrato Horus (Opcional - se vazio busca o ativo)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: 5042"
+                      value={consignmentCodCtr}
+                      onChange={(e) => setConsignmentCodCtr(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleLoadFromConsignment}
+                    disabled={loading}
+                    className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 transition disabled:opacity-50"
+                  >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    Carregar Itens da Consignação
+                  </button>
+                </div>
+              )}
+
+              {activeTab === 'cronuz' && (
+                <div className="space-y-4">
+                  <div className="p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/40 rounded-xl text-xs text-blue-800 dark:text-blue-300">
+                    Carrega todos os produtos ativos cadastrados no sistema Cronuz B2B da sua empresa para consulta e venda rápida.
+                  </div>
+
+                  <button
+                    onClick={handleLoadFromCronuz}
+                    disabled={loading}
+                    className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 transition disabled:opacity-50"
+                  >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+                    Sincronizar Catálogo Geral para o PDV
+                  </button>
+                </div>
+              )}
+
+              {activeTab === 'spreadsheet' && (
+                <div className="space-y-4">
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 rounded-xl text-xs text-emerald-800 dark:text-emerald-300">
+                    Importe uma planilha Excel (.xlsx) ou CSV com as colunas: <strong>ISBN / Código de Barras</strong>, <strong>Título</strong>, <strong>Preço</strong> e <strong>Estoque</strong>.
+                  </div>
+
+                  <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl p-6 text-center hover:border-indigo-500 transition bg-slate-50 dark:bg-slate-800/50">
+                    <input
+                      type="file"
+                      accept=".xlsx,.csv"
+                      onChange={(e) => setFile(e.target.files?.[0] || null)}
+                      className="hidden"
+                      id="spreadsheet-upload-input"
+                    />
+                    <label
+                      htmlFor="spreadsheet-upload-input"
+                      className="cursor-pointer flex flex-col items-center gap-2"
+                    >
+                      <FileSpreadsheet className="w-10 h-10 text-indigo-500" />
+                      <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                        {file ? file.name : 'Clique para selecionar a planilha'}
+                      </span>
+                      <span className="text-xs text-slate-400">Arquivos .xlsx ou .csv</span>
+                    </label>
+                  </div>
+
+                  <button
+                    onClick={handleUploadSpreadsheet}
+                    disabled={loading || !file}
+                    className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition disabled:opacity-50"
+                  >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                    Importar Planilha no PDV
+                  </button>
+                </div>
+              )}
+            </>
           )}
 
           {progressMsg && (

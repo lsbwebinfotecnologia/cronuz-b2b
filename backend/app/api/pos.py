@@ -229,6 +229,25 @@ def close_pos_session(
 # CARGA DE CATÁLOGO OFFLINE (Consignação Horus, Acervo ou Local)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _clean_barcode(raw_val) -> str:
+    """Normaliza o código de barras/ISBN, tratando números e notações científicas do Excel."""
+    if raw_val is None:
+        return ""
+    val_str = str(raw_val).strip()
+    if not val_str:
+        return ""
+    try:
+        if "e" in val_str.lower() or "." in val_str:
+            f = float(val_str)
+            if f.is_integer():
+                return str(int(f))
+    except Exception:
+        pass
+    if val_str.endswith(".0"):
+        val_str = val_str[:-2]
+    return val_str
+
+
 @router.get("/catalog-load")
 async def load_pos_catalog(
     company_id: int,
@@ -242,10 +261,17 @@ async def load_pos_catalog(
     """
     Retorna a lista de produtos formatada para alimentar o banco local IndexedDB do PDV.
     Suporta Contrato de Consignação Horus, Catálogo Cronuz ou Catálogo Geral.
+    Regras estritas:
+    - Preço zerado (<= 0) é descartado.
+    - ISBNs duplicados são ignorados (mantendo apenas o primeiro registro).
+    - Retorna resumo com quantidade de duplicados e itens com preço zero.
     """
     company = _assert_pos_access(current_user, company_id, db)
 
     items = []
+    seen_barcodes = set()
+    duplicate_items = []
+    zero_price_items = []
 
     # 1. Carga via Contrato de Consignação Horus
     if source == "CONSIGNMENT" and customer_id:
@@ -277,15 +303,28 @@ async def load_pos_catalog(
             for row in raw_list:
                 if row.get("Falha"):
                     continue
-                barcode = str(row.get("COD_BARRA_ITEM") or row.get("COD_ITEM") or "").strip()
+                raw_code = row.get("COD_BARRA_ITEM") or row.get("COD_ITEM") or ""
+                barcode = _clean_barcode(raw_code)
                 if not barcode:
                     continue
+
                 vlr_str = str(row.get("VLR_PRECO") or row.get("VLR_LIQUIDO") or "0").replace(",", ".")
                 try:
                     price = float(vlr_str)
                 except Exception:
                     price = 0.0
 
+                # [REQUISITO] Não possibilitar item com preço zerado
+                if price <= 0:
+                    zero_price_items.append(barcode)
+                    continue
+
+                # [REQUISITO] Não deixar item com mesmo ISBN duplicado
+                if barcode in seen_barcodes:
+                    duplicate_items.append(barcode)
+                    continue
+
+                seen_barcodes.add(barcode)
                 saldo = float(row.get("SALDO_ITENS") or row.get("QTD_ATENDIDA") or 0)
 
                 items.append({
@@ -302,14 +341,22 @@ async def load_pos_catalog(
             logger.error("Erro ao carregar consignação Horus: %s", str(e))
             raise HTTPException(status_code=400, detail=f"Erro ao buscar consignação no Horus: {str(e)}")
 
-        return {"source": "CONSIGNMENT", "count": len(items), "items": items}
+        return {
+            "source": "CONSIGNMENT",
+            "count": len(items),
+            "duplicate_count": len(duplicate_items),
+            "zero_price_count": len(zero_price_items),
+            "duplicate_sample": duplicate_items[:10],
+            "zero_price_sample": zero_price_items[:10],
+            "items": items,
+        }
 
     # 2. Carga padrão via Catálogo Cronuz
     products = (
         db.query(Product)
         .filter(
             Product.company_id == company_id,
-            Product.is_active == True
+            Product.status == "ACTIVE"
         )
         .order_by(Product.name)
         .limit(limit)
@@ -317,19 +364,44 @@ async def load_pos_catalog(
     )
 
     for p in products:
-        barcode = str(p.ean_gtin or p.sku or p.id).strip()
+        raw_code = p.ean_gtin or p.sku or p.id
+        barcode = _clean_barcode(raw_code)
+        if not barcode:
+            continue
+
+        price = float(p.promotional_price or p.base_price or 0.0)
+        # [REQUISITO] Não possibilitar item com preço zerado
+        if price <= 0:
+            zero_price_items.append(barcode)
+            continue
+
+        # [REQUISITO] Não deixar item com mesmo ISBN duplicado
+        if barcode in seen_barcodes:
+            duplicate_items.append(barcode)
+            continue
+
+        seen_barcodes.add(barcode)
+
         items.append({
             "barcode": barcode,
             "sku": p.sku or "",
             "title": p.name or "Sem nome",
             "publisher": p.brand or "",
-            "price": float(p.price or 0.0),
-            "stock": float(p.stock or 0),
+            "price": price,
+            "stock": float(p.stock_quantity or 0),
             "product_id": p.id,
             "source": "CRONUZ_CATALOG",
         })
 
-    return {"source": "CRONUZ_CATALOG", "count": len(items), "items": items}
+    return {
+        "source": "CRONUZ_CATALOG",
+        "count": len(items),
+        "duplicate_count": len(duplicate_items),
+        "zero_price_count": len(zero_price_items),
+        "duplicate_sample": duplicate_items[:10],
+        "zero_price_sample": zero_price_items[:10],
+        "items": items,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -346,13 +418,19 @@ async def upload_pos_spreadsheet(
     """
     Recebe um arquivo Excel (.xlsx) ou CSV com colunas:
     ISBN/Código de Barras, Título/Descrição, Preço, Estoque (opcional).
-    Retorna os itens formatados para carga no IndexedDB do PDV.
+    Regras estritas:
+    - Preço zerado (<= 0) é descartado.
+    - ISBNs repetidos são ignorados (apenas a 1ª ocorrência sobe).
+    - Retorna resumo com contadores de duplicados e preço zerado para alertar o usuário.
     """
     _assert_pos_access(current_user, company_id, db)
 
     filename = file.filename.lower()
     content = await file.read()
     items = []
+    seen_barcodes = set()
+    duplicate_items = []
+    zero_price_items = []
 
     if filename.endswith(".xlsx"):
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
@@ -370,7 +448,10 @@ async def upload_pos_spreadsheet(
             for r in rows[1:]:
                 if not r or len(r) <= isbn_idx or not r[isbn_idx]:
                     continue
-                barcode = str(r[isbn_idx]).strip().replace(".0", "")
+                barcode = _clean_barcode(r[isbn_idx])
+                if not barcode:
+                    continue
+
                 title = str(r[title_idx]).strip() if len(r) > title_idx and r[title_idx] else "Item Importado"
                 
                 price = 0.0
@@ -379,6 +460,18 @@ async def upload_pos_spreadsheet(
                         price = float(str(r[price_idx]).replace(",", "."))
                     except Exception:
                         price = 0.0
+
+                # [REQUISITO] Não possibilitar item com preço zerado
+                if price <= 0:
+                    zero_price_items.append(barcode)
+                    continue
+
+                # [REQUISITO] Não deixar item com mesmo ISBN duplicado
+                if barcode in seen_barcodes:
+                    duplicate_items.append(barcode)
+                    continue
+
+                seen_barcodes.add(barcode)
 
                 stock = 100.0
                 if stock_idx >= 0 and len(r) > stock_idx and r[stock_idx] is not None:
@@ -413,7 +506,10 @@ async def upload_pos_spreadsheet(
             for r in rows[1:]:
                 if not r or len(r) <= isbn_idx or not r[isbn_idx].strip():
                     continue
-                barcode = r[isbn_idx].strip()
+                barcode = _clean_barcode(r[isbn_idx])
+                if not barcode:
+                    continue
+
                 title = r[title_idx].strip() if len(r) > title_idx and r[title_idx] else "Item Importado"
                 price = 0.0
                 if len(r) > price_idx and r[price_idx]:
@@ -421,6 +517,19 @@ async def upload_pos_spreadsheet(
                         price = float(r[price_idx].replace(",", "."))
                     except Exception:
                         price = 0.0
+
+                # [REQUISITO] Não possibilitar item com preço zerado
+                if price <= 0:
+                    zero_price_items.append(barcode)
+                    continue
+
+                # [REQUISITO] Não deixar item com mesmo ISBN duplicado
+                if barcode in seen_barcodes:
+                    duplicate_items.append(barcode)
+                    continue
+
+                seen_barcodes.add(barcode)
+
                 stock = 100.0
                 if stock_idx >= 0 and len(r) > stock_idx and r[stock_idx]:
                     try:
@@ -443,6 +552,10 @@ async def upload_pos_spreadsheet(
     return {
         "filename": file.filename,
         "count": len(items),
+        "duplicate_count": len(duplicate_items),
+        "zero_price_count": len(zero_price_items),
+        "duplicate_sample": duplicate_items[:10],
+        "zero_price_sample": zero_price_items[:10],
         "items": items,
     }
 

@@ -61,7 +61,72 @@ def test_pos_imports():
     assert cfg2["validate_stock"] is False
     print("✅ Teste 5: Venda sem estoque liberada quando pdv_allow_out_of_stock=True")
 
-    print("\n🎉 TODOS OS TESTES PASSARAM COM 100% DE SUCESSO!")
+    # Teste 6: Normalização de Barcodes (_clean_barcode)
+    from app.api.pos import _clean_barcode
+    assert _clean_barcode("9788576570000") == "9788576570000"
+    assert _clean_barcode("9788576570000.0") == "9788576570000"
+    assert _clean_barcode(" 9788576570000 ") == "9788576570000"
+    assert _clean_barcode(9788576570000.0) == "9788576570000"
+    print("✅ Teste 6: Normalização de barcodes de planilha e Excel validada")
+
+    # Teste 7: Regra de Deduplicação e Preço Zerado na Carga de Catálogo Cronuz
+    import asyncio
+    from app.api.pos import load_pos_catalog
+    from app.models.product import Product
+
+    prod_valid1 = MagicMock(spec=Product, id=1, ean_gtin="9780001", sku="SKU1", name="Livro 1", brand="Editora A", base_price=45.0, promotional_price=None, stock_quantity=10, status="ACTIVE")
+    prod_dup = MagicMock(spec=Product, id=2, ean_gtin="9780001", sku="SKU1-DUP", name="Livro 1 Duplicado", brand="Editora A", base_price=45.0, promotional_price=None, stock_quantity=5, status="ACTIVE")
+    prod_zero_price = MagicMock(spec=Product, id=3, ean_gtin="9780002", sku="SKU2", name="Livro Grátis", brand="Editora B", base_price=0.0, promotional_price=None, stock_quantity=20, status="ACTIVE")
+    prod_valid2 = MagicMock(spec=Product, id=4, ean_gtin="9780003", sku="SKU3", name="Livro 3", brand="Editora C", base_price=60.0, promotional_price=None, stock_quantity=15, status="ACTIVE")
+
+    db_catalog = MagicMock()
+    company_cat = MagicMock(id=1, module_pdv=True)
+    db_catalog.query().filter().first.return_value = company_cat
+    db_catalog.query().filter().order_by().limit().all.return_value = [prod_valid1, prod_dup, prod_zero_price, prod_valid2]
+
+    catalog_res = asyncio.run(load_pos_catalog(
+        company_id=1,
+        source="CRONUZ_CATALOG",
+        db=db_catalog,
+        current_user=seller_user_co1
+    ))
+
+    assert catalog_res["count"] == 2, f"Esperado 2 itens válidos, obteve {catalog_res['count']}"
+    assert catalog_res["duplicate_count"] == 1, f"Esperado 1 duplicado, obteve {catalog_res['duplicate_count']}"
+    assert catalog_res["zero_price_count"] == 1, f"Esperado 1 com preço zero, obteve {catalog_res['zero_price_count']}"
+    assert [it["barcode"] for it in catalog_res["items"]] == ["9780001", "9780003"]
+    print("✅ Teste 7: Deduplicação e bloqueio de preço zerado no Catálogo validados")
+
+    # Teste 8: Validação na Importação de Planilha via Mock
+    from app.api.pos import upload_pos_spreadsheet
+    from fastapi import UploadFile
+    import io
+
+    # CSV com 1 item válido, 1 repetido (duplicado) e 1 com preço zero
+    csv_content = (
+        "ISBN;TITULO;PRECO;ESTOQUE\n"
+        "978857657001;Livro A;50.00;10\n"
+        "978857657001;Livro A Repetido;50.00;5\n"
+        "978857657002;Livro B Preço Zero;0.00;15\n"
+        "978857657003;Livro C;35.50;8\n"
+    ).encode("utf-8")
+
+    upload_file = UploadFile(filename="teste_produtos.csv", file=io.BytesIO(csv_content))
+
+    sheet_res = asyncio.run(upload_pos_spreadsheet(
+        company_id=1,
+        file=upload_file,
+        db=db_catalog,
+        current_user=seller_user_co1
+    ))
+
+    assert sheet_res["count"] == 2, f"Esperado 2 itens válidos na planilha, obteve {sheet_res['count']}"
+    assert sheet_res["duplicate_count"] == 1, f"Esperado 1 duplicado na planilha, obteve {sheet_res['duplicate_count']}"
+    assert sheet_res["zero_price_count"] == 1, f"Esperado 1 preço zero na planilha, obteve {sheet_res['zero_price_count']}"
+    assert [it["barcode"] for it in sheet_res["items"]] == ["978857657001", "978857657003"]
+    print("✅ Teste 8: Deduplicação e bloqueio de preço zerado na Planilha Excel/CSV validados")
+
+    print("\n🎉 TODOS OS 8 TESTES PASSARAM COM 100% DE SUCESSO!")
 
 if __name__ == "__main__":
     test_pos_imports()

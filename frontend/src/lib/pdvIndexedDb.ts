@@ -103,28 +103,56 @@ export function openPdvDb(): Promise<IDBDatabase> {
 
 // ─── Operações de Catálogo ───────────────────────────────────────────────────
 
-export async function saveCatalogItems(items: PDVCatalogItem[]): Promise<void> {
+export interface SaveCatalogResult {
+  savedCount: number;
+  duplicateCount: number;
+  zeroPriceCount: number;
+}
+
+export async function saveCatalogItems(items: PDVCatalogItem[]): Promise<SaveCatalogResult> {
   const db = await openPdvDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction('pdv_catalog', 'readwrite');
     const store = tx.objectStore('pdv_catalog');
 
+    const seen = new Set<string>();
+    let savedCount = 0;
+    let duplicateCount = 0;
+    let zeroPriceCount = 0;
+
     for (const it of items) {
-      if (!it.barcode) continue;
+      const barcode = String(it.barcode || '').trim().replace(/\.0$/, '');
+      if (!barcode) continue;
+
+      const price = Number(it.price) || 0;
+      // Não possibilitar item com preço zerado
+      if (price <= 0) {
+        zeroPriceCount++;
+        continue;
+      }
+
+      // Não deixar item com mesmo ISBN duplicado
+      if (seen.has(barcode)) {
+        duplicateCount++;
+        continue;
+      }
+      seen.add(barcode);
+
       store.put({
-        barcode: String(it.barcode).trim(),
+        barcode,
         sku: it.sku ? String(it.sku).trim() : '',
         title: it.title || 'Sem Título',
         publisher: it.publisher || '',
-        price: Number(it.price) || 0,
+        price,
         stock: it.stock !== undefined ? Number(it.stock) : 100,
         horus_item_code: it.horus_item_code ? String(it.horus_item_code) : '',
         product_id: it.product_id,
         source: it.source || 'GENERAL',
       });
+      savedCount++;
     }
 
-    tx.oncomplete = () => resolve();
+    tx.oncomplete = () => resolve({ savedCount, duplicateCount, zeroPriceCount });
     tx.onerror = () => reject(tx.error);
   });
 }
