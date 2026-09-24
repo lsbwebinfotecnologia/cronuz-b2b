@@ -860,7 +860,10 @@ def sync_pos_sales(
         try:
             sale_num = s_in.sale_number or f"PDV-{datetime.utcnow().strftime('%y%m%d%H%M')}-{success_count+1}"
 
-            # Sanitização de customer_id: evita erro 500 de ForeignKeyViolation quando for 0 ou cliente avulso
+            # Resolução e Auto-cadastro de Cliente para relatórios gerenciais:
+            cust_name = (s_in.customer_name or "").strip() or "Consumidor Final"
+            cust_doc = (s_in.customer_document or "").strip()
+
             target_customer_id = None
             if s_in.customer_id and int(s_in.customer_id) > 0:
                 cust_exists = db.query(Customer.id).filter(
@@ -870,14 +873,56 @@ def sync_pos_sales(
                 if cust_exists:
                     target_customer_id = cust_exists[0]
 
+            # Se não veio ID ou veio zero/inválido: busca por Documento ou Nome; se não existir, auto-cadastra!
+            if not target_customer_id:
+                # 1. Tenta buscar por CPF/CNPJ se informado
+                if cust_doc:
+                    found_by_doc = db.query(Customer.id).filter(
+                        Customer.company_id == company_id,
+                        Customer.document == cust_doc
+                    ).first()
+                    if found_by_doc:
+                        target_customer_id = found_by_doc[0]
+
+                # 2. Tenta buscar por Nome exato (case insensitive) na mesma empresa
+                if not target_customer_id:
+                    found_by_name = db.query(Customer.id).filter(
+                        Customer.company_id == company_id,
+                        func.lower(Customer.name) == cust_name.lower()
+                    ).first()
+                    if found_by_name:
+                        target_customer_id = found_by_name[0]
+
+                # 3. Se ainda não existe, cria um novo cliente no CRM da empresa para relatórios gerenciais
+                if not target_customer_id:
+                    clean_digits = "".join(filter(str.isdigit, cust_doc))
+                    cust_type = "PJ" if len(clean_digits) > 11 else "PF"
+                    doc_val = cust_doc if cust_doc else f"PDV-{uuid_key[:8].upper()}"
+
+                    new_customer = Customer(
+                        company_id=company_id,
+                        name=cust_name,
+                        corporate_name=cust_name,
+                        document=doc_val,
+                        customer_type=cust_type,
+                        crm_status="ACTIVE",
+                        credit_limit=0.0,
+                        discount=0.0,
+                        open_debts=0.0,
+                        consignment_status="INACTIVE",
+                    )
+                    db.add(new_customer)
+                    db.flush()
+                    target_customer_id = new_customer.id
+
             new_sale = POSSale(
                 company_id=company_id,
                 session_id=payload.session_id or s_in.session_id,
                 user_id=current_user.id,
                 client_sale_uuid=uuid_key,
                 sale_number=sale_num,
-                customer_name=s_in.customer_name or "Consumidor Final",
-                customer_document=s_in.customer_document,
+                customer_name=cust_name,
+                customer_document=cust_doc or None,
                 customer_id=target_customer_id,
                 payment_method=s_in.payment_method.upper(),
                 payment_details=s_in.payment_details,

@@ -1,18 +1,12 @@
-# Roteiro de Deploy — Correção FK customer_id=0 na Sincronização de Vendas PDV (Erro 500)
+# Roteiro de Deploy — Auto-cadastro de Cliente & Correção FK na Sincronização de Vendas PDV (App e Web)
 
-## Causa Raiz
-Quando uma venda foi realizada no PDV com cliente avulso/offline, o cliente no app foi registrado com `id: 0`.
-Ao tentar sincronizar o lote no backend, a query executava:
-`INSERT INTO pos_sale (..., customer_id=0, ...)`
-O PostgreSQL rejeitava com `psycopg2.errors.ForeignKeyViolation: Key (customer_id)=(0) is not present in table "crm_customer"`, gerando HTTP 500.
-
-## Correção Aplicada
-1. No backend (`backend/app/api/pos.py`):
-   - Valida se `customer_id` é maior que zero e se o registro realmente existe em `crm_customer` para a empresa.
-   - Caso contrário, define `customer_id = None` (compatível com cliente avulso / balcão).
-   - Adicionado `db.rollback()` no bloco `except` para evitar contaminação do pool em caso de erro.
-2. No app móvel (`mobile/`):
-   - Sanitizado o envio de `customer_id` para enviar `null` sempre que o id for 0 ou inválido.
+## Funcionalidade Implementada
+Quando uma venda é realizada no PDV (App ou Web) com cliente avulso/offline ou `customer_id` zero/nulo:
+1. O backend captura o `customer_name` e `customer_document` informados na venda.
+2. Verifica se o cliente já existe na empresa por CPF/CNPJ ou Nome exato.
+3. Se não existir, cadastra automaticamente um novo cliente em `crm_customer` com status ativo (`ACTIVE`), tipo PF/PJ e documento informado (ou gerado `PDV-UUID`).
+4. Vincula a venda (`pos_sale.customer_id`) ao cliente recém-cadastrado/existente.
+5. Permite controle e rastreamento completo em relatórios gerenciais e dashboards por cliente.
 
 ## Comandos de Deploy
 ```bash
