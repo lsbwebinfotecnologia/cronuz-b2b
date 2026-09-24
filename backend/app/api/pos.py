@@ -237,12 +237,15 @@ def close_pos_session(
 def get_session_products(
     company_id: int,
     session_id: int,
+    page: int = Query(1, ge=1, description="Número da página"),
+    limit: Optional[int] = Query(None, ge=1, le=5000, description="Tamanho da página para download rápido e seguro"),
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
     """
     Retorna os produtos atrelados a esta sessão específica de PDV.
     Utilizado para carregar/sincronizar instantaneamente o catálogo no mobile ou desktop.
+    Suporta download paginado em lotes (limit) para altíssima performance no mobile.
     """
     _assert_pos_access(current_user, company_id, db)
 
@@ -253,13 +256,26 @@ def get_session_products(
     if not session:
         raise HTTPException(status_code=404, detail="Sessão não encontrada.")
 
-    items = db.query(POSSessionProduct).filter(
+    base_query = db.query(POSSessionProduct).filter(
         POSSessionProduct.session_id == session_id
-    ).order_by(POSSessionProduct.title).all()
+    )
+
+    total_count = base_query.count()
+
+    if limit is not None:
+        offset = (page - 1) * limit
+        total_pages = (total_count + limit - 1) // limit if total_count > 0 else 1
+        items = base_query.order_by(POSSessionProduct.id.asc()).offset(offset).limit(limit).all()
+    else:
+        total_pages = 1
+        items = base_query.order_by(POSSessionProduct.title.asc()).all()
 
     return {
         "session_id": session.id,
         "count": len(items),
+        "total": total_count,
+        "page": page,
+        "total_pages": total_pages,
         "catalog_source": session.catalog_source or "GENERAL",
         "items": [
             {

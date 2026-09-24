@@ -5,6 +5,8 @@
  */
 import api from './api';
 import { PDVCustomer, PDVProduct, CartItem, PaymentTerm } from '../store/pdv.store';
+import { saveSessionProductsLocally, LocalPOSProduct } from './pdv.storage';
+export type { PaymentTerm };
 
 // ─── Tipos de Operação ────────────────────────────────────────────────────────
 // Seguem as mesmas regras do portal seller: V = Venda Direta, C = Consignação
@@ -182,5 +184,205 @@ export async function createPDVOrder(
 
   // Usa POST /orders — mesmo endpoint do portal seller
   const { data } = await api.post<CreateOrderResponse>('/orders', payload);
+  return data;
+}
+
+// ─── MÓDULO PDV OFFLINE & SESSÕES ───────────────────────────────────────────
+
+export interface MobilePOSSession {
+  id: number;
+  code: string;
+  title: string;
+  status: string;
+  catalog_source: string;
+  source_reference?: string;
+  products_count: number;
+  customer_name?: string;
+  total_sales_count: number;
+  total_sales_amount: number;
+  opened_at: string;
+  closed_at?: string;
+}
+
+export interface MobilePOSConfig {
+  module_pdv: boolean;
+  validate_stock: boolean;
+  pdv_allow_out_of_stock: boolean;
+}
+
+export async function fetchPOSConfig(companyId: number): Promise<MobilePOSConfig> {
+  const { data } = await api.get<MobilePOSConfig>(`/companies/${companyId}/pos/config`);
+  return data;
+}
+
+export async function fetchPOSSessions(companyId: number): Promise<MobilePOSSession[]> {
+  const { data } = await api.get<MobilePOSSession[]>(`/companies/${companyId}/pos/sessions`);
+  return Array.isArray(data) ? data : [];
+}
+
+export async function createPOSSession(
+  companyId: number,
+  title: string,
+  catalogSource = 'GENERAL',
+  sourceReference?: string
+): Promise<MobilePOSSession> {
+  const { data } = await api.post<MobilePOSSession>(`/companies/${companyId}/pos/sessions`, {
+    title,
+    catalog_source: catalogSource,
+    source_reference: sourceReference || undefined,
+  });
+  return data;
+}
+
+export async function closePOSSession(companyId: number, sessionId: number): Promise<MobilePOSSession> {
+  const { data } = await api.put<MobilePOSSession>(`/companies/${companyId}/pos/sessions/${sessionId}/close`);
+  return data;
+}
+
+export interface SyncSessionProgressCallback {
+  (current: number, total: number, percent: number, message: string): void;
+}
+
+export async function fetchPOSSessionProducts(
+  companyId: number,
+  sessionId: number,
+  page = 1,
+  limit?: number
+): Promise<any> {
+  const params: any = {};
+  if (limit) {
+    params.page = page;
+    params.limit = limit;
+  }
+  const { data } = await api.get(`/companies/${companyId}/pos/sessions/${sessionId}/products`, {
+    params,
+    timeout: 45000,
+  });
+  return data;
+}
+
+/**
+ * Sincronização Progressiva e Segura em Lotes (Chunks) em Segundo Plano
+ * 1. Baixa em lotes de 1.000 itens para altíssima performance.
+ * 2. Faz até 3 retries com backoff se a rede oscilar.
+ * 3. Grava imediatamente no SQLite via batch insert multi-row.
+ * 4. Notifica percentual e contagem em tempo real para UI não-bloqueante.
+ */
+export async function syncSessionProductsProgressive(
+  companyId: number,
+  sessionId: number,
+  catalogSource = 'SPREADSHEET',
+  onProgress?: SyncSessionProgressCallback
+): Promise<{ totalSaved: number; totalCount: number }> {
+  const PAGE_LIMIT = 1000;
+  let page = 1;
+  let totalCount = 0;
+  let totalSaved = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    let attempts = 0;
+    let data: any = null;
+
+    while (attempts < 3) {
+      try {
+        attempts++;
+        const response = await api.get(
+          `/companies/${companyId}/pos/sessions/${sessionId}/products`,
+          {
+            params: { page, limit: PAGE_LIMIT },
+            timeout: 45000,
+          }
+        );
+        data = response.data;
+        break;
+      } catch (err: any) {
+        if (attempts >= 3) {
+          throw new Error(
+            `Falha na rede ao baixar lote ${page}: ${err.message || 'Erro de conexão'}. Verifique o sinal da internet.`
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1500 * attempts));
+      }
+    }
+
+    const rawItems: any[] = data?.items ?? (Array.isArray(data) ? data : []);
+    totalCount = data?.total ?? rawItems.length;
+    const totalPages = data?.total_pages ?? (totalCount > 0 ? Math.ceil(totalCount / PAGE_LIMIT) : 1);
+
+    if (rawItems.length === 0) {
+      break;
+    }
+
+    const localItems: LocalPOSProduct[] = rawItems.map((p) => ({
+      barcode: String(p.barcode || p.sku || '').trim().replace(/\.0$/, ''),
+      sku: p.sku || '',
+      title: p.title || p.name || 'Produto sem título',
+      publisher: p.publisher || p.brand || '',
+      price: Number(p.price || p.unit_price || 0),
+      stock: Number(p.stock_qty || p.stock || 0),
+      source: (catalogSource || p.source || 'SPREADSHEET') as any,
+      product_id: p.product_id ?? p.id ?? null,
+      horus_item_code: p.horus_item_code,
+    }));
+
+    const isFirst = page === 1;
+    const saveRes = await saveSessionProductsLocally(localItems, isFirst);
+    totalSaved += saveRes.savedCount;
+
+    const percent = totalCount > 0 ? Math.min(100, Math.round((totalSaved / totalCount) * 100)) : 0;
+
+    if (onProgress) {
+      onProgress(
+        totalSaved,
+        totalCount,
+        percent,
+        `Sincronizando: ${totalSaved.toLocaleString()} de ${totalCount.toLocaleString()} itens (${percent}%)...`
+      );
+    }
+
+    if (page >= totalPages || rawItems.length < PAGE_LIMIT) {
+      hasMore = false;
+    } else {
+      page++;
+    }
+  }
+
+  return { totalSaved, totalCount };
+}
+
+export async function loadPOSCatalogToSession(
+  companyId: number,
+  sessionId?: number,
+  catalogSource?: string,
+  sourceReference?: string
+): Promise<any> {
+  const { data } = await api.post(
+    `/companies/${companyId}/pos/catalog-load`,
+    {
+      catalog_source: catalogSource || 'GENERAL',
+      source_reference: sourceReference || undefined,
+    },
+    {
+      params: sessionId ? { session_id: sessionId } : undefined,
+    }
+  );
+  return data;
+}
+
+export async function uploadPOSSpreadsheetFile(
+  companyId: number,
+  formData: FormData,
+  sessionId?: number
+): Promise<any> {
+  const { data } = await api.post(`/companies/${companyId}/pos/upload-spreadsheet`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    params: sessionId ? { session_id: sessionId } : undefined,
+  });
+  return data;
+}
+
+export async function syncPOSSalesBatch(companyId: number, payload: any): Promise<any> {
+  const { data } = await api.post(`/companies/${companyId}/pos/sync-sales`, payload);
   return data;
 }

@@ -54,6 +54,9 @@ class POSSessionProductOut(BaseModel):
 class POSSessionProductsListResponse(BaseModel):
     session_id: int
     count: int
+    total: Optional[int] = None
+    page: Optional[int] = 1
+    total_pages: Optional[int] = 1
     catalog_source: Optional[str] = "GENERAL"
     items: List[POSSessionProductOut]
 

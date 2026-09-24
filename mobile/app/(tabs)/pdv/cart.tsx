@@ -20,9 +20,13 @@ import {
   PaymentTerm,
   OrderType,
   ORDER_TYPE_LABELS,
+  MobilePOSSession,
 } from '../../../services/pdv.service';
 import { Colors, Typography, Spacing, Radius } from '../../../constants/theme';
 import { formatCurrency } from '../../../utils/formatters';
+import { POSCheckoutModal } from '../../../components/pdv/POSCheckoutModal';
+import { useAuthStore } from '../../../store/auth.store';
+import { getPdvLocalSetting } from '../../../services/pdv.storage';
 
 // ─── Error Detail Modal ───────────────────────────────────────────────────────
 
@@ -269,6 +273,17 @@ export default function CartScreen() {
   const [showOrderTypePicker, setShowOrderTypePicker] = useState(false);
   const [errorDetail, setErrorDetail] = useState<ErrorDetail | null>(null);
 
+  // PDV Rápido / Balcão com Checkout Modal
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [activeSession, setActiveSession] = useState<MobilePOSSession | null>(null);
+  const user = useAuthStore((s) => s.user);
+
+  useEffect(() => {
+    getPdvLocalSetting<MobilePOSSession>('active_session').then((sess) => {
+      if (sess) setActiveSession(sess);
+    });
+  }, []);
+
   useEffect(() => {
     getPaymentTerms()
       .then(setTerms)
@@ -504,8 +519,18 @@ export default function CartScreen() {
       </ScrollView>
 
 
-      {/* Confirm Button */}
+      {/* Confirm Buttons (PDV Direto + Pedido Faturado) */}
       <View style={styles.confirmContainer}>
+        <TouchableOpacity
+          style={styles.pdvQuickBtn}
+          onPress={() => setShowCheckoutModal(true)}
+        >
+          <Ionicons name="flash" size={18} color={Colors.white} />
+          <Text style={styles.pdvQuickBtnText}>
+            Concluir Venda PDV — {formatCurrency(total)}
+          </Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={[styles.confirmBtn, submitting && styles.confirmBtnDisabled]}
           onPress={handleSubmit}
@@ -515,11 +540,30 @@ export default function CartScreen() {
             <ActivityIndicator color={Colors.white} />
           ) : (
             <Text style={styles.confirmBtnText}>
-              Criar Pedido — {formatCurrency(total)}
+              Faturar como Pedido Convencional
             </Text>
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Modal de Fechamento de Venda Rápida PDV */}
+      <POSCheckoutModal
+        visible={showCheckoutModal}
+        companyId={user?.company_id}
+        customer={customer}
+        items={items}
+        total={total}
+        activeSession={activeSession}
+        onClose={() => {
+          setShowCheckoutModal(false);
+          if (items.length === 0) {
+            router.replace('/(tabs)/pdv');
+          }
+        }}
+        onSuccess={() => {
+          clearCart();
+        }}
+      />
 
       {/* Modal de erro detalhado */}
       <ErrorDetailModal
@@ -651,23 +695,40 @@ const styles = StyleSheet.create({
     padding: Spacing.base,
     backgroundColor: Colors.bg,
     borderTopWidth: 1, borderTopColor: Colors.border,
+    gap: 10,
   },
-  confirmBtn: {
-    backgroundColor: Colors.primary,
+  pdvQuickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.success,
     borderRadius: Radius.xl,
     padding: Spacing.base,
-    alignItems: 'center',
-    shadowColor: Colors.primary,
+    shadowColor: Colors.success,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 12,
     elevation: 8,
   },
-  confirmBtnDisabled: { opacity: 0.6 },
-  confirmBtnText: {
+  pdvQuickBtnText: {
     color: Colors.white,
     fontSize: Typography.size.base,
     fontWeight: Typography.weight.bold,
+  },
+  confirmBtn: {
+    backgroundColor: Colors.bgCard,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.xl,
+    padding: Spacing.md,
+    alignItems: 'center',
+  },
+  confirmBtnDisabled: { opacity: 0.6 },
+  confirmBtnText: {
+    color: Colors.textSecondary,
+    fontSize: Typography.size.sm,
+    fontWeight: Typography.weight.semibold,
   },
 });
 
