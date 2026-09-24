@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.db.session import engine, get_db, SessionLocal
@@ -36,6 +37,7 @@ from app.models import hosted_site as hosted_site_models
 from app.models import author as author_models
 from app.models import inventory as inventory_models
 from app.models import pos as pos_models
+from app.models import product_search_log as product_search_log_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -128,6 +130,7 @@ hosted_site_models.Base.metadata.create_all(bind=engine)
 author_models.Base.metadata.create_all(bind=engine)
 inventory_models.Base.metadata.create_all(bind=engine)
 pos_models.Base.metadata.create_all(bind=engine)
+product_search_log_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -299,7 +302,9 @@ def create_company(
 @app.get("/companies", response_model=list[schemas.Company])
 def read_companies(
     skip: int = 0, 
-    limit: int = 100, 
+    limit: int = 500, 
+    search: Optional[str] = None,
+    order_by: Optional[str] = "recent",
     uses_bookinfo: bool = False,
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user)
@@ -318,7 +323,31 @@ def read_companies(
             Integrator.active == True
         )
         
-    companies = query.offset(skip).limit(limit).all()
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                company_models.Company.name.ilike(term),
+                company_models.Company.document.ilike(term),
+                company_models.Company.domain.ilike(term),
+                company_models.Company.custom_domain.ilike(term),
+                company_models.Company.razao_social.ilike(term),
+            )
+        )
+
+    if order_by in ["alphabetical", "name_asc", "az"]:
+        query = query.order_by(company_models.Company.name.asc())
+    elif order_by in ["name_desc", "za"]:
+        query = query.order_by(company_models.Company.name.desc())
+    elif order_by in ["oldest", "antiga"]:
+        query = query.order_by(company_models.Company.created_at.asc(), company_models.Company.id.asc())
+    else: # default "recent" (últimas registradas)
+        query = query.order_by(company_models.Company.created_at.desc(), company_models.Company.id.desc())
+
+    if limit > 0:
+        query = query.offset(skip).limit(limit)
+
+    companies = query.all()
     return companies
 
 @app.post("/users", response_model=user_schemas.User)
