@@ -31,6 +31,15 @@ const INITIAL_PAGE_OPTIONS = [
   { value: '/financial', label: 'Financeiro' },
   { value: '/logistics/conference', label: 'Logística / Conferência' },
   { value: '/bookinfo/orders', label: 'Bookinfo Pedidos' },
+  { value: '/orders/dropship', label: 'Dropship (Erdos)' },
+  { value: '/horus-direct/pedidos', label: 'Horus Direct (SQL)' },
+  { value: '/subscriptions', label: 'Assinaturas' },
+  { value: '/notifications', label: 'Notificações' },
+  { value: '/authors', label: 'Autores' },
+  { value: '/inventory', label: 'Inventário' },
+  { value: '/agents', label: 'Vendedores / Rep' },
+  { value: '/commercial-policies', label: 'Políticas Comerciais' },
+  { value: '/settings', label: 'Configurações da Loja' },
 ];
 
 const MODULE_PERMISSIONS_LIST = [
@@ -45,6 +54,14 @@ const MODULE_PERMISSIONS_LIST = [
   { id: 'bookinfo', label: 'Bookinfo Hub', description: 'Automação de pedidos de venda e compra' },
   { id: 'promotions', label: 'Marketing & Promoções', description: 'Vitrines, banners e cupons de desconto' },
   { id: 'proposals', label: 'Propostas Comerciais', description: 'Geração e acompanhamento de orçamentos' },
+  { id: 'dropship', label: 'Dropship (Erdos)', description: 'Pedidos Erdos, tabelas de preço e estoque' },
+  { id: 'horus_sql', label: 'Horus Direct (SQL)', description: 'Pedidos diretos no SQL do Horus e financeiro Vindi' },
+  { id: 'subscriptions', label: 'Assinaturas', description: 'Gestão de planos e assinantes recorrentes' },
+  { id: 'notifications', label: 'Central de Notificações', description: 'Alertas e avisos do sistema' },
+  { id: 'authors', label: 'Gestão de Autores', description: 'Cadastro de autores e portais' },
+  { id: 'inventory', label: 'Inventário & Balanço', description: 'Contagem de estoque e ajustes' },
+  { id: 'agents', label: 'Vendedores / Rep', description: 'Gestão da equipe de vendas' },
+  { id: 'commercial', label: 'Políticas Comerciais', description: 'Regras de desconto e preços' },
   { id: 'settings', label: 'Configurações da Loja', description: 'Parâmetros fiscais, integrações e dados' },
 ];
 

@@ -456,11 +456,14 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
         if (nav.name === 'Marketing' || nav.href === '/promotions') return userAllowedModules.includes('promotions') || userAllowedModules.includes('marketing');
         if (nav.name === 'Propostas' || nav.href === '/proposals') return userAllowedModules.includes('proposals');
         if (nav.name === 'Configurações' || nav.href === '/settings') return userAllowedModules.includes('settings');
-        if (nav.name === 'Horus Direct') return userAllowedModules.includes('logistics') || userAllowedModules.includes('financial') || userAllowedModules.includes('orders');
-        if (nav.name === 'Autores') return userAllowedModules.includes('products');
-        if (nav.name === 'Inventário') return userAllowedModules.includes('logistics');
-        if (nav.name === 'Políticas e Preços') return userAllowedModules.includes('settings') || userAllowedModules.includes('products');
-        if (nav.name === 'Vendedores/Rep') return userAllowedModules.includes('customers');
+        if (nav.name === 'Dropship' || nav.href.startsWith('/orders/dropship')) return userAllowedModules.includes('dropship');
+        if (nav.name === 'Horus Direct' || nav.href.startsWith('/horus-direct')) return userAllowedModules.includes('horus_sql') || userAllowedModules.includes('logistics');
+        if (nav.name === 'Assinaturas' || nav.href === '/subscriptions') return userAllowedModules.includes('subscriptions');
+        if (nav.name === 'Notificações' || nav.href === '/notifications') return userAllowedModules.includes('notifications');
+        if (nav.name === 'Autores' || nav.href === '/authors') return userAllowedModules.includes('authors') || userAllowedModules.includes('products');
+        if (nav.name === 'Inventário' || nav.href === '/inventory') return userAllowedModules.includes('inventory') || userAllowedModules.includes('logistics');
+        if (nav.name === 'Políticas e Preços' || nav.href === '/commercial-policies') return userAllowedModules.includes('commercial') || userAllowedModules.includes('settings');
+        if (nav.name === 'Vendedores/Rep' || nav.href === '/agents') return userAllowedModules.includes('agents') || userAllowedModules.includes('customers');
         return true;
       })
     : baseNavigation;
