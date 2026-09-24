@@ -166,6 +166,15 @@ export default function PDVPage() {
       if (cachedModule !== null) setIsModuleAllowed(cachedModule);
       if (cachedValStock !== null) setValidateStock(cachedValStock);
 
+      // Carregar sessão ativa em cache
+      const cachedActiveSession = await getPdvSetting<POSSessionData>('activeSession');
+      if (cachedActiveSession) {
+        setActiveSession(cachedActiveSession);
+        if (navigator.onLine && companyId) {
+          syncSessionProducts(cachedActiveSession, true);
+        }
+      }
+
       // Consulta configuração atualizada no servidor se online
       if (companyId) {
         try {
@@ -206,6 +215,63 @@ export default function PDVPage() {
       window.removeEventListener('offline', handleOffline);
     };
   }, [companyId]);
+
+  // Sincronizar catálogo da sessão selecionada para o IndexedDB do dispositivo (mobile / desktop)
+  const syncSessionProducts = useCallback(async (session: POSSessionData, silent = false) => {
+    if (!companyId || !navigator.onLine) return;
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions/${session.id}/products`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const rawItems = data.items || [];
+        if (rawItems.length > 0) {
+          const formatted: PDVCatalogItem[] = rawItems.map((p: any) => ({
+            barcode: p.barcode,
+            sku: p.sku || '',
+            title: p.title || 'Sem Título',
+            publisher: p.publisher || '',
+            price: Number(p.price) || 0,
+            stock: Number(p.stock) || 100,
+            horus_item_code: p.horus_item_code || '',
+            product_id: p.product_id,
+            source: session.catalog_source || 'SESSION',
+          }));
+
+          const saveRes = await saveCatalogItems(formatted);
+          const cCount = await getCatalogCount();
+          setCatalogCount(cCount);
+          setActiveSession(prev => prev?.id === session.id ? { ...prev, products_count: saveRes.savedCount } : prev);
+
+          if (!silent) {
+            toast.success(`Sessão "${session.title}": ${saveRes.savedCount} produtos carregados offline neste dispositivo!`);
+          }
+        } else if (!silent) {
+          toast.info(`Sessão "${session.title}" ativada. Nenhum produto vinculado ainda. Carregue produtos via planilha ou contrato no botão de carga.`);
+        }
+      }
+    } catch (err) {
+      console.error('Falha ao sincronizar produtos da sessão', err);
+      if (!silent) {
+        toast.error('Erro ao sincronizar produtos da sessão com o servidor.');
+      }
+    }
+  }, [companyId]);
+
+  // Manipulador de Seleção / Troca de Sessão
+  const handleSelectSession = useCallback(async (session: POSSessionData | null) => {
+    setActiveSession(session);
+    await setPdvSetting('activeSession', session);
+    if (session) {
+      toast.success(`Sessão "${session.title}" selecionada! Carregando produtos...`);
+      await syncSessionProducts(session, false);
+    } else {
+      toast.info('Sessão desvinculada. PDV operando em modo geral.');
+    }
+  }, [syncSessionProducts]);
 
   // ─── 2. Sincronizador de Vendas Offline ─────────────────────────────────────
   const triggerSync = useCallback(async () => {
@@ -669,9 +735,16 @@ export default function PDVPage() {
               )}
             </div>
             
-            <p className="text-[11px] text-slate-400 truncate max-w-[200px] sm:max-w-xs">
-              {activeSession ? `Sessão: ${activeSession.title}` : 'Sem evento vinculado (vendas gerais)'}
-            </p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <p className="text-[11px] text-slate-400 truncate max-w-[200px] sm:max-w-xs">
+                {activeSession ? `Sessão: ${activeSession.title}` : 'Sem evento vinculado (vendas gerais)'}
+              </p>
+              {activeSession && (activeSession.products_count ?? 0) > 0 && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                  {activeSession.products_count} itens
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1280,15 +1353,24 @@ export default function PDVPage() {
       <POSCatalogLoadModal
         isOpen={isCatalogModalOpen}
         onClose={() => setIsCatalogModalOpen(false)}
-        onCatalogUpdated={(newCount) => setCatalogCount(newCount)}
+        onCatalogUpdated={async (newCount) => {
+          setCatalogCount(newCount);
+          if (activeSession) {
+            const updated = { ...activeSession, products_count: newCount };
+            setActiveSession(updated);
+            await setPdvSetting('activeSession', updated);
+          }
+        }}
         currentCatalogCount={catalogCount}
+        activeSessionId={activeSession?.id}
+        activeSessionTitle={activeSession?.title}
       />
 
       <POSSessionModal
         isOpen={isSessionModalOpen}
         onClose={() => setIsSessionModalOpen(false)}
         activeSession={activeSession}
-        onSelectSession={(sess) => setActiveSession(sess)}
+        onSelectSession={handleSelectSession}
       />
 
       <POSSalesHistoryModal

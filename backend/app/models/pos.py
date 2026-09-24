@@ -45,6 +45,7 @@ class POSSession(Base):
 
     total_sales_count = Column(Integer, default=0, nullable=False)
     total_sales_amount = Column(Numeric(12, 2), default=0.00, nullable=False)
+    products_count = Column(Integer, default=0, nullable=False)
 
     opened_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     closed_at = Column(DateTime(timezone=True), nullable=True)
@@ -62,6 +63,12 @@ class POSSession(Base):
         back_populates="session",
         cascade="all, delete-orphan",
         foreign_keys="POSSale.session_id"
+    )
+    products = relationship(
+        "POSSessionProduct",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        foreign_keys="POSSessionProduct.session_id"
     )
 
     __table_args__ = (
@@ -139,3 +146,33 @@ class POSSaleItem(Base):
     # Relacionamentos com foreign_keys explícitas
     sale = relationship("POSSale", back_populates="items", foreign_keys=[sale_id])
     product = relationship("Product", foreign_keys=[product_id])
+
+
+class POSSessionProduct(Base):
+    __tablename__ = "pos_session_product"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("pos_session.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id = Column(Integer, ForeignKey("cmp_company.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("prd_product.id", ondelete="SET NULL"), nullable=True)
+
+    barcode = Column(String(50), nullable=False, index=True)
+    sku = Column(String(100), nullable=True)
+    title = Column(String(255), nullable=False)
+    publisher = Column(String(255), nullable=True)
+    price = Column(Numeric(12, 2), nullable=False, default=0.00)
+    stock = Column(Numeric(10, 2), nullable=False, default=100.00)
+    horus_item_code = Column(String(50), nullable=True)
+    source = Column(String(50), default="SPREADSHEET", nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relacionamentos com foreign_keys explícitas
+    session = relationship("POSSession", back_populates="products", foreign_keys=[session_id])
+    company = relationship("Company", foreign_keys=[company_id])
+    product = relationship("Product", foreign_keys=[product_id])
+
+    __table_args__ = (
+        Index("idx_pos_session_product_session_barcode", "session_id", "barcode", unique=True),
+        Index("idx_pos_session_product_company", "company_id"),
+    )

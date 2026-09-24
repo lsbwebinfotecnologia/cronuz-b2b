@@ -81,6 +81,28 @@ CREATE TABLE IF NOT EXISTS pos_sale_item (
 CREATE INDEX IF NOT EXISTS idx_pos_sale_item_sale_id ON pos_sale_item(sale_id);
 CREATE INDEX IF NOT EXISTS idx_pos_sale_item_barcode ON pos_sale_item(barcode);
 
--- 4. Flags de Módulo e Configuração (idempotente)
+-- 4. Tabela de Produtos Atrelados à Sessão (Catálogo Próprio / Planilha / Contrato da Sessão)
+CREATE TABLE IF NOT EXISTS pos_session_product (
+    id SERIAL PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES pos_session(id) ON DELETE CASCADE,
+    company_id INTEGER NOT NULL REFERENCES cmp_company(id) ON DELETE CASCADE,
+    product_id INTEGER REFERENCES prd_product(id) ON DELETE SET NULL,
+    barcode VARCHAR(50) NOT NULL,
+    sku VARCHAR(100),
+    title VARCHAR(255) NOT NULL,
+    publisher VARCHAR(255),
+    price NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    stock NUMERIC(10, 2) NOT NULL DEFAULT 100.00,
+    horus_item_code VARCHAR(50),
+    source VARCHAR(50) NOT NULL DEFAULT 'SPREADSHEET',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pos_session_product_session_barcode ON pos_session_product(session_id, barcode);
+CREATE INDEX IF NOT EXISTS idx_pos_session_product_company ON pos_session_product(company_id);
+
+-- 5. Flags de Módulo e Configuração (idempotente)
 ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_pdv BOOLEAN DEFAULT FALSE NOT NULL;
 ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS pdv_allow_out_of_stock BOOLEAN DEFAULT FALSE NOT NULL;
+ALTER TABLE pos_session ADD COLUMN IF NOT EXISTS products_count INTEGER DEFAULT 0 NOT NULL;
+

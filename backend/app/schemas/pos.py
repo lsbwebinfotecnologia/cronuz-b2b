@@ -25,12 +25,37 @@ class POSSessionResponse(BaseModel):
     customer_document: Optional[str] = None
     total_sales_count: int
     total_sales_amount: float
+    products_count: Optional[int] = 0
     opened_at: datetime
     closed_at: Optional[datetime] = None
     notes: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class POSSessionProductOut(BaseModel):
+    id: Optional[int] = None
+    session_id: Optional[int] = None
+    barcode: str
+    sku: Optional[str] = None
+    title: str
+    publisher: Optional[str] = None
+    price: float
+    stock: float
+    horus_item_code: Optional[str] = None
+    product_id: Optional[int] = None
+    source: Optional[str] = "SPREADSHEET"
+
+    class Config:
+        from_attributes = True
+
+
+class POSSessionProductsListResponse(BaseModel):
+    session_id: int
+    count: int
+    catalog_source: Optional[str] = "GENERAL"
+    items: List[POSSessionProductOut]
 
 
 class POSSaleItemSchema(BaseModel):

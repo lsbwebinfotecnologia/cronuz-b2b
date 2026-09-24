@@ -8,6 +8,7 @@ from app.db.session import engine, get_db, SessionLocal
 from app.models import company as company_models
 from app.models import user as user_models
 from app.models import customer as customer_models
+from app.models import customer_group as customer_group_models
 from app.models import company_settings as settings_models
 from app.models import product as product_models
 from app.models import catalog_support as catalog_models
@@ -104,6 +105,7 @@ logging.basicConfig(
 company_models.Base.metadata.create_all(bind=engine)
 user_models.Base.metadata.create_all(bind=engine)
 customer_models.Base.metadata.create_all(bind=engine)
+customer_group_models.Base.metadata.create_all(bind=engine)
 settings_models.Base.metadata.create_all(bind=engine)
 product_models.Base.metadata.create_all(bind=engine)
 catalog_models.Base.metadata.create_all(bind=engine)

@@ -6,7 +6,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 def test_pos_imports():
     print("Testando imports do módulo POS...")
-    from app.models.pos import POSSession, POSSale, POSSaleItem, POSSessionStatus, POSCatalogSource, POSPaymentMethod
+    import importlib
+    import pkgutil
+    import app.models
+    for _, modname, _ in pkgutil.walk_packages(app.models.__path__, app.models.__name__ + "."):
+        try:
+            importlib.import_module(modname)
+        except Exception:
+            pass
+
+    from app.models.pos import POSSession, POSSessionProduct, POSSale, POSSaleItem, POSSessionStatus, POSCatalogSource, POSPaymentMethod
     print("✅ Modelos carregados com sucesso!")
 
     from app.schemas.pos import POSSessionCreate, POSSaleCreate, POSSyncBatchRequest, POSSyncBatchResponse
@@ -126,7 +135,31 @@ def test_pos_imports():
     assert [it["barcode"] for it in sheet_res["items"]] == ["978857657001", "978857657003"]
     print("✅ Teste 8: Deduplicação e bloqueio de preço zerado na Planilha Excel/CSV validados")
 
-    print("\n🎉 TODOS OS 8 TESTES PASSARAM COM 100% DE SUCESSO!")
+    # Teste 9: Consulta de Produtos Atrelados à Sessão (para sincronização Mobile)
+    from app.api.pos import get_session_products
+    mock_session = MagicMock(id=10, company_id=1, catalog_source="SPREADSHEET")
+    mock_sp1 = MagicMock(id=1, session_id=10, barcode="9780001", sku="SKU1", title="Livro A", publisher="Ed 1", price=25.0, stock=50, horus_item_code=None, product_id=None, source="SPREADSHEET")
+    mock_sp2 = MagicMock(id=2, session_id=10, barcode="9780002", sku="SKU2", title="Livro B", publisher="Ed 2", price=40.0, stock=30, horus_item_code=None, product_id=None, source="SPREADSHEET")
+
+    db_sess = MagicMock()
+    company_sess = MagicMock(id=1, module_pdv=True)
+    db_sess.query().filter().first.side_effect = [company_sess, mock_session]
+    db_sess.query().filter().order_by().all.return_value = [mock_sp1, mock_sp2]
+
+    sess_prod_res = get_session_products(
+        company_id=1,
+        session_id=10,
+        db=db_sess,
+        current_user=seller_user_co1
+    )
+
+    assert sess_prod_res["session_id"] == 10
+    assert sess_prod_res["count"] == 2
+    assert sess_prod_res["catalog_source"] == "SPREADSHEET"
+    assert [it["barcode"] for it in sess_prod_res["items"]] == ["9780001", "9780002"]
+    print("✅ Teste 9: Endpoint get_session_products para carga automática no Mobile validado")
+
+    print("\n🎉 TODOS OS 9 TESTES PASSARAM COM 100% DE SUCESSO!")
 
 if __name__ == "__main__":
     test_pos_imports()

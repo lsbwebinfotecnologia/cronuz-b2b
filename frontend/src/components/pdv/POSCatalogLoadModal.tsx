@@ -30,13 +30,17 @@ interface POSCatalogLoadModalProps {
   onClose: () => void;
   onCatalogUpdated: (count: number) => void;
   currentCatalogCount: number;
+  activeSessionId?: number;
+  activeSessionTitle?: string;
 }
 
 export default function POSCatalogLoadModal({
   isOpen,
   onClose,
   onCatalogUpdated,
-  currentCatalogCount
+  currentCatalogCount,
+  activeSessionId,
+  activeSessionTitle
 }: POSCatalogLoadModalProps) {
   const [activeTab, setActiveTab] = useState<'consignment' | 'cronuz' | 'spreadsheet'>('consignment');
   const [loading, setLoading] = useState(false);
@@ -113,10 +117,12 @@ export default function POSCatalogLoadModal({
       setProgressMsg('Buscando catálogo no servidor...');
       const token = getToken();
 
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/catalog-load?source=CRONUZ_CATALOG&limit=5000`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/catalog-load?source=CRONUZ_CATALOG&limit=5000`;
+      if (activeSessionId) {
+        url += `&session_id=${activeSessionId}`;
+      }
+
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
 
       if (!res.ok) {
         const err = await res.json();
@@ -151,6 +157,9 @@ export default function POSCatalogLoadModal({
       let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/catalog-load?source=CONSIGNMENT&customer_id=${consignmentCustomerId}`;
       if (consignmentCodCtr) {
         url += `&cod_ctr=${encodeURIComponent(consignmentCodCtr)}`;
+      }
+      if (activeSessionId) {
+        url += `&session_id=${activeSessionId}`;
       }
 
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -195,6 +204,9 @@ export default function POSCatalogLoadModal({
       const token = getToken();
       const formData = new FormData();
       formData.append('file', file);
+      if (activeSessionId) {
+        formData.append('session_id', String(activeSessionId));
+      }
 
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/upload-spreadsheet`,

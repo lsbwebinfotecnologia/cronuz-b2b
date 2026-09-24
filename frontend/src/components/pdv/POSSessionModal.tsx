@@ -22,6 +22,7 @@ export interface POSSessionData {
   status: string;
   catalog_source: string;
   source_reference?: string;
+  products_count?: number;
   customer_name?: string;
   total_sales_count: number;
   total_sales_amount: number;
@@ -46,6 +47,8 @@ export default function POSSessionModal({
   const [loading, setLoading] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  const [newCatalogSource, setNewCatalogSource] = useState<'GENERAL' | 'SPREADSHEET' | 'CONSIGNMENT'>('GENERAL');
+  const [newSourceReference, setNewSourceReference] = useState('');
   const [creating, setCreating] = useState(false);
 
   const userStr = getUser();
@@ -95,7 +98,8 @@ export default function POSSessionModal({
           },
           body: JSON.stringify({
             title: newTitle.trim(),
-            catalog_source: 'GENERAL',
+            catalog_source: newCatalogSource,
+            source_reference: newSourceReference.trim() || undefined,
           }),
         }
       );
@@ -107,6 +111,8 @@ export default function POSSessionModal({
       toast.success(`Sessão "${created.title}" iniciada!`);
       onSelectSession(created);
       setNewTitle('');
+      setNewCatalogSource('GENERAL');
+      setNewSourceReference('');
       setShowCreateForm(false);
       fetchSessions();
       onClose();
@@ -180,9 +186,14 @@ export default function POSSessionModal({
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
                   {activeSession.title}
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {activeSession.code} • Aberta em {new Date(activeSession.opened_at).toLocaleDateString('pt-BR')}
-                </p>
+                <div className="flex flex-wrap items-center gap-2 mt-1">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {activeSession.code} • Aberta em {new Date(activeSession.opened_at).toLocaleDateString('pt-BR')}
+                  </p>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300">
+                    {activeSession.products_count ?? 0} produtos vinculados
+                  </span>
+                </div>
               </div>
               <button
                 onClick={() => onSelectSession(null)}
@@ -211,14 +222,55 @@ export default function POSSessionModal({
               <h4 className="text-xs font-bold uppercase text-slate-700 dark:text-slate-300">
                 Nova Sessão / Evento
               </h4>
-              <input
-                type="text"
-                placeholder="Ex: Bienal do Livro 2026 - Estande Principal"
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-              <div className="flex gap-2 justify-end">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Nome do Evento / Caixa
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: Bienal do Livro 2026 - Estande Principal"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Origem Principal dos Produtos
+                </label>
+                <select
+                  value={newCatalogSource}
+                  onChange={(e: any) => setNewCatalogSource(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="GENERAL">Catálogo Geral da Editora</option>
+                  <option value="SPREADSHEET">Planilha Excel/CSV (Importar no PDV)</option>
+                  <option value="CONSIGNMENT">Contrato de Consignação Horus</option>
+                </select>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  {newCatalogSource === 'SPREADSHEET' && 'Após abrir a sessão, utilize o botão "Carga de Produtos / Offline" para subir sua planilha. Os produtos ficarão gravados nesta sessão e carregarão automaticamente nos celulares!'}
+                  {newCatalogSource === 'CONSIGNMENT' && 'Após abrir a sessão, utilize "Carga de Produtos / Offline" para puxar os itens do contrato de consignação.'}
+                  {newCatalogSource === 'GENERAL' && 'Usa os produtos ativos cadastrados no sistema.'}
+                </p>
+              </div>
+
+              {newCatalogSource === 'CONSIGNMENT' && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Número / Referência do Contrato (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: CTR-2026-0042"
+                    value={newSourceReference}
+                    onChange={(e) => setNewSourceReference(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex gap-2 justify-end pt-1">
                 <button
                   onClick={() => setShowCreateForm(false)}
                   className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
@@ -252,18 +304,23 @@ export default function POSSessionModal({
               sessions.map((s) => {
                 const isActive = activeSession?.id === s.id;
                 const isClosed = s.status === 'CLOSED';
+                const pCount = s.products_count ?? 0;
+
+                const sourceLabel = 
+                  s.catalog_source === 'SPREADSHEET' ? 'Planilha Excel' :
+                  s.catalog_source === 'CONSIGNMENT' ? 'Contrato Consignação' : 'Geral';
 
                 return (
                   <div
                     key={s.id}
-                    className={`p-3.5 rounded-xl border transition flex items-center justify-between ${
+                    className={`p-3.5 rounded-xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
                       isActive
                         ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20'
                         : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
                     }`}
                   >
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-bold text-sm text-slate-900 dark:text-white">
                           {s.title}
                         </span>
@@ -276,18 +333,25 @@ export default function POSSessionModal({
                         >
                           {isClosed ? 'Fechada' : 'Aberta'}
                         </span>
+                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                          {sourceLabel}
+                        </span>
+                        {pCount > 0 && (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                            {pCount} produtos
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                         {s.code} • {s.total_sales_count} vendas (R$ {Number(s.total_sales_amount || 0).toFixed(2)})
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 self-end sm:self-center">
                       {!isClosed && !isActive && (
                         <button
                           onClick={() => {
                             onSelectSession(s);
-                            toast.success(`Sessão "${s.title}" ativada no PDV!`);
                             onClose();
                           }}
                           className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-sm"

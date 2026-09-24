@@ -8,7 +8,7 @@ import time
 import logging
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_
 import openpyxl
@@ -21,6 +21,7 @@ from app.models.product import Product
 from app.models.customer import Customer
 from app.models.pos import (
     POSSession,
+    POSSessionProduct,
     POSSale,
     POSSaleItem,
     POSSessionStatus,
@@ -30,6 +31,8 @@ from app.models.pos import (
 from app.schemas.pos import (
     POSSessionCreate,
     POSSessionResponse,
+    POSSessionProductOut,
+    POSSessionProductsListResponse,
     POSSaleCreate,
     POSSyncBatchRequest,
     POSSyncBatchResponse,
@@ -230,6 +233,54 @@ def close_pos_session(
     return session
 
 
+@router.get("/sessions/{session_id}/products", response_model=POSSessionProductsListResponse)
+def get_session_products(
+    company_id: int,
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Retorna os produtos atrelados a esta sessão específica de PDV.
+    Utilizado para carregar/sincronizar instantaneamente o catálogo no mobile ou desktop.
+    """
+    _assert_pos_access(current_user, company_id, db)
+
+    session = db.query(POSSession).filter(
+        POSSession.id == session_id,
+        POSSession.company_id == company_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+
+    items = db.query(POSSessionProduct).filter(
+        POSSessionProduct.session_id == session_id
+    ).order_by(POSSessionProduct.title).all()
+
+    return {
+        "session_id": session.id,
+        "count": len(items),
+        "catalog_source": session.catalog_source or "GENERAL",
+        "items": [
+            {
+                "id": it.id,
+                "session_id": it.session_id,
+                "barcode": it.barcode,
+                "sku": it.sku,
+                "title": it.title,
+                "publisher": it.publisher,
+                "price": float(it.price or 0.0),
+                "stock": float(it.stock or 0.0),
+                "horus_item_code": it.horus_item_code,
+                "product_id": it.product_id,
+                "source": it.source or "SPREADSHEET",
+            }
+            for it in items
+        ]
+    }
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CARGA DE CATÁLOGO OFFLINE (Consignação Horus, Acervo ou Local)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -253,12 +304,58 @@ def _clean_barcode(raw_val) -> str:
     return val_str
 
 
+def _persist_session_products(
+    db: Session,
+    session_id: int,
+    company_id: int,
+    items: list,
+    source: str,
+    source_ref: Optional[str] = None
+):
+    """Grava em lote os produtos atrelados à sessão no PostgreSQL."""
+    session = db.query(POSSession).filter(
+        POSSession.id == session_id,
+        POSSession.company_id == company_id
+    ).first()
+    if not session:
+        return
+
+    # Limpa itens anteriores para substituição completa e limpa
+    db.query(POSSessionProduct).filter(POSSessionProduct.session_id == session_id).delete()
+
+    bulk_items = [
+        POSSessionProduct(
+            session_id=session.id,
+            company_id=company_id,
+            product_id=it.get("product_id"),
+            barcode=it["barcode"],
+            sku=it.get("sku"),
+            title=it["title"],
+            publisher=it.get("publisher"),
+            price=it["price"],
+            stock=it.get("stock", 100.0),
+            horus_item_code=it.get("horus_item_code"),
+            source=it.get("source", source),
+        )
+        for it in items
+    ]
+    if bulk_items:
+        db.bulk_save_objects(bulk_items)
+
+    session.catalog_source = source
+    if source_ref:
+        session.source_reference = source_ref
+    session.products_count = len(items)
+    db.commit()
+
+
 @router.get("/catalog-load")
 async def load_pos_catalog(
     company_id: int,
     source: str = Query("GENERAL", description="GENERAL, CONSIGNMENT, CRONUZ_CATALOG, HORUS_CATALOG"),
     customer_id: Optional[int] = Query(None),
     cod_ctr: Optional[str] = Query(None),
+    session_id: Optional[int] = Query(None),
     limit: int = Query(5000, le=10000),
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
@@ -346,6 +443,13 @@ async def load_pos_catalog(
             logger.error("Erro ao carregar consignação Horus: %s", str(e))
             raise HTTPException(status_code=400, detail=f"Erro ao buscar consignação no Horus: {str(e)}")
 
+        if session_id:
+            _persist_session_products(
+                db, session_id, company_id, items,
+                source="CONSIGNMENT",
+                source_ref=f"Contrato {cod_ctr or ''}".strip()
+            )
+
         return {
             "source": "CONSIGNMENT",
             "count": len(items),
@@ -398,6 +502,13 @@ async def load_pos_catalog(
             "source": "CRONUZ_CATALOG",
         })
 
+    if session_id:
+        _persist_session_products(
+            db, session_id, company_id, items,
+            source="CRONUZ_CATALOG",
+            source_ref="Catálogo Geral Cronuz"
+        )
+
     return {
         "source": "CRONUZ_CATALOG",
         "count": len(items),
@@ -435,6 +546,7 @@ def _cleanup_old_imports(import_dir: str, max_age_seconds: int = 3600):
 async def upload_pos_spreadsheet(
     company_id: int,
     file: UploadFile = File(...),
+    session_id: Optional[int] = Form(None),
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
@@ -607,9 +719,17 @@ async def upload_pos_spreadsheet(
     with open(cache_filepath, "w", encoding="utf-8") as f:
         json.dump(cache_data, f, ensure_ascii=False)
 
+    if session_id:
+        _persist_session_products(
+            db, session_id, company_id, items,
+            source="SPREADSHEET",
+            source_ref=file.filename
+        )
+
     return {
         "upload_id": upload_id,
         "filename": file.filename,
+        "session_id": session_id,
         "total_count": total_count,
         "count": total_count,
         "duplicate_count": len(duplicate_items),
