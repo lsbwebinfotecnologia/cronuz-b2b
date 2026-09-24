@@ -124,15 +124,76 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
 
             stats["processed"] += 1
 
-            # Verifica se já está na fila
+            # 1. Verifica se já está na fila com ID confirmado ou em situação finalizada
             existing = db.query(LogisticsOrder).filter(
                 LogisticsOrder.company_id == company_id,
                 LogisticsOrder.cod_ped_venda == cod_ped
             ).first()
 
-            if existing and existing.situation in ["IN_LOGISTICS", "CHECKED", "INVOICED"]:
+            if existing and (existing.situation in ["IN_LOGISTICS", "CHECKED", "INVOICED"] or existing.id_ord_sys_log):
+                # Se ainda constar como LEX no Horus, avança para IMP para não ser buscado novamente
+                if str(ped.get("STA_PEDIDO") or "").upper() == "LEX":
+                    try:
+                        await horus_orders.get("AltStatus_Pedido", params={
+                            "COD_EMPRESA": cod_empresa,
+                            "COD_FILIAL": cod_filial,
+                            "COD_CLI": str(existing.cod_cli or ped.get("COD_CLI") or ""),
+                            "COD_PED_VENDA": str(cod_ped),
+                            "STA_PEDIDO": "IMP"
+                        })
+                        existing.status_horus = "IMP"
+                        db.commit()
+                    except Exception:
+                        pass
                 stats["skipped"] += 1
                 continue
+
+            # 1.1. Checagem prévia no WMS: se já foi integrado diretamente no armazém
+            try:
+                ref_order = await provider.get_order_by_ref(cod_ped)
+                if ref_order:
+                    rem_m = ref_order.get("RemessaPedido") or {}
+                    leg_m = ref_order.get("LegadoPedido") or {}
+                    mov_m = ref_order.get("Movimento") or {}
+                    legado_id = leg_m.get("id") or rem_m.get("id") or mov_m.get("id") or ref_order.get("id")
+                    if legado_id:
+                        if not existing:
+                            existing = LogisticsOrder(
+                                company_id=company_id,
+                                provider=log_settings.provider,
+                                cod_ped_venda=cod_ped,
+                                pedido_web_origem=str(ped.get("COD_PEDIDO_ORIGEM") or ""),
+                                status_horus="IMP",
+                                situation="IN_LOGISTICS",
+                                id_ord_sys_log=str(legado_id),
+                                sent_at=now
+                            )
+                            db.add(existing)
+                        else:
+                            existing.situation = "IN_LOGISTICS"
+                            existing.id_ord_sys_log = str(legado_id)
+                            existing.status_horus = "IMP"
+                            existing.error_log = None
+                            existing.sent_at = existing.sent_at or now
+                        db.commit()
+
+                        # Altera status no Horus para IMP
+                        try:
+                            await horus_orders.get("AltStatus_Pedido", params={
+                                "COD_EMPRESA": cod_empresa,
+                                "COD_FILIAL": cod_filial,
+                                "COD_CLI": str(ped.get("COD_CLI") or ""),
+                                "COD_PED_VENDA": str(cod_ped),
+                                "STA_PEDIDO": "IMP"
+                            })
+                        except Exception:
+                            pass
+
+                        stats["skipped"] += 1
+                        logger.info(f"[LogisticsJob] Pedido #{cod_ped} já constava no WMS ({legado_id}). Vinculado e atualizado para IMP no Horus.")
+                        continue
+            except Exception as e_check:
+                logger.debug(f"[LogisticsJob] Checagem prévia de ref {cod_ped}: {e_check}")
 
             if not existing:
                 existing = LogisticsOrder(
@@ -378,13 +439,27 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
 
                 existing.situation = "IN_LOGISTICS"
                 existing.sent_at = now
+                existing.status_horus = "IMP"
                 existing.error_log = None
                 if legado_id:
                     existing.id_ord_sys_log = str(legado_id)
 
                 db.commit()
+
+                # Atualiza status no Horus para IMP
+                try:
+                    await horus_orders.get("AltStatus_Pedido", params={
+                        "COD_EMPRESA": cod_empresa,
+                        "COD_FILIAL": cod_filial,
+                        "COD_CLI": cod_cli,
+                        "COD_PED_VENDA": str(cod_ped),
+                        "STA_PEDIDO": "IMP"
+                    })
+                except Exception as e_alt:
+                    logger.warning(f"[LogisticsJob] Erro ao alterar status no Horus para IMP do pedido #{cod_ped}: {e_alt}")
+
                 stats["sent"] += 1
-                logger.info(f"[LogisticsJob] Pedido #{cod_ped} enviado com sucesso ao WMS (Company {company_id})")
+                logger.info(f"[LogisticsJob] Pedido #{cod_ped} enviado com sucesso ao WMS (Company {company_id}) e status atualizado para IMP")
 
             except Exception as e_wms:
                 err_str = str(e_wms)
