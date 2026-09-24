@@ -267,4 +267,25 @@ class HorusLogisticsClient(HorusClient):
 
         return await self.get("Busca_Acervo", params=params)
 
+    async def busca_nota_fiscal(
+        self,
+        cod_empresa: str,
+        cod_filial: str,
+        cod_cli: str,
+        cod_ped_venda: Union[str, int],
+        xml_base64: str = "S"
+    ) -> Any:
+        """
+        Consulta Busca_NotaFiscal no Horus ERP trazendo dados cadastrais e XML Base64 da NFe.
+        """
+        params = {
+            "COD_EMPRESA": cod_empresa,
+            "COD_FILIAL": cod_filial,
+            "COD_CLI": cod_cli,
+            "COD_PED_VENDA": cod_ped_venda,
+            "XML_BASE64": xml_base64
+        }
+        return await self.get("Busca_NotaFiscal", params=params)
+
+
 

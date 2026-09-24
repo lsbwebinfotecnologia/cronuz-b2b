@@ -401,7 +401,12 @@ async def run_logistics_check_job():
         for st in active_settings:
             try:
                 res = await process_company_logistics_check(db, st.company_id)
-                logger.info(f"[LogisticsCheckJob] Empresa {st.company_id}: {res}")
+                logger.info(f"[LogisticsCheckJob] Conferência Empresa {st.company_id}: {res}")
+
+                # Verifica se há pedidos conferidos que viraram FAT no Horus para envio de NF
+                from app.jobs.logistics_invoice_job import process_company_logistics_invoice
+                inv_res = await process_company_logistics_invoice(db, st.company_id)
+                logger.info(f"[LogisticsInvoiceJob] Faturamento Empresa {st.company_id}: {inv_res}")
             except Exception as e:
                 logger.error(f"[LogisticsCheckJob] Erro na empresa {st.company_id}: {e}")
     finally:

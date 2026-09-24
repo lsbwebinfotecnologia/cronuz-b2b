@@ -412,10 +412,18 @@ def get_logistics_logs(
 
     # Estatísticas globais
     total_count = base_query.count()
+    with_wms_id_count = base_query.filter(
+        LogisticsOrder.id_ord_sys_log.isnot(None),
+        LogisticsOrder.id_ord_sys_log != ""
+    ).count()
     in_logistics_count = base_query.filter(LogisticsOrder.situation == "IN_LOGISTICS").count()
-    cep_invalid_count = base_query.filter(LogisticsOrder.situation == "CEP_INVALID").count()
+    lft_count = base_query.filter(
+        (LogisticsOrder.status_horus == "LFT") |
+        (LogisticsOrder.situation == "CHECKED")
+    ).count()
     checked_count = base_query.filter(LogisticsOrder.situation == "CHECKED").count()
     invoiced_count = base_query.filter(LogisticsOrder.situation == "INVOICED").count()
+    cep_invalid_count = base_query.filter(LogisticsOrder.situation == "CEP_INVALID").count()
     error_count = base_query.filter(
         (LogisticsOrder.situation == "CEP_INVALID") |
         (LogisticsOrder.error_log.isnot(None))
@@ -430,7 +438,12 @@ def get_logistics_logs(
             (LogisticsOrder.error_log.isnot(None))
         )
     elif situation:
-        q = q.filter(LogisticsOrder.situation == situation)
+        if situation == "LFT":
+            q = q.filter((LogisticsOrder.status_horus == "LFT") | (LogisticsOrder.situation == "CHECKED"))
+        elif situation == "WITH_WMS_ID":
+            q = q.filter(LogisticsOrder.id_ord_sys_log.isnot(None), LogisticsOrder.id_ord_sys_log != "")
+        else:
+            q = q.filter(LogisticsOrder.situation == situation)
 
     # Busca por código do pedido ou pedido web
     if search:
@@ -458,10 +471,12 @@ def get_logistics_logs(
         "pages": math.ceil(total_filtered / page_size) if page_size > 0 else 1,
         "stats": {
             "total": total_count,
+            "with_wms_id": with_wms_id_count,
             "in_logistics": in_logistics_count,
-            "cep_invalid": cep_invalid_count,
+            "lft": lft_count,
             "checked": checked_count,
             "invoiced": invoiced_count,
+            "cep_invalid": cep_invalid_count,
             "errors": error_count,
         }
     }
@@ -478,6 +493,20 @@ async def trigger_auto_send_manually(
     _assert_ownership(current_user, company_id)
     from app.jobs.logistics_send_job import process_company_logistics_send
     res = await process_company_logistics_send(db, company_id)
+    return {"success": True, "result": res}
+
+@router.post("/companies/{company_id}/logistics/process-invoice")
+async def trigger_process_invoice_manually(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Aciona imediatamente a rotina de envio de Nota Fiscal (FAT -> NFe no WMS MKT) para pedidos faturados.
+    """
+    _assert_ownership(current_user, company_id)
+    from app.jobs.logistics_invoice_job import process_company_logistics_invoice
+    res = await process_company_logistics_invoice(db, company_id)
     return {"success": True, "result": res}
 
 @router.post("/companies/{company_id}/logistics/sync-from-wms")
@@ -740,6 +769,10 @@ async def process_wms_conference(
                 LogisticsOrder.company_id == company_id,
                 LogisticsOrder.cod_ped_venda == ped_num
             ).first()
+
+            # Se for lote e localmente já estiver conferido ou faturado, pula para poupar a API do Horus
+            if not cod_ped_venda and local_order and (local_order.situation in ["CHECKED", "INVOICED"] or local_order.status_horus in ["LFT", "FAT"]):
+                continue
 
             # ID do WMS
             raw_wms_id = leg.get("id") or rem.get("id") or mov.get("id") or item.get("id") or item.get("legado_pedido_id")

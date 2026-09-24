@@ -94,30 +94,79 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
         cod_empresa = str(cmp_settings.horus_company or "1").strip()
         cod_filial = str(cmp_settings.horus_branch or "1").strip()
 
-        # 1. Busca pedidos com status LEX prontos para envio (Lote seguro de 20 pedidos)
-        params_pedidos = {
-            "COD_EMPRESA": cod_empresa,
-            "COD_FILIAL": cod_filial,
-            "STA_PEDIDO": "LEX",
-            "OFFSET": 0,
-            "LIMIT": 20,
-        }
-        if getattr(cmp_settings, 'horus_legacy_pagination', False):
-            params_pedidos.pop("OFFSET", None)
-            params_pedidos.pop("LIMIT", None)
+        # 1. Busca IDs já integrados no banco local para conciliação eficiente
+        integrated_rows = db.query(LogisticsOrder.cod_ped_venda).filter(
+            LogisticsOrder.company_id == company_id,
+            (LogisticsOrder.situation.in_(["IN_LOGISTICS", "CHECKED", "INVOICED"])) | (LogisticsOrder.id_ord_sys_log.isnot(None))
+        ).all()
+        integrated_ids = {r[0] for r in integrated_rows if r[0]}
 
-        try:
-            res_orders = await horus_orders.get("Busca_PedidosVenda", params=params_pedidos)
-        except Exception as e_horus:
-            logger.error(f"[LogisticsJob] Erro ao buscar pedidos LEX da empresa {company_id}: {e_horus}")
-            return {"processed": 0, "sent": 0, "errors": 1, "message": f"Erro de conexão com Horus: {e_horus}"}
+        pedidos_lex_pendentes = []
+        is_legacy_pag = getattr(cmp_settings, 'horus_legacy_pagination', False)
 
-        if not res_orders or not isinstance(res_orders, list):
-            return {"processed": 0, "sent": 0, "errors": 0, "message": "Nenhum pedido retornado pelo Horus"}
+        if is_legacy_pag:
+            # Sem OFFSET/LIMIT: busca lista completa e filtra pendentes em memória
+            params_pedidos = {
+                "COD_EMPRESA": cod_empresa,
+                "COD_FILIAL": cod_filial,
+                "STA_PEDIDO": "LEX",
+            }
+            try:
+                res_orders = await horus_orders.get("Busca_PedidosVenda", params=params_pedidos)
+                if res_orders and isinstance(res_orders, list):
+                    for p in res_orders:
+                        if isinstance(p, dict) and not (p.get("Falha") or p.get("FALHA") == "S"):
+                            cod_ped = int(p.get("COD_PED_VENDA") or 0)
+                            if cod_ped and cod_ped not in integrated_ids:
+                                pedidos_lex_pendentes.append(p)
+                                if len(pedidos_lex_pendentes) >= 20:
+                                    break
+            except Exception as e_horus:
+                logger.error(f"[LogisticsJob] Erro ao buscar pedidos LEX da empresa {company_id}: {e_horus}")
+                return {"processed": 0, "sent": 0, "errors": 1, "message": f"Erro de conexão com Horus: {e_horus}"}
+        else:
+            # Paginação via OFFSET/LIMIT: varre páginas até coletar 20 pedidos pendentes reais
+            offset = 0
+            page_size = 50
+            max_scan = 500  # Limite máximo de busca por ciclo para não sobrecarregar
 
-        pedidos_lex = [p for p in res_orders if isinstance(p, dict) and not (p.get("Falha") or p.get("FALHA") == "S")]
+            while len(pedidos_lex_pendentes) < 20 and offset < max_scan:
+                params_pedidos = {
+                    "COD_EMPRESA": cod_empresa,
+                    "COD_FILIAL": cod_filial,
+                    "STA_PEDIDO": "LEX",
+                    "OFFSET": offset,
+                    "LIMIT": page_size,
+                }
+                try:
+                    res_orders = await horus_orders.get("Busca_PedidosVenda", params=params_pedidos)
+                except Exception as e_horus:
+                    logger.error(f"[LogisticsJob] Erro ao buscar página OFFSET={offset} de pedidos LEX: {e_horus}")
+                    break
 
-        for ped in pedidos_lex:
+                if not res_orders or not isinstance(res_orders, list):
+                    break
+
+                pedidos_page = [p for p in res_orders if isinstance(p, dict) and not (p.get("Falha") or p.get("FALHA") == "S")]
+                if not pedidos_page:
+                    break
+
+                for p in pedidos_page:
+                    cod_ped = int(p.get("COD_PED_VENDA") or 0)
+                    if cod_ped and cod_ped not in integrated_ids:
+                        pedidos_lex_pendentes.append(p)
+                        if len(pedidos_lex_pendentes) >= 20:
+                            break
+
+                if len(pedidos_page) < page_size:
+                    break
+
+                offset += page_size
+
+        if not pedidos_lex_pendentes:
+            return {"processed": 0, "sent": 0, "errors": 0, "skipped": len(integrated_ids), "message": "Nenhum pedido pendente de envio encontrado no Horus"}
+
+        for ped in pedidos_lex_pendentes:
             cod_ped = int(ped.get("COD_PED_VENDA") or 0)
             if not cod_ped:
                 continue

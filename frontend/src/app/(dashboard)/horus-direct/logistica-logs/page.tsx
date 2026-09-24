@@ -25,6 +25,8 @@ import {
   CheckCircle2,
   Pause,
   SlidersHorizontal,
+  Hash,
+  FileText,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -44,6 +46,9 @@ interface LogItem {
   cep_validated: boolean | null;
   cep_checked_at: string | null;
   cep_error_detail: string | null;
+  tracking_code?: string | null;
+  key_nfe?: string | null;
+  nfe_number?: string | null;
   sent_at: string | null;
   checked_at: string | null;
   invoiced_at: string | null;
@@ -54,10 +59,12 @@ interface LogItem {
 
 interface LogStats {
   total: number;
+  with_wms_id: number;
   in_logistics: number;
-  cep_invalid: number;
+  lft: number;
   checked: number;
   invoiced: number;
+  cep_invalid: number;
   errors: number;
 }
 
@@ -68,6 +75,7 @@ export default function LogisticaLogsPage() {
   const [loading, setLoading] = useState(true);
   const [runningAuto, setRunningAuto] = useState(false);
   const [runningCheck, setRunningCheck] = useState(false);
+  const [runningInvoice, setRunningInvoice] = useState(false);
   const [togglingJob, setTogglingJob] = useState<string | null>(null);
   const [logSettings, setLogSettings] = useState<{
     enabled: boolean;
@@ -80,10 +88,12 @@ export default function LogisticaLogsPage() {
   const [items, setItems] = useState<LogItem[]>([]);
   const [stats, setStats] = useState<LogStats>({
     total: 0,
+    with_wms_id: 0,
     in_logistics: 0,
-    cep_invalid: 0,
+    lft: 0,
     checked: 0,
     invoiced: 0,
+    cep_invalid: 0,
     errors: 0,
   });
 
@@ -92,7 +102,7 @@ export default function LogisticaLogsPage() {
   const [totalRecords, setTotalRecords] = useState(0);
 
   // Filtros
-  const [activeTab, setActiveTab] = useState<'ALL' | 'ERRORS' | 'IN_LOGISTICS' | 'CEP_INVALID'>('ALL');
+  const [activeTab, setActiveTab] = useState<'ALL' | 'ERRORS' | 'WITH_WMS_ID' | 'IN_LOGISTICS' | 'LFT' | 'INVOICED' | 'CEP_INVALID'>('ALL');
   const [search, setSearch] = useState('');
 
   const fetchSettings = useCallback(async () => {
@@ -240,6 +250,32 @@ export default function LogisticaLogsPage() {
     }
   };
 
+  // Disparo manual do envio de Notas Fiscais (FAT -> NFe no WMS)
+  const handleTriggerInvoice = async () => {
+    if (!companyId || runningInvoice) return;
+    setRunningInvoice(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/companies/${companyId}/logistics/process-invoice`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao processar faturamento de pedidos.');
+      }
+      const st = data.result || {};
+      toast.success(
+        `Envio de NFe finalizado! Faturados: ${st.invoiced || 0} | Processados: ${st.processed || 0} | Críticas: ${st.errors || 0}`
+      );
+      fetchLogs();
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao enviar notas fiscais para o WMS.');
+    } finally {
+      setRunningInvoice(false);
+    }
+  };
+
   const formatDate = (dateStr?: string | null) => {
     if (!dateStr) return '—';
     try {
@@ -345,6 +381,17 @@ export default function LogisticaLogsPage() {
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             Atualizar Logs
+          </button>
+
+          <button
+            type="button"
+            onClick={handleTriggerInvoice}
+            disabled={runningInvoice || loading}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white shadow-xs transition-colors disabled:opacity-50"
+            title="Consulta pedidos faturados (FAT) no Horus e envia a NFe para o WMS"
+          >
+            {runningInvoice ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+            {runningInvoice ? 'Enviando NFe...' : 'Enviar NFe (FAT)'}
           </button>
         </div>
       </div>
@@ -496,30 +543,108 @@ export default function LogisticaLogsPage() {
         </div>
       </div>
 
-      {/* ─── CARDS DE RESUMO ───────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-4">
-        <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
-          <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total na Fila</p>
+      {/* ─── CARDS DE RESUMO (Mobile First) ───────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4">
+        {/* 1. Total na Fila */}
+        <div 
+          onClick={() => { setActiveTab('ALL'); setPage(1); }}
+          className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+            activeTab === 'ALL'
+              ? 'border-slate-800 bg-slate-100/90 dark:border-slate-200 dark:bg-slate-800 shadow-md ring-2 ring-slate-400/20'
+              : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:border-slate-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total na Fila</p>
+            <Clock className="h-3.5 w-3.5 text-slate-400" />
+          </div>
           <p className="text-2xl font-black text-slate-900 dark:text-white mt-1">{stats.total}</p>
           <p className="text-[10px] text-slate-400 mt-0.5">Pedidos registrados</p>
         </div>
 
-        <div className="p-4 rounded-2xl border border-blue-200 dark:border-blue-900/40 bg-blue-50/40 dark:bg-blue-950/20 shadow-sm">
-          <p className="text-[11px] font-bold text-blue-700 dark:text-blue-400 uppercase tracking-wider">No WMS (Enviados)</p>
+        {/* 2. Com Nº Logística (WMS ID) */}
+        <div 
+          onClick={() => { setActiveTab('WITH_WMS_ID'); setPage(1); }}
+          className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+            activeTab === 'WITH_WMS_ID'
+              ? 'border-indigo-500 bg-indigo-50 dark:border-indigo-600 dark:bg-indigo-950/40 shadow-md ring-2 ring-indigo-400/20'
+              : 'border-indigo-200 dark:border-indigo-900/40 bg-indigo-50/40 dark:bg-indigo-950/20 shadow-sm hover:border-indigo-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">Com Nº Logística</p>
+            <Hash className="h-3.5 w-3.5 text-indigo-500" />
+          </div>
+          <p className="text-2xl font-black text-indigo-800 dark:text-indigo-200 mt-1">{stats.with_wms_id}</p>
+          <p className="text-[10px] text-indigo-600/70 dark:text-indigo-400/70 mt-0.5">ID gerado no WMS</p>
+        </div>
+
+        {/* 3. No WMS (Enviados) */}
+        <div 
+          onClick={() => { setActiveTab('IN_LOGISTICS'); setPage(1); }}
+          className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+            activeTab === 'IN_LOGISTICS'
+              ? 'border-blue-500 bg-blue-50 dark:border-blue-600 dark:bg-blue-950/40 shadow-md ring-2 ring-blue-400/20'
+              : 'border-blue-200 dark:border-blue-900/40 bg-blue-50/40 dark:bg-blue-950/20 shadow-sm hover:border-blue-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-bold text-blue-700 dark:text-blue-400 uppercase tracking-wider">No WMS (Enviados)</p>
+            <Truck className="h-3.5 w-3.5 text-blue-500" />
+          </div>
           <p className="text-2xl font-black text-blue-800 dark:text-blue-200 mt-1">{stats.in_logistics}</p>
-          <p className="text-[10px] text-blue-600/70 dark:text-blue-400/70 mt-0.5">Aguardando conferência</p>
+          <p className="text-[10px] text-blue-600/70 dark:text-blue-400/70 mt-0.5">Aguardando picking</p>
         </div>
 
-        <div className="p-4 rounded-2xl border border-rose-200 dark:border-rose-900/40 bg-rose-50/50 dark:bg-rose-950/20 shadow-sm">
-          <p className="text-[11px] font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider">CEP Inválido</p>
-          <p className="text-2xl font-black text-rose-800 dark:text-rose-200 mt-1">{stats.cep_invalid}</p>
-          <p className="text-[10px] text-rose-600/70 dark:text-rose-400/70 mt-0.5">Bloqueados pelo ViaCEP</p>
+        {/* 4. Em LFT (Conferidos) */}
+        <div 
+          onClick={() => { setActiveTab('LFT'); setPage(1); }}
+          className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+            activeTab === 'LFT'
+              ? 'border-emerald-500 bg-emerald-50 dark:border-emerald-600 dark:bg-emerald-950/40 shadow-md ring-2 ring-emerald-400/20'
+              : 'border-emerald-200 dark:border-emerald-900/40 bg-emerald-50/40 dark:bg-emerald-950/20 shadow-sm hover:border-emerald-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">Em LFT (Conferidos)</p>
+            <PackageCheck className="h-3.5 w-3.5 text-emerald-500" />
+          </div>
+          <p className="text-2xl font-black text-emerald-800 dark:text-emerald-200 mt-1">{stats.lft}</p>
+          <p className="text-[10px] text-emerald-600/70 dark:text-emerald-400/70 mt-0.5">Liberados p/ faturar</p>
         </div>
 
-        <div className="p-4 rounded-2xl border border-amber-200 dark:border-amber-900/40 bg-amber-50/50 dark:bg-amber-950/20 shadow-sm">
-          <p className="text-[11px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">Total com Críticas</p>
-          <p className="text-2xl font-black text-amber-800 dark:text-amber-200 mt-1">{stats.errors}</p>
-          <p className="text-[10px] text-amber-600/70 dark:text-amber-400/70 mt-0.5">Exigem correção</p>
+        {/* 5. Faturados (NFe) */}
+        <div 
+          onClick={() => { setActiveTab('INVOICED'); setPage(1); }}
+          className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+            activeTab === 'INVOICED'
+              ? 'border-purple-500 bg-purple-50 dark:border-purple-600 dark:bg-purple-950/40 shadow-md ring-2 ring-purple-400/20'
+              : 'border-purple-200 dark:border-purple-900/40 bg-purple-50/40 dark:bg-purple-950/20 shadow-sm hover:border-purple-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-bold text-purple-700 dark:text-purple-400 uppercase tracking-wider">Faturados (NFe)</p>
+            <FileText className="h-3.5 w-3.5 text-purple-500" />
+          </div>
+          <p className="text-2xl font-black text-purple-800 dark:text-purple-200 mt-1">{stats.invoiced}</p>
+          <p className="text-[10px] text-purple-600/70 dark:text-purple-400/70 mt-0.5">NF enviada ao armazém</p>
+        </div>
+
+        {/* 6. Críticas / Erros */}
+        <div 
+          onClick={() => { setActiveTab('ERRORS'); setPage(1); }}
+          className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+            activeTab === 'ERRORS'
+              ? 'border-rose-500 bg-rose-50 dark:border-rose-600 dark:bg-rose-950/40 shadow-md ring-2 ring-rose-400/20'
+              : 'border-rose-200 dark:border-rose-900/40 bg-rose-50/50 dark:bg-rose-950/20 shadow-sm hover:border-rose-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider">Críticas / Erros</p>
+            <AlertTriangle className="h-3.5 w-3.5 text-rose-500" />
+          </div>
+          <p className="text-2xl font-black text-rose-800 dark:text-rose-200 mt-1">{stats.errors}</p>
+          <p className="text-[10px] text-rose-600/70 dark:text-rose-400/70 mt-0.5">Exigem correção</p>
         </div>
       </div>
 
@@ -531,7 +656,7 @@ export default function LogisticaLogsPage() {
             <button
               type="button"
               onClick={() => { setActiveTab('ALL'); setPage(1); }}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shrink-0 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 ${
                 activeTab === 'ALL'
                   ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -542,21 +667,21 @@ export default function LogisticaLogsPage() {
 
             <button
               type="button"
-              onClick={() => { setActiveTab('ERRORS'); setPage(1); }}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
-                activeTab === 'ERRORS'
-                  ? 'bg-rose-600 text-white shadow-sm'
-                  : 'text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 hover:bg-rose-100'
+              onClick={() => { setActiveTab('WITH_WMS_ID'); setPage(1); }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+                activeTab === 'WITH_WMS_ID'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100'
               }`}
             >
-              <AlertTriangle className="h-3.5 w-3.5" />
-              Apenas com Problemas ({stats.errors})
+              <Hash className="h-3.5 w-3.5" />
+              Com Nº Logística ({stats.with_wms_id})
             </button>
 
             <button
               type="button"
               onClick={() => { setActiveTab('IN_LOGISTICS'); setPage(1); }}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shrink-0 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 ${
                 activeTab === 'IN_LOGISTICS'
                   ? 'bg-blue-600 text-white shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -567,14 +692,53 @@ export default function LogisticaLogsPage() {
 
             <button
               type="button"
+              onClick={() => { setActiveTab('LFT'); setPage(1); }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+                activeTab === 'LFT'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
+              }`}
+            >
+              <PackageCheck className="h-3.5 w-3.5" />
+              Em LFT ({stats.lft})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setActiveTab('INVOICED'); setPage(1); }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+                activeTab === 'INVOICED'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 hover:bg-purple-100'
+              }`}
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Faturados ({stats.invoiced})
+            </button>
+
+            <button
+              type="button"
               onClick={() => { setActiveTab('CEP_INVALID'); setPage(1); }}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shrink-0 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 ${
                 activeTab === 'CEP_INVALID'
                   ? 'bg-rose-600 text-white shadow-sm'
                   : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
               }`}
             >
               CEP Inválido ({stats.cep_invalid})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setActiveTab('ERRORS'); setPage(1); }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+                activeTab === 'ERRORS'
+                  ? 'bg-rose-600 text-white shadow-sm'
+                  : 'text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 hover:bg-rose-100'
+              }`}
+            >
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Com Críticas ({stats.errors})
             </button>
           </div>
 
@@ -659,17 +823,35 @@ export default function LogisticaLogsPage() {
                         {it.cod_cli ? `Cód: ${it.cod_cli}` : '—'}
                       </td>
 
-                      {/* Situação WMS */}
+                      {/* Situação WMS & Horus */}
                       <td className="p-3.5 text-center whitespace-nowrap">
-                        {getSituationBadge(it.situation)}
-                        {it.id_ord_sys_log && (
-                          <div className="mt-1 flex items-center justify-center gap-1 font-mono text-[10px]" title="ID do Pedido / Remessa no WMS">
-                            <span className="text-slate-400 font-semibold">WMS:</span>
-                            <span className="font-bold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 px-1.5 py-0.5 rounded border border-blue-200 dark:border-blue-800">
-                              #{it.id_ord_sys_log}
+                        <div className="flex flex-col items-center gap-1">
+                          {getSituationBadge(it.situation)}
+                          {it.status_horus && (
+                            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                              it.status_horus === 'LFT'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                                : it.status_horus === 'FAT'
+                                ? 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800'
+                                : 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+                            }`}>
+                              Horus: {it.status_horus}
                             </span>
-                          </div>
-                        )}
+                          )}
+                          {it.nfe_number && (
+                            <span className="font-mono text-[10px] text-purple-700 dark:text-purple-300 font-semibold" title={`Chave NFe: ${it.key_nfe || ''}`}>
+                              NF #{it.nfe_number}
+                            </span>
+                          )}
+                          {it.id_ord_sys_log && (
+                            <div className="flex items-center justify-center gap-1 font-mono text-[10px]" title="ID do Pedido / Remessa no WMS">
+                              <span className="text-slate-400 font-semibold">WMS:</span>
+                              <span className="font-bold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 px-1.5 py-0.5 rounded border border-blue-200 dark:border-blue-800">
+                                #{it.id_ord_sys_log}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </td>
 
                       {/* Crítica / Detalhes */}
