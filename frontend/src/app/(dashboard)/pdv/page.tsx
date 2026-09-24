@@ -110,6 +110,7 @@ export default function PDVPage() {
 
   // Sessão Ativa
   const [activeSession, setActiveSession] = useState<POSSessionData | null>(null);
+  const [isSyncingSessionCatalog, setIsSyncingSessionCatalog] = useState(false);
 
   // Scanner Câmera & Input Unificado Omnibar
   const [showCameraScanner, setShowCameraScanner] = useState(false);
@@ -178,6 +179,7 @@ export default function PDVPage() {
   const syncSessionProducts = useCallback(async (session: POSSessionData, silent = false) => {
     if (!companyId || !navigator.onLine) return;
     try {
+      setIsSyncingSessionCatalog(true);
       const token = getToken();
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions/${session.id}/products`,
@@ -219,6 +221,8 @@ export default function PDVPage() {
       if (!silent) {
         toast.error('Erro ao sincronizar produtos da sessão com o servidor.');
       }
+    } finally {
+      setIsSyncingSessionCatalog(false);
     }
   }, [companyId, triggerFeedback, loadSampleCatalog]);
 
@@ -1003,6 +1007,16 @@ export default function PDVPage() {
         </button>
 
       </div>
+
+      {/* ── BANNER DE CARGA / PROGRESSO DE SESSÃO OFFLINE ───────────────────── */}
+      {isSyncingSessionCatalog && (
+        <div className="bg-indigo-600 text-white text-xs px-4 py-2 flex items-center justify-center gap-2 shadow-sm animate-pulse z-30 shrink-0">
+          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+          <span className="font-semibold">
+            Sincronizando produtos da sessão "{activeSession?.title}" para este aparelho... Aguarde um instante.
+          </span>
+        </div>
+      )}
 
       {/* ── 3. CORPO PRINCIPAL (Split View no Desktop / Flex no Mobile) ──────── */}
       <div className="flex-1 flex overflow-hidden relative">
