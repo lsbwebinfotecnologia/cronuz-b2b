@@ -213,6 +213,7 @@ export default function SettingsPage() {
         inter_cert_path: data.inter_cert_path || '',
         inter_key_path: data.inter_key_path || '',
         inter_account_number: data.inter_account_number || '',
+        horus_sql_enabled: data.horus_sql_enabled || false,
       }));
       const resPoints = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/print-points`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -414,10 +415,12 @@ export default function SettingsPage() {
     }
   };
 
+  const hasHorusSql = Boolean(company?.module_horus_sql || (settings as any).horus_sql_enabled);
+
   const tabs = [
     { id: 'geral', label: 'Dados Gerais', icon: Settings2 },
     ...(company?.module_horus_erp ? [{ id: 'horus', label: 'Integração Horus ERP', icon: Database }] : []),
-    ...(company?.module_horus_sql ? [{ id: 'horus_sql', label: 'Horus SQL Direct', icon: DatabaseZap }] : []),
+    ...(hasHorusSql ? [{ id: 'horus_sql', label: 'Horus SQL Direct', icon: DatabaseZap }] : []),
     { id: 'bookinfo', label: 'Integração Bookinfo', icon: BookOpen },
     { id: 'fiscal', label: 'Fiscal (NFS-e)', icon: Building2 },
     { id: 'print_points', label: 'Séries e Pontos', icon: FileText },
@@ -428,7 +431,7 @@ export default function SettingsPage() {
     { id: 'templates', label: 'Modelos de E-mail', icon: FileText },
     { id: 'sefaz_sp', label: 'Fiscal SEFAZ', icon: Key },
     { id: 'dropship', label: 'Dropship Horus', icon: Package },
-    ...(company?.module_horus_sql ? [{ id: 'logistics', label: 'Logística WMS', icon: Truck }] : []),
+    ...(hasHorusSql ? [{ id: 'logistics', label: 'Logística WMS', icon: Truck }] : []),
   ];
 
   const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'horus_sql' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && activeTab !== 'logistics';

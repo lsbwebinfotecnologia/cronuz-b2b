@@ -41,8 +41,9 @@ class LogisticsSettingsResponse(BaseModel):
     operator_id: Optional[str] = None
     address_type: Optional[str] = None
     stock_local: Optional[str] = None
-    feature_auto_check: bool
-    check_interval_min: int
+    feature_auto_send: bool = True
+    feature_auto_check: bool = False
+    check_interval_min: int = 15
     password_set: bool
     # Campos extras para o frontend
     configured: bool = False
@@ -62,8 +63,13 @@ class LogisticsSettingsUpdate(BaseModel):
     operator_id: Optional[str] = None
     address_type: Optional[str] = None
     stock_local: Optional[str] = None
+    feature_auto_send: bool = True
     feature_auto_check: bool = False
     check_interval_min: int = 15
+
+class ToggleJobRequest(BaseModel):
+    job_name: str  # 'auto_send' ou 'auto_check'
+    enabled: bool
 
 # --- Helpers ---
 
@@ -211,6 +217,7 @@ def get_logistics_settings(
         operator_id=settings.operator_id,
         address_type=settings.address_type or '1',
         stock_local=settings.stock_local,
+        feature_auto_send=settings.feature_auto_send,
         feature_auto_check=settings.feature_auto_check,
         check_interval_min=settings.check_interval_min,
         password_set=bool(settings.password),
@@ -240,6 +247,7 @@ def update_logistics_settings(
     settings.operator_id = data.operator_id
     settings.address_type = data.address_type
     settings.stock_local = data.stock_local
+    settings.feature_auto_send = data.feature_auto_send
     settings.feature_auto_check = data.feature_auto_check
     settings.check_interval_min = data.check_interval_min
 
@@ -269,12 +277,53 @@ def update_logistics_settings(
         operator_id=settings.operator_id,
         address_type=settings.address_type or '1',
         stock_local=settings.stock_local,
+        feature_auto_send=settings.feature_auto_send,
         feature_auto_check=settings.feature_auto_check,
         check_interval_min=settings.check_interval_min,
         password_set=bool(settings.password),
         configured=bool(settings.api_url or settings.login),
         providers=['MKT'],
     )
+
+@router.post("/companies/{company_id}/logistics/toggle-job")
+def toggle_logistics_job(
+    company_id: int,
+    data: ToggleJobRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Ativa ou desativa rapidamente um dos jobs automáticos de logística (auto_send ou auto_check).
+    """
+    _assert_ownership(current_user, company_id)
+    settings = db.query(LogisticsSettings).filter(LogisticsSettings.company_id == company_id).first()
+    if not settings:
+        settings = LogisticsSettings(company_id=company_id)
+        db.add(settings)
+
+    if data.job_name in ['auto_send', 'send']:
+        settings.feature_auto_send = data.enabled
+        action_desc = "Envio Automático (LEX → WMS)"
+    elif data.job_name in ['auto_check', 'check']:
+        settings.feature_auto_check = data.enabled
+        action_desc = "Conferência Automática (WMS → Horus LFT)"
+    else:
+        raise HTTPException(status_code=400, detail="Job inválido. Use 'auto_send' ou 'auto_check'.")
+
+    db.commit()
+    db.refresh(settings)
+
+    status_str = "ativado" if data.enabled else "pausado"
+    logger.info(f"[Logistics.toggle_job] Job {action_desc} {status_str} para empresa {company_id}.")
+
+    return {
+        "success": True,
+        "job_name": data.job_name,
+        "enabled": data.enabled,
+        "feature_auto_send": settings.feature_auto_send,
+        "feature_auto_check": settings.feature_auto_check,
+        "message": f"Job de {action_desc} foi {status_str} com sucesso."
+    }
 
 @router.post("/companies/{company_id}/logistics/settings/test")
 async def test_logistics_connection(

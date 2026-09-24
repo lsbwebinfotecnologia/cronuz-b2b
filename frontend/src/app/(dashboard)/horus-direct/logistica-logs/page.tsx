@@ -18,7 +18,13 @@ import {
   PackageCheck,
   Send,
   Building2,
-  X
+  X,
+  ToggleLeft,
+  ToggleRight,
+  Settings,
+  CheckCircle2,
+  Pause,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -61,6 +67,16 @@ export default function LogisticaLogsPage() {
 
   const [loading, setLoading] = useState(true);
   const [runningAuto, setRunningAuto] = useState(false);
+  const [runningCheck, setRunningCheck] = useState(false);
+  const [togglingJob, setTogglingJob] = useState<string | null>(null);
+  const [logSettings, setLogSettings] = useState<{
+    enabled: boolean;
+    feature_auto_send: boolean;
+    feature_auto_check: boolean;
+    provider: string;
+    check_interval_min: number;
+  } | null>(null);
+
   const [items, setItems] = useState<LogItem[]>([]);
   const [stats, setStats] = useState<LogStats>({
     total: 0,
@@ -78,6 +94,27 @@ export default function LogisticaLogsPage() {
   // Filtros
   const [activeTab, setActiveTab] = useState<'ALL' | 'ERRORS' | 'IN_LOGISTICS' | 'CEP_INVALID'>('ALL');
   const [search, setSearch] = useState('');
+
+  const fetchSettings = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      const res = await fetch(`${API}/companies/${companyId}/logistics/settings`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setLogSettings({
+          enabled: data.enabled ?? false,
+          feature_auto_send: data.feature_auto_send ?? true,
+          feature_auto_check: data.feature_auto_check ?? false,
+          provider: data.provider || 'MKT',
+          check_interval_min: data.check_interval_min ?? 15,
+        });
+      }
+    } catch {
+      // Silencioso
+    }
+  }, [companyId]);
 
   const fetchLogs = useCallback(async () => {
     if (!companyId) return;
@@ -120,10 +157,41 @@ export default function LogisticaLogsPage() {
   }, [companyId, page, activeTab, search]);
 
   useEffect(() => {
+    fetchSettings();
     fetchLogs();
-  }, [fetchLogs]);
+  }, [fetchSettings, fetchLogs]);
 
-  // Disparo manual da rotina automática
+  // Alterna ativação/desativação de um job
+  const handleToggleJob = async (jobName: 'auto_send' | 'auto_check', currentVal: boolean) => {
+    if (!companyId || togglingJob) return;
+    setTogglingJob(jobName);
+    try {
+      const res = await fetch(`${API}/companies/${companyId}/logistics/toggle-job`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${getToken()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ job_name: jobName, enabled: !currentVal }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao alterar status do job.');
+      }
+      setLogSettings(prev => prev ? {
+        ...prev,
+        feature_auto_send: data.feature_auto_send,
+        feature_auto_check: data.feature_auto_check,
+      } : null);
+      toast.success(data.message || 'Status do job atualizado com sucesso!');
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao alterar job.');
+    } finally {
+      setTogglingJob(null);
+    }
+  };
+
+  // Disparo manual da rotina de envio
   const handleTriggerAuto = async () => {
     if (!companyId || runningAuto) return;
     setRunningAuto(true);
@@ -139,13 +207,36 @@ export default function LogisticaLogsPage() {
       }
       const st = data.result || {};
       toast.success(
-        `Rotina executada! Processados: ${st.processed || 0} | Enviados: ${st.sent || 0} | Críticas/Erros: ${st.errors || 0}`
+        `Rotina de envio executada! Processados: ${st.processed || 0} | Enviados: ${st.sent || 0} | Críticas: ${st.errors || 0}`
       );
       fetchLogs();
     } catch (e: any) {
       toast.error(e.message || 'Erro ao disparar rotina.');
     } finally {
       setRunningAuto(false);
+    }
+  };
+
+  // Disparo manual da conferência WMS
+  const handleTriggerCheck = async () => {
+    if (!companyId || runningCheck) return;
+    setRunningCheck(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/companies/${companyId}/logistics/process-check`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao processar conferência.');
+      }
+      toast.success(data.message || `${data.conferred_count || 0} pedido(s) conferido(s) no Horus.`);
+      fetchLogs();
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao executar conferência WMS.');
+    } finally {
+      setRunningCheck(false);
     }
   };
 
@@ -228,17 +319,23 @@ export default function LogisticaLogsPage() {
               <h1 className="text-xl md:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
                 Logs da Logística WMS
               </h1>
-              <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                <Clock className="h-3 w-3" /> Automático: 15 min
-              </span>
+              {logSettings?.enabled ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  <CheckCircle2 className="h-3 w-3" /> WMS Ativo ({logSettings.provider})
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                  WMS Desabilitado
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Histórico de envios, validações de CEP e críticas recebidas da integração logística
+              Gestão de jobs de sincronização, envios de pedidos, conferência WMS e auditoria de erros
             </p>
           </div>
         </div>
 
-        {/* Botão de Disparo Manual + Atualizar */}
+        {/* Ações Rápidas */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -247,18 +344,155 @@ export default function LogisticaLogsPage() {
             className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Atualizar
+            Atualizar Logs
           </button>
+        </div>
+      </div>
 
-          <button
-            type="button"
-            onClick={handleTriggerAuto}
-            disabled={runningAuto || loading}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-violet-600 hover:bg-violet-700 text-white shadow-sm transition-all disabled:opacity-50"
-          >
-            {runningAuto ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4 fill-white" />}
-            {runningAuto ? 'Processando envio...' : 'Processar Fila Agora'}
-          </button>
+      {/* ─── PAINEL DE CONTROLE DOS JOBS AUTOMÁTICOS ─────────────────── */}
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 md:p-5 shadow-sm space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+            <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">
+              Controle de Sincronização Automática (Jobs em Segundo Plano)
+            </h2>
+          </div>
+          <span className="text-[11px] text-slate-400">
+            Você pode pausar ou ativar qualquer job a qualquer momento com efeito imediato.
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Card Job 1: Envio Automático */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            logSettings?.feature_auto_send
+              ? 'border-emerald-200 bg-emerald-50/40 dark:border-emerald-900/40 dark:bg-emerald-950/20'
+              : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50'
+          }`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Send className={`h-4 w-4 ${logSettings?.feature_auto_send ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`} />
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                    Envio de Pedidos (LEX → WMS)
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Busca pedidos liberados para expedição no Horus e envia automaticamente ao armazém WMS.
+                </p>
+                <div className="pt-1">
+                  {logSettings?.feature_auto_send ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Job Ativo (executa a cada 15 min)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-400">
+                      <Pause className="h-3 w-3" />
+                      Job Pausado (Envio automático desligado)
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Switch de Ativação */}
+              <button
+                type="button"
+                onClick={() => handleToggleJob('auto_send', logSettings?.feature_auto_send ?? true)}
+                disabled={togglingJob === 'auto_send'}
+                className="shrink-0 p-1 rounded-lg hover:bg-white/60 dark:hover:bg-slate-800 transition-colors"
+                title={logSettings?.feature_auto_send ? "Clique para pausar o job de envio automático" : "Clique para ativar o job de envio automático"}
+              >
+                {togglingJob === 'auto_send' ? (
+                  <Loader2 className="h-7 w-7 animate-spin text-slate-400" />
+                ) : logSettings?.feature_auto_send ? (
+                  <ToggleRight className="h-8 w-8 text-emerald-500" />
+                ) : (
+                  <ToggleLeft className="h-8 w-8 text-slate-400" />
+                )}
+              </button>
+            </div>
+
+            {/* Ação manual */}
+            <div className="mt-3 pt-3 border-t border-slate-200/60 dark:border-slate-800/60 flex items-center justify-between">
+              <span className="text-[11px] text-slate-500">Disparo manual:</span>
+              <button
+                type="button"
+                onClick={handleTriggerAuto}
+                disabled={runningAuto || loading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-colors disabled:opacity-50"
+              >
+                {runningAuto ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5 fill-white" />}
+                {runningAuto ? 'Enviando...' : 'Processar Fila Agora'}
+              </button>
+            </div>
+          </div>
+
+          {/* Card Job 2: Conferência Automática */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            logSettings?.feature_auto_check
+              ? 'border-violet-200 bg-violet-50/40 dark:border-violet-900/40 dark:bg-violet-950/20'
+              : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50'
+          }`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <PackageCheck className={`h-4 w-4 ${logSettings?.feature_auto_check ? 'text-violet-600 dark:text-violet-400' : 'text-slate-400'}`} />
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                    Conferência WMS (WMS → Horus LFT)
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Busca pedidos conferidos no WMS, registra volumes/pesos e libera para faturamento (LFT) no Horus.
+                </p>
+                <div className="pt-1">
+                  {logSettings?.feature_auto_check ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-violet-700 dark:text-violet-300">
+                      <span className="h-2 w-2 rounded-full bg-violet-500 animate-pulse"></span>
+                      Job Ativo (executa a cada {logSettings.check_interval_min || 15} min)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-400">
+                      <Pause className="h-3 w-3" />
+                      Job Pausado (Conferência automática desligada)
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Switch de Ativação */}
+              <button
+                type="button"
+                onClick={() => handleToggleJob('auto_check', logSettings?.feature_auto_check ?? false)}
+                disabled={togglingJob === 'auto_check'}
+                className="shrink-0 p-1 rounded-lg hover:bg-white/60 dark:hover:bg-slate-800 transition-colors"
+                title={logSettings?.feature_auto_check ? "Clique para pausar o job de conferência automática" : "Clique para ativar o job de conferência automática"}
+              >
+                {togglingJob === 'auto_check' ? (
+                  <Loader2 className="h-7 w-7 animate-spin text-slate-400" />
+                ) : logSettings?.feature_auto_check ? (
+                  <ToggleRight className="h-8 w-8 text-violet-500" />
+                ) : (
+                  <ToggleLeft className="h-8 w-8 text-slate-400" />
+                )}
+              </button>
+            </div>
+
+            {/* Ação manual */}
+            <div className="mt-3 pt-3 border-t border-slate-200/60 dark:border-slate-800/60 flex items-center justify-between">
+              <span className="text-[11px] text-slate-500">Disparo manual:</span>
+              <button
+                type="button"
+                onClick={handleTriggerCheck}
+                disabled={runningCheck || loading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-violet-600 hover:bg-violet-700 text-white shadow-xs transition-colors disabled:opacity-50"
+              >
+                {runningCheck ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                {runningCheck ? 'Conferindo...' : 'Conferir WMS Agora'}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

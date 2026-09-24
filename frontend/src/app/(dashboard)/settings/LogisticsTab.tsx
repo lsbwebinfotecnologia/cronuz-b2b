@@ -22,6 +22,7 @@ interface LogisticsSettings {
   operator_id: string;
   address_type: string;
   stock_local?: string;
+  feature_auto_send?: boolean;
   feature_auto_check: boolean;
   check_interval_min: number;
   providers: string[];
@@ -49,6 +50,7 @@ export function LogisticsTab() {
     operator_id: '',
     address_type: '1',
     stock_local: '',
+    feature_auto_send: true,
     feature_auto_check: false,
     check_interval_min: 15,
     providers: ['MKT'],
@@ -76,6 +78,7 @@ export function LogisticsTab() {
           operator_id: data.operator_id || '',
           address_type: data.address_type || '1',
           stock_local: data.stock_local || '',
+          feature_auto_send: data.feature_auto_send ?? true,
           feature_auto_check: data.feature_auto_check ?? false,
           check_interval_min: data.check_interval_min ?? 15,
           password_set: data.password_set ?? false,
@@ -104,6 +107,7 @@ export function LogisticsTab() {
         operator_id: settings.operator_id || null,
         address_type: settings.address_type || '1',
         stock_local: settings.stock_local || null,
+        feature_auto_send: settings.feature_auto_send ?? true,
         feature_auto_check: settings.feature_auto_check ?? false,
         check_interval_min: settings.check_interval_min ?? 15,
       };
@@ -331,27 +335,47 @@ export function LogisticsTab() {
         </div>
       </div>
 
-      {/* Conferência Automática */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Conferência Automática</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Job que busca pedidos conferidos no WMS e libera para faturamento no Horus.</p>
+      {/* Jobs de Automação em Segundo Plano */}
+      <div className="space-y-3">
+        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Automação de Jobs em Segundo Plano</h3>
+        
+        {/* Envio Automático */}
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Envio Automático de Pedidos (LEX → WMS)</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Job que busca pedidos liberados para expedição no Horus e envia automaticamente ao WMS a cada 15 min.</p>
+            </div>
+            <button type="button" onClick={() => setSettings(prev => ({ ...prev, feature_auto_send: !prev.feature_auto_send }))}>
+              {settings.feature_auto_send
+                ? <ToggleRight className="h-7 w-7 text-emerald-500" />
+                : <ToggleLeft className="h-7 w-7 text-slate-400" />}
+            </button>
           </div>
-          <button type="button" onClick={() => setSettings(prev => ({ ...prev, feature_auto_check: !prev.feature_auto_check }))}>
-            {settings.feature_auto_check
-              ? <ToggleRight className="h-7 w-7 text-emerald-500" />
-              : <ToggleLeft className="h-7 w-7 text-slate-400" />}
-          </button>
         </div>
-        {settings.feature_auto_check && (
-          <div className="flex items-center gap-3">
-            <label className="text-xs font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap">Intervalo (min):</label>
-            <input type="number" min={5} max={60}
-              value={settings.check_interval_min} onChange={e => setSettings(prev => ({ ...prev, check_interval_min: Number(e.target.value) }))}
-              className="w-20 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-sm text-center text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+
+        {/* Conferência Automática */}
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Conferência Automática (WMS → Horus LFT)</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Job que busca pedidos conferidos no WMS e libera para faturamento (LFT) no Horus a cada 15 min.</p>
+            </div>
+            <button type="button" onClick={() => setSettings(prev => ({ ...prev, feature_auto_check: !prev.feature_auto_check }))}>
+              {settings.feature_auto_check
+                ? <ToggleRight className="h-7 w-7 text-emerald-500" />
+                : <ToggleLeft className="h-7 w-7 text-slate-400" />}
+            </button>
           </div>
-        )}
+          {settings.feature_auto_check && (
+            <div className="flex items-center gap-3 pt-1 border-t border-slate-100 dark:border-slate-800">
+              <label className="text-xs font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap">Intervalo de Verificação (min):</label>
+              <input type="number" min={5} max={60}
+                value={settings.check_interval_min} onChange={e => setSettings(prev => ({ ...prev, check_interval_min: Number(e.target.value) }))}
+                className="w-20 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-sm text-center text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
+            </div>
+          )}
+        </div>
       </div>
 
       {testResult && (

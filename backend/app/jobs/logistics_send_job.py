@@ -88,6 +88,9 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
     if not log_settings or not log_settings.api_url or not log_settings.login or not log_settings.password:
         return {"processed": 0, "sent": 0, "errors": 0, "message": "Logística WMS inativa ou sem credenciais"}
 
+    if not log_settings.feature_auto_send:
+        return {"processed": 0, "sent": 0, "errors": 0, "message": "Job de envio automático desativado para esta empresa"}
+
     cmp_settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
     if not cmp_settings or not cmp_settings.horus_enabled:
         return {"processed": 0, "sent": 0, "errors": 0, "message": "Hórus desativado para a empresa"}
@@ -409,7 +412,8 @@ def run_logistics_auto_send_job():
     db = SessionLocal()
     try:
         active_settings = db.query(LogisticsSettings).filter(
-            LogisticsSettings.enabled == True
+            LogisticsSettings.enabled == True,
+            LogisticsSettings.feature_auto_send == True
         ).all()
 
         if not active_settings:

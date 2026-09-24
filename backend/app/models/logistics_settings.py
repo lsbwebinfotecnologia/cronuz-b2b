@@ -16,7 +16,8 @@ class LogisticsSettings(Base):
     operator_id = Column(String(50), nullable=True)
     address_type = Column(String(10), default='1', nullable=True)
     stock_local = Column(String(50), nullable=True)  # COD_LOCAL do Horus para baixa/conferência de estoque
-    feature_auto_check = Column(Boolean, nullable=False, default=False)
+    feature_auto_send = Column(Boolean, nullable=False, default=True)  # Job de envio automático LEX -> WMS
+    feature_auto_check = Column(Boolean, nullable=False, default=False)  # Job de conferência automática WMS -> LFT
     check_interval_min = Column(Integer, nullable=False, default=15)
 
     created_at = Column(DateTime(timezone=True), default=func.now())
