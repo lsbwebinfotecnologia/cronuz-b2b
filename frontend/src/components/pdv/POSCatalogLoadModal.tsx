@@ -191,7 +191,7 @@ export default function POSCatalogLoadModal({
 
     try {
       setLoading(true);
-      setProgressMsg('Enviando e processando planilha...');
+      setProgressMsg('Enviando e processando planilha no servidor...');
       const token = getToken();
       const formData = new FormData();
       formData.append('file', file);
@@ -211,11 +211,60 @@ export default function POSCatalogLoadModal({
       }
 
       const data = await res.json();
-      setProgressMsg(`Gravando ${data.items.length} produtos na memória local...`);
-      const saveRes = await saveCatalogItems(data.items);
+      const totalCount = data.total_count || data.count || 0;
+
+      if (totalCount === 0) {
+        processLoadOutcome('Planilha Excel/CSV', data, { savedCount: 0, duplicateCount: 0, zeroPriceCount: 0 });
+        return;
+      }
+
+      // Esvaziar catálogo local antigo para dar lugar à nova carga
+      await clearCatalog();
+
+      let totalSaved = 0;
+      let totalDuplicates = data.duplicate_count || 0;
+      let totalZeroPrice = data.zero_price_count || 0;
+
+      // 1. Caso planilha pequena (<= 5.000 produtos já retornados inline no POST)
+      if (data.items && data.items.length > 0) {
+        setProgressMsg(`Gravando ${data.items.length.toLocaleString('pt-BR')} produtos na memória local...`);
+        const saveRes = await saveCatalogItems(data.items);
+        totalSaved = saveRes.savedCount;
+        totalDuplicates += saveRes.duplicateCount;
+        totalZeroPrice += saveRes.zeroPriceCount;
+      } else if (data.upload_id) {
+        // 2. Caso planilha grande (ex: 250 mil produtos): Baixa em lotes de 10.000 itens
+        const chunkSize = 10000;
+        for (let offset = 0; offset < totalCount; offset += chunkSize) {
+          const currentEnd = Math.min(offset + chunkSize, totalCount);
+          const percent = Math.round((currentEnd / totalCount) * 100);
+          setProgressMsg(`Importando produtos para o PDV offline... (${currentEnd.toLocaleString('pt-BR')} / ${totalCount.toLocaleString('pt-BR')} - ${percent}%)`);
+
+          const chunkRes = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/upload-spreadsheet/${data.upload_id}/chunk?offset=${offset}&limit=${chunkSize}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+
+          if (!chunkRes.ok) {
+            const errChunk = await chunkRes.json();
+            throw new Error(errChunk.detail || 'Falha ao baixar lote de produtos da planilha');
+          }
+
+          const chunkData = await chunkRes.json();
+          const saveRes = await saveCatalogItems(chunkData.items || []);
+          totalSaved += saveRes.savedCount;
+          totalDuplicates += saveRes.duplicateCount;
+          totalZeroPrice += saveRes.zeroPriceCount;
+        }
+      }
+
       const newCount = await getCatalogCount();
       onCatalogUpdated(newCount);
-      processLoadOutcome('Planilha Excel/CSV', data, saveRes);
+      processLoadOutcome('Planilha Excel/CSV', data, {
+        savedCount: totalSaved,
+        duplicateCount: totalDuplicates - (data.duplicate_count || 0),
+        zeroPriceCount: totalZeroPrice - (data.zero_price_count || 0)
+      });
     } catch (err: any) {
       toast.error(err.message || 'Erro no upload da planilha');
     } finally {
