@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShoppingBag,
@@ -21,7 +22,12 @@ import {
   Truck,
   Building2,
   Copy,
-  Tag
+  Tag,
+  Send,
+  PackageCheck,
+  PackageX,
+  MapPin,
+  ClipboardCheck
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -104,6 +110,19 @@ interface SalesMethodItem {
   desc_metodo: string;
 }
 
+function formatLogisticsDetail(detail: string | null | undefined): string {
+  if (!detail) return '';
+  return detail
+    .replace(/'(\d{7})'/g, (_m, p1) => `'0${p1.slice(0, 4)}-${p1.slice(4)}'`)
+    .replace(/\b(\d{7})\b/g, (_m, p1) => {
+      const full = '0' + p1;
+      return `${full.slice(0, 5)}-${full.slice(5)}`;
+    })
+    .replace(/\b(\d{8})\b/g, (_m, p1) => {
+      return `${p1.slice(0, 5)}-${p1.slice(5)}`;
+    });
+}
+
 export default function HorusOrdersPage() {
   const currentUser = getUser();
   const companyId = currentUser?.company_id || 1;
@@ -139,6 +158,44 @@ export default function HorusOrdersPage() {
     has_invoice: boolean;
   } | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
+
+  // Logística WMS — mapa de situação por cod_ped_venda
+  const [logisticsMap, setLogisticsMap] = useState<Record<number, { situation: string; cep_validated: boolean | null; cep_error_detail: string | null; error_log?: string | null; id_ord_sys_log?: string | null }>>({});
+  const [loadingLogistics, setLoadingLogistics] = useState(false);
+  // Modal de envio para logística
+  const [sendModal, setSendModal] = useState<{ order: OrderHeader } | null>(null);
+  const [sendingLogistics, setSendingLogistics] = useState(false);
+  const [filterLogisticsErrors, setFilterLogisticsErrors] = useState(false);
+
+  // Sincronização & Conciliação com WMS
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [syncingWms, setSyncingWms] = useState(false);
+  const [syncStartDate, setSyncStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().split('T')[0];
+  });
+  const [syncEndDate, setSyncEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [syncResult, setSyncResult] = useState<{
+    total_wms: number;
+    synced_count: number;
+    updated_count: number;
+    created_count: number;
+    message: string;
+    orders: Array<{ cod_ped_venda: number; id_ord_sys_log: string | null; action: string; situation: string }>;
+  } | null>(null);
+
+  // Conferência WMS (process-check -> LFT)
+  const [checkingWms, setCheckingWms] = useState(false);
+  const [checkingOrderId, setCheckingOrderId] = useState<number | null>(null);
+  const [checkResult, setCheckResult] = useState<{
+    processed_count: number;
+    conferred_count: number;
+    errors_count: number;
+    message: string;
+    results: Array<{ cod_ped_venda: number; status: string; items_checked?: number; volumes?: number; message: string }>;
+    errors: Array<{ cod_ped_venda: number; error: string }>;
+  } | null>(null);
 
   // Debounce na busca de texto (300ms)
   useEffect(() => {
@@ -262,7 +319,277 @@ export default function HorusOrdersPage() {
     fetchOrders();
   }, [fetchOrders]);
 
-  // Carrega detalhes do pedido para o Drawer
+  // Carrega situação logística dos pedidos visíveis
+  // Busca fila da logística
+  const fetchLogisticsQueue = useCallback(async () => {
+    if (!companyId) return;
+    const token = getToken();
+    if (!token) return;
+    setLoadingLogistics(true);
+    try {
+      const res = await fetch(`${API}/companies/${companyId}/logistics/queue`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const queue: Array<{
+          cod_ped_venda: number;
+          situation: string;
+          cep_validated: boolean | null;
+          cep_error_detail: string | null;
+          id_ord_sys_log?: string | null;
+          error_log?: string | null;
+        }> = await res.json();
+        const map: Record<number, { situation: string; cep_validated: boolean | null; cep_error_detail: string | null; id_ord_sys_log?: string | null; error_log?: string | null }> = {};
+        for (const item of queue) {
+          map[item.cod_ped_venda] = {
+            situation: item.situation,
+            cep_validated: item.cep_validated,
+            cep_error_detail: item.cep_error_detail,
+            id_ord_sys_log: item.id_ord_sys_log,
+            error_log: item.error_log,
+          };
+        }
+        setLogisticsMap(map);
+      }
+    } catch {
+      // silencioso — logística pode não estar configurada
+    } finally {
+      setLoadingLogistics(false);
+    }
+  }, [companyId]);
+
+  useEffect(() => {
+    if (orders.length > 0) {
+      fetchLogisticsQueue();
+    }
+  }, [orders, fetchLogisticsQueue]);
+
+  // Executa Sincronização e Conciliação com WMS por período
+  const handleExecuteSyncWms = async () => {
+    if (!syncStartDate || !syncEndDate) {
+      toast.error('Informe a data inicial e final.');
+      return;
+    }
+    setSyncingWms(true);
+    setSyncResult(null);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/companies/${companyId}/logistics/sync-from-wms`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          start_date: syncStartDate,
+          end_date: syncEndDate
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.detail || 'Erro ao sincronizar com WMS');
+      } else {
+        setSyncResult(data);
+        toast.success(`Sincronização concluída! ${data.synced_count} pedidos conciliados.`);
+        fetchLogisticsQueue();
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Falha na comunicação com o servidor.');
+    } finally {
+      setSyncingWms(false);
+    }
+  };
+
+  // Executa Conferência WMS e Liberação para Faturamento (LFT) no Hórus
+  const handleExecuteProcessCheck = async (codPedVenda?: number) => {
+    setCheckingWms(true);
+    if (codPedVenda) setCheckingOrderId(codPedVenda);
+    setCheckResult(null);
+    try {
+      const token = getToken();
+      let url = `${API}/companies/${companyId}/logistics/process-check?start_date=${syncStartDate}&end_date=${syncEndDate}`;
+      if (codPedVenda) {
+        url += `&cod_ped_venda=${codPedVenda}`;
+      }
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.detail || 'Erro ao processar conferência WMS');
+      } else {
+        setCheckResult(data);
+        if (data.conferred_count > 0) {
+          toast.success(data.message || `${data.conferred_count} pedido(s) conferido(s) e liberado(s) para faturamento (LFT) no Hórus!`);
+        } else {
+          toast.info(data.message || 'Nenhum pedido novo pendente de liberação para faturamento.');
+        }
+        fetchLogisticsQueue();
+        fetchOrders();
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao processar conferência.');
+    } finally {
+      setCheckingWms(false);
+      setCheckingOrderId(null);
+    }
+  };
+
+  // Tipo dos checks de preflight
+  type PreflightCheck = { key: string; label: string; status: 'ok' | 'error' | 'warning'; detail: string };
+  type PreflightResult = { can_send: boolean; checks: PreflightCheck[]; order: Record<string, unknown> | null; client: Record<string, unknown> | null; items: Record<string, unknown>[] };
+
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null);
+  const [loadingPreflight, setLoadingPreflight] = useState(false);
+
+  // Abre modal e dispara preflight automaticamente
+  const handleOpenSendModal = async (order: OrderHeader) => {
+    setSendModal({ order });
+    setPreflight(null);
+    setLoadingPreflight(true);
+    try {
+      const r = await fetch(
+        `${API}/companies/${companyId}/logistics/preflight/${order.cod_ped_venda}?cod_filial=${selectedFilial}`,
+        { headers: { Authorization: `Bearer ${getToken()}` } }
+      );
+      const data = await r.json();
+      if (!r.ok) {
+        setPreflight({
+          can_send: false,
+          checks: [{ key: 'error', label: 'Erro ao validar', status: 'error', detail: data.detail || 'Erro desconhecido' }],
+          order: null, client: null, items: []
+        });
+      } else {
+        const pref = data as PreflightResult;
+        setPreflight(pref);
+        // Se o preflight passar (ex: o CEP agora foi normalizado/corrigido com 8 dígitos), remove o estado de erro visual
+        if (pref.can_send) {
+          setLogisticsMap(prev => ({
+            ...prev,
+            [order.cod_ped_venda]: {
+              ...prev[order.cod_ped_venda],
+              situation: prev[order.cod_ped_venda]?.situation === 'CEP_INVALID' ? 'PENDING_SEND' : (prev[order.cod_ped_venda]?.situation || 'PENDING_SEND'),
+              cep_validated: true,
+              cep_error_detail: null,
+            }
+          }));
+        }
+      }
+    } catch (e) {
+      setPreflight({
+        can_send: false,
+        checks: [{ key: 'network', label: 'Erro de conexão', status: 'error', detail: 'Não foi possível conectar ao servidor. Verifique a conexão.' }],
+        order: null, client: null, items: []
+      });
+    } finally {
+      setLoadingPreflight(false);
+    }
+  };
+
+  // Envio de pedido para WMS (só chamado após preflight OK)
+  const handleSendToLogistics = async () => {
+    if (!sendModal || !companyId) return;
+    setSendingLogistics(true);
+    try {
+      const r = await fetch(
+        `${API}/companies/${companyId}/logistics/send/${sendModal.order.cod_ped_venda}?cod_filial=${selectedFilial}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` } }
+      );
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'Erro ao enviar pedido.');
+      toast.success(`Pedido #${sendModal.order.cod_ped_venda} enviado à logística!`);
+      const sentOrderCod = sendModal.order.cod_ped_venda;
+      setSendModal(null);
+      setPreflight(null);
+      setLogisticsMap(prev => ({
+        ...prev,
+        [sentOrderCod]: {
+          situation: 'IN_LOGISTICS',
+          cep_validated: true,
+          cep_error_detail: null,
+          error_log: null,
+          id_ord_sys_log: data.id_ord_sys_log || prev[sentOrderCod]?.id_ord_sys_log || null
+        },
+      }));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Erro ao enviar.';
+      toast.error(msg);
+      const cod = sendModal.order.cod_ped_venda;
+      setLogisticsMap(prev => ({
+        ...prev,
+        [cod]: {
+          situation: msg.toLowerCase().includes('cep') ? 'CEP_INVALID' : 'PENDING_SEND',
+          cep_validated: msg.toLowerCase().includes('cep') ? false : null,
+          cep_error_detail: msg,
+          error_log: msg,
+        },
+      }));
+    } finally {
+      setSendingLogistics(false);
+    }
+  };
+
+  // Badge de situação logística
+  const getLogisticsBadge = (logi: { situation: string; cep_validated: boolean | null; cep_error_detail: string | null; id_ord_sys_log?: string | null } | undefined, order: OrderHeader) => {
+    // Só mostra botão Enviar para pedidos LEX que ainda não tenham ID confirmado no WMS
+    const sta = (order.sta_pedido_venda || '').toUpperCase().trim();
+    if (!logi || (logi.situation === 'IN_LOGISTICS' && !logi.id_ord_sys_log)) {
+      if (sta !== 'LEX') return <span className="text-slate-300 dark:text-slate-600 text-xs">—</span>;
+      return (
+        <button
+          type="button"
+          onClick={() => handleOpenSendModal(order)}
+          className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-50 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-700 hover:bg-violet-100 dark:hover:bg-violet-900/50 transition-colors"
+        >
+          <Send className="h-3 w-3" /> Enviar WMS
+        </button>
+      );
+    }
+    const situationMap: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
+      PENDING_SEND: { label: 'Pendente', cls: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700', icon: <Truck className="h-3 w-3" /> },
+      CEP_INVALID: { label: 'CEP Inválido', cls: 'bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800', icon: <MapPin className="h-3 w-3" /> },
+      IN_LOGISTICS: { label: 'No WMS', cls: 'bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800', icon: <PackageCheck className="h-3 w-3" /> },
+      CHECKED: { label: 'Conferido (LFT)', cls: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800', icon: <ClipboardCheck className="h-3 w-3 text-emerald-600" /> },
+      INVOICED: { label: 'NF Enviada', cls: 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-700', icon: <CheckCircle className="h-3 w-3" /> },
+      CANCELED: { label: 'Cancelado', cls: 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-500 border-slate-200 dark:border-slate-700', icon: <PackageX className="h-3 w-3" /> },
+    };
+    const s = situationMap[logi.situation] || situationMap['PENDING_SEND'];
+
+    if (logi.situation === 'IN_LOGISTICS' && sta === 'LEX') {
+      return (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${s.cls}`}>
+            {s.icon}{s.label}
+          </span>
+          <button
+            type="button"
+            onClick={() => handleExecuteProcessCheck(order.cod_ped_venda)}
+            disabled={checkingWms && checkingOrderId === order.cod_ped_venda}
+            className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 transition-colors shadow-2xs cursor-pointer"
+            title="Conferir este pedido no Hórus e liberar para faturamento (LFT)"
+          >
+            {checkingWms && checkingOrderId === order.cod_ped_venda ? (
+              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+            ) : (
+              <ClipboardCheck className="h-2.5 w-2.5 text-emerald-600" />
+            )}
+            Conferir LFT
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${s.cls}`}>
+        {s.icon}{s.label}
+      </span>
+    );
+  };
+
   const handleOpenDetails = async (order: OrderHeader) => {
     setSelectedOrder(order);
     setLoadingDetails(true);
@@ -314,73 +641,68 @@ export default function HorusOrdersPage() {
   };
 
   const getStatusBadge = (status?: string, nroNf?: string) => {
+    const cls = 'inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap';
     const s = (status || '').toUpperCase().trim();
-    if (s === 'FAT') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
-          <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
-          Faturado {nroNf ? `(NF ${nroNf})` : ''}
-        </span>
-      );
-    }
-    if (s === 'CAN' || s === 'CA') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
-          <XCircle className="h-3.5 w-3.5 text-rose-600" />
-          Cancelado
-        </span>
-      );
-    }
-    if (s === 'LFT') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800" title="Passou pela logística, pendente faturamento">
-          <Receipt className="h-3.5 w-3.5 text-indigo-600" />
-          Lib. Faturamento (LFT)
-        </span>
-      );
-    }
-    if (s === 'LEX' || s === 'EXP' || s === 'EXPEDICAO') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-800 dark:bg-purple-950/50 dark:text-purple-300 border border-purple-300 dark:border-purple-800">
-          <Truck className="h-3.5 w-3.5 text-purple-600" />
-          Em Expedição (LEX)
-        </span>
-      );
-    }
-    if (s === 'IMP') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-100 text-sky-800 dark:bg-sky-950/50 dark:text-sky-300 border border-sky-300 dark:border-sky-800">
-          <Clock className="h-3.5 w-3.5 text-sky-600" />
-          Impresso (IMP)
-        </span>
-      );
-    }
-    if (s === 'CON') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-teal-100 text-teal-800 dark:bg-teal-950/50 dark:text-teal-300 border border-teal-300 dark:border-teal-800">
-          <Clock className="h-3.5 w-3.5 text-teal-600" />
-          Conferência (CON)
-        </span>
-      );
-    }
-    if (s === 'NOV') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border border-slate-300 dark:border-slate-700">
-          <Clock className="h-3.5 w-3.5 text-slate-500" />
-          Novo (NOV)
-        </span>
-      );
-    }
+
+    if (s === 'FAT') return (
+      <span className={`${cls} bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800`}>
+        <CheckCircle className="h-3 w-3 shrink-0 text-emerald-600" />
+        Faturado {nroNf ? `(NF ${nroNf})` : ''}
+      </span>
+    );
+    if (s === 'CAN' || s === 'CA') return (
+      <span className={`${cls} bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300 border-rose-300 dark:border-rose-800`}>
+        <XCircle className="h-3 w-3 shrink-0 text-rose-600" />
+        Cancelado
+      </span>
+    );
+    if (s === 'LFT') return (
+      <span className={`${cls} bg-indigo-100 text-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300 border-indigo-300 dark:border-indigo-800`} title="Passou pela logística, pendente faturamento">
+        <Receipt className="h-3 w-3 shrink-0 text-indigo-600" />
+        Lib. Fat. (LFT)
+      </span>
+    );
+    if (s === 'LEX' || s === 'EXP' || s === 'EXPEDICAO') return (
+      <span className={`${cls} bg-purple-100 text-purple-800 dark:bg-purple-950/50 dark:text-purple-300 border-purple-300 dark:border-purple-800`}>
+        <Truck className="h-3 w-3 shrink-0 text-purple-600" />
+        Em Expedição (LEX)
+      </span>
+    );
+    if (s === 'IMP') return (
+      <span className={`${cls} bg-sky-100 text-sky-800 dark:bg-sky-950/50 dark:text-sky-300 border-sky-300 dark:border-sky-800`}>
+        <Clock className="h-3 w-3 shrink-0 text-sky-600" />
+        Impresso (IMP)
+      </span>
+    );
+    if (s === 'CON') return (
+      <span className={`${cls} bg-teal-100 text-teal-800 dark:bg-teal-950/50 dark:text-teal-300 border-teal-300 dark:border-teal-800`}>
+        <Clock className="h-3 w-3 shrink-0 text-teal-600" />
+        Conferência (CON)
+      </span>
+    );
+    if (s === 'NOV') return (
+      <span className={`${cls} bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border-slate-300 dark:border-slate-700`}>
+        <Clock className="h-3 w-3 shrink-0 text-slate-500" />
+        Novo (NOV)
+      </span>
+    );
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-        <Clock className="h-3.5 w-3.5 text-amber-600" />
+      <span className={`${cls} bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300 border-amber-300 dark:border-amber-800`}>
+        <Clock className="h-3 w-3 shrink-0 text-amber-600" />
         {status || 'Em Aberto'}
       </span>
     );
   };
 
+  const displayedOrders = filterLogisticsErrors
+    ? orders.filter((o) => {
+        const logi = logisticsMap[o.cod_ped_venda];
+        return logi?.situation === 'CEP_INVALID' || Boolean(logi?.error_log);
+      })
+    : orders;
+
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-16">
+    <div className="space-y-5 w-full pb-16">
       {/* ─── CABEÇALHO ────────────────────────────────────────────── */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
         <div className="flex items-center gap-3">
@@ -431,6 +753,30 @@ export default function HorusOrdersPage() {
 
           <button
             type="button"
+            onClick={() => {
+              console.log('[Sincronizar WMS] Abrindo modal de sincronização');
+              setSyncModalOpen(true);
+            }}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-violet-50 hover:bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:hover:bg-violet-900/60 dark:text-violet-300 border border-violet-200 dark:border-violet-800 transition-colors shadow-sm cursor-pointer"
+            title="Consultar remessas existentes no WMS e conciliar com os pedidos do Hórus"
+          >
+            <Truck className="h-3.5 w-3.5" />
+            Sincronizar WMS
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleExecuteProcessCheck()}
+            disabled={checkingWms}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition-colors shadow-sm cursor-pointer disabled:opacity-50"
+            title="Processar conferência dos pedidos no WMS e liberar para faturamento (LFT) no Hórus"
+          >
+            {checkingWms && !checkingOrderId ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
+            Conferir WMS (LFT)
+          </button>
+
+          <button
+            type="button"
             onClick={() => { setPage(1); fetchOrders(); fetchMethods(); }}
             disabled={loading}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
@@ -443,7 +789,7 @@ export default function HorusOrdersPage() {
 
       {/* ─── CARDS ESTATÍSTICOS SUPERIORES ────────────────────────── */}
       {summary && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="p-5 rounded-2xl border border-amber-200 bg-amber-50/50 dark:border-amber-800/40 dark:bg-amber-950/20 shadow-sm">
             <div className="flex items-center justify-between">
               <p className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">Em Aberto / Expedição</p>
@@ -467,178 +813,184 @@ export default function HorusOrdersPage() {
             <p className="text-xs text-rose-600 dark:text-rose-400 mt-1 font-medium">Requerem atenção operacional imediata</p>
           </div>
 
-          <div className="p-5 rounded-2xl border border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/40 dark:bg-emerald-950/20 shadow-sm">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">Faturados</p>
-              <CheckCircle className="h-4 w-4 text-emerald-600" />
-            </div>
-            <p className="text-2xl font-black text-emerald-800 dark:text-emerald-200 mt-2">{summary.faturados_count}</p>
-            <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1 font-medium">Pedidos com NF_MESTRE gerada</p>
-          </div>
-
-          <div className="p-5 rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-sm">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total na Filial {summary.filial_consultada}</p>
-              <Building2 className="h-4 w-4 text-slate-400" />
-            </div>
-            <p className="text-2xl font-black text-slate-900 dark:text-white mt-2">{summary.total_count}</p>
-            <p className="text-xs text-slate-400 mt-1">Cancelados: {summary.cancelados_count}</p>
-          </div>
         </div>
       )}
 
-      {/* ─── BARRA DE FILTROS E ABAS ──────────────────────────────── */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
-        <div className="flex flex-col lg:flex-row items-center justify-between gap-4">
-          {/* Abas Rápidas de Status */}
-          <div className="flex items-center gap-1.5 overflow-x-auto w-full lg:w-auto pb-2 lg:pb-0">
-            <button
-              type="button"
-              onClick={() => { setStatusTab('DEFAULT'); setPage(1); }}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
-                statusTab === 'DEFAULT'
-                  ? 'bg-amber-600 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <Clock className="h-3.5 w-3.5" />
-              Em Aberto / Expedição
-            </button>
+      {/* ─── BARRA DE FILTROS E ABAS (MOBILE FIRST & COMPACTA) ──────────────── */}
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 shadow-sm space-y-3.5">
+        {/* Linha 1: Abas Rápidas de Status + Filtro de Problemas + Link de Logs */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+          <button
+            type="button"
+            onClick={() => { setStatusTab('DEFAULT'); setPage(1); }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+              statusTab === 'DEFAULT'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            Em Aberto / Expedição
+          </button>
 
-            <button
-              type="button"
-              onClick={() => { setStatusTab('FAT'); setPage(1); }}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
-                statusTab === 'FAT'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <CheckCircle className="h-3.5 w-3.5" />
-              Faturados (FAT)
-            </button>
+          <button
+            type="button"
+            onClick={() => { setStatusTab('FAT'); setPage(1); }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+              statusTab === 'FAT'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <CheckCircle className="h-3.5 w-3.5" />
+            Faturados (FAT)
+          </button>
 
-            <button
-              type="button"
-              onClick={() => { setStatusTab('CAN'); setPage(1); }}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
-                statusTab === 'CAN'
-                  ? 'bg-rose-600 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <XCircle className="h-3.5 w-3.5" />
-              Cancelados (CAN)
-            </button>
+          <button
+            type="button"
+            onClick={() => { setStatusTab('CAN'); setPage(1); }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+              statusTab === 'CAN'
+                ? 'bg-rose-600 text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <XCircle className="h-3.5 w-3.5" />
+            Cancelados (CAN)
+          </button>
 
-            <button
-              type="button"
-              onClick={() => { setStatusTab('TODOS'); setPage(1); }}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
-                statusTab === 'TODOS'
-                  ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              Todos os Status
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => { setStatusTab('TODOS'); setPage(1); }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+              statusTab === 'TODOS'
+                ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            Todos os Status
+          </button>
 
-          {/* Busca Instantânea */}
-          <div className="relative w-full lg:w-80">
+          {/* Separador */}
+          <div className="h-5 w-px bg-slate-200 dark:bg-slate-700 shrink-0 mx-1" />
+
+          {/* Filtro: Apenas com Problemas de Logística */}
+          <button
+            type="button"
+            onClick={() => setFilterLogisticsErrors(!filterLogisticsErrors)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+              filterLogisticsErrors
+                ? 'bg-rose-600 text-white shadow-sm ring-2 ring-rose-400'
+                : 'text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 hover:bg-rose-100'
+            }`}
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Problemas de Logística ({Object.values(logisticsMap).filter(l => l.situation === 'CEP_INVALID' || Boolean(l.error_log)).length})
+          </button>
+
+          {/* Link para a tela completa de Logs da Logística */}
+          <Link
+            href="/horus-direct/logistica-logs"
+            className="px-3 py-1.5 rounded-xl text-xs font-bold bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300 border border-violet-200 dark:border-violet-800 hover:bg-violet-100 flex items-center gap-1.5 shrink-0 transition-colors"
+          >
+            <Truck className="h-3.5 w-3.5" />
+            Logs da Logística
+          </Link>
+        </div>
+
+        {/* Linha 2: Busca Rápida (abaixo dos status) + Método de Venda + Período */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+          {/* Campo de Busca Rápida (Destaque abaixo dos status) */}
+          <div className="sm:col-span-2 lg:col-span-5 relative">
             <Search className="h-3.5 w-3.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
               placeholder="Buscar Pedido #, Cliente, NF, Natureza..."
-              className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
+              className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500 font-medium"
             />
           </div>
-        </div>
 
-        {/* Linha 2 de Filtros: Método de Venda + Período de Data */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
           {/* Método de Venda */}
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-500 shrink-0">Método:</span>
+          <div className="sm:col-span-1 lg:col-span-3 flex items-center gap-1.5">
+            <span className="font-bold text-slate-500 shrink-0 text-[11px]">Método:</span>
             <select
               value={selectedMetodo}
               onChange={(e) => { setSelectedMetodo(e.target.value); setPage(1); }}
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 font-semibold"
+              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 px-2.5 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 font-semibold truncate"
             >
               <option value="TODOS">Todos os Métodos</option>
               {methodsList.map((m) => (
                 <option key={m.cod_metodo} value={m.cod_metodo}>
-                  {m.desc_metodo ? `${m.desc_metodo} (Cód ${m.cod_metodo})` : `Método ${m.cod_metodo}`}
+                  {m.desc_metodo ? `${m.desc_metodo} (${m.cod_metodo})` : `Método ${m.cod_metodo}`}
                 </option>
               ))}
             </select>
           </div>
 
-          {/* Data Início */}
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-500 shrink-0">De:</span>
-            <input
-              type="date"
-              value={dataInicio}
-              onChange={(e) => { setDataInicio(e.target.value); setPage(1); }}
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-            />
-          </div>
-
-          {/* Data Fim */}
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-500 shrink-0">Até:</span>
-            <input
-              type="date"
-              value={dataFim}
-              onChange={(e) => { setDataFim(e.target.value); setPage(1); }}
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-            />
+          {/* Data Início & Fim */}
+          <div className="sm:col-span-1 lg:col-span-4 flex items-center gap-1.5">
+            <div className="flex-1 flex items-center gap-1">
+              <span className="font-bold text-slate-500 shrink-0 text-[11px]">De:</span>
+              <input
+                type="date"
+                value={dataInicio}
+                onChange={(e) => { setDataInicio(e.target.value); setPage(1); }}
+                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 px-2 py-1.5 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
+            <div className="flex-1 flex items-center gap-1">
+              <span className="font-bold text-slate-500 shrink-0 text-[11px]">Até:</span>
+              <input
+                type="date"
+                value={dataFim}
+                onChange={(e) => { setDataFim(e.target.value); setPage(1); }}
+                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 px-2 py-1.5 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
           </div>
         </div>
       </div>
 
-      {/* ─── TABELA DE PEDIDOS ────────────────────────────────────── */}
+      {/* ─── TABELA DE PEDIDOS (RESPONSIVA & ENCAIXADA NA TELA) ───────────────────── */}
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto rounded-2xl">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold sticky top-0">
+            <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-bold sticky top-0 border-b border-slate-200/80 dark:border-slate-800 uppercase tracking-wider text-[10px]">
               <tr>
-                <th className="p-3.5">Pedido Web</th>
-                <th className="p-3.5">Pedido Horus</th>
-                <th className="p-3.5">Filial</th>
-                <th className="p-3.5">Cliente / Sacado</th>
-                <th className="p-3.5">Método</th>
-                <th className="p-3.5">Natureza Fiscal</th>
-                <th className="p-3.5">Data Criação</th>
-                <th className="p-3.5">Lib. Expedição</th>
-                <th className="p-3.5">Lib. LFT</th>
-                <th className="p-3.5 text-right">Valores (Líq / Bruto)</th>
-                <th className="p-3.5 text-center">Qtd Itens</th>
-                <th className="p-3.5 text-center">Status no ERP</th>
-                <th className="p-3.5 text-center">Ações</th>
+                <th className="p-3 w-28 whitespace-nowrap">Pedido</th>
+                <th className="p-3 min-w-[200px]">Cliente / Método / Operação</th>
+                <th className="p-3 w-36 whitespace-nowrap">Cronologia / Liberações</th>
+                <th className="p-3 w-32 text-right whitespace-nowrap">Valores</th>
+                <th className="p-3 w-16 text-center whitespace-nowrap">Itens</th>
+                <th className="p-3 w-36 text-center whitespace-nowrap">Logística WMS</th>
+                <th className="p-3 w-24 text-center whitespace-nowrap">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
               {loading ? (
                 <tr>
-                  <td colSpan={13} className="p-12 text-center text-slate-400">
+                  <td colSpan={7} className="p-12 text-center text-slate-400">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-violet-500" />
                     Consultando pedidos no Horus ERP...
                   </td>
                 </tr>
-              ) : orders.length === 0 ? (
+              ) : displayedOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="p-12 text-center text-slate-400">
-                    Nenhum pedido localizado com os filtros selecionados.
+                  <td colSpan={7} className="p-12 text-center text-slate-400">
+                    {filterLogisticsErrors
+                      ? 'Nenhum pedido com problemas de logística localizado nesta página.'
+                      : 'Nenhum pedido localizado com os filtros selecionados.'}
                   </td>
                 </tr>
               ) : (
-                orders.map((o) => {
+                displayedOrders.map((o) => {
                   const isAtrasado = Boolean(o.is_alerta_expedicao);
-                  const rowBgClass = isAtrasado
+                  const hasLogisticsProblem = logisticsMap[o.cod_ped_venda]?.situation === 'CEP_INVALID' || Boolean(logisticsMap[o.cod_ped_venda]?.error_log);
+                  const rowBgClass = hasLogisticsProblem
+                    ? 'bg-rose-50/50 dark:bg-rose-950/20 border-l-4 border-l-rose-500 hover:bg-rose-100/40 dark:hover:bg-rose-900/20'
+                    : isAtrasado
                     ? 'bg-amber-50/75 dark:bg-amber-950/25 border-l-4 border-l-amber-500 hover:bg-amber-100/60 dark:hover:bg-amber-900/30'
                     : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40';
 
@@ -649,82 +1001,97 @@ export default function HorusOrdersPage() {
                   const hasDesconto = valorBruto > valorLiquido;
 
                   return (
-                    <tr
-                      key={`${o.cod_filial}-${o.cod_ped_venda}`}
-                      className={`transition-colors ${rowBgClass}`}
-                    >
-                      {/* Pedido Web */}
-                      <td className="p-3.5 font-mono font-bold text-slate-900 dark:text-white">
-                        #{o.pedido_web}
-                      </td>
-
-                      {/* Pedido Horus */}
-                      <td className="p-3.5 font-mono font-bold text-violet-700 dark:text-violet-300">
-                        <span className="bg-violet-50 dark:bg-violet-950/50 px-2 py-0.5 rounded border border-violet-200 dark:border-violet-800">
-                          #{o.cod_ped_venda}
-                        </span>
-                      </td>
-
-                      {/* Filial */}
-                      <td className="p-3.5">
-                        <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
-                          Filial {o.cod_filial}
-                        </span>
-                      </td>
-
-                      {/* Cliente */}
-                      <td className="p-3.5 max-w-[180px] truncate">
-                        <p className="font-semibold text-slate-800 dark:text-slate-200 truncate">{o.nom_cli || 'Cliente Balcão'}</p>
-                        {o.cod_cli && (
-                          <p className="text-[10px] text-slate-400 font-mono">Cód: {o.cod_cli}</p>
-                        )}
-                      </td>
-
-                      {/* Método de Venda */}
-                      <td className="p-3.5">
-                        <span className="font-semibold text-slate-700 dark:text-slate-300" title={`Código Método: ${o.cod_metodo || ''}`}>
-                          {o.desc_metodo || o.cod_metodo || '—'}
-                        </span>
-                      </td>
-
-                      {/* Natureza Operação (Parâmetro Fiscal) */}
-                      <td className="p-3.5">
-                        {o.natureza_operacao ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                            <Tag className="h-3 w-3 text-slate-400" />
-                            {o.natureza_operacao}
+                    <React.Fragment key={`${o.cod_filial}-${o.cod_ped_venda}`}>
+                    <tr className={`transition-colors ${rowBgClass}`}>
+                      {/* 1. Pedido Web & Horus + Filial */}
+                      <td className="p-3 align-top whitespace-nowrap">
+                        <div className="flex flex-col gap-1">
+                          <span className="font-mono font-black text-violet-700 dark:text-violet-300 text-xs bg-violet-50 dark:bg-violet-950/50 px-2 py-0.5 rounded border border-violet-200 dark:border-violet-800 inline-block w-fit">
+                            #{o.cod_ped_venda}
                           </span>
-                        ) : (
-                          <span className="text-slate-400">—</span>
-                        )}
+                          <div className="flex flex-col gap-0.5 text-[10px] text-slate-500">
+                            {o.pedido_web ? (
+                              <span className="font-mono text-slate-700 dark:text-slate-300 font-medium">
+                                <span className="text-slate-400 font-normal">Origem:</span> #{o.pedido_web}
+                              </span>
+                            ) : null}
+                            <span className="text-slate-500 dark:text-slate-400 font-semibold" title={`Filial ${o.cod_filial}`}>
+                              Filial - {o.cod_filial}
+                            </span>
+                          </div>
+                        </div>
                       </td>
 
-                      {/* Data Criação */}
-                      <td className="p-3.5 text-slate-600 dark:text-slate-400">
-                        {formatDate(o.data_criacao)}
+                      {/* 2. Cliente + Status + Método + Natureza na mesma coluna */}
+                      <td className="p-3 align-top">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-bold text-slate-900 dark:text-slate-100 text-xs truncate max-w-[260px] sm:max-w-xs" title={o.nom_cli || 'Cliente Balcão'}>
+                              {o.nom_cli || 'Cliente Balcão'}
+                            </p>
+                            {o.cod_cli && (
+                              <span className="text-[10px] text-slate-400 font-mono bg-slate-100 dark:bg-slate-800/80 px-1.5 py-0.2 rounded">
+                                Cód: {o.cod_cli}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {/* Status do Pedido */}
+                            {getStatusBadge(o.sta_pedido_venda, o.nro_nota_fiscal)}
+
+                            {/* Método de Venda */}
+                            {(o.desc_metodo || o.cod_metodo) && (
+                              <span
+                                className="inline-flex items-center text-[10px] font-semibold text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md border border-slate-200/60 dark:border-slate-700/60"
+                                title={`Método de Venda: ${o.desc_metodo || ''} (${o.cod_metodo || ''})`}
+                              >
+                                {o.desc_metodo || `Método ${o.cod_metodo}`}
+                              </span>
+                            )}
+
+                            {/* Natureza Fiscal */}
+                            {o.natureza_operacao && (
+                              <span
+                                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-violet-50 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 border border-violet-200/60 dark:border-violet-800/60"
+                                title={`Natureza Fiscal: ${o.natureza_operacao}`}
+                              >
+                                <Tag className="h-2.5 w-2.5" />
+                                {o.natureza_operacao}
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </td>
 
-                      {/* Liberação Expedição (com Badge de Alerta se Atrasado) */}
-                      <td className="p-3.5">
-                        <p className="text-slate-700 dark:text-slate-300 font-medium">
-                          {formatDate(o.data_expedicao)}
-                        </p>
-                        {isAtrasado && o.dias_expedicao !== undefined && (
-                          <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-black px-2 py-0.5 rounded-md bg-amber-200 text-amber-950 dark:bg-amber-900/70 dark:text-amber-200 border border-amber-300 dark:border-amber-700 animate-pulse">
-                            <AlertTriangle className="h-3 w-3 text-amber-700 dark:text-amber-400" />
-                            {o.dias_expedicao} dias em exp.
-                          </span>
-                        )}
+                      {/* 3. Cronologia / Liberações (Criação, Expedição, LFT agrupadas) */}
+                      <td className="p-3 align-top text-[11px] text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                        <div className="space-y-0.5">
+                          <p title="Data de Criação">
+                            <span className="text-slate-400 text-[10px]">Criação:</span> <span className="font-medium text-slate-700 dark:text-slate-300">{formatDate(o.data_criacao)}</span>
+                          </p>
+                          <p title="Liberação para Expedição">
+                            <span className="text-slate-400 text-[10px]">Expedição:</span> <span className="font-medium text-slate-700 dark:text-slate-300">{formatDate(o.data_expedicao)}</span>
+                          </p>
+                          {o.data_lft && (
+                            <p title="Liberação de Faturamento (LFT)">
+                              <span className="text-slate-400 text-[10px]">LFT:</span> <span className="font-medium text-slate-700 dark:text-slate-300">{formatDate(o.data_lft)}</span>
+                            </p>
+                          )}
+                          {isAtrasado && o.dias_expedicao !== undefined && (
+                            <div className="pt-0.5">
+                              <span className="inline-flex items-center gap-1 text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-200 text-amber-950 dark:bg-amber-900/70 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
+                                <AlertTriangle className="h-3 w-3 text-amber-700 dark:text-amber-400" />
+                                {o.dias_expedicao}d em atraso
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </td>
 
-                      {/* Liberação LFT */}
-                      <td className="p-3.5 text-slate-600 dark:text-slate-400">
-                        {formatDate(o.data_lft)}
-                      </td>
-
-                      {/* Valores Líquido e Bruto */}
-                      <td className="p-3.5 text-right font-mono">
-                        <p className="font-black text-slate-900 dark:text-white">
+                      {/* 4. Valores (Líquido e Bruto) */}
+                      <td className="p-3 align-top text-right font-mono whitespace-nowrap">
+                        <p className="font-black text-slate-900 dark:text-white text-xs">
                           {formatBRL(valorLiquido)}
                         </p>
                         {hasDesconto && (
@@ -734,28 +1101,79 @@ export default function HorusOrdersPage() {
                         )}
                       </td>
 
-                      {/* Qtd Itens */}
-                      <td className="p-3.5 text-center font-semibold text-slate-700 dark:text-slate-300">
+                      {/* 5. Qtd Itens */}
+                      <td className="p-3 align-top text-center font-bold text-slate-700 dark:text-slate-300 text-xs">
                         {o.qtd_itens || o.qtd_itens_total || 1}
                       </td>
 
-                      {/* Status no ERP */}
-                      <td className="p-3.5 text-center">
-                        {getStatusBadge(o.sta_pedido_venda, o.nro_nota_fiscal)}
+                      {/* 6. Logística WMS */}
+                      <td className="p-3 align-top text-center">
+                        <div className="flex flex-col items-center gap-1">
+                          {loadingLogistics
+                            ? <span className="inline-block w-14 h-4 bg-slate-100 dark:bg-slate-800 rounded animate-pulse" />
+                            : getLogisticsBadge(logisticsMap[o.cod_ped_venda], o)
+                          }
+                          {/* Número do Pedido / Remessa do WMS */}
+                          {logisticsMap[o.cod_ped_venda]?.id_ord_sys_log && (
+                            <div className="flex items-center justify-center gap-1 font-mono text-[10px]" title="Número da Remessa no WMS">
+                              <span className="text-slate-400 font-semibold">WMS:</span>
+                              <span className="font-bold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 px-1.5 py-0.5 rounded border border-blue-200 dark:border-blue-800">
+                                #{logisticsMap[o.cod_ped_venda]?.id_ord_sys_log}
+                              </span>
+                            </div>
+                          )}
+                          {/* Crítica do MKT exibida abaixo do badge */}
+                          {logisticsMap[o.cod_ped_venda]?.error_log && logisticsMap[o.cod_ped_venda]?.situation === 'PENDING_SEND' && (
+                            <p className="text-[9px] text-rose-600 dark:text-rose-400 max-w-[120px] truncate" title={logisticsMap[o.cod_ped_venda]?.error_log || ''}>
+                              ⚠️ {logisticsMap[o.cod_ped_venda]?.error_log}
+                            </p>
+                          )}
+                        </div>
                       </td>
 
-                      {/* Ações */}
-                      <td className="p-3.5 text-center">
+                      {/* 7. Ações */}
+                      <td className="p-3 align-top text-center">
                         <button
                           type="button"
                           onClick={() => handleOpenDetails(o)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-violet-700 bg-violet-50 hover:bg-violet-100 dark:bg-violet-950/40 dark:text-violet-300 dark:hover:bg-violet-900/60 transition-colors"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold text-violet-700 bg-violet-50 hover:bg-violet-100 dark:bg-violet-950/40 dark:text-violet-300 dark:hover:bg-violet-900/60 transition-colors shadow-2xs"
                         >
                           <Eye className="h-3.5 w-3.5" />
                           Detalhes
                         </button>
                       </td>
                     </tr>
+
+                    {/* Sub-linha de destaque para pedidos com críticas de logística */}
+                    {hasLogisticsProblem && (
+                      <tr className="bg-rose-50/70 dark:bg-rose-950/25 border-b border-rose-200 dark:border-rose-900/50">
+                        <td colSpan={7} className="px-4 py-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                            <div className="flex items-center gap-2 text-rose-700 dark:text-rose-300">
+                              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-600" />
+                              <span className="font-black uppercase tracking-wider text-[10px] bg-rose-100 dark:bg-rose-900/50 px-1.5 py-0.5 rounded">
+                                Crítica de Logística:
+                              </span>
+                              <span>
+                                {formatLogisticsDetail(
+                                  logisticsMap[o.cod_ped_venda]?.situation === 'CEP_INVALID'
+                                    ? (logisticsMap[o.cod_ped_venda]?.cep_error_detail || 'CEP inválido ou não localizado no ViaCEP.')
+                                    : logisticsMap[o.cod_ped_venda]?.error_log
+                                )}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSendModal(o)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold text-rose-800 bg-rose-200/80 hover:bg-rose-300/80 dark:bg-rose-900/50 dark:text-rose-200 transition-colors"
+                            >
+                              <Send className="h-3 w-3" /> Revalidar / Enviar WMS
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })
               )}
@@ -766,7 +1184,7 @@ export default function HorusOrdersPage() {
         {/* ─── PAGINAÇÃO ────────────────────────────────────────── */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
           <span className="text-slate-500">
-            Mostrando <strong>{orders.length}</strong> de <strong>{totalRecords}</strong> pedidos (Página {page} de {totalPages})
+            Mostrando <strong>{displayedOrders.length}</strong> de <strong>{totalRecords}</strong> pedidos {filterLogisticsErrors ? '(filtrado por problemas de logística)' : ''} (Página {page} de {totalPages})
           </span>
 
           <div className="flex items-center gap-2">
@@ -1054,6 +1472,360 @@ export default function HorusOrdersPage() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* ─── MODAL: PRÉ-VALIDAÇÃO + CONFIRMAR ENVIO ─────────── */}
+      {sendModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center gap-3 p-5 border-b border-slate-100 dark:border-slate-800">
+              <div className="p-2.5 rounded-xl bg-violet-100 dark:bg-violet-950/40 shrink-0">
+                <Truck className="h-5 w-5 text-violet-600 dark:text-violet-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Enviar WMS</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                  Pedido #{sendModal.order.cod_ped_venda} — {sendModal.order.nom_cli} | Filial {selectedFilial}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setSendModal(null); setPreflight(null); }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Body — check-list */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-2">
+              {loadingPreflight && (
+                <div className="flex flex-col items-center justify-center py-8 gap-3 text-slate-400">
+                  <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
+                  <p className="text-sm font-medium">Validando pedido no Horus...</p>
+                </div>
+              )}
+
+              {!loadingPreflight && !preflight && (
+                <p className="text-xs text-slate-400 text-center py-4">Aguardando validação...</p>
+              )}
+
+              {!loadingPreflight && preflight && (
+                <>
+                  {/* Resultado global */}
+                  <div className={`rounded-xl px-4 py-2.5 flex items-center gap-2 text-sm font-semibold mb-3 ${
+                    preflight.can_send
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
+                      : 'bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800'
+                  }`}>
+                    {preflight.can_send
+                      ? <><CheckCircle className="h-4 w-4 shrink-0" /> Tudo certo! Pedido pronto para envio.</>
+                      : <><XCircle className="h-4 w-4 shrink-0" /> Há problemas que impedem o envio. Corrija e tente novamente.</>
+                    }
+                  </div>
+
+                  {/* Lista de checks */}
+                  <div className="space-y-1.5">
+                    {preflight.checks.map((c, i) => (
+                      <div
+                        key={`${c.key}-${i}`}
+                        className={`rounded-xl px-3.5 py-2.5 border text-xs ${
+                          c.status === 'ok'
+                            ? 'bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-100 dark:border-emerald-900'
+                            : c.status === 'error'
+                            ? 'bg-rose-50/80 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800'
+                            : 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <span className="mt-0.5 shrink-0">
+                            {c.status === 'ok' && <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />}
+                            {c.status === 'error' && <XCircle className="h-3.5 w-3.5 text-rose-500" />}
+                            {c.status === 'warning' && <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className={`font-semibold ${
+                              c.status === 'ok' ? 'text-emerald-700 dark:text-emerald-400'
+                              : c.status === 'error' ? 'text-rose-700 dark:text-rose-400'
+                              : 'text-amber-700 dark:text-amber-400'
+                            }`}>{c.label}</p>
+                            <p className="text-slate-600 dark:text-slate-400 mt-0.5 break-words leading-relaxed">{formatLogisticsDetail(c.detail)}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Resumo de itens (opcional) */}
+                  {preflight.items && preflight.items.length > 0 && (
+                    <details className="mt-2 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                      <summary className="px-3.5 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800">
+                        Ver {preflight.items.length} item(ns) do pedido
+                      </summary>
+                      <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {preflight.items.map((it, idx) => (
+                          <div key={idx} className="px-3.5 py-1.5 flex justify-between items-center text-xs">
+                            <span className="font-mono text-violet-700 dark:text-violet-300 mr-2">{String(it.cod_item || '')}</span>
+                            <span className="flex-1 text-slate-700 dark:text-slate-300 truncate">{String(it.nom_item || '—')}</span>
+                            <span className="ml-2 text-slate-500 whitespace-nowrap">x{Number(it.qtd || 0).toFixed(0)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-3 p-5 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => { setSendModal(null); setPreflight(null); }}
+                disabled={sendingLogistics}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSendToLogistics}
+                disabled={sendingLogistics || loadingPreflight || !preflight?.can_send}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {sendingLogistics ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {sendingLogistics ? 'Enviando ao WMS...' : loadingPreflight ? 'Validando...' : !preflight?.can_send && preflight ? 'Corrija os erros' : 'Enviar WMS'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL DE SINCRONIZAÇÃO E CONCILIAÇÃO COM WMS ─────────────── */}
+      {syncModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-2xl bg-violet-100 dark:bg-violet-950/60 text-violet-600 dark:text-violet-400 flex items-center justify-center font-bold">
+                  <Truck className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Sincronização com WMS MKT
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Concilia pedidos já criados na logística para evitar duplicidade
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSyncModalOpen(false)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Conteúdo */}
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                Esta rotina consulta a API do WMS no período selecionado, localiza as remessas criadas e atualiza o número do pedido WMS (<span className="font-mono font-bold text-violet-600 dark:text-violet-400">id_ord_sys_log</span>) e a situação correspondente no Cronuz.
+              </div>
+
+              {/* Atalhos Rápidos */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
+                  Atalhos de Período
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { label: '7 dias', days: 7 },
+                    { label: '15 dias', days: 15 },
+                    { label: '30 dias', days: 30 },
+                    { label: '60 dias', days: 60 },
+                  ].map(p => (
+                    <button
+                      key={p.days}
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() - p.days);
+                        setSyncStartDate(d.toISOString().split('T')[0]);
+                        setSyncEndDate(new Date().toISOString().split('T')[0]);
+                      }}
+                      className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors text-center"
+                    >
+                      Últimos {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Filtro de Datas */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                    Data Inicial
+                  </label>
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs">
+                    <Calendar className="h-4 w-4 text-slate-400 shrink-0" />
+                    <input
+                      type="date"
+                      value={syncStartDate}
+                      onChange={e => setSyncStartDate(e.target.value)}
+                      className="bg-transparent w-full text-slate-900 dark:text-white focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                    Data Final
+                  </label>
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs">
+                    <Calendar className="h-4 w-4 text-slate-400 shrink-0" />
+                    <input
+                      type="date"
+                      value={syncEndDate}
+                      onChange={e => setSyncEndDate(e.target.value)}
+                      className="bg-transparent w-full text-slate-900 dark:text-white focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Botões de Ação: Conciliação e Conferência LFT */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleExecuteSyncWms}
+                  disabled={syncingWms || checkingWms}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold shadow-md shadow-violet-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                >
+                  {syncingWms ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  {syncingWms ? 'Conciliando...' : '1. Conciliar com WMS'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleExecuteProcessCheck()}
+                  disabled={syncingWms || checkingWms}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                >
+                  {checkingWms ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardCheck className="h-4 w-4" />}
+                  {checkingWms ? 'Conferindo no Hórus...' : '2. Conferir e Liberar LFT'}
+                </button>
+              </div>
+
+              {/* Feedback de Conferência */}
+              {checkResult && (
+                <div className="mt-4 p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs">
+                    <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+                    <span>{checkResult.message}</span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="bg-white/80 dark:bg-slate-900/60 p-2 rounded-xl border border-emerald-100 dark:border-emerald-900/40">
+                      <span className="text-[10px] text-slate-500 block uppercase font-bold">Processados</span>
+                      <span className="text-base font-black text-slate-900 dark:text-white">{checkResult.processed_count}</span>
+                    </div>
+                    <div className="bg-white/80 dark:bg-slate-900/60 p-2 rounded-xl border border-emerald-100 dark:border-emerald-900/40">
+                      <span className="text-[10px] text-slate-500 block uppercase font-bold">Conferidos (LFT)</span>
+                      <span className="text-base font-black text-emerald-600 dark:text-emerald-400">{checkResult.conferred_count}</span>
+                    </div>
+                    <div className="bg-white/80 dark:bg-slate-900/60 p-2 rounded-xl border border-emerald-100 dark:border-emerald-900/40">
+                      <span className="text-[10px] text-slate-500 block uppercase font-bold">Falhas/Alertas</span>
+                      <span className="text-base font-black text-rose-600 dark:text-rose-400">
+                        {checkResult.errors_count}
+                      </span>
+                    </div>
+                  </div>
+
+                  {checkResult.results && checkResult.results.length > 0 && (
+                    <div className="max-h-40 overflow-y-auto divide-y divide-emerald-100 dark:divide-emerald-900/30 rounded-xl border border-emerald-200/50 dark:border-emerald-900/40 bg-white/50 dark:bg-slate-900/40">
+                      {checkResult.results.map((r, idx) => (
+                        <div key={idx} className="p-2 flex items-center justify-between text-xs">
+                          <span className="font-bold text-slate-800 dark:text-slate-200">
+                            Pedido #{r.cod_ped_venda}
+                          </span>
+                          <span className="text-[11px] text-slate-600 dark:text-slate-400">
+                            {r.items_checked !== undefined ? `${r.items_checked} itens • ${r.volumes} vol` : ''}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 font-bold uppercase">
+                            {r.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Feedback de Resultado */}
+              {syncResult && (
+                <div className="mt-4 p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs">
+                    <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+                    <span>{syncResult.message}</span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="bg-white/80 dark:bg-slate-900/60 p-2 rounded-xl border border-emerald-100 dark:border-emerald-900/40">
+                      <span className="text-[10px] text-slate-500 block uppercase font-bold">WMS Total</span>
+                      <span className="text-base font-black text-slate-900 dark:text-white">{syncResult.total_wms}</span>
+                    </div>
+                    <div className="bg-white/80 dark:bg-slate-900/60 p-2 rounded-xl border border-emerald-100 dark:border-emerald-900/40">
+                      <span className="text-[10px] text-slate-500 block uppercase font-bold">Conciliados</span>
+                      <span className="text-base font-black text-emerald-600 dark:text-emerald-400">{syncResult.synced_count}</span>
+                    </div>
+                    <div className="bg-white/80 dark:bg-slate-900/60 p-2 rounded-xl border border-emerald-100 dark:border-emerald-900/40">
+                      <span className="text-[10px] text-slate-500 block uppercase font-bold">Criados/Atu.</span>
+                      <span className="text-base font-black text-violet-600 dark:text-violet-400">
+                        {syncResult.created_count}/{syncResult.updated_count}
+                      </span>
+                    </div>
+                  </div>
+
+                  {syncResult.orders && syncResult.orders.length > 0 && (
+                    <div className="max-h-40 overflow-y-auto divide-y divide-emerald-100 dark:divide-emerald-900/30 rounded-xl border border-emerald-200/50 dark:border-emerald-900/40 bg-white/50 dark:bg-slate-900/40">
+                      {syncResult.orders.map((o, idx) => (
+                        <div key={idx} className="p-2 flex items-center justify-between text-xs">
+                          <span className="font-bold text-slate-800 dark:text-slate-200">
+                            Hórus #{o.cod_ped_venda}
+                          </span>
+                          <span className="font-mono text-violet-700 dark:text-violet-300 font-semibold">
+                            WMS #{o.id_ord_sys_log || '—'}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 font-bold uppercase">
+                            {o.situation}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setSyncModalOpen(false);
+                  fetchLogisticsQueue();
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

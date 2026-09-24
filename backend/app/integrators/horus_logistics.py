@@ -222,3 +222,49 @@ class HorusLogisticsClient(HorusClient):
         
         return await self.get("InsVolume_Pedido", params=params)
 
+    async def alt_status_pedido(
+        self,
+        cod_empresa: str,
+        cod_filial: str,
+        cod_cli: str,
+        cod_ped_venda: Union[str, int],
+        sta_pedido: str = "LFT"
+    ) -> Any:
+        """
+        Calls AltStatus_Pedido on Horus ERP to update the sales order status (e.g. LFT, LEX).
+        """
+        params = {
+            "COD_EMPRESA": cod_empresa,
+            "COD_FILIAL": cod_filial,
+            "COD_CLI": cod_cli,
+            "COD_PED_VENDA": cod_ped_venda,
+            "STA_PEDIDO": sta_pedido
+        }
+        return await self.get("AltStatus_Pedido", params=params)
+
+    async def busca_acervo_isbn(
+        self,
+        isbn: str,
+        cod_empresa: Optional[str] = None,
+        cod_filial: Optional[str] = None
+    ) -> Any:
+        """
+        Calls Busca_Acervo by BARRAS_ISBN to find the item's COD_ITEM.
+        """
+        params = {
+            "BARRAS_ISBN": isbn,
+            "OFFSET": 0,
+            "LIMIT": 5
+        }
+        if cod_empresa:
+            params["COD_EMPRESA"] = cod_empresa
+        if cod_filial:
+            params["COD_FILIAL"] = cod_filial
+
+        if getattr(self._settings, 'horus_legacy_pagination', False):
+            params.pop("OFFSET", None)
+            params.pop("LIMIT", None)
+
+        return await self.get("Busca_Acervo", params=params)
+
+

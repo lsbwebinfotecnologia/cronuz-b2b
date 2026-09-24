@@ -41,7 +41,8 @@ import {
   DatabaseZap,
   CreditCard,
   Feather,
-  Boxes
+  Boxes,
+  Truck
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -379,6 +380,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     const subItems: { name: string; href: string; icon?: any }[] = [];
     if (horusSqlPedidos) {
       subItems.push({ name: 'Pedidos (Horus)', href: '/horus-direct/pedidos', icon: ShoppingBag });
+      subItems.push({ name: 'Logs da Logística', href: '/horus-direct/logistica-logs', icon: Truck });
     }
     if (horusSqlVindiBaixa || subItems.length === 0) {
       subItems.push({ name: 'Financeiro Vindi', href: '/horus-direct/financeiro-vindi', icon: CreditCard });

@@ -13,6 +13,7 @@ import { HorusSQLTab } from './HorusSQLTab';
 import { BookinfoTab } from './BookinfoTab';
 import { SefazBranchesTab } from './SefazBranchesTab';
 import { DropshipTab } from './DropshipTab';
+import { LogisticsTab } from './LogisticsTab';
 import { useCompany } from './layout';
 
 export default function SettingsPage() {
@@ -427,9 +428,10 @@ export default function SettingsPage() {
     { id: 'templates', label: 'Modelos de E-mail', icon: FileText },
     { id: 'sefaz_sp', label: 'Fiscal SEFAZ', icon: Key },
     { id: 'dropship', label: 'Dropship Horus', icon: Package },
+    ...(company?.module_horus_sql ? [{ id: 'logistics', label: 'Logística WMS', icon: Truck }] : []),
   ];
 
-  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'horus_sql' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship';
+  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'horus_sql' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && activeTab !== 'logistics';
   const FormContainer = isFormTab ? 'form' : 'div';
 
   return (
@@ -1287,9 +1289,16 @@ export default function SettingsPage() {
                 </div>
               )}
 
+              {/* Tab: LOGÍSTICA WMS */}
+              {activeTab === 'logistics' && (
+                <div className="animate-in fade-in">
+                  <LogisticsTab />
+                </div>
+              )}
+
             </div>
 
-            {activeTab !== 'templates' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && (
+            {activeTab !== 'templates' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && activeTab !== 'logistics' && (
               <div className="p-6 bg-slate-50 border-t border-slate-200 dark:bg-slate-900/60 dark:border-slate-800/60 flex items-center justify-end">
                 <button
                 type="submit"

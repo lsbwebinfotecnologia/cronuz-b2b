@@ -1,21 +1,14 @@
 import os
-from sqlalchemy import create_engine, text
+import sys
 
-# Get db url like database.py does
-from dotenv import load_dotenv
-load_dotenv()
+# Ensure backend path is in sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-db_url = os.getenv("DATABASE_URL", "postgresql://cronuz_admin:cronuz_password_123@localhost:5432/cronuz_b2b")
-try:
-    engine = create_engine(db_url)
-    with engine.connect() as conn:
-        try:
-            conn.execute(text('ALTER TABLE fin_category ADD COLUMN dre_group VARCHAR(50);'))
-            print("dre_group added.")
-        except Exception as e:
-            print("dre_group might already exist or error:", e)
+from sqlalchemy import text
+from app.db.session import engine
 
-        conn.commit()
-    print("Migration finished!")
-except Exception as e:
-    print("Engine error:", e)
+with engine.begin() as conn:
+    with open("migrate.sql", "r") as f:
+        sql = f.read()
+    conn.execute(text(sql))
+    print("Migration executed successfully.")

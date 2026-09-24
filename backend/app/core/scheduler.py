@@ -216,6 +216,28 @@ def cleanup_old_purchase_logs():
         db.close()
 
 
+def cleanup_old_logistics_logs():
+    """
+    Deleta registros de logistics_order_logs com mais de 30 dias.
+    Roda 1x por dia às 03:30 (horário de Brasília).
+    """
+    from app.models.logistics_order_log import LogisticsOrderLog
+    from datetime import timedelta
+    db = get_db_session()
+    try:
+        cutoff = __import__("datetime").datetime.utcnow() - timedelta(days=30)
+        deleted = db.query(LogisticsOrderLog).filter(
+            LogisticsOrderLog.created_at < cutoff
+        ).delete(synchronize_session=False)
+        db.commit()
+        logger.info(f"[Cleanup] Logs antigos de logística removidos: {deleted} registros.")
+    except Exception as e:
+        logger.error(f"[Cleanup] Erro ao limpar logs antigos de logística: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
 # -----------------
 # Schedulers init
 # -----------------
@@ -263,6 +285,15 @@ def start_scheduler():
         coalesce=True,
     )
 
+    # Limpeza diária de logs de logística com mais de 30 dias (todo dia às 03:30)
+    scheduler.add_job(
+        cleanup_old_logistics_logs,
+        CronTrigger(hour=3, minute=30, timezone="America/Sao_Paulo"),
+        id="job_cleanup_logistics_logs",
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Limpeza de conexoes SQL expiradas do pool Horus SQL Direct (a cada 15 min)
     scheduler.add_job(
         cleanup_expired_pool_connections,
@@ -272,5 +303,27 @@ def start_scheduler():
         coalesce=True,
     )
 
+    # Envio automático de pedidos LEX para Logística WMS (a cada 15 min por padrão)
+    from app.jobs.logistics_send_job import run_logistics_auto_send_job
+    scheduler.add_job(
+        run_logistics_auto_send_job,
+        IntervalTrigger(minutes=15),
+        id="job_logistics_auto_send",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
+
+    # Conferência automática WMS e liberação LFT (a cada 15 min por padrão)
+    from app.jobs.logistics_check_job import run_logistics_check_job
+    scheduler.add_job(
+        run_logistics_check_job,
+        IntervalTrigger(minutes=15),
+        id="job_logistics_auto_check",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
+
     scheduler.start()
-    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup")
+    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check")

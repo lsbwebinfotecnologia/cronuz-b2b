@@ -34,6 +34,7 @@ from app.models import alert as alert_models
 from app.models import hosted_site as hosted_site_models
 from app.models import author as author_models
 from app.models import inventory as inventory_models
+from app.models import pos as pos_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -83,6 +84,8 @@ from app.api import horus_orders
 from app.api import authors_admin
 from app.api import author_portal
 from app.api import inventory as inventory_api
+from app.api import logistics as logistics_api
+from app.api import pos as pos_api
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -122,6 +125,7 @@ alert_models.Base.metadata.create_all(bind=engine)
 hosted_site_models.Base.metadata.create_all(bind=engine)
 author_models.Base.metadata.create_all(bind=engine)
 inventory_models.Base.metadata.create_all(bind=engine)
+pos_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -205,6 +209,8 @@ app.include_router(authors_admin.router)
 app.include_router(author_portal.router)
 app.include_router(inventory_api.router)
 app.include_router(inventory_api.public_router)
+app.include_router(logistics_api.router, tags=["logistics-wms"])
+app.include_router(pos_api.router, tags=["pos-omnichannel"])
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)

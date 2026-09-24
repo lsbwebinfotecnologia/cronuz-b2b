@@ -1,0 +1,641 @@
+import io
+import csv
+import logging
+from datetime import datetime
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
+from sqlalchemy.orm import Session
+from sqlalchemy import func, desc, or_
+import openpyxl
+
+from app.db.session import get_db
+from app.core import dependencies
+from app.models import user as user_models
+from app.models.company import Company
+from app.models.product import Product
+from app.models.customer import Customer
+from app.models.pos import (
+    POSSession,
+    POSSale,
+    POSSaleItem,
+    POSSessionStatus,
+    POSCatalogSource,
+    POSPaymentMethod,
+)
+from app.schemas.pos import (
+    POSSessionCreate,
+    POSSessionResponse,
+    POSSaleCreate,
+    POSSyncBatchRequest,
+    POSSyncBatchResponse,
+)
+
+router = APIRouter(prefix="/companies/{company_id}/pos", tags=["pos-omnichannel"])
+logger = logging.getLogger("cronuz.pos")
+
+
+def _assert_pos_access(current_user: user_models.User, company_id: int, db: Session) -> Company:
+    user_type = getattr(current_user.type, "value", str(current_user.type))
+    if user_type != "MASTER" and current_user.company_id != company_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso restrito a esta empresa.")
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada.")
+
+    return company
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSÕES DE PDV (Caixas / Eventos)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/sessions", response_model=List[POSSessionResponse])
+def list_pos_sessions(
+    company_id: int,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """Lista as sessões de PDV da empresa (abertas ou fechadas)."""
+    _assert_pos_access(current_user, company_id, db)
+
+    query = db.query(POSSession).filter(POSSession.company_id == company_id)
+    if status_filter:
+        query = query.filter(POSSession.status == status_filter.upper())
+
+    sessions = query.order_by(desc(POSSession.opened_at)).all()
+    return sessions
+
+
+@router.post("/sessions", response_model=POSSessionResponse)
+def create_pos_session(
+    company_id: int,
+    payload: POSSessionCreate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """Abre uma nova sessão ou evento de PDV."""
+    _assert_pos_access(current_user, company_id, db)
+
+    now_str = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    code = f"PDV-{company_id}-{now_str}"
+
+    cust_name = payload.customer_name
+    cust_doc = payload.customer_document
+    if payload.customer_id and not cust_name:
+        cust = db.query(Customer).filter(
+            Customer.id == payload.customer_id,
+            Customer.company_id == company_id
+        ).first()
+        if cust:
+            cust_name = cust.name or cust.corporate_name
+            cust_doc = cust.document
+
+    new_session = POSSession(
+        company_id=company_id,
+        user_id=current_user.id,
+        code=code,
+        title=payload.title,
+        status=POSSessionStatus.OPEN.value,
+        catalog_source=payload.catalog_source or POSCatalogSource.GENERAL.value,
+        source_reference=payload.source_reference,
+        customer_id=payload.customer_id,
+        customer_name=cust_name,
+        customer_document=cust_doc,
+        notes=payload.notes,
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+    return new_session
+
+
+@router.get("/sessions/{session_id}")
+def get_pos_session(
+    company_id: int,
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """Retorna detalhes de uma sessão com resumo de vendas."""
+    _assert_pos_access(current_user, company_id, db)
+
+    session = db.query(POSSession).filter(
+        POSSession.id == session_id,
+        POSSession.company_id == company_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+
+    # Breakdown por método de pagamento
+    breakdown = (
+        db.query(
+            POSSale.payment_method,
+            func.count(POSSale.id).label("count"),
+            func.sum(POSSale.total_amount).label("total")
+        )
+        .filter(POSSale.session_id == session_id, POSSale.status == "COMPLETED")
+        .group_by(POSSale.payment_method)
+        .all()
+    )
+
+    by_payment = {
+        row.payment_method: {"count": row.count, "total": float(row.total or 0)}
+        for row in breakdown
+    }
+
+    return {
+        "session": {
+            "id": session.id,
+            "code": session.code,
+            "title": session.title,
+            "status": session.status,
+            "catalog_source": session.catalog_source,
+            "source_reference": session.source_reference,
+            "customer_id": session.customer_id,
+            "customer_name": session.customer_name,
+            "customer_document": session.customer_document,
+            "total_sales_count": session.total_sales_count,
+            "total_sales_amount": float(session.total_sales_amount or 0),
+            "opened_at": session.opened_at.isoformat() if session.opened_at else None,
+            "closed_at": session.closed_at.isoformat() if session.closed_at else None,
+            "notes": session.notes,
+        },
+        "by_payment_method": by_payment,
+    }
+
+
+@router.put("/sessions/{session_id}/close", response_model=POSSessionResponse)
+def close_pos_session(
+    company_id: int,
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """Fecha a sessão de PDV."""
+    _assert_pos_access(current_user, company_id, db)
+
+    session = db.query(POSSession).filter(
+        POSSession.id == session_id,
+        POSSession.company_id == company_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+
+    session.status = POSSessionStatus.CLOSED.value
+    session.closed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CARGA DE CATÁLOGO OFFLINE (Consignação Horus, Acervo ou Local)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/catalog-load")
+async def load_pos_catalog(
+    company_id: int,
+    source: str = Query("GENERAL", description="GENERAL, CONSIGNMENT, CRONUZ_CATALOG, HORUS_CATALOG"),
+    customer_id: Optional[int] = Query(None),
+    cod_ctr: Optional[str] = Query(None),
+    limit: int = Query(5000, le=10000),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Retorna a lista de produtos formatada para alimentar o banco local IndexedDB do PDV.
+    Suporta Contrato de Consignação Horus, Catálogo Cronuz ou Catálogo Geral.
+    """
+    company = _assert_pos_access(current_user, company_id, db)
+
+    items = []
+
+    # 1. Carga via Contrato de Consignação Horus
+    if source == "CONSIGNMENT" and customer_id:
+        customer = db.query(Customer).filter(
+            Customer.id == customer_id,
+            Customer.company_id == company_id
+        ).first()
+        if not customer or not customer.document:
+            raise HTTPException(status_code=400, detail="Cliente inválido ou sem documento para consulta Horus.")
+
+        try:
+            from app.integrators.horus_clients import HorusClients
+            from app.models.company_settings import CompanySettings
+
+            settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+            id_guid = customer.id_guid or (settings.horus_default_b2b_guid if settings else "")
+
+            client = HorusClients(db, company_id)
+            res = await client.get_consignment_details(
+                cnpj_destino=company.document,
+                cnpj_cliente=customer.document,
+                id_guid=id_guid,
+                cod_ctr=cod_ctr,
+                limit=limit
+            )
+            await client.close()
+
+            raw_list = res if isinstance(res, list) else ([res] if isinstance(res, dict) else [])
+            for row in raw_list:
+                if row.get("Falha"):
+                    continue
+                barcode = str(row.get("COD_BARRA_ITEM") or row.get("COD_ITEM") or "").strip()
+                if not barcode:
+                    continue
+                vlr_str = str(row.get("VLR_PRECO") or row.get("VLR_LIQUIDO") or "0").replace(",", ".")
+                try:
+                    price = float(vlr_str)
+                except Exception:
+                    price = 0.0
+
+                saldo = float(row.get("SALDO_ITENS") or row.get("QTD_ATENDIDA") or 0)
+
+                items.append({
+                    "barcode": barcode,
+                    "sku": str(row.get("COD_ITEM") or ""),
+                    "title": row.get("NOM_ITEM") or "Item Consignado",
+                    "publisher": row.get("NOM_EDITORA") or "",
+                    "price": price,
+                    "stock": saldo,
+                    "horus_item_code": str(row.get("COD_ITEM") or ""),
+                    "source": "CONSIGNMENT",
+                })
+        except Exception as e:
+            logger.error("Erro ao carregar consignação Horus: %s", str(e))
+            raise HTTPException(status_code=400, detail=f"Erro ao buscar consignação no Horus: {str(e)}")
+
+        return {"source": "CONSIGNMENT", "count": len(items), "items": items}
+
+    # 2. Carga padrão via Catálogo Cronuz
+    products = (
+        db.query(Product)
+        .filter(
+            Product.company_id == company_id,
+            Product.is_active == True
+        )
+        .order_by(Product.name)
+        .limit(limit)
+        .all()
+    )
+
+    for p in products:
+        barcode = str(p.ean_gtin or p.sku or p.id).strip()
+        items.append({
+            "barcode": barcode,
+            "sku": p.sku or "",
+            "title": p.name or "Sem nome",
+            "publisher": p.brand or "",
+            "price": float(p.price or 0.0),
+            "stock": float(p.stock or 0),
+            "product_id": p.id,
+            "source": "CRONUZ_CATALOG",
+        })
+
+    return {"source": "CRONUZ_CATALOG", "count": len(items), "items": items}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IMPORTAÇÃO DE PLANILHA PARA CARGA DE PRODUTOS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/upload-spreadsheet")
+async def upload_pos_spreadsheet(
+    company_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Recebe um arquivo Excel (.xlsx) ou CSV com colunas:
+    ISBN/Código de Barras, Título/Descrição, Preço, Estoque (opcional).
+    Retorna os itens formatados para carga no IndexedDB do PDV.
+    """
+    _assert_pos_access(current_user, company_id, db)
+
+    filename = file.filename.lower()
+    content = await file.read()
+    items = []
+
+    if filename.endswith(".xlsx"):
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        sheet = wb.active
+        rows = list(sheet.iter_rows(values_only=True))
+        if len(rows) > 1:
+            header = [str(col).strip().upper() if col else "" for col in rows[0]]
+            
+            # Detectar colunas
+            isbn_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ISBN", "BARRAS", "EAN", "CODIGO"])), 0)
+            title_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["TITULO", "NOME", "DESCRICAO", "LIVRO"])), 1)
+            price_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["PRECO", "VALOR", "VLR", "PRICE"])), 2)
+            stock_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ESTOQUE", "QTD", "QUANTIDADE", "SALDO"])), -1)
+
+            for r in rows[1:]:
+                if not r or len(r) <= isbn_idx or not r[isbn_idx]:
+                    continue
+                barcode = str(r[isbn_idx]).strip().replace(".0", "")
+                title = str(r[title_idx]).strip() if len(r) > title_idx and r[title_idx] else "Item Importado"
+                
+                price = 0.0
+                if len(r) > price_idx and r[price_idx] is not None:
+                    try:
+                        price = float(str(r[price_idx]).replace(",", "."))
+                    except Exception:
+                        price = 0.0
+
+                stock = 100.0
+                if stock_idx >= 0 and len(r) > stock_idx and r[stock_idx] is not None:
+                    try:
+                        stock = float(str(r[stock_idx]).replace(",", "."))
+                    except Exception:
+                        stock = 100.0
+
+                items.append({
+                    "barcode": barcode,
+                    "sku": barcode,
+                    "title": title,
+                    "publisher": "Planilha",
+                    "price": price,
+                    "stock": stock,
+                    "source": "SPREADSHEET",
+                })
+
+    elif filename.endswith(".csv"):
+        text_data = content.decode("utf-8-sig", errors="ignore")
+        dialect = csv.Sniffer().sniff(text_data[:2048]) if text_data else None
+        delimiter = dialect.delimiter if dialect else (";" if ";" in text_data.splitlines()[0] else ",")
+        reader = csv.reader(io.StringIO(text_data), delimiter=delimiter)
+        rows = list(reader)
+        if len(rows) > 1:
+            header = [c.strip().upper() for c in rows[0]]
+            isbn_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ISBN", "BARRAS", "EAN", "CODIGO"])), 0)
+            title_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["TITULO", "NOME", "DESCRICAO"])), 1)
+            price_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["PRECO", "VALOR", "VLR"])), 2)
+            stock_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ESTOQUE", "QTD", "QUANTIDADE"])), -1)
+
+            for r in rows[1:]:
+                if not r or len(r) <= isbn_idx or not r[isbn_idx].strip():
+                    continue
+                barcode = r[isbn_idx].strip()
+                title = r[title_idx].strip() if len(r) > title_idx and r[title_idx] else "Item Importado"
+                price = 0.0
+                if len(r) > price_idx and r[price_idx]:
+                    try:
+                        price = float(r[price_idx].replace(",", "."))
+                    except Exception:
+                        price = 0.0
+                stock = 100.0
+                if stock_idx >= 0 and len(r) > stock_idx and r[stock_idx]:
+                    try:
+                        stock = float(r[stock_idx].replace(",", "."))
+                    except Exception:
+                        stock = 100.0
+
+                items.append({
+                    "barcode": barcode,
+                    "sku": barcode,
+                    "title": title,
+                    "publisher": "Planilha",
+                    "price": price,
+                    "stock": stock,
+                    "source": "SPREADSHEET",
+                })
+    else:
+        raise HTTPException(status_code=400, detail="Formato não suportado. Envie um arquivo .xlsx ou .csv")
+
+    return {
+        "filename": file.filename,
+        "count": len(items),
+        "items": items,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SINCRONIZAÇÃO EM LOTE DE VENDAS OFFLINE / ONLINE
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/sync-sales", response_model=POSSyncBatchResponse)
+def sync_pos_sales(
+    company_id: int,
+    payload: POSSyncBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Ingestão em lote de vendas realizadas no PDV (Offline ou Online).
+    Garantia de IDEMPOTÊNCIA via 'client_sale_uuid'.
+    Se a venda já foi sincronizada anteriormente, não duplica.
+    Atualiza as estatísticas da sessão.
+    """
+    _assert_pos_access(current_user, company_id, db)
+
+    session = None
+    if payload.session_id:
+        session = db.query(POSSession).filter(
+            POSSession.id == payload.session_id,
+            POSSession.company_id == company_id
+        ).first()
+
+    success_count = 0
+    already_synced_count = 0
+    failed_count = 0
+    synced_uuids = []
+    errors = []
+
+    for s_in in payload.sales:
+        uuid_key = s_in.client_sale_uuid.strip()
+        if not uuid_key:
+            failed_count += 1
+            errors.append({"uuid": "", "error": "client_sale_uuid obrigatório"})
+            continue
+
+        # Verifica se já existe (idempotência)
+        existing = db.query(POSSale).filter(
+            POSSale.company_id == company_id,
+            POSSale.client_sale_uuid == uuid_key
+        ).first()
+
+        if existing:
+            already_synced_count += 1
+            synced_uuids.append(uuid_key)
+            continue
+
+        try:
+            sale_num = s_in.sale_number or f"PDV-{datetime.utcnow().strftime('%y%m%d%H%M')}-{success_count+1}"
+
+            new_sale = POSSale(
+                company_id=company_id,
+                session_id=payload.session_id or s_in.session_id,
+                user_id=current_user.id,
+                client_sale_uuid=uuid_key,
+                sale_number=sale_num,
+                customer_name=s_in.customer_name or "Consumidor Final",
+                customer_document=s_in.customer_document,
+                customer_id=s_in.customer_id,
+                payment_method=s_in.payment_method.upper(),
+                payment_details=s_in.payment_details,
+                subtotal=s_in.subtotal,
+                discount=s_in.discount,
+                total_amount=s_in.total_amount,
+                items_count=s_in.items_count,
+                sold_at=s_in.sold_at,
+                synced_at=datetime.utcnow(),
+                origin=s_in.origin or "pdv_offline",
+                status="COMPLETED",
+                notes=s_in.notes,
+            )
+            db.add(new_sale)
+            db.flush()
+
+            for it in s_in.items:
+                sale_item = POSSaleItem(
+                    sale_id=new_sale.id,
+                    product_id=it.product_id,
+                    barcode=it.barcode,
+                    sku=it.sku,
+                    title=it.title,
+                    publisher=it.publisher,
+                    quantity=it.quantity,
+                    unit_price=it.unit_price,
+                    total_price=it.total_price,
+                    horus_item_code=it.horus_item_code,
+                )
+                db.add(sale_item)
+
+            if session:
+                session.total_sales_count = (session.total_sales_count or 0) + 1
+                session.total_sales_amount = float(session.total_sales_amount or 0) + float(s_in.total_amount)
+
+            success_count += 1
+            synced_uuids.append(uuid_key)
+
+        except Exception as e:
+            logger.error("Falha ao gravar venda %s: %s", uuid_key, str(e))
+            failed_count += 1
+            errors.append({"uuid": uuid_key, "error": str(e)})
+
+    db.commit()
+
+    return POSSyncBatchResponse(
+        total_received=len(payload.sales),
+        success_count=success_count,
+        already_synced_count=already_synced_count,
+        failed_count=failed_count,
+        synced_uuids=synced_uuids,
+        errors=errors,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LISTAGEM & ACOMPANHAMENTO EM TEMPO REAL DAS VENDAS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/sales")
+def list_pos_sales(
+    company_id: int,
+    session_id: Optional[int] = Query(None),
+    payment_method: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, le=200),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Centralização e acompanhamento em tempo real das vendas do PDV.
+    Retorna métricas consolidadas (KPIs) e lista paginada com os itens.
+    """
+    _assert_pos_access(current_user, company_id, db)
+
+    query = db.query(POSSale).filter(POSSale.company_id == company_id)
+
+    if session_id:
+        query = query.filter(POSSale.session_id == session_id)
+    if payment_method:
+        query = query.filter(POSSale.payment_method == payment_method.upper())
+    if search:
+        search_like = f"%{search}%"
+        query = query.filter(
+            or_(
+                POSSale.sale_number.ilike(search_like),
+                POSSale.customer_name.ilike(search_like),
+                POSSale.customer_document.ilike(search_like),
+            )
+        )
+
+    # Métricas agregadas
+    total_count = query.count()
+    total_amount = db.query(func.sum(POSSale.total_amount)).filter(
+        POSSale.company_id == company_id,
+        (POSSale.session_id == session_id) if session_id else True,
+        POSSale.status == "COMPLETED"
+    ).scalar() or 0.0
+
+    # Agrupamento por método de pagamento
+    pay_summary = (
+        db.query(
+            POSSale.payment_method,
+            func.count(POSSale.id).label("count"),
+            func.sum(POSSale.total_amount).label("total")
+        )
+        .filter(
+            POSSale.company_id == company_id,
+            (POSSale.session_id == session_id) if session_id else True,
+            POSSale.status == "COMPLETED"
+        )
+        .group_by(POSSale.payment_method)
+        .all()
+    )
+
+    by_payment = {
+        r.payment_method: {"count": r.count, "total": float(r.total or 0)}
+        for r in pay_summary
+    }
+
+    # Registros paginados
+    sales = query.order_by(desc(POSSale.sold_at)).offset(skip).limit(limit).all()
+
+    sales_result = []
+    for s in sales:
+        items_data = [
+            {
+                "barcode": it.barcode,
+                "title": it.title,
+                "quantity": float(it.quantity),
+                "unit_price": float(it.unit_price),
+                "total_price": float(it.total_price),
+                "publisher": it.publisher,
+            }
+            for it in s.items
+        ]
+        sales_result.append({
+            "id": s.id,
+            "client_sale_uuid": s.client_sale_uuid,
+            "sale_number": s.sale_number,
+            "session_id": s.session_id,
+            "customer_name": s.customer_name,
+            "customer_document": s.customer_document,
+            "payment_method": s.payment_method,
+            "subtotal": float(s.subtotal),
+            "discount": float(s.discount),
+            "total_amount": float(s.total_amount),
+            "items_count": s.items_count,
+            "sold_at": s.sold_at.isoformat() if s.sold_at else None,
+            "synced_at": s.synced_at.isoformat() if s.synced_at else None,
+            "origin": s.origin,
+            "status": s.status,
+            "items": items_data,
+        })
+
+    return {
+        "kpis": {
+            "total_sales": total_count,
+            "total_amount": float(total_amount),
+            "by_payment_method": by_payment,
+        },
+        "sales": sales_result,
+        "skip": skip,
+        "limit": limit,
+    }
