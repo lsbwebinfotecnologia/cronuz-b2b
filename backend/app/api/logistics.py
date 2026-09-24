@@ -139,7 +139,7 @@ def _extract_legado_id(res: Any) -> Optional[str]:
             val = data_field.get("legado_pedido_id") or data_field.get("id") or data_field.get("remessa_id")
             if val:
                 return str(val)
-        for k in ["0", "1", "RemessaPedido", "LegadoPedido"]:
+        for k in ["0", "1", "RemessaPedido", "LegadoPedido", "remessa", "resultado"]:
             sub = res.get(k)
             if isinstance(sub, dict):
                 v = sub.get("legado_pedido_id") or sub.get("id") or sub.get("remessa_id")
@@ -148,7 +148,8 @@ def _extract_legado_id(res: Any) -> Optional[str]:
         val = res.get("legado_pedido_id") or res.get("id") or res.get("remessa_id")
         if val:
             return str(val)
-        val = res[0].get("legado_pedido_id") or res[0].get("id")
+    elif isinstance(res, list) and len(res) > 0 and isinstance(res[0], dict):
+        val = res[0].get("legado_pedido_id") or res[0].get("id") or res[0].get("remessa_id")
         if val:
             return str(val)
     return None
@@ -1875,32 +1876,14 @@ async def send_to_logistics(
         legado_id = _extract_legado_id(res)
         if not legado_id:
             try:
-                # Consulta direta na MKT por codigo_referencia para resgatar o ID
-                if isinstance(provider, MKTProvider):
-                    async with provider._get_client() as mkt_client:
-                        r_ref = await mkt_client.get("/movimento/saida.json", params={
-                            "armazem_id": log_settings.warehouse_id or "",
-                            "cliente_id": log_settings.client_id or "",
-                            "codigo_referencia": str(cod_ped)
-                        })
-                        if r_ref.status_code == 200:
-                            data_ref = r_ref.json()
-                            res_list = data_ref.get("data", {}).get("resultados", []) if isinstance(data_ref.get("data"), dict) else data_ref.get("resultados", [])
-                            if res_list:
-                                item_0 = res_list[0]
-                                legado_id = (item_0.get("LegadoPedido") or {}).get("id") or (item_0.get("RemessaPedido") or {}).get("id")
-                if not legado_id:
-                    movs = await provider.get_movements(dat_ped, dat_ped)
-                    for m in movs:
-                        rem_m = m.get("RemessaPedido") or {}
-                        mov_m = m.get("Movimento") or {}
-                        leg_m = m.get("LegadoPedido") or {}
-                        ped_num = str(rem_m.get("pedido_numero") or mov_m.get("codigo_referencia") or m.get("codigo") or "").strip()
-                        if ped_num == str(cod_ped):
-                            legado_id = leg_m.get("id") or rem_m.get("id") or m.get("id")
-                            break
-            except Exception as e_mov:
-                logger.debug(f"[Logistics.send] Não foi possível obter remessa_id de imediato: {e_mov}")
+                ref_order = await provider.get_order_by_ref(cod_ped)
+                if ref_order:
+                    rem_m = ref_order.get("RemessaPedido") or {}
+                    leg_m = ref_order.get("LegadoPedido") or {}
+                    mov_m = ref_order.get("Movimento") or {}
+                    legado_id = leg_m.get("id") or rem_m.get("id") or mov_m.get("id") or ref_order.get("id")
+            except Exception as e_ref:
+                logger.debug(f"[Logistics.send] Não foi possível obter remessa_id de imediato por ref: {e_ref}")
 
         order.id_ord_sys_log = str(legado_id) if legado_id else None
         order.error_log = None
@@ -1930,7 +1913,7 @@ async def send_to_logistics(
         db.commit()
         raise
     except Exception as e:
-        logger.error(f"[Logistics.send] Erro ao enviar pedido {cod_ped} para logística: {e}")
+        logger.error(f"[Logistics.send] Erro ao enviar pedido {cod_ped} para logística: {e}", exc_info=True)
         order.situation = "PENDING_SEND"
         order.error_log = str(e)[:500]
         db.commit()
@@ -1944,7 +1927,10 @@ async def send_to_logistics(
             response_data=str(e),
             message=f"Falha no envio do pedido #{cod_ped} para logística: {e}"
         )
-        raise HTTPException(status_code=500, detail=f"Erro ao enviar pedido para logística: {e}")
+        err_msg = str(e)
+        if isinstance(e, KeyError):
+            err_msg = f"Chave de dados ausente ({e})"
+        raise HTTPException(status_code=500, detail=f"Erro ao enviar pedido para logística: {err_msg}")
     finally:
         await horus_orders.close()
         await horus_clients.close()

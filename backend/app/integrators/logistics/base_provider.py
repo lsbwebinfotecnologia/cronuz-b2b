@@ -26,6 +26,10 @@ class LogisticsProvider(ABC):
         """Send invoice details to the logistics provider."""
         pass
 
+    async def get_order_by_ref(self, cod_ped: int) -> Optional[dict]:
+        """Fetch a single order movement by reference code directly from the provider."""
+        return None
+
     @classmethod
     def factory(cls, provider_name: str, settings: LogisticsSettings) -> "LogisticsProvider":
         if provider_name.upper() == "MKT":

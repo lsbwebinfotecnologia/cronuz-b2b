@@ -14,10 +14,12 @@ class MKTProvider(LogisticsProvider):
 
     def _get_client(self):
         base_url = (self.settings.api_url or "").rstrip("/")
+        limits = httpx.Limits(max_keepalive_connections=5, max_connections=10, keepalive_expiry=30.0)
         return httpx.AsyncClient(
             base_url=base_url,
             auth=self._get_auth(),
-            timeout=30.0,
+            timeout=25.0,
+            limits=limits,
             headers={"Accept": "application/json", "Content-Type": "application/json"},
         )
 
@@ -64,9 +66,32 @@ class MKTProvider(LogisticsProvider):
         except httpx.ConnectError:
             return {"success": False, "message": f"Não foi possível conectar à URL: {self.settings.api_url}. Verifique a URL da API."}
         except httpx.TimeoutException:
-            return {"success": False, "message": "Timeout ao tentar conectar. A API demorou mais que 30 segundos."}
+            return {"success": False, "message": "Timeout ao tentar conectar. A API demorou mais que 25 segundos."}
         except Exception as e:
             return {"success": False, "message": str(e)}
+
+    async def get_order_by_ref(self, cod_ped: int) -> Optional[dict]:
+        """
+        Busca pontualmente uma remessa no WMS pelo código de referência.
+        Evita a varredura pesada de páginas de movimentos no WMS (1 requisição leve).
+        """
+        try:
+            async with self._get_client() as client:
+                params = {
+                    "armazem_id": self.settings.warehouse_id or "",
+                    "cliente_id": self.settings.client_id or "",
+                    "codigo_referencia": str(cod_ped).strip(),
+                    "limit": 1
+                }
+                r = await client.get("/movimento/saida.json", params=params)
+                if r.status_code == 200:
+                    data = r.json()
+                    res_list = data.get("data", {}).get("resultados", []) if isinstance(data.get("data"), dict) else data.get("resultados", [])
+                    if isinstance(res_list, list) and len(res_list) > 0:
+                        return res_list[0]
+        except Exception as e:
+            logger.debug(f"[MKTProvider.get_order_by_ref] Erro ao buscar ref {cod_ped}: {e}")
+        return None
 
     async def send_order(self, payload: dict) -> dict:
         async with self._get_client() as client:
@@ -76,7 +101,7 @@ class MKTProvider(LogisticsProvider):
             except Exception:
                 data = {"raw": response.text}
 
-            # Se a resposta contiver legado_pedido_id (mesmo que venha com status 429 ou warnings), é sucesso!
+            # Se a resposta contiver legado_pedido_id (mesmo com avisos), é sucesso!
             from app.api.logistics import _extract_legado_id
             legado_id = _extract_legado_id(data)
             if legado_id:
@@ -87,6 +112,9 @@ class MKTProvider(LogisticsProvider):
             is_already_integrated = any("integrado antes" in str(e).lower() for e in err_list)
             if is_already_integrated:
                 return data
+
+            if response.status_code == 429:
+                raise Exception("RATE_LIMIT: Limite de requisições por minuto atingido na API do WMS MKT. Aguardando próximo ciclo.")
 
             if response.status_code >= 400:
                 msg = None
@@ -99,6 +127,12 @@ class MKTProvider(LogisticsProvider):
                 elif isinstance(data, list):
                     msg = "; ".join(str(x) for x in data)
                 raise Exception(f"Crítica do WMS MKT ({response.status_code}): {msg or response.text[:200]}")
+
+            if isinstance(data, dict) and data.get("errors"):
+                errs = data.get("errors")
+                if isinstance(errs, list) and len(errs) > 0:
+                    msg = "; ".join(str(x) for x in errs)
+                    raise Exception(f"Crítica do WMS MKT: {msg}")
 
             return data
 

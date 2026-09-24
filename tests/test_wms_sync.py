@@ -23,6 +23,15 @@ def test_extract_legado_id():
     assert _extract_legado_id({}) is None
     assert _extract_legado_id(None) is None
 
+    # Case 6: Dict without matching keys (must not raise KeyError: 0)
+    assert _extract_legado_id({"status": True, "message": "OK", "errors": []}) is None
+
+    # Case 7: List format
+    assert _extract_legado_id([{"id": "777"}]) == "777"
+
+    # Case 8: RemessaPedido dict
+    assert _extract_legado_id({"RemessaPedido": {"id": 123}}) == "123"
+
 if __name__ == '__main__':
     test_extract_legado_id()
     print("ALL EXTRACT LEGADO ID TESTS PASSED!")

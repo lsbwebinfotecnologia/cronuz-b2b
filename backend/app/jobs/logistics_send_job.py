@@ -54,27 +54,7 @@ def _parse_float(v: Any) -> float:
     except (ValueError, TypeError):
         return 0.0
 
-def _extract_legado_id(res: Any) -> Any:
-    if not res:
-        return None
-    if isinstance(res, dict):
-        data_field = res.get("data")
-        if isinstance(data_field, list) and len(data_field) > 0 and isinstance(data_field[0], dict):
-            val = data_field[0].get("legado_pedido_id") or data_field[0].get("id") or data_field[0].get("remessa_id")
-            if val:
-                return str(val)
-        elif isinstance(data_field, dict):
-            val = data_field.get("legado_pedido_id") or data_field.get("id") or data_field.get("remessa_id")
-            if val:
-                return str(val)
-        val = res.get("legado_pedido_id") or res.get("id") or res.get("remessa_id")
-        if val:
-            return str(val)
-    elif isinstance(res, list) and len(res) > 0 and isinstance(res[0], dict):
-        val = res[0].get("legado_pedido_id") or res[0].get("id")
-        if val:
-            return str(val)
-    return None
+from app.api.logistics import _extract_legado_id
 
 async def process_company_logistics_send(db: Session, company_id: int) -> Dict[str, Any]:
     """
@@ -101,19 +81,26 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
     horus_orders = HorusOrders(db, company_id)
     horus_clients = HorusClients(db, company_id)
 
-    stats = {"processed": 0, "sent": 0, "errors": 0, "skipped": 0}
+    # ── Instanciação e Caches em Memória do Ciclo ─────────────────────────
+    # Reduz consultas N+1 ao Horus ERP e ViaCEP durante o processamento do lote
+    client_cache: Dict[str, Dict[str, Any]] = {}
+    address_cache: Dict[str, Dict[str, Any]] = {}
+    viacep_cache: Dict[str, Dict[str, Any]] = {}
+
+    provider = LogisticsProvider.factory(log_settings.provider, log_settings)
+    stats = {"processed": 0, "sent": 0, "errors": 0, "skipped": 0, "rate_limited": 0}
 
     try:
         cod_empresa = str(cmp_settings.horus_company or "1").strip()
         cod_filial = str(cmp_settings.horus_branch or "1").strip()
 
-        # 1. Busca pedidos com status LEX prontos para envio
+        # 1. Busca pedidos com status LEX prontos para envio (Lote seguro de 20 pedidos)
         params_pedidos = {
             "COD_EMPRESA": cod_empresa,
             "COD_FILIAL": cod_filial,
             "STA_PEDIDO": "LEX",
             "OFFSET": 0,
-            "LIMIT": 50,
+            "LIMIT": 20,
         }
         if getattr(cmp_settings, 'horus_legacy_pagination', False):
             params_pedidos.pop("OFFSET", None)
@@ -160,7 +147,7 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
                 db.commit()
                 db.refresh(existing)
 
-            # 2. Busca dados cadastrais e endereço do cliente via API padrão do Hórus
+            # 2. Busca dados cadastrais e endereço do cliente (com cache em memória)
             cod_cli = str(ped.get("COD_CLI") or "").strip()
             if not cod_cli:
                 existing.error_log = "Pedido sem COD_CLI no Horus"
@@ -171,33 +158,40 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
             existing.cod_cli = int(cod_cli) if cod_cli.isdigit() else None
 
             try:
-                res_cli = await horus_clients.get("Busca_Cliente", params={"COD_CLI": cod_cli})
-                cli_data = {}
-                if res_cli and isinstance(res_cli, list) and len(res_cli) > 0 and not (res_cli[0].get("Falha") or res_cli[0].get("FALHA") == "S"):
-                    cli_data = dict(res_cli[0])
+                if cod_cli in client_cache and cod_cli in address_cache:
+                    cli_data = client_cache[cod_cli]
+                    selected_end = address_cache[cod_cli]
+                else:
+                    res_cli = await horus_clients.get("Busca_Cliente", params={"COD_CLI": cod_cli})
+                    cli_data = {}
+                    if res_cli and isinstance(res_cli, list) and len(res_cli) > 0 and not (res_cli[0].get("Falha") or res_cli[0].get("FALHA") == "S"):
+                        cli_data = dict(res_cli[0])
+                    client_cache[cod_cli] = cli_data
 
-                res_end = await horus_clients.get("Busca_EndCliente", params={"COD_CLI": cod_cli})
-                selected_end = {}
-                if res_end and isinstance(res_end, list) and len(res_end) > 0:
-                    ends = [e for e in res_end if isinstance(e, dict) and not (e.get("Falha") or e.get("FALHA") == "S")]
-                    for e in ends:
-                        if str(e.get("STA_DEFAULT", "")).upper() == "S":
-                            selected_end = e
-                            break
-                    if not selected_end:
+                    res_end = await horus_clients.get("Busca_EndCliente", params={"COD_CLI": cod_cli})
+                    selected_end = {}
+                    if res_end and isinstance(res_end, list) and len(res_end) > 0:
+                        ends = [e for e in res_end if isinstance(e, dict) and not (e.get("Falha") or e.get("FALHA") == "S")]
                         for e in ends:
-                            if str(e.get("COD_TPO_END", "")) == "2":
+                            if str(e.get("STA_DEFAULT", "")).upper() == "S":
                                 selected_end = e
                                 break
-                    if not selected_end and ends:
-                        selected_end = ends[0]
+                        if not selected_end:
+                            for e in ends:
+                                if str(e.get("COD_TPO_END", "")) == "2":
+                                    selected_end = e
+                                    break
+                        if not selected_end and ends:
+                            selected_end = ends[0]
+                    address_cache[cod_cli] = selected_end
+
             except Exception as e_cli:
                 existing.error_log = f"Erro ao consultar cliente no Horus: {e_cli}"
                 db.commit()
                 stats["errors"] += 1
                 continue
 
-            # Valida CEP via ViaCEP aplicando máscara com zero à esquerda
+            # Valida CEP via ViaCEP aplicando máscara e cache
             cep_raw = (
                 selected_end.get("CEP") or
                 selected_end.get("CEP_CLI") or
@@ -221,13 +215,17 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
                 continue
 
             vcep_data = {}
-            try:
-                async with httpx.AsyncClient(timeout=6.0) as vclient:
-                    vresp = await vclient.get(f"https://viacep.com.br/ws/{cep}/json/")
-                    if vresp.status_code == 200:
-                        vcep_data = vresp.json()
-            except Exception as e_vcep:
-                logger.warning(f"[LogisticsJob] Erro ao consultar ViaCEP para {cep}: {e_vcep}")
+            if cep in viacep_cache:
+                vcep_data = viacep_cache[cep]
+            else:
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as vclient:
+                        vresp = await vclient.get(f"https://viacep.com.br/ws/{cep}/json/")
+                        if vresp.status_code == 200:
+                            vcep_data = vresp.json()
+                            viacep_cache[cep] = vcep_data
+                except Exception as e_vcep:
+                    logger.warning(f"[LogisticsJob] Erro ao consultar ViaCEP para {cep}: {e_vcep}")
 
             if vcep_data.get("erro"):
                 existing.situation = "CEP_INVALID"
@@ -269,7 +267,7 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
                 stats["errors"] += 1
                 continue
 
-            # 4. Monta payload do MKT e envia
+            # 4. Monta payload do MKT
             try:
                 operacao_id = int(log_settings.operator_id or 0)
             except Exception:
@@ -358,26 +356,25 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
                 }]
             }
 
-            try:
-                provider = LogisticsProvider.factory(log_settings.provider, log_settings)
-                res = await provider.send_order(payload)
+            # 5. Throttling suave de requisições (evita estourar TPS da API MKT)
+            import asyncio
+            await asyncio.sleep(0.35)
 
+            try:
+                res = await provider.send_order(payload)
                 legado_id = _extract_legado_id(res)
 
-                # Se não veio no body do POST, busca a remessa recém-criada no WMS
+                # Se não veio no body do POST, busca pontualmente pelo código de referência
                 if not legado_id:
                     try:
-                        movs = await provider.get_movements(dat_ped, dat_ped)
-                        for m in movs:
-                            rem_m = m.get("RemessaPedido") or {}
-                            mov_m = m.get("Movimento") or {}
-                            leg_m = m.get("LegadoPedido") or {}
-                            ped_num = str(rem_m.get("pedido_numero") or mov_m.get("codigo_referencia") or m.get("codigo") or "").strip()
-                            if ped_num == str(cod_ped):
-                                legado_id = leg_m.get("id") or rem_m.get("id") or m.get("id")
-                                break
-                    except Exception as e_mov:
-                        logger.debug(f"[LogisticsJob] Não foi possível obter remessa_id de imediato: {e_mov}")
+                        ref_order = await provider.get_order_by_ref(cod_ped)
+                        if ref_order:
+                            rem_m = ref_order.get("RemessaPedido") or {}
+                            leg_m = ref_order.get("LegadoPedido") or {}
+                            mov_m = ref_order.get("Movimento") or {}
+                            legado_id = leg_m.get("id") or rem_m.get("id") or mov_m.get("id") or ref_order.get("id")
+                    except Exception as e_ref:
+                        logger.debug(f"[LogisticsJob] Consulta pontual de ref {cod_ped}: {e_ref}")
 
                 existing.situation = "IN_LOGISTICS"
                 existing.sent_at = now
@@ -390,11 +387,20 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
                 logger.info(f"[LogisticsJob] Pedido #{cod_ped} enviado com sucesso ao WMS (Company {company_id})")
 
             except Exception as e_wms:
+                err_str = str(e_wms)
+                # Tratamento de Rate Limit: pausa e encerra o lote suavemente sem marcar como erro fatal
+                if "RATE_LIMIT" in err_str or "429" in err_str:
+                    logger.warning(f"[LogisticsJob] Rate limit atingido na API MKT: {err_str}. Interrompendo lote suavemente.")
+                    existing.situation = "PENDING_SEND"
+                    stats["rate_limited"] += 1
+                    db.commit()
+                    break
+
                 existing.situation = "PENDING_SEND"
-                existing.error_log = str(e_wms)
+                existing.error_log = err_str
                 db.commit()
                 stats["errors"] += 1
-                logger.warning(f"[LogisticsJob] Crítica do WMS para pedido #{cod_ped}: {e_wms}")
+                logger.warning(f"[LogisticsJob] Crítica do WMS para pedido #{cod_ped}: {err_str}")
 
     finally:
         await horus_orders.close()

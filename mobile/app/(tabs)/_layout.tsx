@@ -50,6 +50,13 @@ const TAB_CONFIG: TabConfig[] = [
     module: null,
   },
   {
+    name: 'busca-preco',
+    label: 'Busca Preço',
+    icon: 'barcode-outline',
+    iconFocused: 'barcode',
+    module: null,
+  },
+  {
     name: 'pdv',
     label: 'PDV',
     icon: 'storefront-outline',

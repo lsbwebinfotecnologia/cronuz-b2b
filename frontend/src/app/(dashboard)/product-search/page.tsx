@@ -284,7 +284,11 @@ export default function ProductSearchPage() {
   }, [apiUrl, autoFetchDistributors]);
 
   // ── Executa busca de produto ───────────────
-  const executeSearch = useCallback(async (customTerm?: string, customOption?: SearchOption['value']) => {
+  const executeSearch = useCallback(async (
+    customTerm?: string,
+    customOption?: SearchOption['value'],
+    customSource: 'web' | 'physical_scanner' = 'web'
+  ) => {
     const term = (customTerm !== undefined ? customTerm : searchTerm).trim();
     const optValue = customOption || selectedOption.value;
 
@@ -308,6 +312,7 @@ export default function ProductSearchPage() {
       const params = new URLSearchParams({
         term,
         search_option: optValue,
+        source: customSource,
         offset: '0',
         limit: '10',
       });
@@ -395,7 +400,7 @@ export default function ProductSearchPage() {
           setSearchTerm(candidate);
           const isbnOpt = SEARCH_OPTIONS.find(o => o.value === 'BARRAS_ISBN') || SEARCH_OPTIONS[0];
           setSelectedOption(isbnOpt);
-          executeSearch(candidate, 'BARRAS_ISBN');
+          executeSearch(candidate, 'BARRAS_ISBN', 'physical_scanner');
           barcodeBuffer = '';
         }
       } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {

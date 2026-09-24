@@ -55,3 +55,7 @@ sites/
 backend/sites/
 frontend/public/sites/
 uploads/sites/
+
+# Mobile Binaries
+*.apk
+*.aab
