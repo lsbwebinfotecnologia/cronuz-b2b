@@ -232,6 +232,31 @@ export async function searchCatalogItems(query: string, limit = 20): Promise<PDV
   });
 }
 
+export async function getSampleCatalogItems(limit = 24): Promise<PDVCatalogItem[]> {
+  try {
+    const db = await openPdvDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('pdv_catalog', 'readonly');
+      const store = tx.objectStore('pdv_catalog');
+      const results: PDVCatalogItem[] = [];
+
+      const req = store.openCursor();
+      req.onsuccess = (e: any) => {
+        const cursor = e.target.result;
+        if (cursor && results.length < limit) {
+          results.push(cursor.value);
+          cursor.continue();
+        } else {
+          resolve(results);
+        }
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
 // ─── Operações de Vendas Offline ─────────────────────────────────────────────
 
 export async function savePendingSale(sale: PDVPendingSaleRecord): Promise<void> {

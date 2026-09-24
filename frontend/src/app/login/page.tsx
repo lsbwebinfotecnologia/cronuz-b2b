@@ -102,8 +102,13 @@ export default function LoginPage() {
 
           setToken(data.access_token, data.user);
           toast.success('Login aprovado. Redirecionando...');
-          router.push('/');
-          router.refresh();
+
+          const rawInitial = data.user?.initial_page;
+          const targetRoute = (rawInitial && rawInitial !== 'DEFAULT')
+            ? (rawInitial.startsWith('/') ? rawInitial : `/${rawInitial}`)
+            : '/';
+
+          window.location.href = targetRoute;
       }
     } catch (err: any) {
       toast.error(err.message);

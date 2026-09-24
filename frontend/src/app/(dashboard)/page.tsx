@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowUpRight, TrendingUp, Users, Package, ShoppingCart, RefreshCw, Clock, Target, Calendar } from 'lucide-react';
 import Link from 'next/link';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 
 const defaultStats = [
   { id: 'revenue', name: 'Faturamento Total', value: 'R$ 0,00', change: '+0%', icon: TrendingUp },
@@ -73,6 +73,12 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
+    const user = getUser();
+    if (user?.initial_page && user.initial_page !== 'DEFAULT' && user.initial_page !== '/') {
+      const target = user.initial_page.startsWith('/') ? user.initial_page : `/${user.initial_page}`;
+      window.location.href = target;
+      return;
+    }
     fetchMetrics();
     fetchRecentOrders();
   }, [filterMonth]);

@@ -96,26 +96,58 @@ export default function POSReceiptModal({
               <span>Forma de Pagto:</span>
               <span>{sale.payment_method}</span>
             </div>
+
+            {/* Troco se houver */}
+            {(() => {
+              try {
+                if (sale.payment_details) {
+                  const details = JSON.parse(sale.payment_details);
+                  if (details.troco && Number(details.troco) > 0) {
+                    return (
+                      <div className="flex justify-between text-emerald-600 font-bold text-xs pt-1 border-t border-dashed border-slate-200 dark:border-slate-800">
+                        <span>Troco Devolvido:</span>
+                        <span>R$ {Number(details.troco).toFixed(2)}</span>
+                      </div>
+                    );
+                  }
+                }
+              } catch {}
+              return null;
+            })()}
           </div>
         </div>
 
         {/* Action Buttons */}
-        <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex gap-2">
+        <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex flex-wrap gap-2">
           <button
             onClick={handlePrint}
-            className="flex-1 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 font-semibold text-xs text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1.5 transition"
+            className="flex-1 min-w-[120px] py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 font-semibold text-xs text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1.5 transition"
           >
             <Printer className="w-4 h-4" />
             Imprimir Cupom
           </button>
+
+          <button
+            onClick={() => {
+              const text = encodeURIComponent(
+                `*Comprovante de Compra - Cronuz PDV*\nCupom: ${sale.sale_number}\nData: ${new Date(sale.sold_at).toLocaleString('pt-BR')}\nTotal: R$ ${Number(sale.total_amount).toFixed(2)}\nForma: ${sale.payment_method}\nItens: ${sale.items_count}\nObrigado pela preferência!`
+              );
+              window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
+            }}
+            className="px-3 py-2.5 rounded-xl border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 font-semibold text-xs flex items-center justify-center gap-1.5 transition"
+            title="Compartilhar comprovante no WhatsApp"
+          >
+            WhatsApp
+          </button>
+
           <button
             onClick={() => {
               onClose();
               onNewSale();
             }}
-            className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 font-semibold text-xs text-white flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition"
+            className="flex-1 min-w-[140px] py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 font-bold text-xs text-white flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition"
           >
-            Próxima Venda
+            Próxima Venda (Enter)
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>

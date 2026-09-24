@@ -489,7 +489,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
       <div>
         <div className="flex items-center justify-between px-2 py-4 mb-6">
           <Link 
-            href="/" 
+            href={user?.initial_page && user.initial_page !== 'DEFAULT' ? (user.initial_page.startsWith('/') ? user.initial_page : `/${user.initial_page}`) : "/"} 
             onClick={() => isMobile && onCloseMobile?.()} 
             className="flex items-center gap-3 hover:opacity-80 transition-opacity"
           >

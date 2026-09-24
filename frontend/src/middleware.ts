@@ -131,9 +131,18 @@ export function middleware(request: NextRequest) {
         const user = JSON.parse(userCookie.value);
         const isCustomer = user.type === 'CUSTOMER';
         
+        const rawInitial = user?.initial_page;
+        const initialPage = (rawInitial && rawInitial !== 'DEFAULT')
+          ? (rawInitial.startsWith('/') ? rawInitial : `/${rawInitial}`)
+          : '/';
+
         if (isLoginPage) {
           const targetHost = marketingDomains.includes(hostname) ? 'https://app.cronuzb2b.com.br' : request.url;
-          return NextResponse.redirect(new URL(isCustomer ? '/store' : '/', targetHost));
+          return NextResponse.redirect(new URL(isCustomer ? '/store' : initialPage, targetHost));
+        }
+        
+        if (url.pathname === '/' && !isCustomer && initialPage !== '/') {
+          return NextResponse.redirect(new URL(initialPage, request.url));
         }
         
         if (isCustomer && !url.pathname.startsWith('/store') && !url.pathname.startsWith('/login')) {

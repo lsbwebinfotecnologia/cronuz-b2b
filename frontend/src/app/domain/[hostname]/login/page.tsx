@@ -71,9 +71,17 @@ export default function StorefrontLoginPage() {
 
       const data = await res.json();
       
-      // Store token and redirect to storefront home
+      // Store token and redirect to storefront home or user initial page
       setToken(data.access_token, data.user);
       toast.success('Acesso liberado!');
+      if (data.user?.type !== 'CUSTOMER') {
+        const rawInitial = data.user?.initial_page;
+        const targetRoute = (rawInitial && rawInitial !== 'DEFAULT')
+          ? (rawInitial.startsWith('/') ? rawInitial : `/${rawInitial}`)
+          : '/';
+        window.location.href = targetRoute;
+        return;
+      }
       router.push('/store');
       router.refresh();
       
