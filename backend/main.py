@@ -405,6 +405,46 @@ class ModuleUpdate(BaseModel):
     modulo_autores_ativo: Optional[bool] = None
     has_inventory_module: Optional[bool] = None
 
+@app.get("/users/{user_id}", response_model=user_schemas.User)
+def get_user_by_id(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    user = db.query(user_models.User).filter(user_models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    if current_user.type != user_models.UserRole.MASTER and current_user.company_id != user.company_id:
+        raise HTTPException(status_code=403, detail="Sem permissão para acessar este usuário")
+    return user
+
+@app.put("/users/{user_id}", response_model=user_schemas.User)
+def update_user_details(
+    user_id: int,
+    user_update: user_schemas.UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user)
+):
+    user = db.query(user_models.User).filter(user_models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    if current_user.type != user_models.UserRole.MASTER:
+        if current_user.company_id != user.company_id or current_user.type != user_models.UserRole.SELLER:
+            raise HTTPException(status_code=403, detail="Sem permissão para alterar este usuário")
+
+    update_data = user_update.model_dump(exclude_unset=True)
+    password = update_data.pop("password", None)
+    if password:
+        user.password_hash = security.get_password_hash(password)
+
+    for field, value in update_data.items():
+        setattr(user, field, value)
+
+    db.commit()
+    db.refresh(user)
+    return user
+
 @app.patch("/users/{user_id}/status", response_model=user_schemas.User)
 def update_user_status(
     user_id: int,

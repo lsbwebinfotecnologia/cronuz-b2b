@@ -11,6 +11,8 @@ class UserBase(BaseModel):
     company_id: Optional[int] = None
     tenant_id: Optional[str] = None
     active: bool = True
+    initial_page: Optional[str] = None
+    allowed_modules: Optional[list] = None
 
 class UserCreate(UserBase):
     password: str
@@ -23,6 +25,8 @@ class UserUpdate(BaseModel):
     company_id: Optional[int] = None
     password: Optional[str] = None
     active: Optional[bool] = None
+    initial_page: Optional[str] = None
+    allowed_modules: Optional[list] = None
 
 class UserEmailUpdate(BaseModel):
     email: EmailStr

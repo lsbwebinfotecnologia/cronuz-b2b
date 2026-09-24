@@ -155,7 +155,9 @@ def login_for_access_token(
         "type": user.type,
         "company_id": user.company_id,
         "company_name": company_name,
-        "tenant_id": user.tenant_id
+        "tenant_id": user.tenant_id,
+        "initial_page": getattr(user, "initial_page", None),
+        "allowed_modules": getattr(user, "allowed_modules", None)
     }}
     
     if mobile_modules is not None:

@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, UniqueConstraint, Boolean
+from sqlalchemy import Column, Integer, String, Enum, ForeignKey, DateTime, UniqueConstraint, Boolean, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -26,6 +26,10 @@ class User(Base):
     company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=True)
     
     active = Column(Boolean, default=True, nullable=False)
+    
+    # Custom Redirect & Permission Scope
+    initial_page = Column(String(100), nullable=True) # e.g. '/pdv', '/product-search', '/orders'
+    allowed_modules = Column(JSON, nullable=True)     # e.g. ['pdv'], ['busca_preco'], None = All modules
     
     # Security & 2FA
     failed_login_attempts = Column(Integer, default=0, nullable=False)

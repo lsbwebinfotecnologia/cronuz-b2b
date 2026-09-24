@@ -67,6 +67,8 @@ type UserData = {
   email?: string;
   company_id?: number;
   company_name?: string;
+  allowed_modules?: string[] | null;
+  initial_page?: string | null;
 };
 
 const masterNavigation: NavItem[] = [
@@ -413,6 +415,16 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     });
   }
 
+  if (modulePdv) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Ponto de Venda (PDV)',
+      href: '/pdv',
+      icon: MonitorSmartphone,
+    });
+  }
+
   const dynamicMasterNavigation = masterNavigation.map(item => {
     if (item.name === 'Leads') {
       return { ...item, badge: unreadLeads };
@@ -425,9 +437,33 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     return true;
   });
 
-  const dynamicNavigation = user?.type === 'MASTER' ? dynamicMasterNavigation : 
-                            (user?.type === 'SELLER' ? filteredSellerNavigation : 
-                             (user?.type === 'AGENT' ? filteredAgentNavigation : []));
+  const baseNavigation = user?.type === 'MASTER' ? dynamicMasterNavigation : 
+                        (user?.type === 'SELLER' ? filteredSellerNavigation : 
+                         (user?.type === 'AGENT' ? filteredAgentNavigation : []));
+
+  const userAllowedModules = user?.allowed_modules;
+  const dynamicNavigation = (user?.type === 'SELLER' && Array.isArray(userAllowedModules) && userAllowedModules.length > 0)
+    ? baseNavigation.filter(nav => {
+        if (nav.name === 'Ponto de Venda (PDV)' || nav.href === '/pdv') return userAllowedModules.includes('pdv');
+        if (nav.name === 'Busca Preço' || nav.href === '/product-search') return userAllowedModules.includes('busca_preco');
+        if (nav.name === 'Produtos' || nav.href === '/products') return userAllowedModules.includes('products');
+        if (nav.name === 'Pedidos' || nav.href === '/orders') return userAllowedModules.includes('orders');
+        if (nav.name === 'Empresas' || nav.href === '/customers') return userAllowedModules.includes('customers');
+        if (nav.name === 'Serviços' || nav.href === '/services') return userAllowedModules.includes('services');
+        if (nav.name === 'Financeiro' || nav.href === '/financial') return userAllowedModules.includes('financial');
+        if (nav.name === 'Logística Horus' || nav.href.startsWith('/logistics')) return userAllowedModules.includes('logistics');
+        if (nav.name === 'Bookinfo' || nav.href.startsWith('/bookinfo')) return userAllowedModules.includes('bookinfo');
+        if (nav.name === 'Marketing' || nav.href === '/promotions') return userAllowedModules.includes('promotions') || userAllowedModules.includes('marketing');
+        if (nav.name === 'Propostas' || nav.href === '/proposals') return userAllowedModules.includes('proposals');
+        if (nav.name === 'Configurações' || nav.href === '/settings') return userAllowedModules.includes('settings');
+        if (nav.name === 'Horus Direct') return userAllowedModules.includes('logistics') || userAllowedModules.includes('financial') || userAllowedModules.includes('orders');
+        if (nav.name === 'Autores') return userAllowedModules.includes('products');
+        if (nav.name === 'Inventário') return userAllowedModules.includes('logistics');
+        if (nav.name === 'Políticas e Preços') return userAllowedModules.includes('settings') || userAllowedModules.includes('products');
+        if (nav.name === 'Vendedores/Rep') return userAllowedModules.includes('customers');
+        return true;
+      })
+    : baseNavigation;
 
   const handleLogout = async () => {
     try {
