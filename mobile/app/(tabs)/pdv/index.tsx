@@ -779,7 +779,7 @@ export default function PDVScreen() {
           session_id: s.session_id,
           customer_name: s.customer_name,
           customer_document: s.customer_document,
-          customer_id: s.customer_id,
+          customer_id: (s.customer_id && Number(s.customer_id) > 0) ? Number(s.customer_id) : null,
           payment_method: s.payment_method,
           payment_details: s.payment_details,
           subtotal: s.subtotal,

@@ -860,6 +860,16 @@ def sync_pos_sales(
         try:
             sale_num = s_in.sale_number or f"PDV-{datetime.utcnow().strftime('%y%m%d%H%M')}-{success_count+1}"
 
+            # Sanitização de customer_id: evita erro 500 de ForeignKeyViolation quando for 0 ou cliente avulso
+            target_customer_id = None
+            if s_in.customer_id and int(s_in.customer_id) > 0:
+                cust_exists = db.query(Customer.id).filter(
+                    Customer.id == int(s_in.customer_id),
+                    Customer.company_id == company_id
+                ).first()
+                if cust_exists:
+                    target_customer_id = cust_exists[0]
+
             new_sale = POSSale(
                 company_id=company_id,
                 session_id=payload.session_id or s_in.session_id,
@@ -868,7 +878,7 @@ def sync_pos_sales(
                 sale_number=sale_num,
                 customer_name=s_in.customer_name or "Consumidor Final",
                 customer_document=s_in.customer_document,
-                customer_id=s_in.customer_id,
+                customer_id=target_customer_id,
                 payment_method=s_in.payment_method.upper(),
                 payment_details=s_in.payment_details,
                 subtotal=s_in.subtotal,
@@ -887,7 +897,7 @@ def sync_pos_sales(
             for it in s_in.items:
                 sale_item = POSSaleItem(
                     sale_id=new_sale.id,
-                    product_id=it.product_id,
+                    product_id=it.product_id if (it.product_id and it.product_id > 0) else None,
                     barcode=it.barcode,
                     sku=it.sku,
                     title=it.title,
@@ -903,15 +913,15 @@ def sync_pos_sales(
                 session.total_sales_count = (session.total_sales_count or 0) + 1
                 session.total_sales_amount = float(session.total_sales_amount or 0) + float(s_in.total_amount)
 
+            db.commit()
             success_count += 1
             synced_uuids.append(uuid_key)
 
         except Exception as e:
+            db.rollback()
             logger.error("Falha ao gravar venda %s: %s", uuid_key, str(e))
             failed_count += 1
             errors.append({"uuid": uuid_key, "error": str(e)})
-
-    db.commit()
 
     return POSSyncBatchResponse(
         total_received=len(payload.sales),

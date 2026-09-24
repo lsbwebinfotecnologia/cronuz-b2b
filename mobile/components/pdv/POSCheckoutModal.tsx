@@ -111,7 +111,7 @@ export function POSCheckoutModal({
         session_id: activeSession?.id ?? null,
         customer_name: customer?.name || 'Consumidor Final',
         customer_document: customer?.document || null,
-        customer_id: customer?.id ?? null,
+        customer_id: (customer?.id && Number(customer.id) > 0) ? Number(customer.id) : null,
         payment_method: paymentMethod,
         payment_details: paymentMethod === 'DINHEIRO' && amountReceived > 0 ? `Recebido: R$ ${amountReceived.toFixed(2)} | Troco: R$ ${change.toFixed(2)}` : null,
         subtotal: total,
