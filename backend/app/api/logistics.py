@@ -1882,18 +1882,6 @@ async def send_to_logistics(
                     order.status_horus = "IMP"
                     db.commit()
 
-                    # Atualiza status no Horus para IMP
-                    try:
-                        await horus_orders.get("AltStatus_Pedido", params={
-                            "COD_EMPRESA": cod_empresa,
-                            "COD_FILIAL": str(cod_filial).strip(),
-                            "COD_CLI": str(order.cod_cli or cli_data.get("COD_CLI") or ""),
-                            "COD_PED_VENDA": str(cod_ped),
-                            "STA_PEDIDO": "IMP"
-                        })
-                    except Exception as e_alt:
-                        logger.warning(f"[Logistics.send] Aviso ao atualizar status para IMP no Horus (já no WMS): {e_alt}")
-
                     _record_logistics_log(
                         db=db,
                         company_id=company_id,
@@ -1902,7 +1890,7 @@ async def send_to_logistics(
                         status="SUCCESS",
                         request_data={"cod_ped": cod_ped, "cod_filial": cod_filial},
                         response_data=existing_wms,
-                        message=f"Pedido #{cod_ped} já constava integrado no WMS ({log_settings.provider}) sob a remessa #{order.id_ord_sys_log}. Vinculado e status atualizado para IMP no Horus."
+                        message=f"Pedido #{cod_ped} já constava integrado no WMS ({log_settings.provider}) sob a remessa #{order.id_ord_sys_log}. Vinculado com sucesso."
                     )
                     return {
                         "success": True,
@@ -1910,7 +1898,7 @@ async def send_to_logistics(
                         "id_ord_sys_log": order.id_ord_sys_log,
                         "situation": order.situation,
                         "cep": _mask_cep(cep),
-                        "message": f"Pedido #{cod_ped} já estava integrado no WMS ({log_settings.provider}) com remessa #{order.id_ord_sys_log}. Vinculado e atualizado para IMP no Horus.",
+                        "message": f"Pedido #{cod_ped} já estava integrado no WMS ({log_settings.provider}) com remessa #{order.id_ord_sys_log}. Vinculado com sucesso.",
                     }
         except Exception as e_wms_pre:
             logger.debug(f"[Logistics.send] Checagem prévia no WMS para ref {cod_ped}: {e_wms_pre}")
@@ -1921,7 +1909,7 @@ async def send_to_logistics(
         # 9. Registra sucesso na fila
         order.situation = "IN_LOGISTICS"
         order.sent_at = now
-        order.status_horus = "IMP"
+        order.status_horus = str(ped_data.get("STATUS_PEDIDO_VENDA") or ped_data.get("STA_PEDIDO_VENDA") or "LEX")
         order.cod_cli = int(cli_data.get("COD_CLI") or 0) or None
         legado_id = _extract_legado_id(res)
         if not legado_id:
@@ -1950,45 +1938,13 @@ async def send_to_logistics(
             message=f"Pedido #{cod_ped} enviado com sucesso à logística ({log_settings.provider}). Remessa #{order.id_ord_sys_log}."
         )
 
-        # 10. Atualiza o status do pedido no Horus para IMP (Impresso / Em Expedição)
-        try:
-            alt_res = await horus_orders.get("AltStatus_Pedido", params={
-                "COD_EMPRESA": cod_empresa,
-                "COD_FILIAL": str(cod_filial).strip(),
-                "COD_CLI": str(order.cod_cli or cli_data.get("COD_CLI") or ""),
-                "COD_PED_VENDA": str(cod_ped),
-                "STA_PEDIDO": "IMP"
-            })
-            _record_logistics_log(
-                db=db,
-                company_id=company_id,
-                cod_ped_venda=cod_ped,
-                action="ALT_STATUS_IMP",
-                status="SUCCESS",
-                request_data={"COD_PED_VENDA": cod_ped, "STA_PEDIDO": "IMP"},
-                response_data=alt_res,
-                message=f"Status do pedido #{cod_ped} alterado para IMP no Horus com sucesso."
-            )
-        except Exception as e_alt:
-            logger.warning(f"[Logistics.send] Falha ao atualizar status para IMP no Horus: {e_alt}")
-            _record_logistics_log(
-                db=db,
-                company_id=company_id,
-                cod_ped_venda=cod_ped,
-                action="ALT_STATUS_IMP",
-                status="WARNING",
-                request_data={"COD_PED_VENDA": cod_ped, "STA_PEDIDO": "IMP"},
-                response_data=str(e_alt),
-                message=f"Pedido #{cod_ped} enviado ao WMS, mas falha ao atualizar status para IMP no Horus: {e_alt}"
-            )
-
         return {
             "success": True,
             "cod_ped_venda": cod_ped,
             "id_ord_sys_log": order.id_ord_sys_log,
             "situation": order.situation,
             "cep": _mask_cep(cep),
-            "message": f"Pedido #{cod_ped} enviado com sucesso à logística ({log_settings.provider}) e status alterado para IMP no Horus.",
+            "message": f"Pedido #{cod_ped} enviado com sucesso à logística ({log_settings.provider}).",
         }
 
     except HTTPException:

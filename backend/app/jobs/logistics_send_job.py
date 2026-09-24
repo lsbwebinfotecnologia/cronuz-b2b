@@ -131,20 +131,6 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
             ).first()
 
             if existing and (existing.situation in ["IN_LOGISTICS", "CHECKED", "INVOICED"] or existing.id_ord_sys_log):
-                # Se ainda constar como LEX no Horus, avança para IMP para não ser buscado novamente
-                if str(ped.get("STA_PEDIDO") or "").upper() == "LEX":
-                    try:
-                        await horus_orders.get("AltStatus_Pedido", params={
-                            "COD_EMPRESA": cod_empresa,
-                            "COD_FILIAL": cod_filial,
-                            "COD_CLI": str(existing.cod_cli or ped.get("COD_CLI") or ""),
-                            "COD_PED_VENDA": str(cod_ped),
-                            "STA_PEDIDO": "IMP"
-                        })
-                        existing.status_horus = "IMP"
-                        db.commit()
-                    except Exception:
-                        pass
                 stats["skipped"] += 1
                 continue
 
@@ -163,7 +149,7 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
                                 provider=log_settings.provider,
                                 cod_ped_venda=cod_ped,
                                 pedido_web_origem=str(ped.get("COD_PEDIDO_ORIGEM") or ""),
-                                status_horus="IMP",
+                                status_horus="LEX",
                                 situation="IN_LOGISTICS",
                                 id_ord_sys_log=str(legado_id),
                                 sent_at=now
@@ -172,25 +158,13 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
                         else:
                             existing.situation = "IN_LOGISTICS"
                             existing.id_ord_sys_log = str(legado_id)
-                            existing.status_horus = "IMP"
+                            existing.status_horus = "LEX"
                             existing.error_log = None
                             existing.sent_at = existing.sent_at or now
                         db.commit()
 
-                        # Altera status no Horus para IMP
-                        try:
-                            await horus_orders.get("AltStatus_Pedido", params={
-                                "COD_EMPRESA": cod_empresa,
-                                "COD_FILIAL": cod_filial,
-                                "COD_CLI": str(ped.get("COD_CLI") or ""),
-                                "COD_PED_VENDA": str(cod_ped),
-                                "STA_PEDIDO": "IMP"
-                            })
-                        except Exception:
-                            pass
-
                         stats["skipped"] += 1
-                        logger.info(f"[LogisticsJob] Pedido #{cod_ped} já constava no WMS ({legado_id}). Vinculado e atualizado para IMP no Horus.")
+                        logger.info(f"[LogisticsJob] Pedido #{cod_ped} já constava no WMS ({legado_id}). Vinculado com sucesso.")
                         continue
             except Exception as e_check:
                 logger.debug(f"[LogisticsJob] Checagem prévia de ref {cod_ped}: {e_check}")
@@ -439,27 +413,14 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
 
                 existing.situation = "IN_LOGISTICS"
                 existing.sent_at = now
-                existing.status_horus = "IMP"
+                existing.status_horus = str(ped.get("STA_PEDIDO") or "LEX")
                 existing.error_log = None
                 if legado_id:
                     existing.id_ord_sys_log = str(legado_id)
 
                 db.commit()
-
-                # Atualiza status no Horus para IMP
-                try:
-                    await horus_orders.get("AltStatus_Pedido", params={
-                        "COD_EMPRESA": cod_empresa,
-                        "COD_FILIAL": cod_filial,
-                        "COD_CLI": cod_cli,
-                        "COD_PED_VENDA": str(cod_ped),
-                        "STA_PEDIDO": "IMP"
-                    })
-                except Exception as e_alt:
-                    logger.warning(f"[LogisticsJob] Erro ao alterar status no Horus para IMP do pedido #{cod_ped}: {e_alt}")
-
                 stats["sent"] += 1
-                logger.info(f"[LogisticsJob] Pedido #{cod_ped} enviado com sucesso ao WMS (Company {company_id}) e status atualizado para IMP")
+                logger.info(f"[LogisticsJob] Pedido #{cod_ped} enviado com sucesso ao WMS (Company {company_id}). Remessa #{existing.id_ord_sys_log}")
 
             except Exception as e_wms:
                 err_str = str(e_wms)
