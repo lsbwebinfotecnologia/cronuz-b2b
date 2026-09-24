@@ -35,15 +35,50 @@ logger = logging.getLogger("cronuz.pos")
 
 
 def _assert_pos_access(current_user: user_models.User, company_id: int, db: Session) -> Company:
-    user_type = getattr(current_user.type, "value", str(current_user.type))
-    if user_type != "MASTER" and current_user.company_id != company_id:
+    raw_type = getattr(current_user, "type", None) or getattr(current_user, "role", None)
+    user_type = (getattr(raw_type, "value", None) or str(raw_type)).upper()
+    is_master = "MASTER" in user_type
+
+    if not is_master and getattr(current_user, "company_id", None) != company_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso restrito a esta empresa.")
 
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa não encontrada.")
 
+    # [REQUISITO] A tela do PDV só pode ser liberada para quem está com o módulo PDV ativo no cadastro do seller
+    if not is_master and not getattr(company, "module_pdv", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Módulo de Ponto de Venda (PDV) não está ativo no cadastro deste seller. Solicite a liberação ao administrador."
+        )
+
     return company
+
+
+@router.get("/config")
+def get_pos_config(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Retorna as configurações do PDV para a empresa:
+    - module_pdv: se o módulo está ativo no cadastro do seller
+    - pdv_allow_out_of_stock: se permite vender sem validar saldo
+    - validate_stock: True se deve validar saldo de estoque nas vendas
+    """
+    company = _assert_pos_access(current_user, company_id, db)
+    from app.models.company_settings import CompanySettings
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    allow_out_of_stock = bool(getattr(settings, "pdv_allow_out_of_stock", False)) if settings else False
+
+    return {
+        "company_id": company_id,
+        "module_pdv": getattr(company, "module_pdv", False),
+        "pdv_allow_out_of_stock": allow_out_of_stock,
+        "validate_stock": not allow_out_of_stock,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

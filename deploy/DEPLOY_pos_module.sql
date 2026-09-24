@@ -80,3 +80,7 @@ CREATE TABLE IF NOT EXISTS pos_sale_item (
 
 CREATE INDEX IF NOT EXISTS idx_pos_sale_item_sale_id ON pos_sale_item(sale_id);
 CREATE INDEX IF NOT EXISTS idx_pos_sale_item_barcode ON pos_sale_item(barcode);
+
+-- 4. Flags de Módulo e Configuração (idempotente)
+ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_pdv BOOLEAN DEFAULT FALSE NOT NULL;
+ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS pdv_allow_out_of_stock BOOLEAN DEFAULT FALSE NOT NULL;

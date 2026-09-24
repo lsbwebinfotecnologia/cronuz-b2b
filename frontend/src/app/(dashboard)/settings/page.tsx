@@ -800,20 +800,42 @@ export default function SettingsPage() {
                       </motion.div>
                     )}
                     
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-t border-slate-100 dark:border-slate-800/60 pt-4 mt-2">
-                      <div className="flex items-center gap-2">
+                    <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 space-y-3 pt-3 mt-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div>
-                          <h3 className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">Exclusivo: Caixa Local</h3>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Permite adicionar livros sem saldo no carrinho do sistema de PDV Local.</p>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                              Validação de Saldo de Estoque no PDV
+                            </h3>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              settings.pdv_allow_out_of_stock 
+                                ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+                                : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                            }`}>
+                              {settings.pdv_allow_out_of_stock ? '⚡ Venda sem Saldo Liberada' : '🔒 Validando Saldo Obrigatório'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xl">
+                            {settings.pdv_allow_out_of_stock
+                              ? 'O PDV permite adicionar e vender produtos mesmo que o saldo no sistema/ERP esteja zerado ou insuficiente (ideal para feiras e eventos itinerantes).'
+                              : 'O PDV bloqueia a adição de itens com saldo zerado e não permite vender quantidades acima do estoque disponível.'}
+                          </p>
                         </div>
+                        <label className="relative flex items-center cursor-pointer shrink-0">
+                          <span className="mr-3 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                            {settings.pdv_allow_out_of_stock ? 'Sem Trava de Estoque' : 'Travar sem Estoque'}
+                          </span>
+                          <div className="relative">
+                            <input 
+                              type="checkbox" 
+                              className="sr-only peer" 
+                              checked={settings.pdv_allow_out_of_stock} 
+                              onChange={e => setSettings({ ...settings, pdv_allow_out_of_stock: e.target.checked })} 
+                            />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                          </div>
+                        </label>
                       </div>
-                      <label className="relative flex items-center cursor-pointer shrink-0">
-                        <span className="mr-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">Vender sem Saldo no PDV</span>
-                        <div className="relative">
-                          <input type="checkbox" className="sr-only peer" checked={settings.pdv_allow_out_of_stock} onChange={e => setSettings({ ...settings, pdv_allow_out_of_stock: e.target.checked })} />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500 dark:bg-slate-700 dark:border-slate-600"></div>
-                        </div>
-                      </label>
                     </div>
                   </div>
                 </div>

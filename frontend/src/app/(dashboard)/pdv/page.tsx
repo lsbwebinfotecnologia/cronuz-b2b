@@ -29,8 +29,12 @@ import {
   Layers,
   ArrowRight,
   Split,
-  ChevronDown
+  ChevronDown,
+  Lock,
+  ShieldAlert,
+  Zap
 } from 'lucide-react';
+import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 
@@ -44,6 +48,8 @@ import {
   getPendingSales, 
   markSalesAsSynced, 
   getUnsyncedSalesCount,
+  setPdvSetting,
+  getPdvSetting,
   playSuccessBeep, 
   playWarningBeep,
   PDVCatalogItem,
@@ -74,6 +80,11 @@ export default function PDVPage() {
   const [unsyncedCount, setUnsyncedCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [catalogCount, setCatalogCount] = useState(0);
+
+  // Permissão do Módulo PDV e Configurações de Saldo
+  const [checkingModule, setCheckingModule] = useState(true);
+  const [isModuleAllowed, setIsModuleAllowed] = useState<boolean | null>(null);
+  const [validateStock, setValidateStock] = useState<boolean>(true);
 
   // Modais de Controle
   const [isCatalogModalOpen, setIsCatalogModalOpen] = useState(false);
@@ -124,7 +135,7 @@ export default function PDVPage() {
   const currentUser = typeof userStr === 'string' ? JSON.parse(userStr) : userStr;
   const companyId = currentUser?.company_id;
 
-  // ─── 1. Inicialização ──────────────────────────────────────────────────────
+  // ─── 1. Inicialização & Verificação de Módulo/Configuração ──────────────────
   useEffect(() => {
     setMounted(true);
     setIsOnline(navigator.onLine);
@@ -142,12 +153,47 @@ export default function PDVPage() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Carregar contadores do IndexedDB
+    // Carregar contadores do IndexedDB e verificar permissões
     openPdvDb().then(async () => {
       const cCount = await getCatalogCount();
       setCatalogCount(cCount);
       const uCount = await getUnsyncedSalesCount();
       setUnsyncedCount(uCount);
+
+      // Carregar cache offline de permissão e saldo
+      const cachedModule = await getPdvSetting<boolean>('isModuleAllowed');
+      const cachedValStock = await getPdvSetting<boolean>('validateStock');
+      if (cachedModule !== null) setIsModuleAllowed(cachedModule);
+      if (cachedValStock !== null) setValidateStock(cachedValStock);
+
+      // Consulta configuração atualizada no servidor se online
+      if (companyId) {
+        try {
+          const token = getToken();
+          const res = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/config`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (res.ok) {
+            const cfg = await res.json();
+            const allowed = currentUser?.type === 'MASTER' || !!cfg.module_pdv;
+            setIsModuleAllowed(allowed);
+            const valStock = cfg.validate_stock ?? !cfg.pdv_allow_out_of_stock;
+            setValidateStock(valStock);
+            await setPdvSetting('validateStock', valStock);
+            await setPdvSetting('isModuleAllowed', allowed);
+          } else if (res.status === 403) {
+            setIsModuleAllowed(false);
+            await setPdvSetting('isModuleAllowed', false);
+          }
+        } catch {
+          // Se falhar rede, mantém o cache offline
+        } finally {
+          setCheckingModule(false);
+        }
+      } else {
+        setCheckingModule(false);
+      }
 
       // Se estiver online e houver pendências, sincroniza
       if (navigator.onLine && uCount > 0) {
@@ -159,7 +205,7 @@ export default function PDVPage() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
+  }, [companyId]);
 
   // ─── 2. Sincronizador de Vendas Offline ─────────────────────────────────────
   const triggerSync = useCallback(async () => {
@@ -346,11 +392,29 @@ export default function PDVPage() {
     }, 100);
   }
 
-  // ─── 5. Manipulação do Carrinho ───────────────────────────────────────────
+  // ─── 5. Manipulação do Carrinho (Com Validação de Saldo) ─────────────────
   function addToCart(product: PDVCatalogItem) {
+    const existing = cart.find((i) => i.barcode === product.barcode);
+    const currentQtyInCart = existing ? existing.quantity : 0;
+    const availableStock = product.stock !== undefined ? Number(product.stock) : 0;
+
+    // Se validação de saldo estiver ativa no cadastro do seller:
+    if (validateStock) {
+      if (availableStock <= 0) {
+        playWarningBeep();
+        toast.error(`"${product.title}" está sem estoque (${availableStock} un). A validação de saldo está ativa nas configurações.`);
+        return;
+      }
+      if (currentQtyInCart + 1 > availableStock) {
+        playWarningBeep();
+        toast.warning(`Limite de estoque atingido para "${product.title}" (${availableStock} un disponíveis).`);
+        return;
+      }
+    }
+
     setCart((prev) => {
-      const existing = prev.find((i) => i.barcode === product.barcode);
-      if (existing) {
+      const existingItem = prev.find((i) => i.barcode === product.barcode);
+      if (existingItem) {
         return prev.map((i) =>
           i.barcode === product.barcode ? { ...i, quantity: i.quantity + 1 } : i
         );
@@ -360,6 +424,18 @@ export default function PDVPage() {
   }
 
   function updateQuantity(barcode: string, delta: number) {
+    const item = cart.find((i) => i.barcode === barcode);
+    if (!item) return;
+
+    if (delta > 0 && validateStock) {
+      const availableStock = item.stock !== undefined ? Number(item.stock) : 0;
+      if (item.quantity + delta > availableStock) {
+        playWarningBeep();
+        toast.warning(`Limite de estoque atingido (${availableStock} un disponíveis).`);
+        return;
+      }
+    }
+
     setCart((prev) =>
       prev
         .map((i) => {
@@ -498,7 +574,42 @@ export default function PDVPage() {
     }
   }
 
-  if (!mounted) return null;
+  if (!mounted || checkingModule) {
+    return (
+      <div className="flex h-[calc(100vh-4rem)] items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+          <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+            Validando permissões do PDV...
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // [REQUISITO] A tela do PDV só pode ser liberada para clientes que estão com módulo PDV ativo no cadastro do seller
+  if (isModuleAllowed === false && currentUser?.type !== 'MASTER') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-4rem)] p-6 text-center bg-slate-50 dark:bg-slate-950 animate-in fade-in">
+        <div className="w-16 h-16 rounded-3xl bg-rose-100 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 flex items-center justify-center mb-4 shadow-xl">
+          <Lock className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white">Módulo PDV Desativado</h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mt-2 leading-relaxed">
+          O módulo de <strong>Ponto de Venda (PDV)</strong> não está ativo no cadastro desta empresa no painel do seller.
+        </p>
+        <p className="text-xs text-slate-400 max-w-md mt-1">
+          Solicite ao administrador do sistema a ativação do módulo PDV para liberar o acesso a esta tela.
+        </p>
+        <Link
+          href="/dashboard"
+          className="mt-6 px-6 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:text-slate-900 text-xs font-bold transition shadow-md"
+        >
+          Voltar ao Painel Principal
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] bg-slate-100 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 overflow-hidden">
@@ -512,7 +623,7 @@ export default function PDVPage() {
             <Store className="w-4 h-4" />
           </div>
           <div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <h1 className="text-sm font-bold tracking-tight">PDV Mobile & Balcão</h1>
               
               {/* Online/Offline Badge */}
@@ -525,6 +636,23 @@ export default function PDVPage() {
               >
                 {isOnline ? <Wifi className="w-2.5 h-2.5" /> : <WifiOff className="w-2.5 h-2.5" />}
                 {isOnline ? 'Online' : 'Offline'}
+              </span>
+
+              {/* Stock Validation Badge */}
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                  validateStock
+                    ? 'bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                    : 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                }`}
+                title={
+                  validateStock
+                    ? 'Validação de saldo ativa: bloqueia itens sem estoque'
+                    : 'Venda sem saldo liberada no cadastro do seller'
+                }
+              >
+                {validateStock ? <ShieldAlert className="w-2.5 h-2.5" /> : <Zap className="w-2.5 h-2.5" />}
+                {validateStock ? 'Valida Saldo' : 'Venda s/ Saldo'}
               </span>
 
               {/* Unsynced Badge */}
@@ -833,34 +961,66 @@ export default function PDVPage() {
               </div>
             ) : searchResults.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {searchResults.map((item) => (
-                  <div
-                    key={item.barcode}
-                    onClick={() => {
-                      addToCart(item);
-                      playSuccessBeep();
-                    }}
-                    className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-500 hover:bg-indigo-50/30 dark:hover:bg-indigo-950/20 cursor-pointer transition flex flex-col justify-between group"
-                  >
-                    <div>
-                      <span className="font-bold text-xs text-slate-900 dark:text-white line-clamp-2 group-hover:text-indigo-600 transition">
-                        {item.title}
-                      </span>
-                      <p className="text-[10px] text-slate-400 mt-0.5">
-                        ISBN: {item.barcode} {item.publisher ? `• ${item.publisher}` : ''}
-                      </p>
-                    </div>
+                {searchResults.map((item) => {
+                  const itemStock = item.stock !== undefined ? Number(item.stock) : 0;
+                  const isOutOfStock = validateStock && itemStock <= 0;
+                  return (
+                    <div
+                      key={item.barcode}
+                      onClick={() => {
+                        if (isOutOfStock) {
+                          playWarningBeep();
+                          toast.error(`Produto sem estoque (${item.title.substring(0, 25)}...)`);
+                          return;
+                        }
+                        addToCart(item);
+                        playSuccessBeep();
+                      }}
+                      className={`p-3 rounded-xl border transition flex flex-col justify-between group ${
+                        isOutOfStock
+                          ? 'border-red-200 dark:border-red-900/40 bg-red-50/20 dark:bg-red-950/10 cursor-not-allowed opacity-75'
+                          : 'border-slate-200 dark:border-slate-800 hover:border-indigo-500 hover:bg-indigo-50/30 dark:hover:bg-indigo-950/20 cursor-pointer'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-1">
+                          <span className="font-bold text-xs text-slate-900 dark:text-white line-clamp-2 group-hover:text-indigo-600 transition">
+                            {item.title}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          ISBN: {item.barcode} {item.publisher ? `• ${item.publisher}` : ''}
+                        </p>
+                        <div className="mt-1 flex items-center gap-1.5">
+                          <span className={`text-[10px] font-medium px-1.5 py-0.2 rounded ${
+                            isOutOfStock
+                              ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-400'
+                              : itemStock > 5
+                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                              : 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'
+                          }`}>
+                            Estoque: {itemStock}
+                          </span>
+                        </div>
+                      </div>
 
-                    <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                      <span className="text-xs font-black text-emerald-600 dark:text-emerald-400">
-                        R$ {Number(item.price).toFixed(2)}
-                      </span>
-                      <span className="text-[10px] bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-md font-semibold">
-                        + Adicionar
-                      </span>
+                      <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                        <span className="text-xs font-black text-emerald-600 dark:text-emerald-400">
+                          R$ {Number(item.price).toFixed(2)}
+                        </span>
+                        {isOutOfStock ? (
+                          <span className="text-[10px] bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400 px-2 py-0.5 rounded-md font-semibold">
+                            Sem Saldo
+                          </span>
+                        ) : (
+                          <span className="text-[10px] bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded-md font-semibold">
+                            + Adicionar
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="py-16 text-center text-slate-400 flex flex-col items-center justify-center">
