@@ -27,7 +27,8 @@ import {
   PackageCheck,
   PackageX,
   MapPin,
-  ClipboardCheck
+  ClipboardCheck,
+  Zap
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -146,8 +147,12 @@ export default function HorusOrdersPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedMetodo, setSelectedMetodo] = useState('TODOS');
-  const [dataInicio, setDataInicio] = useState('');
-  const [dataFim, setDataFim] = useState('');
+  const [dataInicio, setDataInicio] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 15);
+    return d.toISOString().split('T')[0];
+  });
+  const [dataFim, setDataFim] = useState(() => new Date().toISOString().split('T')[0]);
 
   // Drawer de Detalhes do Pedido
   const [selectedOrder, setSelectedOrder] = useState<OrderHeader | null>(null);
@@ -160,12 +165,22 @@ export default function HorusOrdersPage() {
   const [loadingDetails, setLoadingDetails] = useState(false);
 
   // Logística WMS — mapa de situação por cod_ped_venda
-  const [logisticsMap, setLogisticsMap] = useState<Record<number, { situation: string; cep_validated: boolean | null; cep_error_detail: string | null; error_log?: string | null; id_ord_sys_log?: string | null }>>({});
+  const [logisticsMap, setLogisticsMap] = useState<Record<number, {
+    situation: string;
+    cep_validated: boolean | null;
+    cep_error_detail: string | null;
+    error_log?: string | null;
+    id_ord_sys_log?: string | null;
+    key_nfe?: string | null;
+    nfe_number?: string | null;
+    invoiced_at?: string | null;
+  }>>({});
   const [loadingLogistics, setLoadingLogistics] = useState(false);
   // Modal de envio para logística
   const [sendModal, setSendModal] = useState<{ order: OrderHeader } | null>(null);
   const [sendingLogistics, setSendingLogistics] = useState(false);
   const [filterLogisticsErrors, setFilterLogisticsErrors] = useState(false);
+  const [filterNfEnviada, setFilterNfEnviada] = useState(false);
 
   // Sincronização & Conciliação com WMS
   const [syncModalOpen, setSyncModalOpen] = useState(false);
@@ -338,8 +353,20 @@ export default function HorusOrdersPage() {
           cep_error_detail: string | null;
           id_ord_sys_log?: string | null;
           error_log?: string | null;
+          key_nfe?: string | null;
+          nfe_number?: string | null;
+          invoiced_at?: string | null;
         }> = await res.json();
-        const map: Record<number, { situation: string; cep_validated: boolean | null; cep_error_detail: string | null; id_ord_sys_log?: string | null; error_log?: string | null }> = {};
+        const map: Record<number, {
+          situation: string;
+          cep_validated: boolean | null;
+          cep_error_detail: string | null;
+          id_ord_sys_log?: string | null;
+          error_log?: string | null;
+          key_nfe?: string | null;
+          nfe_number?: string | null;
+          invoiced_at?: string | null;
+        }> = {};
         for (const item of queue) {
           map[item.cod_ped_venda] = {
             situation: item.situation,
@@ -347,6 +374,9 @@ export default function HorusOrdersPage() {
             cep_error_detail: item.cep_error_detail,
             id_ord_sys_log: item.id_ord_sys_log,
             error_log: item.error_log,
+            key_nfe: item.key_nfe,
+            nfe_number: item.nfe_number,
+            invoiced_at: item.invoiced_at,
           };
         }
         setLogisticsMap(map);
@@ -436,6 +466,38 @@ export default function HorusOrdersPage() {
     } finally {
       setCheckingWms(false);
       setCheckingOrderId(null);
+    }
+  };
+
+  // Força conferência e transição para LFT exclusivamente no Hórus ERP
+  const [forcingHorusOrderId, setForcingHorusOrderId] = useState<number | null>(null);
+
+  const handleForceHorusConference = async (codPedVenda: number) => {
+    setForcingHorusOrderId(codPedVenda);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/companies/${companyId}/logistics/orders/${codPedVenda}/force-horus-conference`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.detail || 'Erro ao forçar conferência no Hórus');
+      } else {
+        toast.success(data.message || `Pedido #${codPedVenda} conferido e liberado (LFT) no Hórus com sucesso!`);
+        fetchLogisticsQueue();
+        fetchOrders();
+        if (selectedOrder && selectedOrder.cod_ped_venda === codPedVenda) {
+          setSelectedOrder({ ...selectedOrder, sta_pedido_venda: 'LFT' });
+        }
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao forçar conferência no Hórus.');
+    } finally {
+      setForcingHorusOrderId(null);
     }
   };
 
@@ -534,7 +596,17 @@ export default function HorusOrdersPage() {
   };
 
   // Badge de situação logística
-  const getLogisticsBadge = (logi: { situation: string; cep_validated: boolean | null; cep_error_detail: string | null; id_ord_sys_log?: string | null } | undefined, order: OrderHeader) => {
+  const getLogisticsBadge = (
+    logi: {
+      situation: string;
+      cep_validated: boolean | null;
+      cep_error_detail: string | null;
+      id_ord_sys_log?: string | null;
+      key_nfe?: string | null;
+      nfe_number?: string | null;
+    } | undefined,
+    order: OrderHeader
+  ) => {
     // Só mostra botão Enviar para pedidos LEX que ainda não tenham ID confirmado no WMS
     const sta = (order.sta_pedido_venda || '').toUpperCase().trim();
     if (!logi || (logi.situation === 'IN_LOGISTICS' && !logi.id_ord_sys_log)) {
@@ -549,17 +621,55 @@ export default function HorusOrdersPage() {
         </button>
       );
     }
+
+    // 1. Se a NF já foi enviada para o WMS MKT (INVOICED)
+    if (logi.situation === 'INVOICED') {
+      return (
+        <div className="flex flex-col items-center gap-0.5">
+          <span
+            className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-100/90 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 shadow-2xs whitespace-nowrap"
+            title={logi.key_nfe ? `Chave NFe: ${logi.key_nfe}` : 'Nota Fiscal transmitida com sucesso ao WMS'}
+          >
+            <CheckCircle className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+            NF Enviada MKT
+          </span>
+          {logi.nfe_number && (
+            <span className="font-mono text-[9px] font-bold text-emerald-700 dark:text-emerald-400">
+              NF #{logi.nfe_number}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    // 2. Se o pedido está FAT no ERP e tem WMS ID, mas a NF ainda não foi enviada
+    if (sta === 'FAT' && logi.id_ord_sys_log && logi.situation !== 'INVOICED') {
+      return (
+        <div className="flex flex-col items-center gap-0.5">
+          <span
+            className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-700 whitespace-nowrap"
+            title="Pedido faturado no ERP aguardando transmissão de NF ao WMS"
+          >
+            <Clock className="h-3 w-3 text-amber-600" />
+            Pendente NF
+          </span>
+        </div>
+      );
+    }
+
     const situationMap: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
       PENDING_SEND: { label: 'Pendente', cls: 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700', icon: <Truck className="h-3 w-3" /> },
       CEP_INVALID: { label: 'CEP Inválido', cls: 'bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800', icon: <MapPin className="h-3 w-3" /> },
       IN_LOGISTICS: { label: 'No WMS', cls: 'bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800', icon: <PackageCheck className="h-3 w-3" /> },
       CHECKED: { label: 'Conferido (LFT)', cls: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800', icon: <ClipboardCheck className="h-3 w-3 text-emerald-600" /> },
-      INVOICED: { label: 'NF Enviada', cls: 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-700', icon: <CheckCircle className="h-3 w-3" /> },
       CANCELED: { label: 'Cancelado', cls: 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-500 border-slate-200 dark:border-slate-700', icon: <PackageX className="h-3 w-3" /> },
     };
     const s = situationMap[logi.situation] || situationMap['PENDING_SEND'];
 
-    if (logi.situation === 'IN_LOGISTICS' && sta === 'LEX') {
+    const isPendingHorusLFT = (sta === 'LEX' || sta === 'CON' || sta === 'IMP' || sta === 'ABERTO') &&
+      (logi.situation === 'CHECKED' || logi.situation === 'IN_LOGISTICS' || !!logi.id_ord_sys_log);
+
+    if (isPendingHorusLFT) {
       return (
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${s.cls}`}>
@@ -567,17 +677,17 @@ export default function HorusOrdersPage() {
           </span>
           <button
             type="button"
-            onClick={() => handleExecuteProcessCheck(order.cod_ped_venda)}
-            disabled={checkingWms && checkingOrderId === order.cod_ped_venda}
-            className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 transition-colors shadow-2xs cursor-pointer"
-            title="Conferir este pedido no Hórus e liberar para faturamento (LFT)"
+            onClick={() => handleForceHorusConference(order.cod_ped_venda)}
+            disabled={forcingHorusOrderId === order.cod_ped_venda}
+            className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+            title="WMS já conferiu/separou, mas o Hórus ainda não avançou para LFT. Clique para forçar a conferência e liberação (LFT) apenas no Hórus."
           >
-            {checkingWms && checkingOrderId === order.cod_ped_venda ? (
+            {forcingHorusOrderId === order.cod_ped_venda ? (
               <Loader2 className="h-2.5 w-2.5 animate-spin" />
             ) : (
-              <ClipboardCheck className="h-2.5 w-2.5 text-emerald-600" />
+              <Zap className="h-2.5 w-2.5 text-amber-600" />
             )}
-            Conferir LFT
+            Forçar LFT Hórus
           </button>
         </div>
       );
@@ -698,6 +808,11 @@ export default function HorusOrdersPage() {
     ? orders.filter((o) => {
         const logi = logisticsMap[o.cod_ped_venda];
         return logi?.situation === 'CEP_INVALID' || Boolean(logi?.error_log);
+      })
+    : filterNfEnviada
+    ? orders.filter((o) => {
+        const logi = logisticsMap[o.cod_ped_venda];
+        return logi?.situation === 'INVOICED';
       })
     : orders;
 
@@ -877,7 +992,10 @@ export default function HorusOrdersPage() {
           {/* Filtro: Apenas com Problemas de Logística */}
           <button
             type="button"
-            onClick={() => setFilterLogisticsErrors(!filterLogisticsErrors)}
+            onClick={() => {
+              setFilterLogisticsErrors(!filterLogisticsErrors);
+              if (!filterLogisticsErrors) setFilterNfEnviada(false);
+            }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
               filterLogisticsErrors
                 ? 'bg-rose-600 text-white shadow-sm ring-2 ring-rose-400'
@@ -886,6 +1004,24 @@ export default function HorusOrdersPage() {
           >
             <AlertTriangle className="h-3.5 w-3.5" />
             Problemas de Logística ({Object.values(logisticsMap).filter(l => l.situation === 'CEP_INVALID' || Boolean(l.error_log)).length})
+          </button>
+
+          {/* Filtro: NF Enviada ao WMS MKT */}
+          <button
+            type="button"
+            onClick={() => {
+              setFilterNfEnviada(!filterNfEnviada);
+              if (!filterNfEnviada) setFilterLogisticsErrors(false);
+            }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+              filterNfEnviada
+                ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-400'
+                : 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
+            }`}
+            title="Filtrar pedidos cuja Nota Fiscal já foi transmitida com sucesso para o WMS MKT"
+          >
+            <CheckCircle className="h-3.5 w-3.5" />
+            NF Enviada MKT ({Object.values(logisticsMap).filter(l => l.situation === 'INVOICED').length})
           </button>
 
           {/* Link para a tela completa de Logs da Logística */}
@@ -1184,7 +1320,7 @@ export default function HorusOrdersPage() {
         {/* ─── PAGINAÇÃO ────────────────────────────────────────── */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
           <span className="text-slate-500">
-            Mostrando <strong>{displayedOrders.length}</strong> de <strong>{totalRecords}</strong> pedidos {filterLogisticsErrors ? '(filtrado por problemas de logística)' : ''} (Página {page} de {totalPages})
+            Mostrando <strong>{displayedOrders.length}</strong> de <strong>{totalRecords}</strong> pedidos {filterLogisticsErrors ? '(filtrado por problemas de logística)' : filterNfEnviada ? '(filtrado por NF enviada MKT)' : ''} (Página {page} de {totalPages})
           </span>
 
           <div className="flex items-center gap-2">
@@ -1248,13 +1384,32 @@ export default function HorusOrdersPage() {
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setSelectedOrder(null)}
-                    className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {selectedOrder.sta_pedido_venda !== 'LFT' && selectedOrder.sta_pedido_venda !== 'FAT' && (
+                      <button
+                        type="button"
+                        onClick={() => handleForceHorusConference(selectedOrder.cod_ped_venda)}
+                        disabled={forcingHorusOrderId === selectedOrder.cod_ped_venda}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shadow-sm cursor-pointer disabled:opacity-50"
+                        title="Forçar conferência dos itens e liberação para faturamento (LFT) no Hórus"
+                      >
+                        {forcingHorusOrderId === selectedOrder.cod_ped_venda ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Zap className="h-3.5 w-3.5 text-amber-600" />
+                        )}
+                        Forçar LFT Hórus
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOrder(null)}
+                      className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Conteúdo do Drawer */}

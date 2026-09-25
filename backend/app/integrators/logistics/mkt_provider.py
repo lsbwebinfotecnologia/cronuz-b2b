@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import httpx
 from typing import List, Optional
@@ -136,18 +137,25 @@ class MKTProvider(LogisticsProvider):
 
             return data
 
-    async def get_movements(self, start_date: str, end_date: str, situacao: Optional[str] = None, codigo_referencia: Optional[str] = None) -> List[dict]:
+    async def get_movements(
+        self,
+        start_date: str,
+        end_date: str,
+        situacao: Optional[str] = None,
+        codigo_referencia: Optional[str] = None,
+        max_pages: int = 1
+    ) -> List[dict]:
         """
-        Busca movimentos/remessas no MKT por período com paginação automática.
-        Percorre todas as páginas para garantir a conciliação completa de todas as remessas.
-        Se codigo_referencia for informado, filtra diretamente pelo pedido.
+        Busca movimentos/remessas no MKT por período com segurança anti-bloqueio.
+        Por padrão, faz apenas 1 requisição direta para evitar sobrecarregar o WMS.
+        Se max_pages > 1, percorre as páginas aplicando delay entre chamadas.
         """
         all_results = []
         page = 1
         limit = 50
 
         async with self._get_client() as client:
-            while True:
+            while page <= max_pages:
                 params = {
                     "armazem_id": self.settings.warehouse_id or "",
                     "cliente_id": self.settings.client_id or "",
@@ -161,12 +169,23 @@ class MKTProvider(LogisticsProvider):
                 if codigo_referencia:
                     params["codigo_referencia"] = str(codigo_referencia).strip()
 
-                try:
-                    response = await client.get("/movimento/saida.json", params=params)
-                    response.raise_for_status()
-                    data = response.json()
-                except Exception as e:
-                    logger.warning(f"[MKTProvider.get_movements] Erro na página {page}: {e}")
+                data = None
+                for attempt in range(2):
+                    try:
+                        response = await client.get("/movimento/saida.json", params=params)
+                        if response.status_code == 429:
+                            logger.warning(f"[MKTProvider.get_movements] 429 Too Many Requests (página {page}). Aguardando 10s...")
+                            await asyncio.sleep(10.0)
+                            continue
+                        response.raise_for_status()
+                        data = response.json()
+                        break
+                    except Exception as e:
+                        logger.warning(f"[MKTProvider.get_movements] Erro na tentativa {attempt+1} (página {page}): {e}")
+                        if attempt == 0:
+                            await asyncio.sleep(3.0)
+
+                if not data:
                     break
 
                 if isinstance(data, dict):
@@ -184,12 +203,12 @@ class MKTProvider(LogisticsProvider):
                         if codigo_referencia:
                             break
 
-                    # Verifica se há mais páginas
                     paginacao = data.get("paginacao") or {}
                     page_count = paginacao.get("pageCount") or 1
-                    if page >= page_count or not resultados:
+                    if page >= page_count or not resultados or page >= max_pages:
                         break
                     page += 1
+                    await asyncio.sleep(2.0)  # Delay preventivo entre páginas
                 elif isinstance(data, list):
                     all_results.extend(data)
                     break
@@ -200,6 +219,13 @@ class MKTProvider(LogisticsProvider):
 
     async def invoice_order(self, id_sys_log: str, payload: dict) -> dict:
         async with self._get_client() as client:
-            response = await client.put("/remessa_pedido/faturar.json", json=payload)
-            response.raise_for_status()
-            return response.json()
+            for attempt in range(4):
+                response = await client.put("/remessa_pedido/faturar.json", json=payload)
+                if response.status_code == 429:
+                    wait_time = (attempt + 1) * 30.0
+                    logger.warning(f"[MKTProvider.invoice_order] 429 Too Many Requests (tentativa {attempt+1}). Aguardando {wait_time}s para liberar janela do WMS...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                response.raise_for_status()
+                return response.json()
+            raise Exception("WMS MKT retornou 429 (Too Many Requests) após 4 tentativas de backoff.")

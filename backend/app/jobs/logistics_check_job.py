@@ -66,13 +66,15 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
         return {"processed": 0, "conferred": 0, "errors": 0, "message": "Horus desativado para a empresa"}
 
     now_dt = datetime.now(timezone.utc)
-    start_date = (now_dt - timedelta(days=30)).strftime("%Y-%m-%d")
+    # Limita a no máximo 3 dias para garantir consulta leve e não estourar rate limit da MKT
+    start_date = (now_dt - timedelta(days=3)).strftime("%Y-%m-%d")
     end_date = now_dt.strftime("%Y-%m-%d")
 
     provider = LogisticsProvider.factory(log_settings.provider, log_settings)
 
     try:
-        movements = await provider.get_movements(start_date, end_date, situacao="aguardando_nfe")
+        # Executa uma única requisição no WMS para tratar todos os pedidos conferidos
+        movements = await provider.get_movements(start_date, end_date, situacao="aguardando_nfe", max_pages=1)
     except Exception as e:
         logger.error(f"[LogisticsCheckJob] Erro ao consultar WMS para empresa {company_id}: {e}")
         return {"processed": 0, "conferred": 0, "errors": 1, "message": f"Erro WMS: {e}"}
@@ -85,7 +87,10 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
     cod_local_cfg = str(getattr(log_settings, 'stock_local', '') or getattr(cmp_settings, 'horus_stock_local', '') or '').strip()
 
     horus_client = HorusLogisticsClient(db, company_id)
-    stats = {"processed": 0, "conferred": 0, "errors": 0, "skipped": 0}
+    stats = {"processed": 0, "conferred": 0, "invoiced": 0, "errors": 0, "skipped": 0}
+
+    # Importa função de envio de NFe para aproveitar a mesma consulta
+    from app.jobs.logistics_invoice_job import send_single_invoice_to_wms
 
     try:
         for item in movements:
@@ -117,15 +122,10 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                 LogisticsOrder.cod_ped_venda == ped_num
             ).first()
 
-            # Se localmente já estiver faturado ou conferido, pula
-            if local_order and local_order.situation in ["CHECKED", "INVOICED"]:
-                stats["skipped"] += 1
-                continue
-
             raw_wms_id = leg.get("id") or rem.get("id") or mov.get("id") or item.get("id") or item.get("legado_pedido_id")
             wms_id_str = str(raw_wms_id).strip() if raw_wms_id else None
 
-            # Consulta no Horus
+            # Consulta status atual no Horus ERP
             ord_horus = None
             for try_filial in [cod_filial_padrao, "2", "1"]:
                 params_horus = {
@@ -171,9 +171,6 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                 else:
                     cod_local = "15"
 
-            status_erp = str(ord_horus.get("STATUS_PEDIDO_VENDA") or ord_horus.get("STA_PEDIDO_VENDA") or "").strip().upper()
-            cod_cli = ord_horus.get("COD_CLI")
-
             if status_erp == "CAN":
                 if local_order:
                     local_order.situation = "CANCELLED"
@@ -182,27 +179,50 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                 stats["skipped"] += 1
                 continue
 
+            # Se o pedido já estiver FATURADO (FAT) no Horus, já aproveita e envia a NFe para o WMS!
             if status_erp == "FAT":
-                if local_order:
-                    local_order.situation = "CHECKED"
-                    local_order.status_horus = "FAT"
-                    if not local_order.checked_at:
-                        local_order.checked_at = now_dt
-                    db.commit()
-                stats["skipped"] += 1
+                if wms_id_str:
+                    logger.info(f"[LogisticsCheckJob] Pedido #{ped_num} já está FAT no Horus. Enviando NFe imediatamente para WMS...")
+                    inv_sent = await send_single_invoice_to_wms(
+                        db=db,
+                        company_id=company_id,
+                        ped_num=ped_num,
+                        id_ord_sys_log=wms_id_str,
+                        cod_cli=str(cod_cli),
+                        cod_empresa=cod_empresa,
+                        cod_filial=cod_filial,
+                        horus_client=horus_client,
+                        provider=provider,
+                        log_settings=log_settings,
+                        order=local_order
+                    )
+                    if inv_sent:
+                        stats["invoiced"] += 1
+                    else:
+                        stats["errors"] += 1
+                else:
+                    if local_order:
+                        local_order.situation = "CHECKED"
+                        local_order.status_horus = "FAT"
+                        db.commit()
+                    stats["skipped"] += 1
                 continue
 
+            # Se já estiver LFT no ERP e localmente atualizado, pula
             if status_erp == "LFT":
                 if local_order:
                     local_order.situation = "CHECKED"
                     local_order.status_horus = "LFT"
                     if not local_order.checked_at:
                         local_order.checked_at = now_dt
+                    if wms_id_str and not local_order.id_ord_sys_log:
+                        local_order.id_ord_sys_log = wms_id_str
                     db.commit()
                 stats["skipped"] += 1
                 continue
 
-            # Confere itens no Horus
+            # CASO PENDENTE DE CONFERÊNCIA (LEX, IMP, CON ou ABERTO):
+            # 1. Confere itens no Horus atentando-se à quantidade real bipada
             items_mkt = item.get("MovimentoItensPedido") or []
             total_volumes = int(mov.get("total_volumes") or rem.get("volumes") or 1)
             total_weights = float(mov.get("total_pesos") or 0.5)
@@ -210,14 +230,15 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
             all_items_ok = True
             for mkt_it in items_mkt:
                 qty_bom = 0.0
-                if "MovimentoItensPedido" in mkt_it and isinstance(mkt_it["MovimentoItensPedido"], list) and len(mkt_it["MovimentoItensPedido"]) > 0:
-                    qty_bom = float(mkt_it["MovimentoItensPedido"][0].get("quantidade_bom") or 0.0)
+                inner_mov = mkt_it.get("MovimentoItensPedido")
+                if inner_mov and isinstance(inner_mov, list) and len(inner_mov) > 0 and isinstance(inner_mov[0], dict):
+                    qty_bom = abs(float(inner_mov[0].get("quantidade_bom") or 0.0))
                 elif "quantidade_bom" in mkt_it:
-                    qty_bom = float(mkt_it.get("quantidade_bom") or 0.0)
+                    qty_bom = abs(float(mkt_it.get("quantidade_bom") or 0.0))
                 elif "quantidade" in mkt_it:
-                    qty_bom = float(mkt_it.get("quantidade") or 0.0)
+                    qty_bom = abs(float(mkt_it.get("quantidade") or 0.0))
 
-                qty_atendida = abs(int(round(qty_bom)))
+                qty_atendida = int(round(qty_bom))
                 if qty_atendida <= 0:
                     continue
 
@@ -297,7 +318,7 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                 stats["errors"] += 1
                 continue
 
-            # Volumes e pesos
+            # 2. Volumes e pesos
             vols = max(1, total_volumes)
             peso_vol = math.ceil(total_weights) if vols > 1 else max(0.1, total_weights)
             for v in range(1, vols + 1):
@@ -323,7 +344,7 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                 except Exception:
                     pass
 
-            # Altera status para LFT
+            # 3. Altera status para LFT no Horus ERP via AltStatus_Pedido oficial da API
             try:
                 alt_res = await horus_client.alt_status_pedido(
                     cod_empresa=cod_empresa,
@@ -340,7 +361,7 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                     status="SUCCESS",
                     request_data={"COD_EMPRESA": cod_empresa, "COD_FILIAL": cod_filial, "STA_PEDIDO": "LFT"},
                     response_data=alt_res,
-                    message="Status alterado para LFT no Horus."
+                    message="Status alterado para LFT no Horus com sucesso."
                 )
             except Exception as e_alt:
                 logger.error(f"[LogisticsCheckJob] Falha ao mudar status para LFT ped {ped_num}: {e_alt}")
@@ -355,7 +376,7 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                     message=f"Erro ao alterar status para LFT: {e_alt}"
                 )
 
-            # Salva no banco local
+            # 4. Salva no banco local
             if not local_order:
                 local_order = LogisticsOrder(
                     company_id=company_id,
@@ -379,7 +400,7 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
 
             db.commit()
             stats["conferred"] += 1
-            logger.info(f"[LogisticsCheckJob] Pedido #{ped_num} conferido e liberado (LFT) com sucesso.")
+            logger.info(f"[LogisticsCheckJob] Pedido #{ped_num} conferido e liberado (LFT) via API com sucesso.")
 
     finally:
         await horus_client.close()

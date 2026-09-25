@@ -770,8 +770,8 @@ async def process_wms_conference(
                 LogisticsOrder.cod_ped_venda == ped_num
             ).first()
 
-            # Se for lote e localmente já estiver conferido ou faturado, pula para poupar a API do Horus
-            if not cod_ped_venda and local_order and (local_order.situation in ["CHECKED", "INVOICED"] or local_order.status_horus in ["LFT", "FAT"]):
+            # Se for lote e localmente já estiver confirmado como LFT/FAT ou já faturado, pula para poupar a API do Horus
+            if not cod_ped_venda and local_order and (local_order.status_horus in ["LFT", "FAT"] or local_order.situation == "INVOICED"):
                 continue
 
             # ID do WMS
@@ -1087,6 +1087,210 @@ async def process_wms_conference(
         "results": results,
         "message": f"{conferred_count} pedido(s) conferido(s) e liberado(s) para faturamento no Horus (LFT) com sucesso."
     }
+
+
+@router.post("/companies/{company_id}/logistics/orders/{cod_ped_venda}/force-horus-conference")
+async def force_horus_conference(
+    company_id: int,
+    cod_ped_venda: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Força a conferência de itens e a transição para LFT exclusivamente no Horus ERP para um pedido específico.
+    Útil quando a remessa já foi separada/conferida no WMS mas por qualquer inconsistência
+    o Horus permaneceu em LEX, sem avançar para LFT.
+    """
+    _assert_ownership(current_user, company_id)
+
+    log_settings = db.query(LogisticsSettings).filter(
+        LogisticsSettings.company_id == company_id,
+        LogisticsSettings.enabled == True
+    ).first()
+    if not log_settings:
+        raise HTTPException(status_code=400, detail="Configurações de logística não ativas para esta empresa.")
+
+    cmp_settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not cmp_settings:
+        raise HTTPException(status_code=400, detail="Configurações do Horus não localizadas para esta empresa.")
+
+    cod_empresa_padrao = str(getattr(cmp_settings, 'horus_company', '') or '1').strip()
+    cod_filial_padrao = str(getattr(cmp_settings, 'horus_branch', '') or '2').strip()
+    cod_local_cfg = str(getattr(log_settings, 'stock_local', '') or getattr(cmp_settings, 'horus_stock_local', '') or '').strip()
+
+    horus_client = HorusLogisticsClient(db, company_id)
+    now_dt = datetime.now(timezone.utc)
+
+    try:
+        # 1. Localiza pedido no Horus
+        ord_horus = None
+        for try_filial in [cod_filial_padrao, "2", "1"]:
+            params_horus = {
+                "COD_EMPRESA": cod_empresa_padrao,
+                "COD_FILIAL": try_filial,
+                "COD_PED_VENDA": cod_ped_venda,
+                "OFFSET": 0,
+                "LIMIT": 1
+            }
+            if getattr(cmp_settings, 'horus_legacy_pagination', False):
+                params_horus.pop("OFFSET", None)
+                params_horus.pop("LIMIT", None)
+
+            try:
+                res_h = await horus_client.get("Busca_PedidosVenda", params=params_horus)
+                if res_h and isinstance(res_h, list) and len(res_h) > 0:
+                    first_h = res_h[0]
+                    if not (first_h.get("Falha") or first_h.get("FALHA") == "S"):
+                        ord_horus = first_h
+                        break
+                elif isinstance(res_h, dict) and not (res_h.get("Falha") or res_h.get("FALHA") == "S"):
+                    ord_horus = res_h
+                    break
+            except Exception:
+                pass
+
+        if not ord_horus:
+            raise HTTPException(status_code=404, detail=f"Pedido #{cod_ped_venda} não encontrado no Horus ERP.")
+
+        status_erp = str(ord_horus.get("STATUS_PEDIDO_VENDA") or ord_horus.get("STA_PEDIDO_VENDA") or "").strip().upper()
+        cod_cli = str(ord_horus.get("COD_CLI") or "").strip()
+        cod_empresa = str(ord_horus.get("COD_EMPRESA") or cod_empresa_padrao).strip()
+        cod_filial = str(ord_horus.get("COD_FILIAL") or cod_filial_padrao).strip()
+
+        # Define cod_local
+        cod_local = cod_local_cfg
+        if not cod_local or cod_local in ["1", "2", "5"]:
+            if str(cod_filial) == "2":
+                cod_local = "15"  # EO-TRANSPO
+            elif str(cod_filial) == "1":
+                cod_local = "9"   # CV-TRANSPO
+            else:
+                cod_local = "15"
+
+        local_order = db.query(LogisticsOrder).filter(
+            LogisticsOrder.company_id == company_id,
+            LogisticsOrder.cod_ped_venda == cod_ped_venda
+        ).first()
+
+        # Se já estiver FAT
+        if status_erp == "FAT":
+            if local_order:
+                local_order.situation = "CHECKED"
+                local_order.status_horus = "FAT"
+                db.commit()
+            return {
+                "success": True,
+                "status": "FAT",
+                "message": f"Pedido #{cod_ped_venda} já está faturado (FAT) no Hórus."
+            }
+
+        # 2. Confere os itens do pedido no Horus caso ainda não tenha sido conferido
+        items_conferred = 0
+        try:
+            items_res = await horus_client.get_order_items(cod_ped_venda, cod_empresa, cod_filial)
+            items_list = items_res if isinstance(items_res, list) else ([items_res] if isinstance(items_res, dict) else [])
+            for item_h in items_list:
+                if not isinstance(item_h, dict):
+                    continue
+                c_item = str(item_h.get("COD_ITEM") or "").strip()
+                q_item = abs(int(float(str(item_h.get("QTD_ITEM") or item_h.get("QTD_PEDIDA") or 1).replace(",", "."))))
+                if not c_item or q_item <= 0:
+                    continue
+
+                try:
+                    await horus_client.confere_item_pedido(
+                        cod_empresa=cod_empresa,
+                        cod_filial=cod_filial,
+                        cod_cli=cod_cli,
+                        cod_ped_venda=str(cod_ped_venda),
+                        cod_item=c_item,
+                        cod_local=cod_local,
+                        qtd_atendida=q_item
+                    )
+                    items_conferred += 1
+                except Exception as e_ci:
+                    logger.warning(f"[ForceHorusConf] ConfereItem {c_item} ped {cod_ped_venda}: {e_ci}")
+        except Exception as e_it:
+            logger.warning(f"[ForceHorusConf] Erro ao buscar itens para conferência ped {cod_ped_venda}: {e_it}")
+
+        # 3. Insere volume preventivo
+        try:
+            await horus_client.ins_volume_pedido(
+                cod_empresa=cod_empresa,
+                cod_filial=cod_filial,
+                cod_cli=cod_cli,
+                cod_ped_venda=str(cod_ped_venda),
+                cod_volume=1,
+                pes_volume=1.0
+            )
+        except Exception as e_v:
+            logger.debug(f"[ForceHorusConf] InsVolume ped {cod_ped_venda}: {e_v}")
+
+        # 4. Altera o status no Horus para LFT
+        alt_res = await horus_client.alt_status_pedido(
+            cod_empresa=cod_empresa,
+            cod_filial=cod_filial,
+            cod_cli=cod_cli,
+            cod_ped_venda=cod_ped_venda,
+            sta_pedido="LFT"
+        )
+        logger.info(f"[ForceHorusConf] AltStatus_Pedido LFT ped {cod_ped_venda}: {alt_res}")
+
+        # 5. Atualiza registro local
+        if local_order:
+            local_order.situation = "CHECKED"
+            local_order.status_horus = "LFT"
+            local_order.checked_at = now_dt
+            local_order.error_log = None
+        else:
+            local_order = LogisticsOrder(
+                company_id=company_id,
+                cod_ped_venda=cod_ped_venda,
+                cod_cli=int(cod_cli) if cod_cli.isdigit() else None,
+                provider=log_settings.provider,
+                situation="CHECKED",
+                status_horus="LFT",
+                checked_at=now_dt,
+                cep_validated=True
+            )
+            db.add(local_order)
+        db.commit()
+
+        _record_logistics_log(
+            db=db,
+            company_id=company_id,
+            cod_ped_venda=cod_ped_venda,
+            action="FORCE_HORUS_LFT",
+            status="SUCCESS",
+            request_data={"COD_PED_VENDA": cod_ped_venda, "STA_PEDIDO": "LFT", "items_conferred": items_conferred},
+            response_data=alt_res,
+            message="Conferência e liberação para faturamento (LFT) forçadas no Horus com sucesso."
+        )
+
+        return {
+            "success": True,
+            "status": "LFT",
+            "items_conferred": items_conferred,
+            "message": f"Pedido #{cod_ped_venda} conferido e liberado para faturamento (LFT) no Hórus com sucesso!"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ForceHorusConf] Erro ao forçar conferência no Hórus para pedido #{cod_ped_venda}: {e}")
+        _record_logistics_log(
+            db=db,
+            company_id=company_id,
+            cod_ped_venda=cod_ped_venda,
+            action="FORCE_HORUS_LFT",
+            status="ERROR",
+            request_data={"COD_PED_VENDA": cod_ped_venda},
+            response_data=str(e),
+            message=f"Falha ao forçar conferência no Horus: {e}"
+        )
+        raise HTTPException(status_code=500, detail=f"Erro ao forçar conferência no Horus: {e}")
+    finally:
+        await horus_client.close()
 
 
 @router.get("/companies/{company_id}/logistics/orders/{cod_ped}/logs")

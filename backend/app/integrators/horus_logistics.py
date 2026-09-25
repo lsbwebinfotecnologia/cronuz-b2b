@@ -242,6 +242,26 @@ class HorusLogisticsClient(HorusClient):
         }
         return await self.get("AltStatus_Pedido", params=params)
 
+    async def pular_expedicao(
+        self,
+        cod_empresa: str,
+        cod_filial: str,
+        cod_cli: str,
+        cod_ped_venda: Union[str, int],
+        cod_local: str
+    ) -> Any:
+        """
+        Calls Pular_expedicao on Horus ERP to skip expedition and release order to LFT natively.
+        """
+        params = {
+            "COD_EMPRESA": cod_empresa,
+            "COD_FILIAL": cod_filial,
+            "COD_CLI": cod_cli,
+            "COD_PED_VENDA": cod_ped_venda,
+            "COD_LOCAL": cod_local
+        }
+        return await self.get("Pular_expedicao", params=params)
+
     async def busca_acervo_isbn(
         self,
         isbn: str,
