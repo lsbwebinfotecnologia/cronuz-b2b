@@ -130,13 +130,13 @@ async def list_horus_orders(
             like_term = f"%{s}%"
             params.extend([like_term, like_term, like_term, like_term])
 
-        # 4. Filtro por Período de Data de Criação
+        # 4. Filtro por Período de Data de Criação (usa estilo 120 para conversão canônica independente do idioma)
         if data_inicio:
-            where_clauses.append("PV.DAT_PEDIDO >= %s")
-            params.append(f"{data_inicio} 00:00:00")
+            where_clauses.append("PV.DAT_PEDIDO >= CONVERT(DATETIME, %s, 120)")
+            params.append(f"{data_inicio[:10]} 00:00:00")
         if data_fim:
-            where_clauses.append("PV.DAT_PEDIDO <= %s")
-            params.append(f"{data_fim} 23:59:59")
+            where_clauses.append("PV.DAT_PEDIDO <= CONVERT(DATETIME, %s, 120)")
+            params.append(f"{data_fim[:10]} 23:59:59")
 
         where_sql = " AND ".join(where_clauses)
         offset = (page - 1) * page_size
