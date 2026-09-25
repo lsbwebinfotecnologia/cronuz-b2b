@@ -95,12 +95,15 @@ interface OrderHeader {
 
 interface SummaryData {
   abertos_count: number;
+  lft_count?: number;
   faturados_count: number;
   cancelados_count: number;
   alertas_expedicao_count: number;
   abertos_valor_bruto: number;
   abertos_valor_liquido: number;
   abertos_valor: number;
+  lft_valor_bruto?: number;
+  lft_valor_liquido?: number;
   total_count: number;
   filial_consultada: string;
   dias_alerta_expedicao: number;
@@ -143,7 +146,7 @@ export default function HorusOrdersPage() {
   // Estados de filtros
   const [selectedFilial, setSelectedFilial] = useState('1');
   const [diasAlertaExpedicao, setDiasAlertaExpedicao] = useState<number>(3);
-  const [statusTab, setStatusTab] = useState<'DEFAULT' | 'FAT' | 'CAN' | 'TODOS'>('DEFAULT');
+  const [statusTab, setStatusTab] = useState<'DEFAULT' | 'LFT' | 'FAT' | 'CAN' | 'TODOS'>('DEFAULT');
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedMetodo, setSelectedMetodo] = useState('TODOS');
@@ -181,6 +184,7 @@ export default function HorusOrdersPage() {
   const [sendingLogistics, setSendingLogistics] = useState(false);
   const [filterLogisticsErrors, setFilterLogisticsErrors] = useState(false);
   const [filterNfEnviada, setFilterNfEnviada] = useState(false);
+  const [filterProntoFaturar, setFilterProntoFaturar] = useState(false);
 
   // Sincronização & Conciliação com WMS
   const [syncModalOpen, setSyncModalOpen] = useState(false);
@@ -667,7 +671,7 @@ export default function HorusOrdersPage() {
     const s = situationMap[logi.situation] || situationMap['PENDING_SEND'];
 
     const isPendingHorusLFT = (sta === 'LEX' || sta === 'CON' || sta === 'IMP' || sta === 'ABERTO') &&
-      (logi.situation === 'CHECKED' || logi.situation === 'IN_LOGISTICS' || !!logi.id_ord_sys_log);
+      (logi.situation === 'CHECKED');
 
     if (isPendingHorusLFT) {
       return (
@@ -814,6 +818,12 @@ export default function HorusOrdersPage() {
         const logi = logisticsMap[o.cod_ped_venda];
         return logi?.situation === 'INVOICED';
       })
+    : filterProntoFaturar
+    ? orders.filter((o) => {
+        const logi = logisticsMap[o.cod_ped_venda];
+        const sta = (o.sta_pedido_venda || '').toUpperCase().trim();
+        return sta === 'LFT' && logi?.situation === 'CHECKED';
+      })
     : orders;
 
   return (
@@ -904,7 +914,7 @@ export default function HorusOrdersPage() {
 
       {/* ─── CARDS ESTATÍSTICOS SUPERIORES ────────────────────────── */}
       {summary && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <div className="p-5 rounded-2xl border border-amber-200 bg-amber-50/50 dark:border-amber-800/40 dark:bg-amber-950/20 shadow-sm">
             <div className="flex items-center justify-between">
               <p className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">Em Aberto / Expedição</p>
@@ -919,6 +929,22 @@ export default function HorusOrdersPage() {
             </div>
           </div>
 
+          {/* Card: Pronto p/ Faturar (LFT) */}
+          <div className="p-5 rounded-2xl border border-indigo-200 bg-indigo-50/50 dark:border-indigo-800/40 dark:bg-indigo-950/20 shadow-sm cursor-pointer hover:border-indigo-300 transition-colors"
+               onClick={() => { setStatusTab('LFT'); setPage(1); }}>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">Prontos p/ Faturar (LFT)</p>
+              <Receipt className="h-4 w-4 text-indigo-600" />
+            </div>
+            <p className="text-2xl font-black text-indigo-800 dark:text-indigo-200 mt-2">{summary.lft_count || 0}</p>
+            <div className="flex items-center justify-between mt-1 text-[11px] text-indigo-700 dark:text-indigo-300 font-semibold">
+              <span>Líquido: {formatBRL(summary.lft_valor_liquido || 0)}</span>
+              {(summary.lft_valor_bruto || 0) > (summary.lft_valor_liquido || 0) && (
+                <span className="text-indigo-600/70 font-normal">Bruto: {formatBRL(summary.lft_valor_bruto)}</span>
+              )}
+            </div>
+          </div>
+
           <div className="p-5 rounded-2xl border border-rose-300 bg-rose-50/60 dark:border-rose-800/50 dark:bg-rose-950/25 shadow-sm">
             <div className="flex items-center justify-between">
               <p className="text-xs font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider">Atraso Expedição (≥ {summary.dias_alerta_expedicao}d)</p>
@@ -927,7 +953,6 @@ export default function HorusOrdersPage() {
             <p className="text-2xl font-black text-rose-800 dark:text-rose-200 mt-2">{summary.alertas_expedicao_count}</p>
             <p className="text-xs text-rose-600 dark:text-rose-400 mt-1 font-medium">Requerem atenção operacional imediata</p>
           </div>
-
         </div>
       )}
 
@@ -937,7 +962,7 @@ export default function HorusOrdersPage() {
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
           <button
             type="button"
-            onClick={() => { setStatusTab('DEFAULT'); setPage(1); }}
+            onClick={() => { setStatusTab('DEFAULT'); setFilterProntoFaturar(false); setPage(1); }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
               statusTab === 'DEFAULT'
                 ? 'bg-amber-600 text-white shadow-sm'
@@ -950,7 +975,21 @@ export default function HorusOrdersPage() {
 
           <button
             type="button"
-            onClick={() => { setStatusTab('FAT'); setPage(1); }}
+            onClick={() => { setStatusTab('LFT'); setFilterProntoFaturar(false); setPage(1); }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+              statusTab === 'LFT'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-indigo-700 dark:text-indigo-400 bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100'
+            }`}
+            title="Exibir pedidos liberados para faturamento (LFT)"
+          >
+            <Receipt className="h-3.5 w-3.5" />
+            Prontos p/ Faturar (LFT) {summary?.lft_count !== undefined ? `(${summary.lft_count})` : ''}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setStatusTab('FAT'); setFilterProntoFaturar(false); setPage(1); }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
               statusTab === 'FAT'
                 ? 'bg-emerald-600 text-white shadow-sm'
@@ -963,7 +1002,7 @@ export default function HorusOrdersPage() {
 
           <button
             type="button"
-            onClick={() => { setStatusTab('CAN'); setPage(1); }}
+            onClick={() => { setStatusTab('CAN'); setFilterProntoFaturar(false); setPage(1); }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
               statusTab === 'CAN'
                 ? 'bg-rose-600 text-white shadow-sm'
@@ -976,7 +1015,7 @@ export default function HorusOrdersPage() {
 
           <button
             type="button"
-            onClick={() => { setStatusTab('TODOS'); setPage(1); }}
+            onClick={() => { setStatusTab('TODOS'); setFilterProntoFaturar(false); setPage(1); }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
               statusTab === 'TODOS'
                 ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm'
@@ -989,12 +1028,36 @@ export default function HorusOrdersPage() {
           {/* Separador */}
           <div className="h-5 w-px bg-slate-200 dark:bg-slate-700 shrink-0 mx-1" />
 
+          {/* Filtro: Prontos p/ Faturar (LFT e Conferidos no WMS) */}
+          <button
+            type="button"
+            onClick={() => {
+              setFilterProntoFaturar(!filterProntoFaturar);
+              if (!filterProntoFaturar) {
+                setFilterLogisticsErrors(false);
+                setFilterNfEnviada(false);
+              }
+            }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
+              filterProntoFaturar
+                ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400'
+                : 'text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100'
+            }`}
+            title="Filtrar pedidos com status LFT que já foram conferidos na logística"
+          >
+            <CheckCircle className="h-3.5 w-3.5" />
+            LFT Conferidos ({orders.filter(o => (o.sta_pedido_venda || '').toUpperCase() === 'LFT' && logisticsMap[o.cod_ped_venda]?.situation === 'CHECKED').length})
+          </button>
+
           {/* Filtro: Apenas com Problemas de Logística */}
           <button
             type="button"
             onClick={() => {
               setFilterLogisticsErrors(!filterLogisticsErrors);
-              if (!filterLogisticsErrors) setFilterNfEnviada(false);
+              if (!filterLogisticsErrors) {
+                setFilterNfEnviada(false);
+                setFilterProntoFaturar(false);
+              }
             }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
               filterLogisticsErrors
@@ -1011,7 +1074,10 @@ export default function HorusOrdersPage() {
             type="button"
             onClick={() => {
               setFilterNfEnviada(!filterNfEnviada);
-              if (!filterNfEnviada) setFilterLogisticsErrors(false);
+              if (!filterNfEnviada) {
+                setFilterLogisticsErrors(false);
+                setFilterProntoFaturar(false);
+              }
             }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors shrink-0 flex items-center gap-1.5 ${
               filterNfEnviada
@@ -1320,7 +1386,7 @@ export default function HorusOrdersPage() {
         {/* ─── PAGINAÇÃO ────────────────────────────────────────── */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
           <span className="text-slate-500">
-            Mostrando <strong>{displayedOrders.length}</strong> de <strong>{totalRecords}</strong> pedidos {filterLogisticsErrors ? '(filtrado por problemas de logística)' : filterNfEnviada ? '(filtrado por NF enviada MKT)' : ''} (Página {page} de {totalPages})
+            Mostrando <strong>{displayedOrders.length}</strong> de <strong>{totalRecords}</strong> pedidos {filterLogisticsErrors ? '(filtrado por problemas de logística)' : filterNfEnviada ? '(filtrado por NF enviada MKT)' : filterProntoFaturar ? '(filtrado por prontos p/ faturar LFT)' : ''} (Página {page} de {totalPages})
           </span>
 
           <div className="flex items-center gap-2">
@@ -1385,7 +1451,7 @@ export default function HorusOrdersPage() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {selectedOrder.sta_pedido_venda !== 'LFT' && selectedOrder.sta_pedido_venda !== 'FAT' && (
+                    {logisticsMap[selectedOrder.cod_ped_venda]?.situation === 'CHECKED' && selectedOrder.sta_pedido_venda !== 'LFT' && selectedOrder.sta_pedido_venda !== 'FAT' && selectedOrder.sta_pedido_venda !== 'CAN' && (
                       <button
                         type="button"
                         onClick={() => handleForceHorusConference(selectedOrder.cod_ped_venda)}

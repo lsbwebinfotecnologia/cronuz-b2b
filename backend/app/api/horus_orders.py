@@ -287,6 +287,7 @@ async def list_horus_orders(
         summary_sql = f"""
             SELECT 
                 SUM(CASE WHEN ISNULL(PV.STATUS_PEDIDO_VENDA, '') NOT IN ('FAT', 'CAN', 'CA') THEN 1 ELSE 0 END) AS abertos_count,
+                SUM(CASE WHEN ISNULL(PV.STATUS_PEDIDO_VENDA, '') = 'LFT' THEN 1 ELSE 0 END) AS lft_count,
                 SUM(CASE WHEN ISNULL(PV.STATUS_PEDIDO_VENDA, '') = 'FAT' THEN 1 ELSE 0 END) AS faturados_count,
                 SUM(CASE WHEN ISNULL(PV.STATUS_PEDIDO_VENDA, '') IN ('CAN', 'CA') THEN 1 ELSE 0 END) AS cancelados_count,
                 SUM(CASE WHEN ISNULL(PV.STATUS_PEDIDO_VENDA, '') NOT IN ('FAT', 'CAN', 'CA', 'NOV') 
@@ -294,6 +295,8 @@ async def list_horus_orders(
                          AND DATEDIFF(day, PV.DAT_LEX, GETDATE()) >= %s THEN 1 ELSE 0 END) AS alertas_expedicao_count,
                 SUM(CASE WHEN ISNULL(PV.STATUS_PEDIDO_VENDA, '') NOT IN ('FAT', 'CAN', 'CA') THEN ISNULL(PV.VLR_TOTAL_PEDIDO, 0) ELSE 0 END) AS abertos_valor_bruto,
                 SUM(CASE WHEN ISNULL(PV.STATUS_PEDIDO_VENDA, '') NOT IN ('FAT', 'CAN', 'CA') THEN ISNULL(PV.VLR_TOTAL_LIQUIDO, PV.VLR_TOTAL_PEDIDO) ELSE 0 END) AS abertos_valor_liquido,
+                SUM(CASE WHEN ISNULL(PV.STATUS_PEDIDO_VENDA, '') = 'LFT' THEN ISNULL(PV.VLR_TOTAL_PEDIDO, 0) ELSE 0 END) AS lft_valor_bruto,
+                SUM(CASE WHEN ISNULL(PV.STATUS_PEDIDO_VENDA, '') = 'LFT' THEN ISNULL(PV.VLR_TOTAL_LIQUIDO, PV.VLR_TOTAL_PEDIDO) ELSE 0 END) AS lft_valor_liquido,
                 COUNT(1) AS total_count
             FROM PEDIDOS_VENDA PV WITH (NOLOCK)
             WHERE PV.COD_FILIAL = %s
@@ -309,12 +312,15 @@ async def list_horus_orders(
             "total_pages": (total_records + page_size - 1) // page_size if total_records > 0 else 1,
             "summary": {
                 "abertos_count": int(summary_data.get("abertos_count") or 0),
+                "lft_count": int(summary_data.get("lft_count") or 0),
                 "faturados_count": int(summary_data.get("faturados_count") or 0),
                 "cancelados_count": int(summary_data.get("cancelados_count") or 0),
                 "alertas_expedicao_count": int(summary_data.get("alertas_expedicao_count") or 0),
                 "abertos_valor_bruto": float(summary_data.get("abertos_valor_bruto") or 0.0),
                 "abertos_valor_liquido": float(summary_data.get("abertos_valor_liquido") or 0.0),
                 "abertos_valor": float(summary_data.get("abertos_valor_liquido") or summary_data.get("abertos_valor_bruto") or 0.0),
+                "lft_valor_bruto": float(summary_data.get("lft_valor_bruto") or 0.0),
+                "lft_valor_liquido": float(summary_data.get("lft_valor_liquido") or 0.0),
                 "total_count": int(summary_data.get("total_count") or 0),
                 "filial_consultada": cod_filial,
                 "dias_alerta_expedicao": dias_alerta_expedicao,

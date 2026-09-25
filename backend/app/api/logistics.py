@@ -43,6 +43,8 @@ class LogisticsSettingsResponse(BaseModel):
     stock_local: Optional[str] = None
     feature_auto_send: bool = True
     feature_auto_check: bool = False
+    feature_auto_invoice: bool = True
+    min_order_number: Optional[int] = None
     check_interval_min: int = 15
     password_set: bool
     # Campos extras para o frontend
@@ -65,10 +67,12 @@ class LogisticsSettingsUpdate(BaseModel):
     stock_local: Optional[str] = None
     feature_auto_send: bool = True
     feature_auto_check: bool = False
+    feature_auto_invoice: bool = True
+    min_order_number: Optional[int] = None
     check_interval_min: int = 15
 
 class ToggleJobRequest(BaseModel):
-    job_name: str  # 'auto_send' ou 'auto_check'
+    job_name: str  # 'auto_send', 'auto_check' ou 'auto_invoice'
     enabled: bool
 
 # --- Helpers ---
@@ -220,6 +224,8 @@ def get_logistics_settings(
         stock_local=settings.stock_local,
         feature_auto_send=settings.feature_auto_send,
         feature_auto_check=settings.feature_auto_check,
+        feature_auto_invoice=getattr(settings, 'feature_auto_invoice', True),
+        min_order_number=getattr(settings, 'min_order_number', None),
         check_interval_min=settings.check_interval_min,
         password_set=bool(settings.password),
         configured=is_configured,
@@ -250,6 +256,8 @@ def update_logistics_settings(
     settings.stock_local = data.stock_local
     settings.feature_auto_send = data.feature_auto_send
     settings.feature_auto_check = data.feature_auto_check
+    settings.feature_auto_invoice = data.feature_auto_invoice
+    settings.min_order_number = data.min_order_number
     settings.check_interval_min = data.check_interval_min
 
     if data.password:
@@ -280,6 +288,8 @@ def update_logistics_settings(
         stock_local=settings.stock_local,
         feature_auto_send=settings.feature_auto_send,
         feature_auto_check=settings.feature_auto_check,
+        feature_auto_invoice=settings.feature_auto_invoice,
+        min_order_number=settings.min_order_number,
         check_interval_min=settings.check_interval_min,
         password_set=bool(settings.password),
         configured=bool(settings.api_url or settings.login),
@@ -294,7 +304,7 @@ def toggle_logistics_job(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Ativa ou desativa rapidamente um dos jobs automáticos de logística (auto_send ou auto_check).
+    Ativa ou desativa rapidamente um dos jobs automáticos de logística (auto_send, auto_check ou auto_invoice).
     """
     _assert_ownership(current_user, company_id)
     settings = db.query(LogisticsSettings).filter(LogisticsSettings.company_id == company_id).first()
@@ -308,8 +318,11 @@ def toggle_logistics_job(
     elif data.job_name in ['auto_check', 'check']:
         settings.feature_auto_check = data.enabled
         action_desc = "Conferência Automática (WMS → Horus LFT)"
+    elif data.job_name in ['auto_invoice', 'invoice']:
+        settings.feature_auto_invoice = data.enabled
+        action_desc = "Envio Automático de Notas (FAT → WMS)"
     else:
-        raise HTTPException(status_code=400, detail="Job inválido. Use 'auto_send' ou 'auto_check'.")
+        raise HTTPException(status_code=400, detail="Job inválido. Use 'auto_send', 'auto_check' ou 'auto_invoice'.")
 
     db.commit()
     db.refresh(settings)
@@ -323,6 +336,8 @@ def toggle_logistics_job(
         "enabled": data.enabled,
         "feature_auto_send": settings.feature_auto_send,
         "feature_auto_check": settings.feature_auto_check,
+        "feature_auto_invoice": settings.feature_auto_invoice,
+        "min_order_number": settings.min_order_number,
         "message": f"Job de {action_desc} foi {status_str} com sucesso."
     }
 
@@ -1184,94 +1199,51 @@ async def force_horus_conference(
                 "message": f"Pedido #{cod_ped_venda} já está faturado (FAT) no Hórus."
             }
 
-        # 2. Confere os itens do pedido no Horus caso ainda não tenha sido conferido
-        items_conferred = 0
-        try:
-            items_res = await horus_client.get_order_items(cod_ped_venda, cod_empresa, cod_filial)
-            items_list = items_res if isinstance(items_res, list) else ([items_res] if isinstance(items_res, dict) else [])
-            for item_h in items_list:
-                if not isinstance(item_h, dict):
-                    continue
-                c_item = str(item_h.get("COD_ITEM") or "").strip()
-                q_item = abs(int(float(str(item_h.get("QTD_ITEM") or item_h.get("QTD_PEDIDA") or 1).replace(",", "."))))
-                if not c_item or q_item <= 0:
-                    continue
+        # 2. Busca os dados reais de conferência/picking no WMS MKT
+        provider = LogisticsProvider.factory(log_settings.provider, log_settings)
+        wms_item = await provider.get_order_by_ref(cod_ped_venda)
 
-                try:
-                    await horus_client.confere_item_pedido(
-                        cod_empresa=cod_empresa,
-                        cod_filial=cod_filial,
-                        cod_cli=cod_cli,
-                        cod_ped_venda=str(cod_ped_venda),
-                        cod_item=c_item,
-                        cod_local=cod_local,
-                        qtd_atendida=q_item
-                    )
-                    items_conferred += 1
-                except Exception as e_ci:
-                    logger.warning(f"[ForceHorusConf] ConfereItem {c_item} ped {cod_ped_venda}: {e_ci}")
-        except Exception as e_it:
-            logger.warning(f"[ForceHorusConf] Erro ao buscar itens para conferência ped {cod_ped_venda}: {e_it}")
+        if not wms_item:
+            # Fallback buscando movimentos dos últimos 15 dias
+            d_ini = (now_dt - timedelta(days=15)).strftime("%Y-%m-%d")
+            d_fim = now_dt.strftime("%Y-%m-%d")
+            try:
+                movs = await provider.get_movements(d_ini, d_fim, codigo_referencia=str(cod_ped_venda), max_pages=2)
+                if movs and len(movs) > 0:
+                    wms_item = movs[0]
+            except Exception:
+                pass
 
-        # 3. Insere volume preventivo
-        try:
-            await horus_client.ins_volume_pedido(
-                cod_empresa=cod_empresa,
-                cod_filial=cod_filial,
-                cod_cli=cod_cli,
-                cod_ped_venda=str(cod_ped_venda),
-                cod_volume=1,
-                pes_volume=1.0
+        if not wms_item:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Não foi possível localizar os dados de conferência do pedido #{cod_ped_venda} no WMS MKT. Verifique se o picking já foi concluído na logística."
             )
-        except Exception as e_v:
-            logger.debug(f"[ForceHorusConf] InsVolume ped {cod_ped_venda}: {e_v}")
 
-        # 4. Altera o status no Horus para LFT
-        alt_res = await horus_client.alt_status_pedido(
-            cod_empresa=cod_empresa,
-            cod_filial=cod_filial,
-            cod_cli=cod_cli,
-            cod_ped_venda=cod_ped_venda,
-            sta_pedido="LFT"
-        )
-        logger.info(f"[ForceHorusConf] AltStatus_Pedido LFT ped {cod_ped_venda}: {alt_res}")
+        # 3. Executa a conferência oficial no Hórus usando as quantidades REAIS conferidas pela logística
+        from app.jobs.logistics_check_job import perform_order_conference_from_wms
 
-        # 5. Atualiza registro local
-        if local_order:
-            local_order.situation = "CHECKED"
-            local_order.status_horus = "LFT"
-            local_order.checked_at = now_dt
-            local_order.error_log = None
-        else:
-            local_order = LogisticsOrder(
-                company_id=company_id,
-                cod_ped_venda=cod_ped_venda,
-                cod_cli=int(cod_cli) if cod_cli.isdigit() else None,
-                provider=log_settings.provider,
-                situation="CHECKED",
-                status_horus="LFT",
-                checked_at=now_dt,
-                cep_validated=True
-            )
-            db.add(local_order)
-        db.commit()
-
-        _record_logistics_log(
+        success, msg_conf, num_items = await perform_order_conference_from_wms(
             db=db,
             company_id=company_id,
-            cod_ped_venda=cod_ped_venda,
-            action="FORCE_HORUS_LFT",
-            status="SUCCESS",
-            request_data={"COD_PED_VENDA": cod_ped_venda, "STA_PEDIDO": "LFT", "items_conferred": items_conferred},
-            response_data=alt_res,
-            message="Conferência e liberação para faturamento (LFT) forçadas no Horus com sucesso."
+            ped_num=cod_ped_venda,
+            cod_cli=str(cod_cli),
+            cod_empresa=cod_empresa,
+            cod_filial=cod_filial,
+            cod_local=cod_local,
+            wms_item=wms_item,
+            horus_client=horus_client,
+            local_order=local_order
         )
+
+        if not success:
+            raise HTTPException(status_code=400, detail=msg_conf)
 
         return {
             "success": True,
             "status": "LFT",
-            "items_conferred": items_conferred,
-            "message": f"Pedido #{cod_ped_venda} conferido e liberado para faturamento (LFT) no Hórus com sucesso!"
+            "items_conferred": num_items,
+            "message": msg_conf
         }
 
     except HTTPException:

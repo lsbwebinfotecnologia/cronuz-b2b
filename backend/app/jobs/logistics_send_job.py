@@ -104,6 +104,13 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
         pedidos_lex_pendentes = []
         is_legacy_pag = getattr(cmp_settings, 'horus_legacy_pagination', False)
 
+        min_order_number = getattr(log_settings, 'min_order_number', None)
+        if min_order_number:
+            try:
+                min_order_number = int(min_order_number)
+            except (ValueError, TypeError):
+                min_order_number = None
+
         if is_legacy_pag:
             # Sem OFFSET/LIMIT: busca lista completa e filtra pendentes em memória
             params_pedidos = {
@@ -118,6 +125,8 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
                         if isinstance(p, dict) and not (p.get("Falha") or p.get("FALHA") == "S"):
                             cod_ped = int(p.get("COD_PED_VENDA") or 0)
                             if cod_ped and cod_ped not in integrated_ids:
+                                if min_order_number and cod_ped < min_order_number:
+                                    continue
                                 pedidos_lex_pendentes.append(p)
                                 if len(pedidos_lex_pendentes) >= 20:
                                     break
@@ -154,6 +163,8 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
                 for p in pedidos_page:
                     cod_ped = int(p.get("COD_PED_VENDA") or 0)
                     if cod_ped and cod_ped not in integrated_ids:
+                        if min_order_number and cod_ped < min_order_number:
+                            continue
                         pedidos_lex_pendentes.append(p)
                         if len(pedidos_lex_pendentes) >= 20:
                             break

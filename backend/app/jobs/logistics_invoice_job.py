@@ -290,17 +290,31 @@ async def process_company_logistics_invoice(db: Session, company_id: int, limit_
     if not log_settings or not log_settings.api_url or not log_settings.login or not log_settings.password:
         return {"processed": 0, "invoiced": 0, "errors": 0, "message": "Logística inativa ou sem credenciais"}
 
+    if not getattr(log_settings, 'feature_auto_invoice', True):
+        return {"processed": 0, "invoiced": 0, "errors": 0, "message": "Envio automático de notas fiscais desativado para esta empresa"}
+
     cmp_settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
     if not cmp_settings or not cmp_settings.horus_enabled:
         return {"processed": 0, "invoiced": 0, "errors": 0, "message": "Horus desativado para a empresa"}
 
+    min_order_number = getattr(log_settings, 'min_order_number', None)
+    if min_order_number:
+        try:
+            min_order_number = int(min_order_number)
+        except (ValueError, TypeError):
+            min_order_number = None
+
     # Busca pedidos com ID no armazém que ainda não foram marcados como INVOICED
-    orders_to_check = db.query(LogisticsOrder).filter(
+    orders_query = db.query(LogisticsOrder).filter(
         LogisticsOrder.company_id == company_id,
         LogisticsOrder.id_ord_sys_log.isnot(None),
         LogisticsOrder.id_ord_sys_log != "",
         LogisticsOrder.situation.in_(["CHECKED", "IN_LOGISTICS"])
-    ).order_by(LogisticsOrder.updated_at.desc()).limit(limit_orders).all()
+    )
+    if min_order_number:
+        orders_query = orders_query.filter(LogisticsOrder.cod_ped_venda >= min_order_number)
+
+    orders_to_check = orders_query.order_by(LogisticsOrder.updated_at.desc()).limit(limit_orders).all()
 
     if not orders_to_check:
         return {"processed": 0, "invoiced": 0, "errors": 0, "message": "Nenhum pedido pendente de faturamento"}
@@ -317,6 +331,8 @@ async def process_company_logistics_invoice(db: Session, company_id: int, limit_
     try:
         for order in orders_to_check:
             ped_num = order.cod_ped_venda
+            if min_order_number and ped_num < min_order_number:
+                continue
             stats["processed"] += 1
 
             # 1. Consulta status atual no Horus

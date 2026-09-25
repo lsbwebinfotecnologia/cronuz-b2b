@@ -2,7 +2,7 @@ import json
 import logging
 import math
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple, Optional
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.logistics_settings import LogisticsSettings
@@ -48,6 +48,213 @@ def _record_logistics_log(
             pass
 
 
+async def perform_order_conference_from_wms(
+    db: Session,
+    company_id: int,
+    ped_num: int,
+    cod_cli: str,
+    cod_empresa: str,
+    cod_filial: str,
+    cod_local: str,
+    wms_item: dict,
+    horus_client: HorusLogisticsClient,
+    local_order: Optional[LogisticsOrder] = None
+) -> Tuple[bool, str, int]:
+    """
+    Executa a conferência item a item no Hórus baseando-se EXCLUSIVAMENTE nas quantidades reais
+    conferidas/bipadas pela logística (WMS MKT), insere os volumes e altera o status para LFT.
+    Retorna (sucesso: bool, mensagem: str, itens_conferidos: int).
+    """
+    mov = wms_item.get("Movimento") or {}
+    rem = wms_item.get("RemessaPedido") or {}
+    leg = wms_item.get("LegadoPedido") or {}
+    items_mkt = wms_item.get("MovimentoItensPedido") or wms_item.get("itens") or wms_item.get("RemessaPedidoItem") or []
+    raw_wms_id = leg.get("id") or rem.get("id") or mov.get("id") or wms_item.get("id") or wms_item.get("legado_pedido_id")
+    wms_id_str = str(raw_wms_id).strip() if raw_wms_id else None
+
+    total_volumes = int(mov.get("total_volumes") or rem.get("volumes") or 1)
+    total_weights = float(mov.get("total_pesos") or 0.5)
+
+    if not items_mkt:
+        return False, "Nenhum item com conferência retornado pelo WMS.", 0
+
+    items_conferred = 0
+    all_items_ok = True
+
+    for mkt_it in items_mkt:
+        qty_bom = 0.0
+        inner_mov = mkt_it.get("MovimentoItensPedido")
+        if inner_mov and isinstance(inner_mov, list) and len(inner_mov) > 0 and isinstance(inner_mov[0], dict):
+            qty_bom = abs(float(inner_mov[0].get("quantidade_bom") or 0.0))
+        elif "quantidade_bom" in mkt_it:
+            qty_bom = abs(float(mkt_it.get("quantidade_bom") or 0.0))
+        elif "quantidade" in mkt_it:
+            qty_bom = abs(float(mkt_it.get("quantidade") or 0.0))
+
+        qty_atendida = int(round(qty_bom))
+        if qty_atendida <= 0:
+            continue
+
+        prod_info = mkt_it.get("Produto") or {}
+        cod_item_raw = prod_info.get("codigo_cliente") or mkt_it.get("cProd") or mkt_it.get("codigo")
+        ean_raw = prod_info.get("codigo_barras") or mkt_it.get("cEAN") or mkt_it.get("ean")
+
+        cod_item_final = str(cod_item_raw or "").strip()
+        if len(cod_item_final) == 13 or (not cod_item_final and ean_raw):
+            isbn_to_search = ean_raw or cod_item_final
+            try:
+                acervo_res = await horus_client.busca_acervo_isbn(str(isbn_to_search), cod_empresa=cod_empresa, cod_filial=cod_filial)
+                if acervo_res and isinstance(acervo_res, list) and len(acervo_res) > 0:
+                    first_ac = acervo_res[0]
+                    if first_ac.get("COD_ITEM"):
+                        cod_item_final = str(first_ac.get("COD_ITEM"))
+            except Exception:
+                pass
+
+        if not cod_item_final:
+            cod_item_final = str(ean_raw or "")
+
+        try:
+            conf_res = await horus_client.confere_item_pedido(
+                cod_empresa=cod_empresa,
+                cod_filial=cod_filial,
+                cod_cli=str(cod_cli),
+                cod_ped_venda=str(ped_num),
+                cod_item=cod_item_final,
+                cod_local=cod_local,
+                qtd_atendida=qty_atendida
+            )
+            items_conferred += 1
+            _record_logistics_log(
+                db=db,
+                company_id=company_id,
+                cod_ped_venda=ped_num,
+                action="CONFERENCE_ITEM",
+                status="SUCCESS",
+                request_data={
+                    "COD_EMPRESA": cod_empresa,
+                    "COD_FILIAL": cod_filial,
+                    "COD_CLI": str(cod_cli),
+                    "COD_PED_VENDA": str(ped_num),
+                    "COD_ITEM": cod_item_final,
+                    "COD_LOCAL": cod_local,
+                    "QTD_ATENDIDA": qty_atendida
+                },
+                response_data=conf_res,
+                message=f"Item {cod_item_final} conferido ({qty_atendida} un) no local {cod_local}."
+            )
+        except Exception as e_conf:
+            err_str = str(e_conf).upper()
+            if "JÁ CONFERIDO" in err_str or "JA CONFERIDO" in err_str:
+                items_conferred += 1
+            else:
+                logger.error(f"[LogisticsCheck] Falha confere item {cod_item_final} ped {ped_num}: {e_conf}")
+                all_items_ok = False
+                _record_logistics_log(
+                    db=db,
+                    company_id=company_id,
+                    cod_ped_venda=ped_num,
+                    action="CONFERENCE_ITEM",
+                    status="ERROR",
+                    request_data={"COD_ITEM": cod_item_final, "QTD_ATENDIDA": qty_atendida},
+                    response_data=str(e_conf),
+                    message=f"Erro ao conferir item {cod_item_final}: {e_conf}"
+                )
+                break
+
+    if not all_items_ok or items_conferred == 0:
+        return False, f"Falha ao conferir itens no Hórus ({items_conferred} conferidos com sucesso).", items_conferred
+
+    # Registra volumes apurados no WMS
+    vols = max(1, total_volumes)
+    peso_vol = math.ceil(total_weights) if vols > 1 else max(0.1, total_weights)
+    for v in range(1, vols + 1):
+        try:
+            vol_res = await horus_client.ins_volume_pedido(
+                cod_empresa=cod_empresa,
+                cod_filial=cod_filial,
+                cod_cli=str(cod_cli),
+                cod_ped_venda=str(ped_num),
+                cod_volume=v,
+                pes_volume=peso_vol
+            )
+            _record_logistics_log(
+                db=db,
+                company_id=company_id,
+                cod_ped_venda=ped_num,
+                action="INS_VOLUME",
+                status="SUCCESS",
+                request_data={"COD_VOLUME": v, "PES_VOLUME": peso_vol},
+                response_data=vol_res,
+                message=f"Volume {v}/{vols} registrado com peso {peso_vol}kg."
+            )
+        except Exception:
+            pass
+
+    # Altera status para LFT no Horus via AltStatus_Pedido
+    try:
+        alt_res = await horus_client.alt_status_pedido(
+            cod_empresa=cod_empresa,
+            cod_filial=cod_filial,
+            cod_cli=str(cod_cli),
+            cod_ped_venda=ped_num,
+            sta_pedido="LFT"
+        )
+        _record_logistics_log(
+            db=db,
+            company_id=company_id,
+            cod_ped_venda=ped_num,
+            action="ALT_STATUS_LFT",
+            status="SUCCESS",
+            request_data={"COD_EMPRESA": cod_empresa, "COD_FILIAL": cod_filial, "STA_PEDIDO": "LFT"},
+            response_data=alt_res,
+            message="Status alterado para LFT no Horus com sucesso."
+        )
+    except Exception as e_alt:
+        logger.error(f"[LogisticsCheck] Falha ao mudar status para LFT ped {ped_num}: {e_alt}")
+        _record_logistics_log(
+            db=db,
+            company_id=company_id,
+            cod_ped_venda=ped_num,
+            action="ALT_STATUS_LFT",
+            status="ERROR",
+            response_data=str(e_alt),
+            message=f"Erro ao alterar status para LFT: {e_alt}"
+        )
+        return False, f"Erro ao alterar status para LFT no Horus: {e_alt}", items_conferred
+
+    now_dt = datetime.now(timezone.utc)
+    if not local_order:
+        local_order = db.query(LogisticsOrder).filter(
+            LogisticsOrder.company_id == company_id,
+            LogisticsOrder.cod_ped_venda == ped_num
+        ).first()
+
+    if not local_order:
+        local_order = LogisticsOrder(
+            company_id=company_id,
+            cod_ped_venda=ped_num,
+            cod_cli=int(cod_cli) if str(cod_cli).isdigit() else None,
+            provider="MKT",
+            id_ord_sys_log=wms_id_str,
+            situation="CHECKED",
+            status_horus="LFT",
+            checked_at=now_dt,
+            cep_validated=True
+        )
+        db.add(local_order)
+    else:
+        local_order.situation = "CHECKED"
+        local_order.status_horus = "LFT"
+        local_order.checked_at = now_dt
+        if wms_id_str and not local_order.id_ord_sys_log:
+            local_order.id_ord_sys_log = wms_id_str
+        local_order.error_log = None
+
+    db.commit()
+    return True, f"Pedido #{ped_num} conferido ({items_conferred} itens com quantidades reais da logística) e liberado para LFT!", items_conferred
+
+
 async def process_company_logistics_check(db: Session, company_id: int) -> Dict[str, Any]:
     """
     Processa a conferência dos pedidos que tiveram picking finalizado no WMS (MKT)
@@ -61,9 +268,19 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
     if not log_settings or not log_settings.api_url or not log_settings.login or not log_settings.password:
         return {"processed": 0, "conferred": 0, "errors": 0, "message": "Logística inativa ou sem credenciais"}
 
+    if not getattr(log_settings, 'feature_auto_check', False):
+        return {"processed": 0, "conferred": 0, "errors": 0, "message": "Conferência automática desativada para esta empresa"}
+
     cmp_settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
     if not cmp_settings or not cmp_settings.horus_enabled:
         return {"processed": 0, "conferred": 0, "errors": 0, "message": "Horus desativado para a empresa"}
+
+    min_order_number = getattr(log_settings, 'min_order_number', None)
+    if min_order_number:
+        try:
+            min_order_number = int(min_order_number)
+        except (ValueError, TypeError):
+            min_order_number = None
 
     now_dt = datetime.now(timezone.utc)
     # Limita a no máximo 3 dias para garantir consulta leve e não estourar rate limit da MKT
@@ -108,6 +325,9 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
             try:
                 ped_num = int(str(raw_hs).strip())
             except (ValueError, TypeError):
+                continue
+
+            if min_order_number and ped_num < min_order_number:
                 continue
 
             # Checa picking finalizado
@@ -179,8 +399,8 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                 stats["skipped"] += 1
                 continue
 
-            # Se o pedido já estiver FATURADO (FAT) no Horus, já aproveita e envia a NFe para o WMS!
-            if status_erp == "FAT":
+            # Se o pedido já estiver FATURADO (FAT) no Horus e o envio de NF estiver ativo, envia a NFe para o WMS!
+            if status_erp == "FAT" and getattr(log_settings, 'feature_auto_invoice', True):
                 if wms_id_str:
                     logger.info(f"[LogisticsCheckJob] Pedido #{ped_num} já está FAT no Horus. Enviando NFe imediatamente para WMS...")
                     inv_sent = await send_single_invoice_to_wms(
@@ -222,185 +442,24 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                 continue
 
             # CASO PENDENTE DE CONFERÊNCIA (LEX, IMP, CON ou ABERTO):
-            # 1. Confere itens no Horus atentando-se à quantidade real bipada
-            items_mkt = item.get("MovimentoItensPedido") or []
-            total_volumes = int(mov.get("total_volumes") or rem.get("volumes") or 1)
-            total_weights = float(mov.get("total_pesos") or 0.5)
-
-            all_items_ok = True
-            for mkt_it in items_mkt:
-                qty_bom = 0.0
-                inner_mov = mkt_it.get("MovimentoItensPedido")
-                if inner_mov and isinstance(inner_mov, list) and len(inner_mov) > 0 and isinstance(inner_mov[0], dict):
-                    qty_bom = abs(float(inner_mov[0].get("quantidade_bom") or 0.0))
-                elif "quantidade_bom" in mkt_it:
-                    qty_bom = abs(float(mkt_it.get("quantidade_bom") or 0.0))
-                elif "quantidade" in mkt_it:
-                    qty_bom = abs(float(mkt_it.get("quantidade") or 0.0))
-
-                qty_atendida = int(round(qty_bom))
-                if qty_atendida <= 0:
-                    continue
-
-                prod_info = mkt_it.get("Produto") or {}
-                cod_item_raw = prod_info.get("codigo_cliente") or mkt_it.get("cProd") or mkt_it.get("codigo")
-                ean_raw = prod_info.get("codigo_barras") or mkt_it.get("cEAN") or mkt_it.get("ean")
-
-                cod_item_final = str(cod_item_raw or "").strip()
-                if len(cod_item_final) == 13 or (not cod_item_final and ean_raw):
-                    isbn_to_search = ean_raw or cod_item_final
-                    try:
-                        acervo_res = await horus_client.busca_acervo_isbn(str(isbn_to_search), cod_empresa=cod_empresa, cod_filial=cod_filial)
-                        if acervo_res and isinstance(acervo_res, list) and len(acervo_res) > 0:
-                            first_ac = acervo_res[0]
-                            if first_ac.get("COD_ITEM"):
-                                cod_item_final = str(first_ac.get("COD_ITEM"))
-                    except Exception:
-                        pass
-
-                if not cod_item_final:
-                    cod_item_final = str(ean_raw or "")
-
-                try:
-                    conf_res = await horus_client.confere_item_pedido(
-                        cod_empresa=cod_empresa,
-                        cod_filial=cod_filial,
-                        cod_cli=str(cod_cli),
-                        cod_ped_venda=str(ped_num),
-                        cod_item=cod_item_final,
-                        cod_local=cod_local,
-                        qtd_atendida=qty_atendida
-                    )
-                    _record_logistics_log(
-                        db=db,
-                        company_id=company_id,
-                        cod_ped_venda=ped_num,
-                        action="CONFERENCE_ITEM",
-                        status="SUCCESS",
-                        request_data={
-                            "COD_EMPRESA": cod_empresa,
-                            "COD_FILIAL": cod_filial,
-                            "COD_CLI": str(cod_cli),
-                            "COD_PED_VENDA": str(ped_num),
-                            "COD_ITEM": cod_item_final,
-                            "COD_LOCAL": cod_local,
-                            "QTD_ATENDIDA": qty_atendida
-                        },
-                        response_data=conf_res,
-                        message=f"Item {cod_item_final} conferido ({qty_atendida} un) no local {cod_local}."
-                    )
-                except Exception as e_conf:
-                    err_str = str(e_conf).upper()
-                    if "JÁ CONFERIDO" in err_str or "JA CONFERIDO" in err_str:
-                        pass
-                    else:
-                        logger.error(f"[LogisticsCheckJob] Falha confere item {cod_item_final} ped {ped_num}: {e_conf}")
-                        all_items_ok = False
-                        _record_logistics_log(
-                            db=db,
-                            company_id=company_id,
-                            cod_ped_venda=ped_num,
-                            action="CONFERENCE_ITEM",
-                            status="ERROR",
-                            request_data={
-                                "COD_EMPRESA": cod_empresa,
-                                "COD_FILIAL": cod_filial,
-                                "COD_ITEM": cod_item_final,
-                                "COD_LOCAL": cod_local,
-                                "QTD_ATENDIDA": qty_atendida
-                            },
-                            response_data=str(e_conf),
-                            message=f"Erro ao conferir item {cod_item_final}: {e_conf}"
-                        )
-                        break
-
-            if not all_items_ok:
-                stats["errors"] += 1
-                continue
-
-            # 2. Volumes e pesos
-            vols = max(1, total_volumes)
-            peso_vol = math.ceil(total_weights) if vols > 1 else max(0.1, total_weights)
-            for v in range(1, vols + 1):
-                try:
-                    vol_res = await horus_client.ins_volume_pedido(
-                        cod_empresa=cod_empresa,
-                        cod_filial=cod_filial,
-                        cod_cli=str(cod_cli),
-                        cod_ped_venda=str(ped_num),
-                        cod_volume=v,
-                        pes_volume=peso_vol
-                    )
-                    _record_logistics_log(
-                        db=db,
-                        company_id=company_id,
-                        cod_ped_venda=ped_num,
-                        action="INS_VOLUME",
-                        status="SUCCESS",
-                        request_data={"COD_VOLUME": v, "PES_VOLUME": peso_vol},
-                        response_data=vol_res,
-                        message=f"Volume {v}/{vols} registrado com peso {peso_vol}kg."
-                    )
-                except Exception:
-                    pass
-
-            # 3. Altera status para LFT no Horus ERP via AltStatus_Pedido oficial da API
-            try:
-                alt_res = await horus_client.alt_status_pedido(
-                    cod_empresa=cod_empresa,
-                    cod_filial=cod_filial,
-                    cod_cli=str(cod_cli),
-                    cod_ped_venda=ped_num,
-                    sta_pedido="LFT"
-                )
-                _record_logistics_log(
-                    db=db,
-                    company_id=company_id,
-                    cod_ped_venda=ped_num,
-                    action="ALT_STATUS_LFT",
-                    status="SUCCESS",
-                    request_data={"COD_EMPRESA": cod_empresa, "COD_FILIAL": cod_filial, "STA_PEDIDO": "LFT"},
-                    response_data=alt_res,
-                    message="Status alterado para LFT no Horus com sucesso."
-                )
-            except Exception as e_alt:
-                logger.error(f"[LogisticsCheckJob] Falha ao mudar status para LFT ped {ped_num}: {e_alt}")
-                _record_logistics_log(
-                    db=db,
-                    company_id=company_id,
-                    cod_ped_venda=ped_num,
-                    action="ALT_STATUS_LFT",
-                    status="ERROR",
-                    request_data={"COD_EMPRESA": cod_empresa, "COD_FILIAL": cod_filial, "STA_PEDIDO": "LFT"},
-                    response_data=str(e_alt),
-                    message=f"Erro ao alterar status para LFT: {e_alt}"
-                )
-
-            # 4. Salva no banco local
-            if not local_order:
-                local_order = LogisticsOrder(
-                    company_id=company_id,
-                    cod_ped_venda=ped_num,
-                    cod_cli=int(cod_cli) if str(cod_cli).isdigit() else None,
-                    provider=log_settings.provider,
-                    id_ord_sys_log=wms_id_str,
-                    situation="CHECKED",
-                    status_horus="LFT",
-                    checked_at=now_dt,
-                    cep_validated=True
-                )
-                db.add(local_order)
+            success, msg_conf, num_items = await perform_order_conference_from_wms(
+                db=db,
+                company_id=company_id,
+                ped_num=ped_num,
+                cod_cli=str(cod_cli),
+                cod_empresa=cod_empresa,
+                cod_filial=cod_filial,
+                cod_local=cod_local,
+                wms_item=item,
+                horus_client=horus_client,
+                local_order=local_order
+            )
+            if success:
+                stats["conferred"] += 1
+                logger.info(f"[LogisticsCheckJob] {msg_conf}")
             else:
-                local_order.situation = "CHECKED"
-                local_order.status_horus = "LFT"
-                local_order.checked_at = now_dt
-                if wms_id_str and not local_order.id_ord_sys_log:
-                    local_order.id_ord_sys_log = wms_id_str
-                local_order.error_log = None
-
-            db.commit()
-            stats["conferred"] += 1
-            logger.info(f"[LogisticsCheckJob] Pedido #{ped_num} conferido e liberado (LFT) via API com sucesso.")
+                stats["errors"] += 1
+                logger.warning(f"[LogisticsCheckJob] Falha na conferência do pedido #{ped_num}: {msg_conf}")
 
     finally:
         await horus_client.close()

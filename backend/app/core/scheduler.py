@@ -325,5 +325,16 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
+    # Envio automático de notas fiscais para Logística WMS (a cada 15 min por padrão)
+    from app.jobs.logistics_invoice_job import run_logistics_invoice_job
+    scheduler.add_job(
+        run_logistics_invoice_job,
+        IntervalTrigger(minutes=15),
+        id="job_logistics_auto_invoice",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
+
     scheduler.start()
-    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check")
+    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice")

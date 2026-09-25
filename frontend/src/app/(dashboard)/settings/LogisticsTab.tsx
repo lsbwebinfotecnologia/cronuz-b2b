@@ -24,6 +24,8 @@ interface LogisticsSettings {
   stock_local?: string;
   feature_auto_send?: boolean;
   feature_auto_check: boolean;
+  feature_auto_invoice?: boolean;
+  min_order_number?: number | null;
   check_interval_min: number;
   providers: string[];
 }
@@ -52,6 +54,8 @@ export function LogisticsTab() {
     stock_local: '',
     feature_auto_send: true,
     feature_auto_check: false,
+    feature_auto_invoice: true,
+    min_order_number: null,
     check_interval_min: 15,
     providers: ['MKT'],
   });
@@ -80,6 +84,8 @@ export function LogisticsTab() {
           stock_local: data.stock_local || '',
           feature_auto_send: data.feature_auto_send ?? true,
           feature_auto_check: data.feature_auto_check ?? false,
+          feature_auto_invoice: data.feature_auto_invoice ?? true,
+          min_order_number: data.min_order_number ?? null,
           check_interval_min: data.check_interval_min ?? 15,
           password_set: data.password_set ?? false,
           configured: data.configured ?? false,
@@ -109,6 +115,8 @@ export function LogisticsTab() {
         stock_local: settings.stock_local || null,
         feature_auto_send: settings.feature_auto_send ?? true,
         feature_auto_check: settings.feature_auto_check ?? false,
+        feature_auto_invoice: settings.feature_auto_invoice ?? true,
+        min_order_number: (settings.min_order_number !== null && settings.min_order_number !== undefined) ? Number(settings.min_order_number) : null,
         check_interval_min: settings.check_interval_min ?? 15,
       };
       // Envia senha se: (1) primeiro cadastro com senha digitada, ou (2) usuário clicou Alterar e digitou nova senha
@@ -333,6 +341,26 @@ export function LogisticsTab() {
             Parâmetro <code>COD_LOCAL</code> do Horus ERP utilizado na rotina de conferência (<code>ConfereItem_Pedido</code>). Caso não seja informado, o sistema utilizará o local padrão da filial do pedido.
           </p>
         </div>
+
+        {/* Número de Pedido Inicial (Corte para Automação) */}
+        <div className="space-y-1.5 md:col-span-2">
+          <label className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1">
+            Número do Pedido Inicial (Corte para Automação)
+            <span title="Define o número de pedido inicial a partir do qual as rotinas automáticas de envio, conferência e envio de NF devem atuar. Pedidos com número inferior a este serão ignorados pela rotina automática.">
+              <Info className="h-3.5 w-3.5 text-slate-400 cursor-help" />
+            </span>
+          </label>
+          <input
+            type="number"
+            placeholder="ex: 19594"
+            value={settings.min_order_number ?? ''}
+            onChange={e => setSettings(prev => ({ ...prev, min_order_number: e.target.value ? Number(e.target.value) : null }))}
+            className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500 font-mono"
+          />
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            Apenas pedidos com código igual ou superior a este número serão processados automaticamente pelo robô de logística (envio WMS, conferência LFT e envio de Nota Fiscal). Deixe vazio para processar sem limite inferior.
+          </p>
+        </div>
       </div>
 
       {/* Jobs de Automação em Segundo Plano */}
@@ -375,6 +403,21 @@ export function LogisticsTab() {
                 className="w-20 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-sm text-center text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500" />
             </div>
           )}
+        </div>
+
+        {/* Envio Automático de Notas Fiscais */}
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Envio Automático de Notas Fiscais (FAT → WMS)</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Job que localiza pedidos faturados no Horus ERP (com NFe/XML gerados) e envia automaticamente ao WMS a cada 15 min.</p>
+            </div>
+            <button type="button" onClick={() => setSettings(prev => ({ ...prev, feature_auto_invoice: !prev.feature_auto_invoice }))}>
+              {settings.feature_auto_invoice
+                ? <ToggleRight className="h-7 w-7 text-emerald-500" />
+                : <ToggleLeft className="h-7 w-7 text-slate-400" />}
+            </button>
+          </div>
         </div>
       </div>
 
