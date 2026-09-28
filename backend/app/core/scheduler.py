@@ -336,5 +336,19 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
+    # Sincronização dinâmica e automática de SSL para Portais de Autores ativos (a cada 6 horas)
+    try:
+        from app.core.ssl_authors import sync_all_active_author_portals
+        scheduler.add_job(
+            sync_all_active_author_portals,
+            IntervalTrigger(hours=6),
+            id="job_sync_authors_ssl",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=600,
+        )
+    except Exception as _e_job_ssl:
+        logger.warning(f"Falha ao registrar job de SSL para autores: {_e_job_ssl}")
+
     scheduler.start()
-    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice")
+    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice, Authors SSL Sync")

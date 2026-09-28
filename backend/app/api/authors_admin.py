@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import hashlib
@@ -393,10 +393,11 @@ def set_author_password_manually(
 def toggle_modulo_autores(
     company_id: int,
     status_in: dict,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Ativa ou desativa o módulo de autores para a empresa."""
+    """Ativa ou desativa o módulo de autores para a empresa garantindo provisionamento dinâmico de SSL."""
     if current_user.type != "MASTER" and current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Sem permissão para alterar configurações desta empresa.")
 
@@ -409,8 +410,39 @@ def toggle_modulo_autores(
     db.commit()
     db.refresh(company)
 
+    if new_status:
+        try:
+            from app.core.ssl_authors import ensure_author_portal_ssl
+            slug = _get_seller_slug(company)
+            background_tasks.add_task(ensure_author_portal_ssl, slug)
+        except Exception as e:
+            logger.warning(f"[SSL_AUTHORS] Falha ao agendar SSL para company {company_id}: {e}")
+
     return {
         "company_id": company.id,
         "modulo_autores_ativo": company.modulo_autores_ativo,
         "message": "Status do Módulo Portal do Autor atualizado com sucesso."
     }
+
+
+@router.post("/sync-ssl")
+def sync_authors_ssl(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Executa a rotina dinâmica e automática de sincronização de certificados SSL para todos os autores ativos."""
+    if current_user.type not in ("MASTER", "SELLER"):
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+
+    try:
+        from app.core.ssl_authors import sync_all_active_author_portals
+        background_tasks.add_task(sync_all_active_author_portals)
+        return {
+            "status": "ok",
+            "message": "Rotina dinâmica de sincronização SSL dos Portais de Autores iniciada em segundo plano."
+        }
+    except Exception as e:
+        logger.error(f"[SSL_AUTHORS] Erro ao disparar rotina de SSL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

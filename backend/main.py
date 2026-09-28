@@ -265,6 +265,14 @@ def seed_master_user():
         # Este worker foi o primeiro: inicia o scheduler
         from app.core.scheduler import start_scheduler
         start_scheduler()
+
+        # Rotina dinâmica para sincronizar SSL dos Portais de Autores ativos na inicialização
+        try:
+            import threading
+            from app.core.ssl_authors import sync_all_active_author_portals
+            threading.Thread(target=sync_all_active_author_portals, daemon=True, name="AuthorSSLSync").start()
+        except Exception as _e_ssl:
+            _main_logger.warning("[SSL_AUTHORS] Erro ao iniciar thread de sync SSL: %s", _e_ssl)
     except FileExistsError:
         # Outro worker ja criou o arquivo — scheduler ja esta rodando
         _main_logger.info(
