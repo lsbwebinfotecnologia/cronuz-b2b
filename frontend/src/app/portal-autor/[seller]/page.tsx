@@ -11,10 +11,15 @@ export default function AuthorPortalIndex() {
   useEffect(() => {
     // Verifica se já possui sessão de autor ativa
     const token = localStorage.getItem(`author_token_${seller}`) || localStorage.getItem('author_token');
+    const isSubdomain = typeof window !== 'undefined' && window.location.hostname.toLowerCase().startsWith('autores.');
+
+    const targetDashboard = isSubdomain ? '/dashboard' : `/portal-autor/${seller}/dashboard`;
+    const targetLogin = isSubdomain ? '/login' : `/portal-autor/${seller}/login`;
+
     if (token) {
-      router.replace(`/portal-autor/${seller}/dashboard`);
+      router.replace(targetDashboard);
     } else {
-      router.replace(`/portal-autor/${seller}/login`);
+      router.replace(targetLogin);
     }
   }, [seller, router]);
 

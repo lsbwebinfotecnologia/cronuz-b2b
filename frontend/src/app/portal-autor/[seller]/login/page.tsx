@@ -45,7 +45,8 @@ export default function AuthorLoginPage() {
         localStorage.setItem(`author_token_${seller}`, data.access_token);
         localStorage.setItem(`author_user_${seller}`, JSON.stringify(data.author));
         toast.success(`Bem-vindo(a), ${data.author?.nome || 'Autor'}!`);
-        router.push(`/portal-autor/${seller}/dashboard`);
+        const isSubdomain = typeof window !== 'undefined' && window.location.hostname.toLowerCase().startsWith('autores.');
+        router.push(isSubdomain ? '/dashboard' : `/portal-autor/${seller}/dashboard`);
       } else {
         const err = await res.json();
         toast.error(err.detail || 'Falha ao autenticar.');

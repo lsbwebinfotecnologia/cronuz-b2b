@@ -96,7 +96,8 @@ export default function AuthorDashboardPage() {
     const token = getAuthorToken();
 
     if (!token) {
-      router.replace(`/portal-autor/${seller}/login`);
+      const isSubdomain = typeof window !== 'undefined' && window.location.hostname.toLowerCase().startsWith('autores.');
+      router.replace(isSubdomain ? '/login' : `/portal-autor/${seller}/login`);
       return;
     }
 
@@ -224,7 +225,8 @@ export default function AuthorDashboardPage() {
   const handleLogout = () => {
     localStorage.removeItem(`author_token_${seller}`);
     localStorage.removeItem(`author_user_${seller}`);
-    router.push(`/portal-autor/${seller}/login`);
+    const isSubdomain = typeof window !== 'undefined' && window.location.hostname.toLowerCase().startsWith('autores.');
+    router.push(isSubdomain ? '/login' : `/portal-autor/${seller}/login`);
   };
 
   const formatDate = (dateStr: string) => {

@@ -64,6 +64,23 @@ export function middleware(request: NextRequest) {
     requestHeaders.set('x-seller-slug', sellerSlug);
     requestHeaders.set('x-portal-type', 'autor');
 
+    // Se a rota já começar com o sellerSlug (ex: /portal-autor/editorafoco/login)
+    if (url.pathname.startsWith(`/portal-autor/${sellerSlug}`)) {
+      return NextResponse.rewrite(url, {
+        request: { headers: requestHeaders }
+      });
+    }
+
+    // Se começar com /portal-autor/ mas outro formato, normaliza para o seller atual
+    if (url.pathname.startsWith('/portal-autor/')) {
+      const remainingPath = url.pathname.replace(/^\/portal-autor\/[^/]+/, '');
+      url.pathname = `/portal-autor/${sellerSlug}${remainingPath}`;
+      return NextResponse.rewrite(url, {
+        request: { headers: requestHeaders }
+      });
+    }
+
+    // Rotas limpas no subdomínio (ex: / => /portal-autor/[seller], /login => /portal-autor/[seller]/login)
     url.pathname = `/portal-autor/${sellerSlug}${url.pathname === '/' ? '' : url.pathname}`;
     return NextResponse.rewrite(url, {
       request: { headers: requestHeaders }

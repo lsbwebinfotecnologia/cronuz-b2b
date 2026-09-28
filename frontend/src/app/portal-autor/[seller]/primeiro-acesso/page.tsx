@@ -116,6 +116,9 @@ export default function AuthorFirstAccessPage() {
     );
   }
 
+  const isSubdomain = typeof window !== 'undefined' && window.location.hostname.toLowerCase().startsWith('autores.');
+  const loginUrl = isSubdomain ? '/login' : `/portal-autor/${seller}/login`;
+
   if (!tokenValid) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
@@ -128,7 +131,7 @@ export default function AuthorFirstAccessPage() {
             {errorMessage}
           </p>
           <Link
-            href={`/portal-autor/${seller}/login`}
+            href={loginUrl}
             className="inline-flex items-center justify-center w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-white dark:text-slate-900 font-semibold text-sm transition-all"
           >
             Ir para a Tela de Login
@@ -150,7 +153,7 @@ export default function AuthorFirstAccessPage() {
             Sua senha foi configurada. Agora você já pode acessar o Portal do Autor com seu e-mail <strong>{authorEmail}</strong>.
           </p>
           <Link
-            href={`/portal-autor/${seller}/login`}
+            href={loginUrl}
             className="inline-flex items-center justify-center gap-2 w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-semibold text-sm shadow-md shadow-amber-500/20 transition-all"
           >
             Acessar Minha Conta <ArrowRight className="w-4 h-4" />
