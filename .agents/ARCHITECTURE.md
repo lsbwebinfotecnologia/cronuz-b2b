@@ -849,6 +849,10 @@ Antes de iniciar qualquer nova funcionalidade, verificar:
 - [ ] O endpoint filtra por `company_id` corretamente?
 - [ ] O schema Pydantic (request + response) está atualizado?
 - [ ] Se novo módulo: seguir checklist da seção 7
+- [ ] Se envolve upload de arquivos (planilhas, imagens, notas, etc.):
+  - [ ] Validar e limitar tamanho máximo no Frontend e Backend (Imagens <= 5MB, Planilhas/PDFs <= 10MB, Teto 15MB) para preservar performance e estabilidade do servidor
+  - [ ] Garantir subpastas isoladas por seller (`uploads/<company_id>/...`) criadas dinamicamente
+  - [ ] Preservar o `.gitignore` existente intacto (arquivos de sellers nunca devem ser versionados)
 - [ ] A página frontend consome o endpoint correto?
 - [ ] Existe loading state e tratamento de erro no fetch?
 - [ ] Testar localmente (backend HTTP 200, frontend HTTP 200/307)

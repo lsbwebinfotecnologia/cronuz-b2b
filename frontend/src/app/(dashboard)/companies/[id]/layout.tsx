@@ -52,6 +52,7 @@ interface Company {
   module_horus_sql?: boolean;
   modulo_autores_ativo?: boolean;
   has_inventory_module?: boolean;
+  module_editorial?: boolean;
   active: boolean;
 }
 

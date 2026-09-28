@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, ClipboardList, Feather } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, ClipboardList, Feather, BookOpen } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -30,6 +30,7 @@ export default function CompanyModulesPage() {
       module_agents: company.module_agents,
       module_logistica_horus: company.module_logistica_horus,
       modulo_autores_ativo: company.modulo_autores_ativo ?? false,
+      module_editorial: company.module_editorial ?? false,
       [moduleName]: !currentValue
     };
 
@@ -313,6 +314,30 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('modulo_autores_ativo', company.modulo_autores_ativo ?? false)} 
                     disabled={togglingModule !== null}
                     colorClass="bg-amber-500"
+                  />
+                </div>
+              </div>
+
+              {/* Produção Editorial */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_editorial ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <BookOpen className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Produção Editorial</p>
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800 rounded dark:bg-emerald-900/30 dark:text-emerald-400">Novo</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Gestão flexível de esteiras e etapas de livros (diagramação, revisão, capa, aprovação), tarefas, arquivos e integração Horus.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch 
+                    active={company.module_editorial ?? false} 
+                    onClick={() => handleToggleModule('module_editorial', company.module_editorial ?? false)} 
+                    disabled={togglingModule !== null}
+                    colorClass="bg-emerald-500"
                   />
                 </div>
               </div>

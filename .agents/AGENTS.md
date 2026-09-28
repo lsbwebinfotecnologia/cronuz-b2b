@@ -60,8 +60,31 @@ Para manter a raiz do projeto limpa e organizada, aplicam-se as seguintes regras
 
 ### 📦 Pasta de Uploads e Arquivos Dinâmicos (`uploads/`):
 * A pasta `uploads/` localizada na raiz do projeto armazena imagens, capas, boletos e notas fiscais dinamicamente. **Ela NUNCA deve ser removida do servidor de produção**, pois contém arquivos ativos de cada seller/cliente.
-* Essa pasta deve estar obrigatoriamente configurada no `.gitignore` para que limpezas do Git (ex: `git clean -fd`) no servidor não a apaguem acidentalmente.
-* **Criação de Subpastas por Seller**: O backend deve ser robusto e, ao processar qualquer upload (como imagens ou PDFs), deve sempre verificar se a subpasta específica do seller/company existe dentro de `uploads/`. Caso não exista, o código deve criá-la dinamicamente antes de gravar o arquivo (ex: `Path.mkdir(parents=True, exist_ok=True)`).
+* **Manter o `.gitignore` Intacto**: Essa pasta já está devidamente configurada no `.gitignore`. **NUNCA altere ou remova as regras de ignore já existentes no `.gitignore`**. Toda nova feature ou módulo deve obrigatoriamente armazenar seus arquivos dinâmicos dentro das estruturas já ignoradas pelo Git.
+* **Estrutura e Isolamento Obrigatório por Seller**:
+  - Cada seller/empresa deve ter **sua própria pasta e estrutura isolada** de arquivos: `uploads/<company_id>/...` (ex: `uploads/<company_id>/products/`, `uploads/<company_id>/sheets/`, `uploads/<company_id>/invoices/`).
+  - **NUNCA grave arquivos soltos na raiz de `uploads/`**.
+  - O backend deve sempre verificar e criar a subpasta do seller dinamicamente antes de gravar o arquivo (ex: `Path.mkdir(parents=True, exist_ok=True)`).
+
+### 🛡️ Regra Mandatória: Limite de Tamanho de Arquivos (Proteção do Software):
+> [!IMPORTANT]
+> **Todo e qualquer upload de arquivos realizado por sellers (planilhas de produtos/estoque, fotos/capas, PDFs, notas fiscais, boletos, etc.) DEVE OBRIGATORIAMENTE possuir limite rígido de tamanho de arquivo.**
+> Essa diretriz é vital para **preservar a vida útil do software**, a estabilidade dos workers (evitando estouro de memória RAM / OOM Killer do Uvicorn/Gunicorn) e o espaço em disco do servidor de produção.
+
+#### Diretrizes de Limites de Tamanho por Tipo:
+1. **Imagens e Capas de Produtos (`JPG`, `PNG`, `WEBP`)**:
+   - Limite máximo permitido: **5 MB** por arquivo.
+   - Sempre que possível, aplicar compressão no backend antes de persistir em disco.
+2. **Planilhas de Importação (`XLSX`, `CSV`, `ODS`)**:
+   - Limite máximo permitido: **10 MB** por arquivo.
+   - O processamento deve ser streaming/chunked para não carregar planilhas gigantescas inteiras na memória RAM de uma só vez.
+3. **Documentos e Fiscais (`PDF`, `XML`, `TXT`)**:
+   - Limite máximo permitido: **10 MB** por arquivo.
+4. **Teto Máximo Absoluto do Sistema**:
+   - Nenhum endpoint de upload deve permitir arquivos superiores a **15 MB**.
+5. **Validação em Duas Camadas**:
+   - **No Frontend**: Validar `file.size` no cliente antes do envio, bloqueando e alertando o usuário imediatamente com mensagem amigável caso o arquivo ultrapasse o limite.
+   - **No Backend**: O endpoint deve obrigatoriamente checar o tamanho do stream/payload antes de salvar em disco. Se exceder, abortar imediatamente retornando `HTTP 413 (Payload Too Large)` ou `HTTP 400`: *"O arquivo excede o limite máximo permitido de X MB para este tipo de envio."*.
 
 ---
 

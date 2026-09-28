@@ -63,6 +63,7 @@ class CompanyBase(BaseModel):
     module_horus_sql: bool = False
     modulo_autores_ativo: bool = False
     has_inventory_module: bool = False
+    module_editorial: bool = False
     active: bool = True
 
 
@@ -134,6 +135,7 @@ class CompanyUpdate(BaseModel):
     module_busca_preco: Optional[bool] = None
     modulo_autores_ativo: Optional[bool] = None
     has_inventory_module: Optional[bool] = None
+    module_editorial: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

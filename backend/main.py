@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -89,6 +89,8 @@ from app.api import author_portal
 from app.api import inventory as inventory_api
 from app.api import logistics as logistics_api
 from app.api import pos as pos_api
+from app.api import editorial as editorial_api
+from app.models import editorial as editorial_models
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -131,6 +133,7 @@ author_models.Base.metadata.create_all(bind=engine)
 inventory_models.Base.metadata.create_all(bind=engine)
 pos_models.Base.metadata.create_all(bind=engine)
 product_search_log_models.Base.metadata.create_all(bind=engine)
+editorial_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -216,6 +219,7 @@ app.include_router(inventory_api.router)
 app.include_router(inventory_api.public_router)
 app.include_router(logistics_api.router, tags=["logistics-wms"])
 app.include_router(pos_api.router, tags=["pos-omnichannel"])
+app.include_router(editorial_api.router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -435,6 +439,7 @@ class ModuleUpdate(BaseModel):
     module_horus_sql: Optional[bool] = None
     modulo_autores_ativo: Optional[bool] = None
     has_inventory_module: Optional[bool] = None
+    module_editorial: Optional[bool] = None
 
 @app.get("/users/{user_id}", response_model=user_schemas.User)
 def get_user_by_id(
@@ -636,6 +641,7 @@ def update_company_status(
 def update_company_modules(
     company_id: int,
     module_update: ModuleUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user)
 ):
@@ -652,6 +658,16 @@ def update_company_modules(
     
     db.commit()
     db.refresh(company)
+
+    if update_data.get("modulo_autores_ativo") is True:
+        try:
+            from app.core.ssl_authors import ensure_author_portal_ssl
+            raw = company.domain or company.custom_domain or f"seller{company.id}"
+            slug = raw.split(".")[0].strip().lower()
+            background_tasks.add_task(ensure_author_portal_ssl, slug)
+        except Exception as e:
+            _main_logger.warning("[SSL_AUTHORS] Falha ao agendar provisionamento SSL: %s", e)
+
     return company
 
 @app.get("/companies/{company_id}/users")

@@ -42,7 +42,8 @@ import {
   CreditCard,
   Feather,
   Boxes,
-  Truck
+  Truck,
+  BookOpen
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -183,6 +184,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [horusSqlPedidos, setHorusSqlPedidos] = useState(true);
   const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
   const [hasInventoryModule, setHasInventoryModule] = useState(false);
+  const [moduleEditorial, setModuleEditorial] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const _settingsFetchedRef = useRef(false);
@@ -204,6 +206,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        if (pathname.startsWith('/financial')) initialOpen['Financeiro'] = true;
        if (pathname.startsWith('/subscriptions') || pathname.startsWith('/subscribers')) initialOpen['Assinaturas'] = true;
        if (pathname.startsWith('/horus-direct')) initialOpen['Horus Direct'] = true;
+       if (pathname.startsWith('/editorial')) initialOpen['Editorial'] = true;
        setOpenMenus(initialOpen);
        
        const fetchSettings = async () => {
@@ -236,6 +239,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setHorusSqlPedidos(data.horus_sql_feature_pedidos ?? true);
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
                setHasInventoryModule(data.has_inventory_module || false);
+                setModuleEditorial(data.module_editorial || false);
                if (data.company_logo) setCompanyLogo(data.company_logo);
             }
          } catch (e) {}
@@ -414,6 +418,21 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
       icon: Boxes,
     });
   }
+
+  if (moduleEditorial) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Editorial',
+      href: '/editorial',
+      icon: BookOpen,
+      subItems: [
+        { name: 'Quadro de Produção', href: '/editorial', icon: LayoutGrid },
+        { name: 'Configurar Fluxos', href: '/editorial/settings', icon: SlidersHorizontal }
+      ]
+    });
+  }
+
 
   if (modulePdv) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');

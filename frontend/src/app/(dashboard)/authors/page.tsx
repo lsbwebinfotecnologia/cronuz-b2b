@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, Search, Plus, Mail, ShieldCheck, CheckCircle2, 
@@ -9,6 +10,7 @@ import {
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
+
 
 interface Author {
   id: number;
@@ -59,6 +61,7 @@ const CLASSIFICACOES = [
 ];
 
 export default function AuthorsManagementPage() {
+  const router = useRouter();
   const [authors, setAuthors] = useState<Author[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -412,6 +415,15 @@ export default function AuthorsManagementPage() {
                     </td>
                     <td className="px-5 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => router.push(`/authors/${author.id}`)}
+                          title="Ver detalhes do autor"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 dark:text-indigo-400 transition-colors"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          Detalhes
+                        </button>
+
                         {lastActivationUrl && lastActivationUrl.id === author.id && (
                           <button
                             onClick={() => copyToClipboard(lastActivationUrl.url)}
@@ -436,6 +448,7 @@ export default function AuthorsManagementPage() {
                         </button>
                       </div>
                     </td>
+
                   </tr>
                 ))
               )}

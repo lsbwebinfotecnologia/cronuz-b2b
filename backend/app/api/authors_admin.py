@@ -339,6 +339,56 @@ def trigger_activation_email(
     }
 
 
+@router.post("/{author_id}/set-password")
+def set_author_password_manually(
+    author_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Permite que o seller (ou master) defina/redefina manualmente a senha de um autor
+    e o ative imediatamente, sem depender de e-mail.
+    Útil quando o autor tem dificuldade de acessar o e-mail de convite.
+    """
+    company_id = current_user.company_id
+    query = db.query(Author).filter(Author.id == author_id)
+    if current_user.type != "MASTER":
+        query = query.filter(Author.company_id == company_id)
+
+    author = query.first()
+    if not author:
+        raise HTTPException(status_code=404, detail="Autor não encontrado.")
+
+    new_password = payload.get("password", "").strip()
+    if not new_password or len(new_password) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="A senha deve ter no mínimo 6 caracteres."
+        )
+
+    # Hash SHA-256 (mesmo padrão do portal do autor)
+    author.password_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    author.status = "ATIVO"
+    # Limpa tokens de ativação pendentes
+    author.activation_token_hash = None
+    author.activation_token_expires_at = None
+
+    db.commit()
+    db.refresh(author)
+
+    logger.info(
+        f"Senha definida manualmente pelo seller para autor {author.id} ({author.nome}) "
+        f"por usuário {current_user.id}."
+    )
+
+    return {
+        "message": f"Senha definida com sucesso. Autor {author.nome} está ATIVO.",
+        "author_id": author.id,
+        "status": author.status
+    }
+
+
 @router.patch("/companies/{company_id}/modulo-autores")
 def toggle_modulo_autores(
     company_id: int,

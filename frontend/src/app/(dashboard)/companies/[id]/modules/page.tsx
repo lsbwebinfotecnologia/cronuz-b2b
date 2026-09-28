@@ -184,6 +184,7 @@ export default function CompanyModulesPage() {
       module_horus_sql: company.module_horus_sql ?? false,
       modulo_autores_ativo: company.modulo_autores_ativo ?? false,
       has_inventory_module: company.has_inventory_module ?? false,
+      module_editorial: company.module_editorial ?? false,
       [moduleName]: !currentValue
     };
 
@@ -697,6 +698,30 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('has_inventory_module', company.has_inventory_module ?? false)}
                     disabled={togglingModule !== null}
                     colorClass="bg-teal-500"
+                  />
+                </div>
+              </div>
+
+              {/* Produção Editorial */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_editorial ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <BookOpen className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Produção Editorial</p>
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800 rounded dark:bg-emerald-900/30 dark:text-emerald-400">Novo</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Gestão de esteiras/etapas de livros (diagramação, revisão, capa, aprovação), tarefas, arquivos e integração com o Horus.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch
+                    active={company.module_editorial ?? false}
+                    onClick={() => handleToggleModule('module_editorial', company.module_editorial ?? false)}
+                    disabled={togglingModule !== null}
+                    colorClass="bg-emerald-500"
                   />
                 </div>
               </div>
