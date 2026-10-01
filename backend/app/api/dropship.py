@@ -565,7 +565,7 @@ def list_credentials(
 
 
 @router.post("/config/{company_id}/credentials", response_model=CredentialResponse)
-def create_credential(
+async def create_credential(
     company_id: int,
     payload: CredentialCreate,
     db: Session = Depends(get_db),
@@ -587,13 +587,26 @@ def create_credential(
             DspErdosCredential.is_primary == True,
         ).update({"is_primary": False}, synchronize_session=False)
 
+    cod_cli = payload.horus_customer_cod_cli
+    if not cod_cli and customer.document:
+        doc_clean = re.sub(r"\D", "", str(customer.document))
+        if doc_clean:
+            try:
+                from app.integrators.horus_clients import HorusClients
+                horus_clients = HorusClients(db, company_id)
+                busca = await horus_clients.get_client_b2c(cnpj_destino="", cpf=doc_clean)
+                if busca and not busca.get("error") and busca.get("data"):
+                    cod_cli = str(busca["data"].get("COD_CLI") or busca["data"].get("CODIGO") or "").strip()
+            except Exception as _e_c:
+                log.warning(f"[Dropship] Erro ao buscar COD_CLI do customer para credencial: {_e_c}")
+
     cred = DspErdosCredential(
         company_id=company_id,
         config_id=config.id,
         label=payload.label,
         api_token=payload.api_token,
         horus_customer_id=payload.horus_customer_id,
-        horus_customer_cod_cli=payload.horus_customer_cod_cli,
+        horus_customer_cod_cli=cod_cli,
         horus_fiscal_param_remessa_intra=payload.horus_fiscal_param_remessa_intra,
         horus_fiscal_param_remessa_inter=payload.horus_fiscal_param_remessa_inter,
         horus_fiscal_param_venda=payload.horus_fiscal_param_venda,
@@ -603,11 +616,16 @@ def create_credential(
     db.add(cred)
     db.commit()
     db.refresh(cred)
+
+    if cred.is_primary and cod_cli:
+        config.horus_customer_cod_cli = cod_cli
+        db.commit()
+
     return _cred_to_response(cred)
 
 
 @router.patch("/config/{company_id}/credentials/{cred_id}", response_model=CredentialResponse)
-def update_credential(
+async def update_credential(
     company_id: int,
     cred_id: int,
     payload: CredentialUpdate,
@@ -635,6 +653,26 @@ def update_credential(
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(cred, field, value)
+
+    # Se ficou sem horus_customer_cod_cli ou mudou o customer, tenta resolver automaticamente
+    if not cred.horus_customer_cod_cli and cred.horus_customer_id:
+        cust = db.query(Customer).filter(Customer.id == cred.horus_customer_id).first()
+        if cust and cust.document:
+            doc_clean = re.sub(r"\D", "", str(cust.document))
+            if doc_clean:
+                try:
+                    from app.integrators.horus_clients import HorusClients
+                    horus_clients = HorusClients(db, company_id)
+                    busca = await horus_clients.get_client_b2c(cnpj_destino="", cpf=doc_clean)
+                    if busca and not busca.get("error") and busca.get("data"):
+                        found_cod = str(busca["data"].get("COD_CLI") or busca["data"].get("CODIGO") or "").strip()
+                        if found_cod:
+                            cred.horus_customer_cod_cli = found_cod
+                except Exception as _e_u:
+                    log.warning(f"[Dropship] Erro ao buscar COD_CLI do customer na atualização: {_e_u}")
+
+    if cred.is_primary and cred.horus_customer_cod_cli:
+        config.horus_customer_cod_cli = cred.horus_customer_cod_cli
 
     db.commit()
     db.refresh(cred)
@@ -1623,22 +1661,29 @@ async def send_order_to_horus(
     cod_ped_venda   = None
     cod_cli_final   = order.horus_cod_cli_final  # reutiliza se já foi buscado antes
 
-    # Buscar COD_CLI do cliente parceiro ERDOS no Hórus (reutiliza salvo em config ou busca e salva)
-    cod_cli_erdos = getattr(config, "horus_customer_cod_cli", None)
+    # Buscar COD_CLI do cliente parceiro ERDOS no Hórus para a credencial correspondente:
+    # 1º: Da credencial vinculada ao pedido
+    # 2º: Se vazia, busca no Hórus pelo CPF/CNPJ de customer_erdos e persiste na credencial
+    # 3º: Fallback: config legado se não houver credencial multi-token
+    cod_cli_erdos = getattr(cred, "horus_customer_cod_cli", None) if cred else getattr(config, "horus_customer_cod_cli", None)
+
     if not cod_cli_erdos and customer_erdos and customer_erdos.document:
         doc_erdos_clean = re.sub(r"\D", "", str(customer_erdos.document))
         try:
             busca_erdos = await horus_clients.get_client_b2c(cnpj_destino="", cpf=doc_erdos_clean)
             if busca_erdos and not busca_erdos.get("error") and busca_erdos.get("data"):
                 cod_cli_erdos = str(busca_erdos["data"].get("COD_CLI") or busca_erdos["data"].get("CODIGO") or "").strip()
-                if cod_cli_erdos and config:
-                    config.horus_customer_cod_cli = cod_cli_erdos
+                if cod_cli_erdos:
+                    if cred:
+                        cred.horus_customer_cod_cli = cod_cli_erdos
+                    if config and (not cred or getattr(cred, "is_primary", False)):
+                        config.horus_customer_cod_cli = cod_cli_erdos
                     db.commit()
-                    log.info(f"[Dropship] COD_CLI do cliente ERDOS no Hórus salvo na config: {cod_cli_erdos}")
+                    log.info(f"[Dropship] COD_CLI do cliente ERDOS ({customer_erdos.name}) no Hórus salvo na credencial: {cod_cli_erdos}")
         except Exception as _e_erdos:
             log.warning(f"[Dropship] Busca_Cliente p/ Erdos falhou: {_e_erdos}")
 
-    log.info(f"[Dropship] COD_CLI ERDOS confirmado p/ alteração de status B2B: {cod_cli_erdos}")
+    log.info(f"[Dropship] COD_CLI ERDOS confirmado p/ alteração de status B2B (cred={getattr(cred, 'label', 'N/A')}): {cod_cli_erdos}")
 
     try:
         itens = order.items_data or []
