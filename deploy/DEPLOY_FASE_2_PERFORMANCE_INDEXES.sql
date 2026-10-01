@@ -23,8 +23,8 @@ CREATE INDEX IF NOT EXISTS idx_crm_address_customer_id ON crm_address (customer_
 CREATE INDEX IF NOT EXISTS idx_crm_contact_customer_id ON crm_contact (customer_id);
 CREATE INDEX IF NOT EXISTS idx_crm_interaction_customer_id ON crm_interaction (customer_id);
 CREATE INDEX IF NOT EXISTS idx_crm_interaction_seller_id ON crm_interaction (seller_id);
-CREATE INDEX IF NOT EXISTS idx_crm_favorite_customer_id ON crm_customer_favorite (customer_id);
-CREATE INDEX IF NOT EXISTS idx_crm_favorite_product_id ON crm_customer_favorite (product_id);
+CREATE INDEX IF NOT EXISTS idx_crm_favorite_customer_id ON crm_favorite (customer_id);
+CREATE INDEX IF NOT EXISTS idx_crm_favorite_product_id ON crm_favorite (product_id);
 
 -- 3. Tabela ord_order e ord_order_item
 CREATE INDEX IF NOT EXISTS idx_ord_order_item_order_id ON ord_order_item (order_id);

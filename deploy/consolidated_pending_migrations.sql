@@ -4,8 +4,6 @@
 -- Todos os comandos usam IF NOT EXISTS (100% idempotente e seguro)
 -- ==============================================================================
 
-BEGIN;
-
 -- 1. Contas Pessoais e Exclusão Gerencial
 ALTER TABLE fin_account ADD COLUMN IF NOT EXISTS is_personal BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE fin_transaction ADD COLUMN IF NOT EXISTS exclude_from_reports BOOLEAN NOT NULL DEFAULT FALSE;
@@ -45,8 +43,8 @@ CREATE INDEX IF NOT EXISTS idx_crm_address_customer_id ON crm_address (customer_
 CREATE INDEX IF NOT EXISTS idx_crm_contact_customer_id ON crm_contact (customer_id);
 CREATE INDEX IF NOT EXISTS idx_crm_interaction_customer_id ON crm_interaction (customer_id);
 CREATE INDEX IF NOT EXISTS idx_crm_interaction_seller_id ON crm_interaction (seller_id);
-CREATE INDEX IF NOT EXISTS idx_crm_favorite_customer_id ON crm_customer_favorite (customer_id);
-CREATE INDEX IF NOT EXISTS idx_crm_favorite_product_id ON crm_customer_favorite (product_id);
+CREATE INDEX IF NOT EXISTS idx_crm_favorite_customer_id ON crm_favorite (customer_id);
+CREATE INDEX IF NOT EXISTS idx_crm_favorite_product_id ON crm_favorite (product_id);
 CREATE INDEX IF NOT EXISTS idx_ord_order_item_order_id ON ord_order_item (order_id);
 CREATE INDEX IF NOT EXISTS idx_ord_order_item_product_id ON ord_order_item (product_id);
 CREATE INDEX IF NOT EXISTS idx_fin_installment_account_id ON fin_installment (account_id);
@@ -56,5 +54,3 @@ CREATE INDEX IF NOT EXISTS idx_fin_installment_status_due ON fin_installment (st
 CREATE INDEX IF NOT EXISTS idx_cmp_company_tenant_id ON cmp_company (tenant_id);
 CREATE INDEX IF NOT EXISTS idx_cmp_company_active ON cmp_company (active);
 CREATE INDEX IF NOT EXISTS idx_usr_user_company_id ON usr_user (company_id);
-
-COMMIT;
