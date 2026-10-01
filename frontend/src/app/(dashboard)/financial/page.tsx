@@ -2055,13 +2055,13 @@ export default function FinancialPage() {
                                                 </div>
                                                 <div className="flex items-center gap-3 text-xs">
                                                     <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                                                        Receitas: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(group.total_entradas)}
+                                                        Receitas: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(group.total_entradas || 0)}
                                                     </span>
                                                     <span className="text-rose-600 dark:text-rose-400 font-semibold">
-                                                        Despesas: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(group.total_saidas)}
+                                                        Despesas: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(group.total_saidas || 0)}
                                                     </span>
-                                                    <span className={`font-black px-2 py-0.5 rounded-lg ${group.saldo_liquido >= 0 ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'}`}>
-                                                        Saldo: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(group.saldo_liquido)}
+                                                    <span className={`font-black px-2 py-0.5 rounded-lg ${(group.saldo_liquido ?? group.saldo_cliente ?? 0) >= 0 ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'}`}>
+                                                        Saldo: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(group.saldo_liquido ?? group.saldo_cliente ?? 0)}
                                                     </span>
                                                 </div>
                                             </div>
@@ -2079,7 +2079,7 @@ export default function FinancialPage() {
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                                                        {group.installments.map((inst: any) => (
+                                                        {(group.installments || group.items || []).map((inst: any) => (
                                                             <tr key={inst.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
                                                                 <td className="px-4 py-2.5 font-bold text-slate-700 dark:text-slate-300">
                                                                     #{inst.id}

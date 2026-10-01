@@ -166,7 +166,7 @@ export default function EditorialDashboardPage() {
         setProjects(data);
       }
     } catch (e) {
-      toast.error('Erro ao carregar demandas');
+      toast.error('Erro ao carregar projetos editoriais');
     }
   };
 
@@ -274,7 +274,7 @@ export default function EditorialDashboardPage() {
       });
 
       if (res.ok) {
-        toast.success('Demanda editorial criada com sucesso!');
+        toast.success('Projeto editorial criado com sucesso!');
         setIsModalOpen(false);
         setNewTitle('');
         setNewSubtitle('');
@@ -287,10 +287,10 @@ export default function EditorialDashboardPage() {
         if (activePipelineId) loadProjects(companyId, activePipelineId);
       } else {
         const err = await res.json();
-        toast.error(err.detail || 'Erro ao criar demanda');
+        toast.error(err.detail || 'Erro ao criar projeto editorial');
       }
     } catch (e) {
-      toast.error('Erro de conexão ao criar demanda');
+      toast.error('Erro de conexão ao criar projeto editorial');
     } finally {
       setCreating(false);
     }
@@ -343,7 +343,7 @@ export default function EditorialDashboardPage() {
                 Produção Editorial
               </h1>
               <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-                Gestão ágil de fluxos de produção, etapas e demandas de publicações.
+                Gestão ágil de fluxos de produção, etapas e projetos editoriais de publicações.
               </p>
             </div>
           </div>
@@ -379,7 +379,7 @@ export default function EditorialDashboardPage() {
             className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm transition flex items-center gap-2 shadow-sm shadow-indigo-600/20 active:scale-95"
           >
             <Plus className="w-4 h-4" />
-            <span>Nova Demanda</span>
+            <span>Novo Projeto Editorial</span>
           </button>
         </div>
       </div>
@@ -474,7 +474,7 @@ export default function EditorialDashboardPage() {
       {loading ? (
         <div className="flex flex-col items-center justify-center p-16 space-y-3">
           <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin" />
-          <p className="text-sm text-slate-500">Carregando demandas do pipeline...</p>
+          <p className="text-sm text-slate-500">Carregando projetos editoriais do pipeline...</p>
         </div>
       ) : !activePipeline || activePipeline.stages.length === 0 ? (
         <div className="text-center p-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
@@ -524,7 +524,7 @@ export default function EditorialDashboardPage() {
                 <div className="space-y-3 overflow-y-auto pr-1 flex-1 min-h-[120px]">
                   {stageProjects.length === 0 ? (
                     <div className="p-6 text-center text-xs text-slate-400 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                      Nenhuma demanda nesta etapa
+                      Nenhum projeto editorial nesta etapa
                     </div>
                   ) : (
                     stageProjects.map(proj => (
@@ -639,7 +639,7 @@ export default function EditorialDashboardPage() {
             <table className="w-full text-left text-sm text-slate-600 dark:text-slate-300">
               <thead className="bg-slate-50 dark:bg-slate-800/60 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider border-b border-slate-200 dark:border-slate-800">
                 <tr>
-                  <th className="p-4">Demanda / Obra</th>
+                  <th className="p-4">Projeto Editorial / Obra</th>
                   <th className="p-4">Etapa Atual</th>
                   <th className="p-4">Autor</th>
                   <th className="p-4">Prioridade</th>
@@ -652,7 +652,7 @@ export default function EditorialDashboardPage() {
                 {filteredProjects.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="p-8 text-center text-slate-400 text-sm">
-                      Nenhuma demanda editorial encontrada com os filtros aplicados.
+                      Nenhum projeto editorial encontrado com os filtros aplicados.
                     </td>
                   </tr>
                 ) : (
@@ -752,7 +752,7 @@ export default function EditorialDashboardPage() {
                   </div>
                   <div>
                     <h3 className="font-bold text-slate-900 dark:text-white text-base md:text-lg">
-                      Nova Demanda Editorial
+                      Novo Projeto Editorial
                     </h3>
                     <p className="text-xs text-slate-500">
                       Fluxo selecionado: <strong className="text-indigo-600">{activePipeline?.name}</strong>
@@ -825,7 +825,7 @@ export default function EditorialDashboardPage() {
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      Título da Obra / Demanda *
+                      Título da Obra / Projeto Editorial *
                     </label>
                     <input
                       type="text"
@@ -1003,7 +1003,7 @@ export default function EditorialDashboardPage() {
                     className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition shadow-sm flex items-center gap-2"
                   >
                     {creating && <RefreshCw className="w-4 h-4 animate-spin" />}
-                    Criar Demanda
+                    Criar Projeto Editorial
                   </button>
                 </div>
               </form>

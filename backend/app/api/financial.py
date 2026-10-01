@@ -1889,7 +1889,9 @@ def _build_cashflow_forecast_data(
                 "total_entradas": 0.0,
                 "total_saidas": 0.0,
                 "saldo_cliente": 0.0,
-                "items": []
+                "saldo_liquido": 0.0,
+                "items": [],
+                "installments": []
             }
 
         t_type = trans.type if trans else "RECEIVABLE"
@@ -1898,16 +1900,18 @@ def _build_cashflow_forecast_data(
         if t_type == "RECEIVABLE":
             customer_dict[key]["total_entradas"] += val
             customer_dict[key]["saldo_cliente"] += val
+            customer_dict[key]["saldo_liquido"] += val
         else:
             customer_dict[key]["total_saidas"] += val
             customer_dict[key]["saldo_cliente"] -= val
+            customer_dict[key]["saldo_liquido"] -= val
 
         cat_name = trans.category.name if (trans and trans.category) else "Sem Categoria"
         acc_name = inst.account.name if inst.account else "Padrão"
         due_str = inst.due_date.strftime("%d/%m/%Y") if inst.due_date else "-"
         desc_str = trans.description if trans else f"Parcela #{inst.id}"
 
-        customer_dict[key]["items"].append({
+        item_obj = {
             "id": inst.id,
             "type": t_type,
             "category_name": cat_name,
@@ -1916,7 +1920,9 @@ def _build_cashflow_forecast_data(
             "amount": val,
             "status": inst.status,
             "description": desc_str
-        })
+        }
+        customer_dict[key]["items"].append(item_obj)
+        customer_dict[key]["installments"].append(item_obj)
 
     return list(customer_dict.values())
 

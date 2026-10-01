@@ -230,7 +230,7 @@ export default function EditorialProjectDetailPage() {
         setEditNotes(data.internal_notes || '');
         loadPipelineStages(cid, data.pipeline_id);
       } else {
-        toast.error('Demanda não encontrada');
+        toast.error('Projeto editorial não encontrado');
         router.push('/editorial');
       }
     } catch (e) {
@@ -584,7 +584,7 @@ export default function EditorialProjectDetailPage() {
     return (
       <div className="flex flex-col items-center justify-center p-24 space-y-4">
         <RefreshCw className="w-8 h-8 text-indigo-500 animate-spin" />
-        <p className="text-sm text-slate-500">Carregando detalhes da demanda editorial...</p>
+        <p className="text-sm text-slate-500">Carregando detalhes do projeto editorial...</p>
       </div>
     );
   }
@@ -706,7 +706,7 @@ export default function EditorialProjectDetailPage() {
         <div className="p-5 bg-white dark:bg-slate-900 rounded-2xl border border-indigo-200 dark:border-indigo-900/50 shadow-sm space-y-4">
           <h3 className="font-bold text-sm text-slate-800 dark:text-white flex items-center gap-2">
             <Edit3 className="w-4 h-4 text-indigo-600" />
-            Editar Metadados da Demanda
+            Editar Metadados do Projeto
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
             <div>
@@ -1082,7 +1082,7 @@ export default function EditorialProjectDetailPage() {
                   {(!project.costs || project.costs.length === 0) ? (
                     <tr>
                       <td colSpan={8} className="p-8 text-center text-xs text-slate-400">
-                        Nenhum custo ou prestador vinculado a esta demanda ainda. Clique em "Adicionar Serviço" para orçar e vincular prestadores.
+                        Nenhum custo ou prestador vinculado a este projeto ainda. Clique em "Adicionar Serviço" para orçar e vincular prestadores.
                       </td>
                     </tr>
                   ) : (
@@ -1176,7 +1176,7 @@ export default function EditorialProjectDetailPage() {
           <div className="flex items-center justify-between">
             <h3 className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-2">
               <CheckSquare className="w-5 h-5 text-indigo-500" />
-              Checklist de Tarefas da Demanda
+              Checklist de Tarefas do Projeto
             </h3>
             <span className="text-xs text-slate-400">
               {project.tasks.filter(t => t.is_completed).length} de {project.tasks.length} concluídas
@@ -1206,7 +1206,7 @@ export default function EditorialProjectDetailPage() {
           <div className="space-y-2 pt-2">
             {project.tasks.length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-6">
-                Nenhuma tarefa cadastrada nesta demanda.
+                Nenhuma tarefa cadastrada neste projeto.
               </p>
             ) : (
               project.tasks.map(task => (
@@ -1280,7 +1280,7 @@ export default function EditorialProjectDetailPage() {
           <div className="divide-y divide-slate-100 dark:divide-slate-800 pt-2">
             {project.files.length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-8">
-                Nenhum arquivo anexado a esta demanda.
+                Nenhum arquivo anexado a este projeto.
               </p>
             ) : (
               project.files.map(file => (
@@ -1393,7 +1393,7 @@ export default function EditorialProjectDetailPage() {
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 w-full max-w-md p-5 space-y-4 shadow-2xl">
             <div>
               <h3 className="font-bold text-slate-900 dark:text-white text-base">
-                Mover Etapa da Demanda
+                Mover Etapa do Projeto
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
                 Altere o estágio de produção e registre observações no histórico.

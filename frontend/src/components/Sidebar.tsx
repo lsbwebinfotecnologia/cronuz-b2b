@@ -432,7 +432,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
       href: '/editorial',
       icon: BookOpen,
       subItems: [
-        { name: 'Quadro de Produção', href: '/editorial', icon: LayoutGrid },
+        { name: 'Projeto Editorial', href: '/editorial', icon: LayoutGrid },
         { name: 'Configurar Fluxos', href: '/editorial/settings', icon: SlidersHorizontal }
       ]
     });
