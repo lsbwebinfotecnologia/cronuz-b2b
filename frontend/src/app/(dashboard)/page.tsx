@@ -87,6 +87,10 @@ export default function DashboardPage() {
 
   const formatBRL = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
+  const hasOrders = metrics ? metrics.module_orders !== false : true;
+  const hasServices = metrics ? Boolean(metrics.module_services) : false;
+  const hasFinancial = metrics ? Boolean(metrics.module_financial) : false;
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -99,35 +103,37 @@ export default function DashboardPage() {
         </div>
         
         <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
-          {/* Seletor de Escopo Gerencial vs Global */}
-          <div className="bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl flex items-center border border-slate-200 dark:border-slate-700/60 shadow-inner">
-            <button
-              type="button"
-              onClick={() => setIncludePersonal(false)}
-              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                !includePersonal 
-                  ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' 
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-              title="Exibe apenas a movimentação real da empresa (ignora contas pessoais e despesas fora do relatório)"
-            >
-              <Building2 className="w-3.5 h-3.5" />
-              <span>Visão Gerencial</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setIncludePersonal(true)}
-              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                includePersonal 
-                  ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-sm' 
-                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-              title="Exibe todas as contas e transações, incluindo contas físicas/pessoais"
-            >
-              <User className="w-3.5 h-3.5" />
-              <span>Visão Global (PF+PJ)</span>
-            </button>
-          </div>
+          {/* Seletor de Escopo Gerencial vs Global - Somente se Módulo Financeiro estiver ativo */}
+          {hasFinancial && (
+            <div className="bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl flex items-center border border-slate-200 dark:border-slate-700/60 shadow-inner">
+              <button
+                type="button"
+                onClick={() => setIncludePersonal(false)}
+                className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  !includePersonal 
+                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' 
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+                title="Exibe apenas a movimentação real da empresa (ignora contas pessoais e despesas fora do relatório)"
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>Visão Gerencial</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncludePersonal(true)}
+                className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  includePersonal 
+                    ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-sm' 
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+                title="Exibe todas as contas e transações, incluindo contas físicas/pessoais"
+              >
+                <User className="w-3.5 h-3.5" />
+                <span>Visão Global (PF+PJ)</span>
+              </button>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Período de Análise</label>
@@ -141,7 +147,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {!includePersonal && (
+      {hasFinancial && !includePersonal && (
         <div className="bg-indigo-50/70 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-indigo-800 dark:text-indigo-300">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
@@ -154,140 +160,179 @@ export default function DashboardPage() {
       )}
 
       {/* SEÇÃO CONSOLIDADA DE FATURAMENTO (PEDIDOS + SERVIÇOS) */}
+      {(hasOrders || hasServices || hasFinancial) && (
       <div className="space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <BarChart3 className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
-              Análise de Faturamento
+              {hasOrders && hasServices 
+                ? 'Análise de Faturamento' 
+                : hasOrders 
+                  ? 'Análise de Vendas' 
+                  : hasServices 
+                    ? 'Análise de Serviços' 
+                    : 'Visão Financeira'}
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Consolidação de Pedidos de Venda Faturados e Ordens de Serviço Concluídas
+              {hasOrders && hasServices
+                ? 'Consolidação de Pedidos de Venda Faturados e Ordens de Serviço Concluídas'
+                : hasOrders
+                  ? 'Consolidação de Pedidos de Venda Faturados no Período'
+                  : hasServices
+                    ? 'Consolidação de Ordens de Serviço Concluídas no Período'
+                    : 'Acompanhamento de entradas, saídas e resultado de caixa'}
             </p>
           </div>
         </div>
 
         {/* CARDS DE DESTAQUE DE FATURAMENTO */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {/* Card Total Consolidado */}
-          <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}
-            className="rounded-2xl border border-indigo-200/80 dark:border-indigo-800/60 bg-gradient-to-br from-indigo-50/50 via-white to-white dark:from-indigo-950/30 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">Faturamento Consolidado</span>
-              <div className="p-2 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
-                <TrendingUp className="w-4 h-4" />
+        <div className={`grid gap-4 ${
+          (hasOrders && hasServices && hasFinancial) ? 'sm:grid-cols-2 lg:grid-cols-4' :
+          (hasOrders && hasServices) ? 'sm:grid-cols-3' :
+          ((hasOrders || hasServices) && hasFinancial) ? 'sm:grid-cols-2' :
+          'grid-cols-1 sm:max-w-md'
+        }`}>
+          {/* Card Total Consolidado (somente quando tem tanto Pedidos quanto Serviços) */}
+          {hasOrders && hasServices && (
+            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}
+              className="rounded-2xl border border-indigo-200/80 dark:border-indigo-800/60 bg-gradient-to-br from-indigo-50/50 via-white to-white dark:from-indigo-950/30 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">Faturamento Consolidado</span>
+                <div className="p-2 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  <TrendingUp className="w-4 h-4" />
+                </div>
               </div>
-            </div>
-            {loadingMetrics ? (
-              <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
-            ) : (
-              <div>
-                <p className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-                  {formatBRL(metrics?.consolidated_revenue?.total || 0)}
-                </p>
-                {(() => {
-                  const hist = metrics?.revenue_history || [];
-                  const curIdx = hist.findIndex((h: any) => (h.month || h.year_month) === filterMonth);
-                  const prevItem = curIdx > 0 ? hist[curIdx - 1] : (hist.length > 1 ? hist[hist.length - 2] : null);
-                  const curItem = curIdx >= 0 ? hist[curIdx] : hist[hist.length - 1];
-                  const curTotal = Number(curItem?.total ?? curItem?.total_revenue ?? 0);
-                  const prevTotal = Number(prevItem?.total ?? prevItem?.total_revenue ?? 0);
-                  if (prevTotal > 0 && curItem) {
-                    const diff = curTotal - prevTotal;
-                    const pct = Math.round((diff / prevTotal) * 100);
-                    const isPos = pct >= 0;
-                    return (
-                      <div className="flex items-center gap-1 text-[11px] font-bold mt-1.5">
-                        <span className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-md ${isPos ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' : 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400'}`}>
-                          {isPos ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                          {isPos ? `+${pct}%` : `${pct}%`}
-                        </span>
-                        <span className="text-slate-400 font-normal">vs mês anterior</span>
-                      </div>
-                    );
-                  }
-                  return <p className="text-[11px] text-slate-400 mt-1">Período selecionado</p>;
-                })()}
-              </div>
-            )}
-          </motion.div>
+              {loadingMetrics ? (
+                <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
+              ) : (
+                <div>
+                  <p className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                    {formatBRL(metrics?.consolidated_revenue?.total || 0)}
+                  </p>
+                  {(() => {
+                    const hist = metrics?.revenue_history || [];
+                    const curIdx = hist.findIndex((h: any) => (h.month || h.year_month) === filterMonth);
+                    const prevItem = curIdx > 0 ? hist[curIdx - 1] : (hist.length > 1 ? hist[hist.length - 2] : null);
+                    const curItem = curIdx >= 0 ? hist[curIdx] : hist[hist.length - 1];
+                    const curTotal = Number(curItem?.total ?? curItem?.total_revenue ?? 0);
+                    const prevTotal = Number(prevItem?.total ?? prevItem?.total_revenue ?? 0);
+                    if (prevTotal > 0 && curItem) {
+                      const diff = curTotal - prevTotal;
+                      const pct = Math.round((diff / prevTotal) * 100);
+                      const isPos = pct >= 0;
+                      return (
+                        <div className="flex items-center gap-1 text-[11px] font-bold mt-1.5">
+                          <span className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-md ${isPos ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' : 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400'}`}>
+                            {isPos ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                            {isPos ? `+${pct}%` : `${pct}%`}
+                          </span>
+                          <span className="text-slate-400 font-normal">vs mês anterior</span>
+                        </div>
+                      );
+                    }
+                    return <p className="text-[11px] text-slate-400 mt-1">Período selecionado</p>;
+                  })()}
+                </div>
+              )}
+            </motion.div>
+          )}
 
           {/* Card Pedidos Faturados */}
-          <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.3 }}
-            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40 p-5 shadow-sm"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pedidos Faturados</span>
-              <div className="p-2 bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 rounded-xl">
-                <ShoppingCart className="w-4 h-4" />
-              </div>
-            </div>
-            {loadingMetrics ? (
-              <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
-            ) : (
-              <div>
-                <p className="text-2xl font-bold text-blue-600 dark:text-blue-400 tracking-tight">
-                  {formatBRL(metrics?.consolidated_revenue?.orders || 0)}
-                </p>
-                <p className="text-[11px] text-slate-400 mt-1">Vendas de produtos no período</p>
-              </div>
-            )}
-          </motion.div>
-
-          {/* Card Serviços Concluídos */}
-          <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.3 }}
-            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40 p-5 shadow-sm"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Serviços (OS)</span>
-              <div className="p-2 bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 rounded-xl">
-                <Target className="w-4 h-4" />
-              </div>
-            </div>
-            {loadingMetrics ? (
-              <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
-            ) : (
-              <div>
-                <p className="text-2xl font-bold text-purple-600 dark:text-purple-400 tracking-tight">
-                  {formatBRL(metrics?.consolidated_revenue?.services || 0)}
-                </p>
-                <p className="text-[11px] text-slate-400 mt-1">{metrics?.service_metrics?.completed?.count || 0} ordens concluídas</p>
-              </div>
-            )}
-          </motion.div>
-
-          {/* Card Balanço Financeiro Líquido */}
-          <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15, duration: 0.3 }}
-            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40 p-5 shadow-sm"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Resultado Caixa</span>
-              <div className="p-2 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 rounded-xl">
-                <Building2 className="w-4 h-4" />
-              </div>
-            </div>
-            {loadingMetrics ? (
-              <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
-            ) : (() => {
-              const recPaid = metrics?.financial_metrics?.receivable?.paid || 0;
-              const payPaid = metrics?.financial_metrics?.payable?.paid || 0;
-              const net = recPaid - payPaid;
-              return (
-                <div>
-                  <p className={`text-2xl font-bold tracking-tight ${net >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                    {formatBRL(net)}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    {includePersonal ? 'Todas as contas' : 'Apenas contas da empresa'}
-                  </p>
+          {hasOrders && (
+            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.3 }}
+              className={`rounded-2xl border p-5 shadow-sm ${
+                !hasServices 
+                  ? 'border-indigo-200/80 dark:border-indigo-800/60 bg-gradient-to-br from-indigo-50/50 via-white to-white dark:from-indigo-950/30 dark:via-slate-900 dark:to-slate-900' 
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className={`text-xs font-bold uppercase tracking-wider ${!hasServices ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                  {!hasServices ? 'Faturamento (Pedidos)' : 'Pedidos Faturados'}
+                </span>
+                <div className={`p-2 rounded-xl ${!hasServices ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400'}`}>
+                  {!hasServices ? <TrendingUp className="w-4 h-4" /> : <ShoppingCart className="w-4 h-4" />}
                 </div>
-              );
-            })()}
-          </motion.div>
+              </div>
+              {loadingMetrics ? (
+                <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
+              ) : (
+                <div>
+                  <p className={`text-2xl font-black tracking-tight ${!hasServices ? 'text-slate-900 dark:text-white' : 'text-blue-600 dark:text-blue-400'}`}>
+                    {formatBRL(metrics?.consolidated_revenue?.orders || 0)}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-1">Vendas de produtos no período</p>
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {/* Card Serviços Concluídos (somente se módulo de serviços ativo) */}
+          {hasServices && (
+            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.3 }}
+              className={`rounded-2xl border p-5 shadow-sm ${
+                !hasOrders 
+                  ? 'border-purple-200/80 dark:border-purple-800/60 bg-gradient-to-br from-purple-50/50 via-white to-white dark:from-purple-950/30 dark:via-slate-900 dark:to-slate-900' 
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className={`text-xs font-bold uppercase tracking-wider ${!hasOrders ? 'text-purple-700 dark:text-purple-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                  {!hasOrders ? 'Faturamento (Serviços)' : 'Serviços (OS)'}
+                </span>
+                <div className="p-2 bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 rounded-xl">
+                  <Target className="w-4 h-4" />
+                </div>
+              </div>
+              {loadingMetrics ? (
+                <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
+              ) : (
+                <div>
+                  <p className="text-2xl font-bold text-purple-600 dark:text-purple-400 tracking-tight">
+                    {formatBRL(metrics?.consolidated_revenue?.services || 0)}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-1">{metrics?.service_metrics?.completed?.count || 0} ordens concluídas</p>
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {/* Card Balanço Financeiro Líquido (somente se módulo financeiro ativo) */}
+          {hasFinancial && (
+            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15, duration: 0.3 }}
+              className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40 p-5 shadow-sm"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Resultado Caixa</span>
+                <div className="p-2 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 rounded-xl">
+                  <Building2 className="w-4 h-4" />
+                </div>
+              </div>
+              {loadingMetrics ? (
+                <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
+              ) : (() => {
+                const recPaid = metrics?.financial_metrics?.receivable?.paid || 0;
+                const payPaid = metrics?.financial_metrics?.payable?.paid || 0;
+                const net = recPaid - payPaid;
+                return (
+                  <div>
+                    <p className={`text-2xl font-bold tracking-tight ${net >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                      {formatBRL(net)}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      {includePersonal ? 'Todas as contas' : 'Apenas contas da empresa'}
+                    </p>
+                  </div>
+                );
+              })()}
+            </motion.div>
+          )}
         </div>
 
-        {/* GRÁFICO HISTÓRICO DE FATURAMENTO MÊS A MÊS */}
+        {/* GRÁFICO HISTÓRICO DE FATURAMENTO MÊS A MÊS - Somente se tem Pedidos ou Serviços */}
+        {(hasOrders || hasServices) && (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 shadow-sm">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100 dark:border-slate-800">
             <div>
@@ -301,19 +346,25 @@ export default function DashboardPage() {
             </div>
 
             {/* Legenda do Gráfico */}
-            <div className="flex items-center gap-4 text-xs font-semibold">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-blue-500"></span>
-                <span className="text-slate-600 dark:text-slate-300">Pedidos</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-purple-500"></span>
-                <span className="text-slate-600 dark:text-slate-300">Serviços / OS</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-indigo-600"></span>
-                <span className="text-slate-900 dark:text-white font-bold">Total Faturado</span>
-              </div>
+            <div className="flex items-center gap-4 text-xs font-semibold flex-wrap">
+              {hasOrders && (
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded bg-blue-500"></span>
+                  <span className="text-slate-600 dark:text-slate-300">Pedidos</span>
+                </div>
+              )}
+              {hasServices && (
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded bg-purple-500"></span>
+                  <span className="text-slate-600 dark:text-slate-300">Serviços / OS</span>
+                </div>
+              )}
+              {hasOrders && hasServices && (
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded bg-indigo-600"></span>
+                  <span className="text-slate-900 dark:text-white font-bold">Total Faturado</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -359,18 +410,24 @@ export default function DashboardPage() {
                         {/* Tooltip flutuante no Hover / Active */}
                         <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none absolute -top-24 z-20 bg-slate-900 text-white text-[11px] p-2.5 rounded-xl shadow-xl border border-slate-700 whitespace-nowrap min-w-[150px]">
                           <p className="font-bold text-slate-200 border-b border-slate-700 pb-1 mb-1">{itemLabel}</p>
-                          <div className="flex justify-between gap-3 text-blue-300">
-                            <span>📦 Pedidos:</span>
-                            <span className="font-mono font-bold">{formatBRL(itemOrders)}</span>
-                          </div>
-                          <div className="flex justify-between gap-3 text-purple-300">
-                            <span>🛠️ Serviços:</span>
-                            <span className="font-mono font-bold">{formatBRL(itemServices)}</span>
-                          </div>
-                          <div className="flex justify-between gap-3 text-white font-bold border-t border-slate-700 pt-1 mt-1">
-                            <span>Total:</span>
-                            <span className="font-mono text-emerald-400">{formatBRL(itemTotal)}</span>
-                          </div>
+                          {hasOrders && (
+                            <div className="flex justify-between gap-3 text-blue-300">
+                              <span>📦 Pedidos:</span>
+                              <span className="font-mono font-bold">{formatBRL(itemOrders)}</span>
+                            </div>
+                          )}
+                          {hasServices && (
+                            <div className="flex justify-between gap-3 text-purple-300">
+                              <span>🛠️ Serviços:</span>
+                              <span className="font-mono font-bold">{formatBRL(itemServices)}</span>
+                            </div>
+                          )}
+                          {hasOrders && hasServices && (
+                            <div className="flex justify-between gap-3 text-white font-bold border-t border-slate-700 pt-1 mt-1">
+                              <span>Total:</span>
+                              <span className="font-mono text-emerald-400">{formatBRL(itemTotal)}</span>
+                            </div>
+                          )}
                         </div>
 
                         {/* Valor compacto acima da barra */}
@@ -387,7 +444,7 @@ export default function DashboardPage() {
                             className="w-full rounded-lg overflow-hidden flex flex-col justify-end shadow-sm"
                           >
                             {/* Segmento de Serviços (Topo) */}
-                            {servicesHeightPct > 0 && (
+                            {hasServices && servicesHeightPct > 0 && (
                               <div 
                                 style={{ height: `${servicesHeightPct}%` }}
                                 className="w-full bg-purple-500 hover:bg-purple-400 transition-colors"
@@ -395,7 +452,7 @@ export default function DashboardPage() {
                               />
                             )}
                             {/* Segmento de Pedidos (Base) */}
-                            {ordersHeightPct > 0 && (
+                            {hasOrders && ordersHeightPct > 0 && (
                               <div 
                                 style={{ height: `${ordersHeightPct}%` }}
                                 className="w-full bg-blue-500 hover:bg-blue-400 transition-colors"
@@ -434,7 +491,9 @@ export default function DashboardPage() {
             );
           })()}
         </div>
+        )}
       </div>
+      )}
 
       {/* Basic Stats Row (Customers & Products) */}
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">

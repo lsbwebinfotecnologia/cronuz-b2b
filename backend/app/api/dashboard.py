@@ -31,120 +31,41 @@ def get_dashboard_metrics(
     else:
          company_id = 1
 
-    # 1. Total active products (unless Horus is used)
     settings = db.query(CompanySettings)
     if company_id:
         settings = settings.filter(CompanySettings.company_id == company_id)
     settings = settings.first()
-        
-    uses_horus = settings.horus_enabled if settings else False
-    
-    active_products = 0
-    prod_query = db.query(Product).filter(Product.status == "ACTIVE")
-    if company_id:
-        prod_query = prod_query.filter(Product.company_id == company_id)
-    elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
-        prod_query = prod_query.join(Company, Product.company_id == Company.id)
-        if False:
-            prod_query = prod_query.filter(Company.module_horus_erp == True)
-        else:
-            prod_query = prod_query.filter(Company.tenant_id == current_user.tenant_id)
-            
-    active_products = prod_query.count()
 
-    # 2. Total customers (empresas clientes)
-    cust_query = db.query(Customer)
-    if company_id:
-        cust_query = cust_query.filter(Customer.company_id == company_id)
-    elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
-        cust_query = cust_query.join(Company, Customer.company_id == Company.id)
-        if False:
-            cust_query = cust_query.filter(Company.module_horus_erp == True)
-        else:
-            cust_query = cust_query.filter(Company.tenant_id == current_user.tenant_id)
-    total_customers = cust_query.count()
-
-    # Setup Date Filter for dynamically calculated metrics (Orders, Financial, Services)
-    if start_date and end_date:
-        try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Datas inválidas")
-    else:
-        # Default current month
-        now = datetime.now()
-        start_dt = datetime(now.year, now.month, 1)
-        if now.month == 12:
-            end_dt = datetime(now.year + 1, 1, 1)
-        else:
-            end_dt = datetime(now.year, now.month + 1, 1)
-
-    # 3. Orders By Status
-    from app.models.order import Order
-    order_query = db.query(Order.status, func.count(Order.id).label('count')).filter(Order.created_at >= start_dt, Order.created_at < end_dt)
-    
-    if company_id:
-        order_query = order_query.filter(Order.company_id == company_id)
-    elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
-        order_query = order_query.join(Company, Order.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
-        
-    orders_grouped = order_query.group_by(Order.status).all()
-    orders_by_status = {st: count for st, count in orders_grouped}
-    
-    active_orders = sum(orders_by_status.get(st, 0) for st in ["NEW", "PROCESSING", "SENT_TO_HORUS", "DISPATCH"])
-    
-    invoiced_revenue = 0.0
-    pending_revenue = 0.0
-    
-    revenue_query = db.query(Order.status, func.sum(Order.total).label('rev')).filter(
-        Order.created_at >= start_dt, Order.created_at < end_dt
-    )
-    if company_id:
-        revenue_query = revenue_query.filter(Order.company_id == company_id)
-    elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
-        revenue_query = revenue_query.join(Company, Order.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
-        
-    revenue_grouped = revenue_query.group_by(Order.status).all()
-    for st, rev in revenue_grouped:
-        st_val = str(getattr(st, 'value', st)).upper().strip()
-        if st_val in ["INVOICED", "FATURADO"]:
-            invoiced_revenue += float(rev or 0)
-        elif st_val in ["NEW", "NOVO", "PROCESSING", "EM PROCESSAMENTO", "SENT_TO_HORUS", "DISPATCH", "AGUARDANDO"]:
-            pending_revenue += float(rev or 0)
-    
     # Check Integrations
     integrations = []
-    if company_id: # Only query integrations if company_id is available
+    if company_id:
         integrations = db.query(Integrator.platform).filter(
             Integrator.company_id == company_id,
             Integrator.active == True
         ).all()
-    
     active_integrations = [i[0] for i in integrations]
 
-    uses_horus = "HORUS" in active_integrations
-    uses_bookinfo = "BOOKINFO" in active_integrations
-
-    # Get Company Modules
+    # Get Company and Modules Upfront
     company = None
     if company_id:
         company = db.query(Company).filter(Company.id == company_id).first()
-        
-    module_b2b_native = company.module_b2b_native if company else False
+
+    is_master_global = bool(current_user and getattr(current_user, "type", None) == "MASTER" and not company_id)
+
+    module_b2b_native = True if is_master_global else (company.module_b2b_native if company else False)
     module_horus_erp = company.module_horus_erp if company else False
-    module_products = company.module_products if company else False
-    module_orders = company.module_orders if company else False
-    module_customers = company.module_customers if company else False
-    module_marketing = company.module_marketing if company else False
-    module_subscriptions = company.module_subscriptions if company else False
-    module_pdv = company.module_pdv if company else False
-    module_agents = company.module_agents if company else False
-    module_financial = company.module_financial if company else False
-    module_services = company.module_services if company else False
-    module_commercial = company.module_commercial if company else False
-    module_crm = getattr(company, "module_crm", False) if company else False
-    module_proposals = company.module_proposals if company else False
+    module_products = True if is_master_global else (company.module_products if company else False)
+    module_orders = True if is_master_global else (company.module_orders if company else False)
+    module_customers = True if is_master_global else (company.module_customers if company else False)
+    module_marketing = True if is_master_global else (company.module_marketing if company else False)
+    module_subscriptions = True if is_master_global else (company.module_subscriptions if company else False)
+    module_pdv = True if is_master_global else (company.module_pdv if company else False)
+    module_agents = True if is_master_global else (company.module_agents if company else False)
+    module_financial = True if is_master_global else (company.module_financial if company else False)
+    module_services = True if is_master_global else (company.module_services if company else False)
+    module_commercial = True if is_master_global else (company.module_commercial if company else False)
+    module_crm = True if is_master_global else (getattr(company, "module_crm", False) if company else False)
+    module_proposals = True if is_master_global else (company.module_proposals if company else False)
     module_logistica_horus = company.module_logistica_horus if company else False
     module_dropship = getattr(company, "module_dropship", False) if company else False
     module_notifications = getattr(company, "module_notifications", False) if company else False
@@ -158,11 +79,82 @@ def get_dashboard_metrics(
     horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
     company_logo = getattr(company, "logo", None) if company else None
 
-    # Uses horus is now strongly derived from the company flag
-    if current_user and current_user.type == "MASTER" and current_user.tenant_id == "horus":
+    # Uses horus is derived from integration / module flag
+    if current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) == "horus":
         uses_horus = True
     else:
-        uses_horus = module_horus_erp
+        uses_horus = module_horus_erp or ("HORUS" in active_integrations) or (settings.horus_enabled if settings else False)
+
+    uses_bookinfo = "BOOKINFO" in active_integrations
+
+    # 1. Total active products (only if module_products)
+    active_products = 0
+    if module_products:
+        prod_query = db.query(Product).filter(Product.status == "ACTIVE")
+        if company_id:
+            prod_query = prod_query.filter(Product.company_id == company_id)
+        elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
+            prod_query = prod_query.join(Company, Product.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+        active_products = prod_query.count()
+
+    # 2. Total customers (empresas clientes - only if module_customers)
+    total_customers = 0
+    if module_customers:
+        cust_query = db.query(Customer)
+        if company_id:
+            cust_query = cust_query.filter(Customer.company_id == company_id)
+        elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
+            cust_query = cust_query.join(Company, Customer.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+        total_customers = cust_query.count()
+
+    # Setup Date Filter for dynamically calculated metrics (Orders, Financial, Services)
+    if start_date and end_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Datas inválidas")
+    else:
+        now = datetime.now()
+        start_dt = datetime(now.year, now.month, 1)
+        if now.month == 12:
+            end_dt = datetime(now.year + 1, 1, 1)
+        else:
+            end_dt = datetime(now.year, now.month + 1, 1)
+
+    # 3. Orders By Status & Revenue (only if module_orders)
+    orders_by_status = {}
+    active_orders = 0
+    invoiced_revenue = 0.0
+    pending_revenue = 0.0
+
+    if module_orders:
+        from app.models.order import Order
+        order_query = db.query(Order.status, func.count(Order.id).label('count')).filter(Order.created_at >= start_dt, Order.created_at < end_dt)
+        if company_id:
+            order_query = order_query.filter(Order.company_id == company_id)
+        elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
+            order_query = order_query.join(Company, Order.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+            
+        orders_grouped = order_query.group_by(Order.status).all()
+        orders_by_status = {st: count for st, count in orders_grouped}
+        active_orders = sum(orders_by_status.get(st, 0) for st in ["NEW", "PROCESSING", "SENT_TO_HORUS", "DISPATCH"])
+
+        revenue_query = db.query(Order.status, func.sum(Order.total).label('rev')).filter(
+            Order.created_at >= start_dt, Order.created_at < end_dt
+        )
+        if company_id:
+            revenue_query = revenue_query.filter(Order.company_id == company_id)
+        elif current_user and current_user.type == "MASTER" and current_user.tenant_id and current_user.tenant_id != "cronuz":
+            revenue_query = revenue_query.join(Company, Order.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+            
+        revenue_grouped = revenue_query.group_by(Order.status).all()
+        for st, rev in revenue_grouped:
+            st_val = str(getattr(st, 'value', st)).upper().strip()
+            if st_val in ["INVOICED", "FATURADO"]:
+                invoiced_revenue += float(rev or 0)
+            elif st_val in ["NEW", "NOVO", "PROCESSING", "EM PROCESSAMENTO", "SENT_TO_HORUS", "DISPATCH", "AGUARDANDO"]:
+                pending_revenue += float(rev or 0)
 
     # 4. Financial Metrics (if module enabled)
     financial_metrics = {
@@ -249,48 +241,50 @@ def get_dashboard_metrics(
         month_series.append({"ym": ym, "label": lbl})
 
     orders_hist_map = {}
-    from app.models.order import Order
-    ord_hist_q = db.query(
-        func.to_char(Order.created_at, 'YYYY-MM').label('ym'),
-        func.sum(Order.total).label('rev'),
-        func.count(Order.id).label('cnt')
-    ).filter(
-        Order.created_at >= hist_start,
-        Order.created_at < hist_end,
-        func.upper(Order.status).in_(["INVOICED", "FATURADO"])
-    )
-    if company_id:
-        ord_hist_q = ord_hist_q.filter(Order.company_id == company_id)
-    elif current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) and current_user.tenant_id != "cronuz":
-        ord_hist_q = ord_hist_q.join(Company, Order.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
-    
-    for ym_val, rev_val, cnt_val in ord_hist_q.group_by(func.to_char(Order.created_at, 'YYYY-MM')).all():
-        orders_hist_map[str(ym_val)] = {"rev": float(rev_val or 0.0), "cnt": int(cnt_val or 0)}
+    if module_orders:
+        from app.models.order import Order
+        ord_hist_q = db.query(
+            func.to_char(Order.created_at, 'YYYY-MM').label('ym'),
+            func.sum(Order.total).label('rev'),
+            func.count(Order.id).label('cnt')
+        ).filter(
+            Order.created_at >= hist_start,
+            Order.created_at < hist_end,
+            func.upper(Order.status).in_(["INVOICED", "FATURADO"])
+        )
+        if company_id:
+            ord_hist_q = ord_hist_q.filter(Order.company_id == company_id)
+        elif current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) and current_user.tenant_id != "cronuz":
+            ord_hist_q = ord_hist_q.join(Company, Order.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+        
+        for ym_val, rev_val, cnt_val in ord_hist_q.group_by(func.to_char(Order.created_at, 'YYYY-MM')).all():
+            orders_hist_map[str(ym_val)] = {"rev": float(rev_val or 0.0), "cnt": int(cnt_val or 0)}
 
     services_hist_map = {}
-    from app.models.service import ServiceOrder, ServiceOrderStatus
-    from sqlalchemy import cast, String
-    svc_hist_q = db.query(
-        func.to_char(ServiceOrder.execution_date, 'YYYY-MM').label('ym'),
-        func.sum(ServiceOrder.negotiated_value).label('rev'),
-        func.count(ServiceOrder.id).label('cnt')
-    ).filter(
-        ServiceOrder.execution_date >= hist_start.date(),
-        ServiceOrder.execution_date < hist_end.date(),
-        func.upper(cast(ServiceOrder.status, String)).in_(["COMPLETED", "CONCLUIDO"])
-    )
-    if company_id:
-        svc_hist_q = svc_hist_q.filter(ServiceOrder.company_id == company_id)
-    elif current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) and current_user.tenant_id != "cronuz":
-        svc_hist_q = svc_hist_q.join(Company, ServiceOrder.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
-    
-    for ym_val, rev_val, cnt_val in svc_hist_q.group_by(func.to_char(ServiceOrder.execution_date, 'YYYY-MM')).all():
-        services_hist_map[str(ym_val)] = {"rev": float(rev_val or 0.0), "cnt": int(cnt_val or 0)}
+    if module_services:
+        from app.models.service import ServiceOrder, ServiceOrderStatus
+        from sqlalchemy import cast, String
+        svc_hist_q = db.query(
+            func.to_char(ServiceOrder.execution_date, 'YYYY-MM').label('ym'),
+            func.sum(ServiceOrder.negotiated_value).label('rev'),
+            func.count(ServiceOrder.id).label('cnt')
+        ).filter(
+            ServiceOrder.execution_date >= hist_start.date(),
+            ServiceOrder.execution_date < hist_end.date(),
+            func.upper(cast(ServiceOrder.status, String)).in_(["COMPLETED", "CONCLUIDO"])
+        )
+        if company_id:
+            svc_hist_q = svc_hist_q.filter(ServiceOrder.company_id == company_id)
+        elif current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) and current_user.tenant_id != "cronuz":
+            svc_hist_q = svc_hist_q.join(Company, ServiceOrder.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+        
+        for ym_val, rev_val, cnt_val in svc_hist_q.group_by(func.to_char(ServiceOrder.execution_date, 'YYYY-MM')).all():
+            services_hist_map[str(ym_val)] = {"rev": float(rev_val or 0.0), "cnt": int(cnt_val or 0)}
 
     for item in month_series:
         ym = item["ym"]
-        ord_info = orders_hist_map.get(ym, {"rev": 0.0, "cnt": 0})
-        svc_info = services_hist_map.get(ym, {"rev": 0.0, "cnt": 0})
+        ord_info = orders_hist_map.get(ym, {"rev": 0.0, "cnt": 0}) if module_orders else {"rev": 0.0, "cnt": 0}
+        svc_info = services_hist_map.get(ym, {"rev": 0.0, "cnt": 0}) if module_services else {"rev": 0.0, "cnt": 0}
         tot_rev = ord_info["rev"] + svc_info["rev"]
         revenue_history.append({
             "year_month": ym,
@@ -307,7 +301,9 @@ def get_dashboard_metrics(
             "total": tot_rev
         })
 
-    consolidated_invoiced = invoiced_revenue + service_metrics["completed"]["value"]
+    consolidated_orders = invoiced_revenue if module_orders else 0.0
+    consolidated_services = service_metrics["completed"]["value"] if module_services else 0.0
+    consolidated_invoiced = consolidated_orders + consolidated_services
 
     return {
         "active_products": active_products,
@@ -315,13 +311,13 @@ def get_dashboard_metrics(
         "active_orders": active_orders,
         "orders_by_status": orders_by_status,
         "orders_revenue": {
-            "invoiced": invoiced_revenue,
-            "pending": pending_revenue
+            "invoiced": invoiced_revenue if module_orders else 0.0,
+            "pending": pending_revenue if module_orders else 0.0
         },
         "consolidated_revenue": {
             "total": consolidated_invoiced,
-            "orders": invoiced_revenue,
-            "services": service_metrics["completed"]["value"]
+            "orders": consolidated_orders,
+            "services": consolidated_services
         },
         "revenue_history": revenue_history,
         "financial_metrics": financial_metrics,
