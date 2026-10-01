@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Boxes, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, UserCircle, Bell, DatabaseZap, Zap, AlertTriangle, CreditCard, Feather } from 'lucide-react';
+import { Loader2, Globe, Box, Boxes, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, UserCircle, Bell, DatabaseZap, Zap, AlertTriangle, CreditCard, Feather, LayoutGrid } from 'lucide-react';
 
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -38,7 +38,7 @@ export default function CompanyModulesPage() {
   const [togglingMobile, setTogglingMobile] = useState<string | null>(null);
 
   // ─── Horus SQL Direct — Features State ────────────────────────────
-  interface HorusSQLFeatures { vindi_baixa: boolean; pedidos: boolean; }
+  interface HorusSQLFeatures { vindi_baixa: boolean; pedidos: boolean; dbm?: boolean; }
   const [horusSQLData, setHorusSQLData] = useState<{
     sql_configured: boolean;
     module_horus_sql: boolean;
@@ -936,6 +936,34 @@ export default function CompanyModulesPage() {
                           onClick={() => handleToggleHorusSQLFeature('pedidos')}
                           disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
                           colorClass="bg-violet-600"
+                        />
+                      )
+                    }
+                  </div>
+                </div>
+
+                {/* DBM (Painel Operacional & CRM) */}
+                <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                  <div className="flex items-center gap-4">
+                    <div className={`p-2 rounded-xl border ${horusSQLData?.features.dbm ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-600' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                      <LayoutGrid className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">DBM (Painel Operacional &amp; CRM)</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Painel de navegação ágil estilo Switchboard com módulos de comercial, pesquisa de empresas, produtos e integração.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="shrink-0 pl-4 flex items-center gap-3">
+                    {togglingHorusFeature === 'dbm'
+                      ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                      : (
+                        <Switch
+                          active={horusSQLData?.features.dbm ?? false}
+                          onClick={() => handleToggleHorusSQLFeature('dbm')}
+                          disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
+                          colorClass="bg-indigo-600"
                         />
                       )
                     }

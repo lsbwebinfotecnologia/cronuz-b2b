@@ -46,52 +46,88 @@ cronuz-b2b/
 
 | Item | Regra |
 |------|-------|
+| `SECRET_KEY` | Obrigatório no `.env` — **nunca** hardcoded em `security.py` |
 | `DATABASE_URL` | Obrigatório no `.env` — **sem fallback hardcoded** em `session.py` |
 | `MASTER_SEED_PASSWORD` | `.env` em produção — sem hardcoded no `main.py` |
 | `HORUS_SQL_ENCRYPTION_KEY` | Fernet key no `.env` — **nunca** no repositório |
-| Senhas de terceiros (`vindi_api_key`, `smtp_password`, etc.) | Banco de dados — criptografia Fernet (roadmap) |
+| Senhas de terceiros (`vindi_api_key`, `smtp_password`, etc.) | Banco de dados — criptografia Fernet |
 | Certificados NFS-e `.pfx` | Disco em `certs/nfse/<company_id>/` — **fora do git** |
 | Certificados MTLS (Banco Inter) | Banco de dados — arquivo temporário descartado após uso |
 
-### 2. Autorização por ownership — obrigatório em todos os endpoints de empresa
+### 2. Autorização por ownership (Multi-tenancy IDOR Prevention)
 
-Todo endpoint que recebe `company_id` na rota DEVE validar que o usuário pertence àquela empresa ou é MASTER:
-
-```python
-# app/api/horus_sql.py — padrão a seguir em todos os módulos novos
-def _assert_ownership(current_user: dict, company_id: int) -> None:
-    user_type = current_user.get("type", "")
-    user_company = current_user.get("company_id")
-    if user_type != "MASTER" and user_company != company_id:
-        raise HTTPException(status_code=403, detail="Acesso restrito.")
-```
-
-### 3. CORS — apenas HTTPS
+Todo endpoint que recebe `company_id` na rota DEVE obrigatoriamente validar que o usuário pertence àquela empresa ou possui privilégio MASTER. Use SEMPRE o utilitário centralizado:
 
 ```python
-# main.py
-allow_origin_regex=r"https://.*"  # http:// NUNCA permitido
+from app.core.utils import assert_company_ownership
+
+@router.get("/companies/{company_id}/modulo/endpoint")
+def meu_endpoint(company_id: int, current_user = Depends(get_current_user)):
+    assert_company_ownership(current_user, company_id)  # [SEC] Primeira linha do handler
 ```
 
-### 4. Respostas de erro — sem information disclosure
-
+> **Atenção especial a Foreign Keys e Clientes:** Ao criar ou alterar registros vinculados a uma empresa (ex: Pedidos, Ordens de Serviço, Parcelas, Clientes), garanta que os IDs passados no payload pertençam estritamente à mesma empresa do usuário autenticado:
 ```python
-# CORRETO — traceback apenas em log interno, nunca no response
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    _main_logger.error("[500] %s", traceback.format_exc())
-    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+customer = db.query(Customer).filter(
+    Customer.id == payload.customer_id,
+    Customer.company_id == current_user.company_id
+).first()
 ```
 
-### 5. SQL Injection — pytds
+### 3. Validação e Limite Mandatório de Uploads (Proteção contra DoS / OOM)
 
-O cliente pytds (`horus_sql_client.py`) sempre usa parâmetros separados:
+Todo upload de arquivos DEVE obrigatoriamente utilizar o módulo [app/core/upload_security.py](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/core/upload_security.py):
+
+| Categoria | Tipos Permitidos | Limite Máximo |
+|-----------|------------------|---------------|
+| **Imagens / Capas** (`category="image"`) | `.jpg, .jpeg, .png, .webp` | **5 MB** |
+| **Planilhas** (`category="sheet"`) | `.xlsx, .csv, .ods` | **10 MB** (streaming chunked) |
+| **Documentos / Fiscais** (`category="doc"`) | `.pdf, .xml, .txt` | **10 MB** |
+| **Certificados** (`category="cert"`) | `.pfx, .p12, .crt, .key, .pem` | **10 MB** |
+| **Teto Absoluto do Sistema** | Qualquer arquivo | **15 MB** (bloqueio imediato) |
+
+**Padrão de Implementação em Novos Endpoints:**
 ```python
-cur.execute("SELECT * FROM TABLE WHERE ID = %s", (id_value,))
-# NUNCA: cur.execute(f"SELECT * WHERE ID = {id_value}")
+from app.core.upload_security import validate_file_size_and_extension, sanitize_filename, read_file_safely
+
+@router.post("/meu-upload")
+async def meu_upload(file: UploadFile = File(...)):
+    # 1. Valida tamanho de cabeçalho e extensão
+    validate_file_size_and_extension(file, category="sheet")
+
+    # 2. Sanitiza nome do arquivo contra Path Traversal (ex: ../../../malicious.php)
+    clean_name = sanitize_filename(file.filename)
+
+    # 3. Lê com segurança em chunks (aborta streaming se exceder limite em trânsito)
+    content = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
 ```
 
-### 6. Arquivos sensíveis — .gitignore obrigatório
+### 4. Proteção contra Ataques de Força Bruta (Brute-Force & Lockout)
+
+- Rotinas de autenticação (`/token`, `/customer/login`, etc.) contam tentativas consecutivas em `user.failed_login_attempts`.
+- Ao atingir 5 tentativas inválidas, a conta é suspensa temporariamente por 15 minutos em `user.locked_until`, retornando `HTTP 429 Too Many Requests`.
+- Logins bem-sucedidos resetam o contador e limpam `user.locked_until`.
+
+### 5. Respostas de erro — sem information disclosure
+
+- Respostas 500 NUNCA devem devolver tracebacks, strings de exceção (`str(exc)`), erros de SQL ou detalhes de tabelas para clientes externos.
+- O traceback completo é exclusivo dos logs internos do servidor (`_main_logger.error`).
+- Resposta para o cliente: `{"detail": "Ocorreu um erro interno no servidor. Por favor, tente novamente mais tarde."}`.
+
+### 6. Headers de Segurança HTTP
+
+Todo response da API inclui cabeçalhos de proteção contra ataques clássicos de web:
+- `X-Content-Type-Options: nosniff` (impede MIME-sniffing malicioso)
+- `X-Frame-Options: SAMEORIGIN` (proteção contra Clickjacking)
+- `X-XSS-Protection: 1; mode=block`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+
+### 7. SQL Injection & Horus Consultas
+
+- **pytds**: SEMPRE usar tuplas de parâmetros separados (`cur.execute("SELECT ... WHERE COD = %s", (param,))`). NUNCA interpolar variáveis de usuário em strings SQL.
+- **Regra OFFSET/LIMIT**: Toda consulta no Horus ERP DEVE checar a flag `horus_legacy_pagination` do `cmp_settings`. Se `True`, omitir `OFFSET/LIMIT`. Se `False`, utilizar paginação segura com limites máximos definidos.
+
+### 8. Arquivos sensíveis — .gitignore obrigatório
 
 ```gitignore
 .env
@@ -99,6 +135,24 @@ certs/
 *.pfx *.p12 *.pem *.key *.crt
 uploads/
 ```
+
+---
+
+## 📋 CHECKLIST MANDATÓRIO PARA NOVOS MÓDULOS E FEATURES
+
+Antes de finalizar qualquer nova rota, módulo ou endpoint no backend, execute este checklist:
+
+1. [ ] **Multi-tenancy**: Se o endpoint recebe `company_id`, executou `assert_company_ownership(current_user, company_id)`?
+2. [ ] **Payload Validation**: Se o endpoint cria/atualiza vínculos (ex: `customer_id`, `order_id`), validou que o registro pertence à empresa autenticada?
+3. [ ] **Upload Seguro**: Se recebe arquivos, invocou `validate_file_size_and_extension` e `read_file_safely` respeitando os tetos (5MB/10MB/15MB)?
+4. [ ] **Path Traversal**: Se grava arquivo em disco, sanitizou o nome com `sanitize_filename` e salvou na subpasta isolada `uploads/<company_id>/...`?
+5. [ ] **Foreign Keys**: Se criou novos relacionamentos no SQLAlchemy com referências múltiplas, especificou `foreign_keys=[...]` para evitar ambiguidade?
+6. [ ] **PostgreSQL Exclusivo**: O código utiliza 100% PostgreSQL? Não há referências a SQLite?
+7. [ ] **Deploy Script**: Se houve alteração de DDL no banco (novas tabelas/colunas/índices), criou o script SQL correspondente na pasta `deploy/` usando `IF NOT EXISTS` (zero perda de dados)?
+8. [ ] **Indexação de Foreign Keys e Filtros**: Toda chave estrangeira (`company_id`, relacionamentos frequentes) e campos de status/data em queries foram indexados (`index=True` ou composite `Index`)?
+9. [ ] **Prevenção de N+1**: Em queries que iteram listas e consultam entidades relacionadas, foi usado `joinedload`/`selectinload` ou cache em memória para evitar requisições N+1 ao banco?
+10. [ ] **Healthcheck**: A API sobe e responde `HTTP 200` em teste de saúde local?
+
 
 ---
 
@@ -169,63 +223,108 @@ useEffect(() => {
 }, [pathname]); // pathname ainda no deps para auto-open de menus
 ```
 
-### 6. Índices recomendados (migrations futuras)
+### 6. Índices Estratégicos Implementados (Migration Fase 2)
+
+Todos os comandos devem ser sempre executados com `CREATE INDEX IF NOT EXISTS` para assegurar idempotência e integridade sem perda de dados:
 
 ```sql
--- Filtros frequentes em produção
-CREATE INDEX idx_cmp_company_active ON cmp_company (active) WHERE active = true;
-CREATE INDEX idx_cmp_company_tenant ON cmp_company (tenant_id);
-CREATE INDEX idx_ord_order_company_status ON ord_order (company_id, status);
-CREATE INDEX idx_ord_order_horus_pedido ON ord_order (company_id, horus_pedido_venda)
-  WHERE horus_pedido_venda IS NOT NULL;
-CREATE INDEX idx_crm_customer_company_doc ON crm_customer (company_id, document);
-CREATE INDEX idx_fin_installment_status_due ON fin_installment (status, due_date);
+-- prd_product
+CREATE INDEX IF NOT EXISTS idx_prd_product_company_id ON prd_product (company_id);
+CREATE INDEX IF NOT EXISTS idx_prd_product_category_id ON prd_product (category_id);
+CREATE INDEX IF NOT EXISTS idx_prd_product_brand_id ON prd_product (brand_id);
+CREATE INDEX IF NOT EXISTS idx_prd_product_status ON prd_product (status);
+CREATE INDEX IF NOT EXISTS idx_prd_product_company_status ON prd_product (company_id, status);
+
+-- crm_customer & subentidades
+CREATE INDEX IF NOT EXISTS idx_crm_customer_company_id ON crm_customer (company_id);
+CREATE INDEX IF NOT EXISTS idx_crm_customer_company_doc ON crm_customer (company_id, document);
+CREATE INDEX IF NOT EXISTS idx_crm_address_customer_id ON crm_address (customer_id);
+CREATE INDEX IF NOT EXISTS idx_crm_contact_customer_id ON crm_contact (customer_id);
+CREATE INDEX IF NOT EXISTS idx_crm_interaction_customer_id ON crm_interaction (customer_id);
+CREATE INDEX IF NOT EXISTS idx_crm_interaction_seller_id ON crm_interaction (seller_id);
+CREATE INDEX IF NOT EXISTS idx_crm_favorite_customer_id ON crm_customer_favorite (customer_id);
+CREATE INDEX IF NOT EXISTS idx_crm_favorite_product_id ON crm_customer_favorite (product_id);
+
+-- ord_order & ord_order_item
+CREATE INDEX IF NOT EXISTS idx_ord_order_item_order_id ON ord_order_item (order_id);
+CREATE INDEX IF NOT EXISTS idx_ord_order_item_product_id ON ord_order_item (product_id);
+
+-- fin_installment
+CREATE INDEX IF NOT EXISTS idx_fin_installment_account_id ON fin_installment (account_id);
+CREATE INDEX IF NOT EXISTS idx_fin_installment_status ON fin_installment (status);
+CREATE INDEX IF NOT EXISTS idx_fin_installment_due_date ON fin_installment (due_date);
+CREATE INDEX IF NOT EXISTS idx_fin_installment_status_due ON fin_installment (status, due_date);
+
+-- cmp_company & usr_user
+CREATE INDEX IF NOT EXISTS idx_cmp_company_tenant_id ON cmp_company (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cmp_company_active ON cmp_company (active);
+CREATE INDEX IF NOT EXISTS idx_usr_user_company_id ON usr_user (company_id);
 ```
+
+### 7. Otimizações de Query & Agregação (Fase 3)
+
+1. **Agregações em SQL Direto vs. `.all()` na memória**:
+   - NUNCA carregar milhares de linhas na memória com `.all()` para calcular somas em Python com `sum(...)`.
+   - Utilizar agregação nativa do PostgreSQL via `db.query(..., func.sum(...)).group_by(...)`. Isso reduz o consumo de RAM em até 95% e o tempo de resposta em até 10x.
+2. **Prevenção de N+1 em Paginações**:
+   - Ao iterar sobre uma lista de resultados paginados onde cada item precisa de contagens filhas (ex: número de parcelas por transação), extrair a lista de IDs (`trans_ids = list({trans.id for ...})`) e fazer uma única consulta agregada com `IN (...)` agrupada por ID pai, montando um mapa em memória.
+3. **Eager Loading com `joinedload`**:
+   - Sempre que o endpoint retornar dados de relacionamentos directos (ex: `Product.brand_rel`, `Product.category`, `Order.customer`), aplicar `.options(joinedload(...))` na query principal.
+4. **Respeito Obrigatório à Flag de Paginação do Horus (`horus_legacy_pagination`)**:
+   - Qualquer consulta ao ERP Horus DEVE verificar `getattr(self._settings, 'horus_legacy_pagination', False)`. Se verdadeiro, os parâmetros `OFFSET` e `LIMIT` NÃO devem ser enviados na requisição à API Horus.
 
 ---
 
 ## 🏗️ ARQUITETURA — Padrões obrigatórios
 
-### Estrutura de um novo módulo
+### Estrutura de um novo módulo e Regras Mandatórias
 
-Ao criar qualquer novo módulo (ex: Horus Direct Financeiro Vindi):
+Ao criar qualquer novo módulo ou feature (ex: `horus_financial`, `editorial`, `inventory`):
 
-1. **Endpoint** → `app/api/horus_financial.py` (router FastAPI isolado)
-2. **Modelo** → `app/models/horus_financial.py` (se precisar de tabela)
-3. **Schema** → `app/schemas/horus_financial.py` (Pydantic)
-4. **Integrador** → `app/integrators/vindi_parser.py` (lógica de negócio separada)
-5. **Router** → registrado no `main.py` via `app.include_router()`
+1. **Endpoint** → `app/api/<modulo>.py` (router FastAPI isolado com tags claras)
+2. **Modelo** → `app/models/<modulo>.py` (se precisar de tabela no PostgreSQL — SEM SQLite)
+3. **Schema** → `app/schemas/<modulo>.py` (Pydantic com validação rigorosa de campos)
+4. **Integrador / Service** → `app/integrators/<modulo>.py` ou `app/services/` (lógica de negócio isolada do handler)
+5. **Router** → registrado no `main.py` via `app.include_router(modulo.router)`
 
-### Guard de ownership — padrão mínimo
+### 🔐 Regras Mandatórias para Todo Novo Módulo / Feature:
 
-```python
-@router.get("/companies/{company_id}/modulo/endpoint")
-def meu_endpoint(
-    company_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-):
-    _assert_ownership(current_user, company_id)  # [SEC] SEMPRE primeiro
-    # ... lógica do endpoint
-```
+1. **Guard de Ownership (Primeira Linha)**:
+   ```python
+   from app.core.utils import assert_company_ownership
 
-### Módulos por seller — dois níveis de controle
-
-```
-cmp_company.module_horus_sql = True/False    ← toggle mestre (Master ativa para o seller)
-cmp_settings.horus_sql_feature_vindi_baixa   ← sub-feature (Master ativa funcionalidade)
-```
-
-O seller vê o menu **"Horus Direct"** somente quando `module_horus_sql = True`.  
-As sub-features aparecem somente quando ativas individualmente.
-
-### Dados que nunca devem ser retornados ao cliente
+   @router.get("/companies/{company_id}/meu-modulo")
+   def meu_endpoint(
+       company_id: int,
+       db: Session = Depends(get_db),
+       current_user: User = Depends(get_current_user),
+   ):
+       assert_company_ownership(current_user, company_id)  # [SEC] Mandatório antes de qualquer query
+   ```
+2. **Validação Rígida de Uploads (Se houver arquivos)**:
+   - Utilizar obrigatoriamente `validate_file_size_and_extension` e `read_file_safely` de `app.core.upload_security`.
+   - Tetos: 5MB fotos, 10MB planilhas/documentos, 15MB teto absoluto.
+   - Gravar SEMPRE na pasta isolada da empresa: `uploads/<company_id>/<modulo>/...`.
+   - Sanitizar nomes de arquivos com `sanitize_filename(file.filename)`.
+3. **Relacionamentos SQLAlchemy Sem Ambiguidade**:
+   - Sempre declarar `foreign_keys=[...]` nos relationships caso a tabela aponte mais de uma vez para o mesmo modelo.
+4. **Consultas ao ERP Horus**:
+   - Respeitar a flag `horus_legacy_pagination` do `cmp_settings`.
+5. **Indexação Estratégica & Não Destrutiva (Zero Perda de Dados)**:
+   - Todo campo `company_id`, chaves estrangeiras (`ForeignKey`) e pares de busca frequente (ex: `company_id + status`, `company_id + document`) DEVEM ser indexados.
+   - Qualquer migração DDL de índices DEVE utilizar a cláusula `CREATE INDEX IF NOT EXISTS` para assegurar idempotência e integridade absoluta dos dados existentes.
+6. **Prevenção Rígida de Queries N+1**:
+   - Em rotinas de listagem, jobs em background (APScheduler) e relatórios, NUNCA executar `db.query(...)` dentro de loops `for item in items`.
+   - Utilizar `joinedload` / `selectinload` para relacionamentos diretos ou cache em dicionário local (`cache[id] = ...`) para metadados por empresa.
+   - Sempre limitar queries em background com `.limit(N)` (ex: 50 ou 100 por execução) para não travar a memória RAM nem o pool de conexões do PostgreSQL.
+7. **Dados que nunca devem ser retornados ao cliente**:
 
 | Campo | Substituição |
 |-------|-------------|
 | `horus_sql_password` | `"SET"` se configurado, `null` se não |
 | `efi_client_secret`, `smtp_password` etc | `"SET"` se configurado, `null` se não |
-| Stack trace de erros 500 | `{"detail": "Internal Server Error"}` |
+| Stack trace de erros 500 | `{"detail": "Ocorreu um erro interno no servidor. Por favor, tente novamente mais tarde."}` |
+| Hashes de senha / segredos de token | Nunca em nenhum schema de response |
 | Credenciais do banco PostgreSQL | Nunca em nenhum response |
 
 ---

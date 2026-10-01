@@ -182,6 +182,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduleHorusSql, setModuleHorusSql] = useState(false);
   const [horusSqlVindiBaixa, setHorusSqlVindiBaixa] = useState(false);
   const [horusSqlPedidos, setHorusSqlPedidos] = useState(true);
+  const [horusSqlDbm, setHorusSqlDbm] = useState(false);
   const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
   const [hasInventoryModule, setHasInventoryModule] = useState(false);
   const [moduleEditorial, setModuleEditorial] = useState(false);
@@ -205,7 +206,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        });
        if (pathname.startsWith('/financial')) initialOpen['Financeiro'] = true;
        if (pathname.startsWith('/subscriptions') || pathname.startsWith('/subscribers')) initialOpen['Assinaturas'] = true;
-       if (pathname.startsWith('/horus-direct')) initialOpen['Horus Direct'] = true;
+       if (pathname.startsWith('/horus-direct') || pathname.startsWith('/dbm')) initialOpen['Horus Direct'] = true;
        if (pathname.startsWith('/editorial')) initialOpen['Editorial'] = true;
        setOpenMenus(initialOpen);
        
@@ -237,6 +238,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuleHorusSql(data.module_horus_sql || false);
                setHorusSqlVindiBaixa(data.horus_sql_feature_vindi_baixa || false);
                setHorusSqlPedidos(data.horus_sql_feature_pedidos ?? true);
+               setHorusSqlDbm(data.horus_sql_feature_dbm || false);
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
                setHasInventoryModule(data.has_inventory_module || false);
                 setModuleEditorial(data.module_editorial || false);
@@ -390,6 +392,9 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     }
     if (horusSqlVindiBaixa || subItems.length === 0) {
       subItems.push({ name: 'Financeiro Vindi', href: '/horus-direct/financeiro-vindi', icon: CreditCard });
+    }
+    if (horusSqlDbm) {
+      subItems.push({ name: 'DBM (Painel & CRM)', href: '/dbm', icon: LayoutGrid });
     }
     filteredSellerNavigation.splice(targetIndex, 0, {
       name: 'Horus Direct',

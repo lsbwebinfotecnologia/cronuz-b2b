@@ -74,6 +74,8 @@ class ServiceOrder(Base):
     email_sent_at = Column(DateTime(timezone=True), nullable=True)
     email_logs = Column(JSON, nullable=True, default=list)
 
+    grouped_in_id = Column(Integer, ForeignKey("svc_service_order.id", ondelete="SET NULL"), nullable=True, index=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
@@ -82,6 +84,7 @@ class ServiceOrder(Base):
     customer = relationship("Customer")
     service = relationship("Service")
     proposal = relationship("Proposal", back_populates="converted_service_orders", foreign_keys=[proposal_id])
+    grouped_in = relationship("ServiceOrder", remote_side=[id], foreign_keys=[grouped_in_id], backref="grouped_orders")
 
 import app.models.company
 import app.models.financial

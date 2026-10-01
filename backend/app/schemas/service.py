@@ -48,7 +48,8 @@ class ServiceOrderBase(BaseModel):
     recurrence_end_date: Optional[date] = None
 
 class ServiceOrderCreate(ServiceOrderBase):
-    pass
+    merge_mode: Optional[str] = "NONE" # NONE | CONSOLIDATE | DISTRIBUTE_MONTHLY
+    target_order_ids: Optional[List[int]] = None
 
 class ServiceOrderUpdate(BaseModel):
     negotiated_value: Optional[float] = None
@@ -74,6 +75,7 @@ class ServiceOrderResponse(ServiceOrderBase):
     
     email_sent_at: Optional[datetime] = None
     email_logs: Optional[list] = []
+    grouped_in_id: Optional[int] = None
     
     class Config:
         from_attributes = True
@@ -111,3 +113,11 @@ class ServiceOrderSplitItem(BaseModel):
 
 class ServiceOrderSplitRequest(BaseModel):
     splits: List[ServiceOrderSplitItem]
+
+
+class ServiceOrderGroupRequest(BaseModel):
+    order_ids: List[int]
+    target_order_id: Optional[int] = None
+    execution_date: Optional[date] = None
+    custom_description: Optional[str] = None
+

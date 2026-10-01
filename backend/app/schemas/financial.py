@@ -69,6 +69,7 @@ class FinancialInstallmentUpdate(BaseModel):
     account_id: Optional[int] = None
     category_id: Optional[int] = None
     amount: Optional[float] = None
+    exclude_from_reports: Optional[bool] = None
 
 class FinancialBulkConciliate(BaseModel):
     installment_ids: List[int]
@@ -78,6 +79,7 @@ class FinancialInstallment(FinancialInstallmentBase):
     status: str
     payment_date: Optional[datetime] = None
     account_id: Optional[int] = None
+    exclude_from_reports: bool = False
     is_conciliated: bool = False
     conciliated_at: Optional[datetime] = None
     bank_slip_pdf_url: Optional[str] = None
@@ -93,6 +95,7 @@ class FinancialAccountBase(BaseModel):
     initial_balance: float = 0.0
     closing_day: Optional[int] = None
     due_day: Optional[int] = None
+    is_personal: bool = False
     active: bool = True
 
 class FinancialAccountCreate(FinancialAccountBase):
@@ -102,6 +105,7 @@ class FinancialAccountUpdate(BaseModel):
     name: Optional[str] = None
     closing_day: Optional[int] = None
     due_day: Optional[int] = None
+    is_personal: Optional[bool] = None
     current_balance: Optional[float] = None
     adjustment_description: Optional[str] = None
     active: Optional[bool] = None
@@ -110,6 +114,7 @@ class FinancialAccount(FinancialAccountBase):
     id: int
     company_id: int
     current_balance: float
+    is_personal: bool = False
     
     class Config:
         from_attributes = True
@@ -140,20 +145,26 @@ class FinancialTransactionBase(BaseModel):
     first_due_date: date
     customer_id: Optional[int] = None
     order_id: Optional[int] = None
+    exclude_from_reports: bool = False
 
 class FinancialTransactionCreate(FinancialTransactionBase):
     installments_count: int = 1
     account_id: Optional[int] = None
+    merge_mode: Optional[str] = "NONE" # NONE | DISTRIBUTE_MONTHLY
+    target_installment_ids: Optional[List[int]] = None
+    exclude_from_reports: bool = False
 
 class FinancialTransactionUpdate(BaseModel):
     description: Optional[str] = None
     category_id: Optional[int] = None
     customer_id: Optional[int] = None
+    exclude_from_reports: Optional[bool] = None
 
 class FinancialTransaction(FinancialTransactionBase):
     id: int
     company_id: int
     created_at: datetime
+    exclude_from_reports: bool = False
     
     email_sent_at: Optional[datetime] = None
     email_logs: Optional[list] = []
@@ -174,4 +185,13 @@ class BankTransferRequest(BaseModel):
 class FinancialBulkUpdateDateRequest(BaseModel):
     installment_ids: List[int]
     due_date: date
+
+class FinancialInstallmentsGroupRequest(BaseModel):
+    installment_ids: List[int]
+    target_installment_id: Optional[int] = None
+    due_date: date
+    account_id: Optional[int] = None
+    category_id: Optional[int] = None
+    description: Optional[str] = None
+
 

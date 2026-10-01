@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Date, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Date, Boolean, JSON, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -40,6 +40,7 @@ class FinancialTransaction(Base):
     total_amount = Column(Float, nullable=False)
     issue_date = Column(Date, nullable=False)
     first_due_date = Column(Date, nullable=False)
+    exclude_from_reports = Column(Boolean, default=False, nullable=False)
     
     email_sent_at = Column(DateTime(timezone=True), nullable=True)
     email_logs = Column(JSON, nullable=True, default=list)
@@ -48,21 +49,26 @@ class FinancialTransaction(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     category = relationship("FinancialCategory")
+    customer = relationship("Customer", foreign_keys=[customer_id])
     installments = relationship("FinancialInstallment", back_populates="transaction", cascade="all, delete-orphan")
 
 class FinancialInstallment(Base):
     __tablename__ = "fin_installment"
+    __table_args__ = (
+        Index('idx_fin_installment_status_due', 'status', 'due_date'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     transaction_id = Column(Integer, ForeignKey("fin_transaction.id", ondelete="CASCADE"), nullable=False, index=True)
     
     number = Column(Integer, nullable=False) # 1, 2, 3
-    due_date = Column(Date, nullable=False)
+    due_date = Column(Date, nullable=False, index=True)
     amount = Column(Float, nullable=False)
     
-    status = Column(String(50), nullable=False, default="PENDING") # PENDING, PAID, OVERDUE, CANCELLED
+    status = Column(String(50), nullable=False, default="PENDING", index=True) # PENDING, PAID, OVERDUE, CANCELLED
+    exclude_from_reports = Column(Boolean, default=False, nullable=False)
     
-    account_id = Column(Integer, ForeignKey("fin_account.id", ondelete="SET NULL"), nullable=True)
+    account_id = Column(Integer, ForeignKey("fin_account.id", ondelete="SET NULL"), nullable=True, index=True)
     payment_date = Column(DateTime(timezone=True), nullable=True)
     amount_paid = Column(Float, default=0.0, nullable=False)
     
@@ -76,10 +82,14 @@ class FinancialInstallment(Base):
     bank_slip_codigo_barras = Column(String(255), nullable=True)
     bank_slip_pdf_url = Column(String(500), nullable=True)
 
+    grouped_in_id = Column(Integer, ForeignKey("fin_installment.id", ondelete="SET NULL"), nullable=True, index=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     transaction = relationship("FinancialTransaction", back_populates="installments")
+    account = relationship("FinancialAccount", foreign_keys=[account_id])
+    grouped_in = relationship("FinancialInstallment", remote_side=[id], foreign_keys=[grouped_in_id], backref="grouped_installments")
 
 class FinancialAccount(Base):
     __tablename__ = "fin_account"
@@ -94,6 +104,7 @@ class FinancialAccount(Base):
     
     closing_day = Column(Integer, nullable=True) # Ex: 10
     due_day = Column(Integer, nullable=True) # Ex: 20
+    is_personal = Column(Boolean, default=False, nullable=False)
     active = Column(Boolean, default=True, nullable=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())

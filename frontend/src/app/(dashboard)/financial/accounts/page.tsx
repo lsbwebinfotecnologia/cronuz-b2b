@@ -15,7 +15,7 @@ export default function AccountsPage() {
     const [editingAccount, setEditingAccount] = useState<any>(null);
     const [showInactive, setShowInactive] = useState(false);
     const [formData, setFormData] = useState({
-        name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '', active: true
+        name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '', is_personal: false, active: true
     });
     
     // Transfer Modal
@@ -55,6 +55,7 @@ export default function AccountsPage() {
             closing_day: acc.closing_day || '', 
             due_day: acc.due_day || '',
             adjustment_description: '',
+            is_personal: acc.is_personal || false,
             active: acc.active !== undefined ? acc.active : true
         });
         setIsModalOpen(true);
@@ -72,6 +73,7 @@ export default function AccountsPage() {
                 name: formData.name,
                 type: formData.type,
                 initial_balance: formData.initial_balance ? parseFloat(formData.initial_balance) : 0,
+                is_personal: formData.is_personal,
                 active: formData.active
             };
             if (formData.type === 'CREDIT_CARD') {
@@ -90,6 +92,7 @@ export default function AccountsPage() {
                     payload.adjustment_description = formData.adjustment_description;
                 }
                 delete payload.initial_balance;
+                payload.is_personal = formData.is_personal;
                 payload.active = formData.active;
             }
             
@@ -107,7 +110,7 @@ export default function AccountsPage() {
                 toast.success(editingAccount ? "Conta atualizada!" : "Conta criada!");
                 setIsModalOpen(false);
                 setEditingAccount(null);
-                setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '', active: true });
+                setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '', is_personal: false, active: true });
                 fetchAccounts();
             } else {
                 let errText = "Erro desconhecido";
@@ -210,7 +213,7 @@ export default function AccountsPage() {
                     </button>
                     <button onClick={() => {
                         setEditingAccount(null);
-                        setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '', active: true });
+                        setFormData({ name: '', type: 'CURRENT', initial_balance: '', closing_day: '', due_day: '', adjustment_description: '', is_personal: false, active: true });
                         setIsModalOpen(true);
                     }} className="px-5 py-2 bg-[var(--color-primary-base)] text-white font-semibold rounded-xl text-sm shadow flex items-center gap-2 hover:opacity-90 transition">
                         <Plus className="w-4 h-4"/> Adicionar Conta
@@ -232,6 +235,15 @@ export default function AccountsPage() {
                             <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${acc.active ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>
                                 {acc.active ? 'Ativa' : 'Inativa'}
                             </span>
+                            {acc.is_personal ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                                    👤 Pessoal / Física
+                                </span>
+                            ) : (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800 flex items-center gap-1">
+                                    🏢 Empresa
+                                </span>
+                            )}
                         </div>
                         <p className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-6">
                             {acc.type === 'CURRENT' ? 'Conta Corrente' : acc.type === 'CREDIT_CARD' ? `Cartão (Vence dia ${acc.due_day})` : acc.type === 'WALLET' ? 'Caixa / Espécie' : 'Poupança'}
@@ -321,6 +333,22 @@ export default function AccountsPage() {
                                     className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                                 />
                                 <label htmlFor="account_active" className="text-sm font-semibold text-slate-700 dark:text-slate-300 cursor-pointer select-none">Conta Ativa (Aceita lançamentos e transferências)</label>
+                            </div>
+
+                            <div className="flex items-start gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                                <input
+                                    type="checkbox"
+                                    id="account_is_personal"
+                                    checked={formData.is_personal}
+                                    onChange={e=>setFormData({...formData, is_personal: e.target.checked})}
+                                    className="w-4 h-4 mt-0.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                                />
+                                <label htmlFor="account_is_personal" className="text-sm font-semibold text-slate-700 dark:text-slate-300 cursor-pointer select-none">
+                                    Conta Pessoal / Física
+                                    <span className="block text-xs font-normal text-slate-500 dark:text-slate-400 mt-0.5">
+                                        Desconsiderar de relatórios gerenciais, DRE e fluxo de caixa empresarial.
+                                    </span>
+                                </label>
                             </div>
                             
                             <div className="pt-4 flex justify-end gap-3 border-t border-slate-100 dark:border-slate-800">

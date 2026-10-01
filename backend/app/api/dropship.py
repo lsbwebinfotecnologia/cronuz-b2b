@@ -40,6 +40,7 @@ from app.integrators.horus_logistics import HorusLogisticsClient
 from fastapi import UploadFile, File
 from datetime import date
 import io
+from app.core.upload_security import validate_file_size_and_extension, read_file_safely
 
 router = APIRouter()
 
@@ -2828,11 +2829,13 @@ async def upload_price_table(
     if not cred:
         raise HTTPException(status_code=404, detail="Credencial Erdos não encontrada para esta empresa.")
 
+    validate_file_size_and_extension(file, category="sheet")
+
     filename = (file.filename or "").lower()
     if not (filename.endswith(".xlsx") or filename.endswith(".csv")):
         raise HTTPException(status_code=400, detail="Formato inválido. Envie um arquivo .xlsx ou .csv.")
 
-    content = await file.read()
+    content = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
 
     rows: list = []
     try:

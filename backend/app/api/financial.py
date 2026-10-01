@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 from app.db.session import get_db
 from app.core.dependencies import get_current_user
@@ -15,8 +16,10 @@ from app.schemas.financial import (
     FinancialAccount as FinancialAccountSchema, FinancialAccountCreate, FinancialAccountUpdate,
     FinancialCashFlowLogSchema, FinancialBulkConciliate,
     FinancialTransactionUpdate, FinancialInstallmentEdit,
-    BankTransferRequest, FinancialBulkUpdateDateRequest
+    BankTransferRequest, FinancialBulkUpdateDateRequest,
+    FinancialInstallmentsGroupRequest
 )
+from fastapi.responses import Response, StreamingResponse
 from app.models.financial import FinancialCategory, FinancialTransaction, FinancialInstallment, FinancialAccount, FinancialCashFlowLog
 from app.models.company import Company
 from app.models.customer import Customer
@@ -102,6 +105,7 @@ def pay_installment(
 
 @router.get("/financial/summary", response_model=dict)
 def get_financial_summary(
+    include_personal: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -110,18 +114,30 @@ def get_financial_summary(
         
     cid = current_user.company_id
     
-    installments = db.query(FinancialInstallment).join(FinancialTransaction).filter(
+    # Agregação direta no PostgreSQL via SUM/GROUP BY (alta performance, zero desperdício de RAM)
+    q = db.query(
+        FinancialInstallment.status,
+        func.sum(FinancialInstallment.amount).label("total")
+    ).join(FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id)
+
+    if not include_personal:
+        q = q.outerjoin(FinancialAccount, FinancialInstallment.account_id == FinancialAccount.id)\
+             .filter(
+                 (FinancialAccount.id == None) | (FinancialAccount.is_personal == False),
+                 FinancialTransaction.exclude_from_reports == False,
+                 FinancialInstallment.exclude_from_reports == False
+             )
+
+    sums_by_status = q.filter(
         FinancialTransaction.company_id == cid
-    ).all()
-    
-    total_open = sum(i.amount for i in installments if i.status == "PENDING")
-    total_paid = sum(i.amount for i in installments if i.status == "PAID")
-    total_overdue = sum(i.amount for i in installments if i.status == "OVERDUE")
-    
+    ).group_by(FinancialInstallment.status).all()
+
+    totals_map = {st: float(tot or 0.0) for st, tot in sums_by_status}
+
     return {
-        "total_open": total_open,
-        "total_paid": total_paid,
-        "total_overdue": total_overdue
+        "total_open": totals_map.get("PENDING", 0.0),
+        "total_paid": totals_map.get("PAID", 0.0),
+        "total_overdue": totals_map.get("OVERDUE", 0.0)
     }
 
 def get_company_id(user: User):
@@ -214,7 +230,8 @@ def create_transaction(
         issue_date=transaction.issue_date,
         first_due_date=transaction.first_due_date,
         customer_id=transaction.customer_id,
-        order_id=transaction.order_id
+        order_id=transaction.order_id,
+        exclude_from_reports=getattr(transaction, 'exclude_from_reports', False)
     )
     db.add(db_trans)
     db.flush()
@@ -224,13 +241,96 @@ def create_transaction(
     last_amount = round(transaction.total_amount - (base_amount * (qnt - 1)), 2)
     
     from dateutil.relativedelta import relativedelta
+
+    # Se merge_mode == "DISTRIBUTE_MONTHLY", busca parcelas pendentes do cliente nos mesmos meses e soma nelas
+    if transaction.merge_mode == "DISTRIBUTE_MONTHLY" and transaction.customer_id:
+        # Busca parcelas pendentes não conciliadas do mesmo cliente e tipo
+        query_pending = db.query(FinancialInstallment).join(
+            FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
+        ).filter(
+            FinancialTransaction.company_id == cid,
+            FinancialTransaction.customer_id == transaction.customer_id,
+            FinancialTransaction.type == transaction.type,
+            FinancialInstallment.status.in_(["PENDING", "OVERDUE"]),
+            FinancialInstallment.is_conciliated == False
+        )
+        if transaction.target_installment_ids:
+            query_pending = query_pending.filter(FinancialInstallment.id.in_(transaction.target_installment_ids))
+        
+        pending_list = query_pending.order_by(FinancialInstallment.due_date.asc(), FinancialInstallment.id.asc()).all()
+
+        pending_by_month = {}
+        for p_inst in pending_list:
+            if p_inst.due_date:
+                k = (p_inst.due_date.year, p_inst.due_date.month)
+                if k not in pending_by_month:
+                    pending_by_month[k] = p_inst
+
+        created_installments = []
+        for i in range(qnt):
+            if transaction.keep_fixed_day:
+                due = transaction.first_due_date + relativedelta(months=i)
+            else:
+                due = transaction.first_due_date + timedelta(days=30 * i)
+            part_amount = last_amount if i == qnt - 1 else base_amount
+            k = (due.year, due.month)
+
+            if k in pending_by_month:
+                # Soma na parcela existente
+                existing_inst = pending_by_month.pop(k)
+                existing_inst.amount = round(existing_inst.amount + part_amount, 2)
+                
+                # Incrementa observação / histórico da transação existente
+                if existing_inst.transaction:
+                    existing_inst.transaction.total_amount = round(existing_inst.transaction.total_amount + part_amount, 2)
+                    tag = f"+ {transaction.description} (R$ {part_amount:,.2f})"
+                    if existing_inst.transaction.description:
+                        existing_inst.transaction.description = f"{existing_inst.transaction.description}\n• {tag}"
+                    else:
+                        existing_inst.transaction.description = tag
+            else:
+                # Cria nova parcela sob a transação atual
+                inst = FinancialInstallment(
+                    transaction_id=db_trans.id,
+                    number=len(created_installments) + 1,
+                    due_date=due,
+                    amount=part_amount,
+                    status="PENDING",
+                    account_id=transaction.account_id,
+                    exclude_from_reports=getattr(transaction, 'exclude_from_reports', False)
+                )
+                db.add(inst)
+                created_installments.append(inst)
+
+        # Se todas as parcelas foram somadas nas já existentes e nenhuma nova foi gerada sob db_trans, remove db_trans para não ficar órfã vazia
+        if not created_installments:
+            db.delete(db_trans)
+            db.commit()
+            # Retorna a primeira parcela existente afetada
+            first_affected = pending_list[0].transaction if pending_list else None
+            return first_affected
+        else:
+            db_trans.total_amount = round(sum(ci.amount for ci in created_installments), 2)
+            db.commit()
+            db.refresh(db_trans)
+            return db_trans
+
+    # Modo padrão (sem distribuição / soma mensal)
     for i in range(qnt):
         if transaction.keep_fixed_day:
             due = transaction.first_due_date + relativedelta(months=i)
         else:
             due = transaction.first_due_date + timedelta(days=30 * i)
         amount = last_amount if i == qnt - 1 else base_amount
-        inst = FinancialInstallment(transaction_id=db_trans.id, number=i + 1, due_date=due, amount=amount, status="PENDING", account_id=transaction.account_id)
+        inst = FinancialInstallment(
+            transaction_id=db_trans.id, 
+            number=i + 1, 
+            due_date=due, 
+            amount=amount, 
+            status="PENDING", 
+            account_id=transaction.account_id,
+            exclude_from_reports=getattr(transaction, 'exclude_from_reports', False)
+        )
         db.add(inst)
     
     db.commit()
@@ -254,20 +354,36 @@ def list_generic_installments(
     account_id: Optional[int] = None,
     order_id: Optional[int] = None,
     search: Optional[str] = None,
+    management_only: bool = Query(False, description="Filtrar apenas movimentações da empresa (ocultando contas pessoais e despesas desconsideradas)"),
+    personal_only: bool = Query(False, description="Filtrar apenas movimentações pessoais/desconsideradas"),
     page: int = 1,
     page_size: int = 50
 ):
     cid = get_company_id(current_user)
     str_types = types.split(',') if types else []
     
-    query = db.query(FinancialInstallment, FinancialTransaction, FinancialCategory, Customer, CompanySettings.inter_enabled).join(
+    query = db.query(FinancialInstallment, FinancialTransaction, FinancialCategory, Customer, CompanySettings.inter_enabled, FinancialAccount).join(
         FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
     ).join(FinancialCategory, FinancialTransaction.category_id == FinancialCategory.id).outerjoin(
         Customer, FinancialTransaction.customer_id == Customer.id
     ).outerjoin(
         CompanySettings, FinancialTransaction.company_id == CompanySettings.company_id
+    ).outerjoin(
+        FinancialAccount, FinancialInstallment.account_id == FinancialAccount.id
     )
     if cid: query = query.filter(FinancialTransaction.company_id == cid)
+
+    if management_only:
+        query = query.filter(
+            (FinancialAccount.id == None) | (FinancialAccount.is_personal == False),
+            FinancialTransaction.exclude_from_reports == False,
+            FinancialInstallment.exclude_from_reports == False
+        )
+    elif personal_only:
+        query = query.filter(
+            (FinancialAccount.is_personal == True) | (FinancialTransaction.exclude_from_reports == True) | (FinancialInstallment.exclude_from_reports == True)
+        )
+
     if status and status != 'ALL': 
         if status == 'OVERDUE':
             from datetime import date
@@ -297,13 +413,31 @@ def list_generic_installments(
     total = query.count()
     results = query.order_by(FinancialInstallment.due_date.asc()).offset((page - 1) * page_size).limit(page_size).all()
     
+    # Previne N+1 coletando a contagem de parcelas em batch por transaction_id
+    trans_ids = list({trans.id for _, trans, _, _, _, _ in results})
+    counts_map = {}
+    if trans_ids:
+        counts = db.query(
+            FinancialInstallment.transaction_id,
+            func.count(FinancialInstallment.id)
+        ).filter(FinancialInstallment.transaction_id.in_(trans_ids)).group_by(FinancialInstallment.transaction_id).all()
+        counts_map = {tid: c for tid, c in counts}
+
     items = []
-    for inst, trans, cat, cust, inter_enabled in results:
+    for inst, trans, cat, cust, inter_enabled, acc in results:
+        acc_is_personal = bool(acc.is_personal) if acc else False
+        is_excluded = bool(inst.exclude_from_reports or trans.exclude_from_reports or acc_is_personal)
+
         items.append({
             "id": inst.id, "number": inst.number, "due_date": inst.due_date, "amount": inst.amount, "status": inst.status,
             "payment_date": inst.payment_date, "transaction_id": trans.id, "description": trans.description, "order_id": trans.order_id,
-            "total_installments": db.query(func.count(FinancialInstallment.id)).filter(FinancialInstallment.transaction_id == trans.id).scalar(),
+            "total_installments": counts_map.get(trans.id, 1),
             "category_name": cat.name, "category_id": cat.id, "type": trans.type, "account_id": inst.account_id,
+            "account_name": acc.name if acc else None,
+            "account_is_personal": acc_is_personal,
+            "exclude_from_reports": is_excluded,
+            "inst_exclude_from_reports": bool(inst.exclude_from_reports),
+            "trans_exclude_from_reports": bool(trans.exclude_from_reports),
             "customer_name": cust.name if cust else None,
             "customer_id": cust.id if cust else None,
             "is_conciliated": inst.is_conciliated,
@@ -319,6 +453,31 @@ def list_generic_installments(
         "total": total,
         "page": page,
         "page_size": page_size
+    }
+
+@router.patch("/financial/generic_installments/{inst_id}/toggle_exclude")
+def toggle_installment_exclude(
+    inst_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    cid = get_company_id(current_user)
+    inst = db.query(FinancialInstallment).join(
+        FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
+    ).filter(
+        FinancialInstallment.id == inst_id,
+        FinancialTransaction.company_id == cid
+    ).first()
+    if not inst:
+        raise HTTPException(status_code=404, detail="Parcela não encontrada.")
+    
+    inst.exclude_from_reports = not inst.exclude_from_reports
+    db.commit()
+    db.refresh(inst)
+    return {
+        "id": inst.id,
+        "exclude_from_reports": inst.exclude_from_reports,
+        "message": "Lançamento desconsiderado de relatórios gerenciais." if inst.exclude_from_reports else "Lançamento reativado para relatórios gerenciais."
     }
 
 @router.get("/financial/reports/by-category")
@@ -854,11 +1013,18 @@ def edit_payment_generic_installment(
         trans = inst.transaction
         trans.category_id = pay_data.category_id
 
+    if "exclude_from_reports" in fields:
+        inst.exclude_from_reports = bool(pay_data.exclude_from_reports)
+
     db.commit()
     return {"message": "Lançamento editado com sucesso!"}
 
 @router.get("/financial/cashflow")
-def get_cashflow_projection(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_cashflow_projection(
+    include_personal: bool = Query(False),
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
     cid = get_company_id(current_user)
     from dateutil.relativedelta import relativedelta
     import calendar
@@ -867,9 +1033,19 @@ def get_cashflow_projection(db: Session = Depends(get_db), current_user: User = 
     start_date = today.replace(day=1)
     end_date = start_date + relativedelta(months=6)
     
-    query = db.query(FinancialInstallment, FinancialTransaction).join(
+    q = db.query(FinancialInstallment, FinancialTransaction).join(
         FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
-    ).filter(
+    )
+
+    if not include_personal:
+        q = q.outerjoin(FinancialAccount, FinancialInstallment.account_id == FinancialAccount.id)\
+             .filter(
+                 (FinancialAccount.id == None) | (FinancialAccount.is_personal == False),
+                 FinancialTransaction.exclude_from_reports == False,
+                 FinancialInstallment.exclude_from_reports == False
+             )
+
+    query = q.filter(
         FinancialTransaction.company_id == cid,
         FinancialInstallment.due_date >= start_date, FinancialInstallment.due_date < end_date,
         FinancialTransaction.transaction_status != 'CANCELADO'
@@ -917,6 +1093,7 @@ def create_account(account: FinancialAccountCreate, db: Session = Depends(get_db
         company_id=cid, name=account.name, type=account.type, 
         initial_balance=account.initial_balance, current_balance=account.initial_balance,
         closing_day=account.closing_day, due_day=account.due_day,
+        is_personal=getattr(account, 'is_personal', False),
         active=account.active
     )
     db.add(db_acc)
@@ -994,6 +1171,8 @@ def update_account(acc_id: int, account: FinancialAccountUpdate, db: Session = D
         acc.closing_day = account.closing_day
     if account.due_day is not None:
         acc.due_day = account.due_day
+    if account.is_personal is not None:
+        acc.is_personal = account.is_personal
     if account.active is not None:
         acc.active = account.active
         
@@ -1528,3 +1707,310 @@ def get_installment_bank_slip_pdf(inst_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         if isinstance(e, HTTPException): raise e
         raise HTTPException(status_code=500, detail=f"Erro ao obter PDF do Inter: {str(e)}")
+
+
+@router.post("/financial/installments/group")
+def group_financial_installments(
+    payload: FinancialInstallmentsGroupRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Agrupa múltiplos lançamentos / parcelas previstos do mesmo cliente/contato e mesmo tipo (RECEIVABLE ou PAYABLE).
+    Consolida valores e unifica observações garantindo rastreabilidade contábil (audit trail).
+    """
+    if len(payload.installment_ids) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="É necessário selecionar pelo menos duas parcelas para agrupar."
+        )
+
+    installments = db.query(FinancialInstallment).options(
+        joinedload(FinancialInstallment.transaction).joinedload(FinancialTransaction.category),
+        joinedload(FinancialInstallment.transaction).joinedload(FinancialTransaction.installments)
+    ).join(
+        FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
+    ).filter(
+        FinancialInstallment.id.in_(payload.installment_ids),
+        FinancialTransaction.company_id == current_user.company_id
+    ).all()
+
+    if len(installments) != len(payload.installment_ids):
+        raise HTTPException(status_code=404, detail="Uma ou mais parcelas não foram encontradas.")
+
+    # 1. Validações de integridade financeira
+    types = {i.transaction.type for i in installments if i.transaction}
+    if len(types) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível agrupar receitas com despesas. Selecione apenas lançamentos do mesmo tipo."
+        )
+
+    customer_ids = {i.transaction.customer_id for i in installments if i.transaction}
+    if len(customer_ids) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível agrupar lançamentos de clientes/fornecedores diferentes."
+        )
+
+    for inst in installments:
+        if inst.status == "PAID":
+            raise HTTPException(
+                status_code=400,
+                detail=f"A parcela #{inst.id} já está PAGA e não pode ser agrupada."
+            )
+        if inst.is_conciliated:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A parcela #{inst.id} já está CONCILIADA bancariamente e não pode ser agrupada."
+            )
+        if inst.status == "CANCELLED":
+            raise HTTPException(
+                status_code=400,
+                detail=f"A parcela #{inst.id} já está Cancelada e não pode ser agrupada."
+            )
+
+    # 2. Determina parcela mestre
+    target_inst = None
+    if payload.target_installment_id:
+        target_inst = next((i for i in installments if i.id == payload.target_installment_id), None)
+    if not target_inst:
+        sorted_inst = sorted(installments, key=lambda x: (x.due_date, x.id))
+        target_inst = sorted_inst[0]
+
+    other_inst = [i for i in installments if i.id != target_inst.id]
+
+    # 3. Consolidação de valores
+    total_amount = sum(i.amount for i in installments)
+
+    # 4. Composição da descrição/observação
+    if payload.description and payload.description.strip():
+        new_description = payload.description.strip()
+    else:
+        desc_parts = []
+        for i in installments:
+            orig_desc = i.transaction.description if i.transaction else "Lançamento"
+            desc_parts.append(f"Parc #{i.id} (R$ {i.amount:,.2f} - {orig_desc})")
+        new_description = "Lançamento Agrupado: " + " + ".join(desc_parts)
+
+    target_inst.amount = round(total_amount, 2)
+    target_inst.due_date = payload.due_date
+    if payload.account_id:
+        target_inst.account_id = payload.account_id
+
+    # Atualiza a transação mestre
+    if target_inst.transaction:
+        target_inst.transaction.total_amount = round(total_amount, 2)
+        target_inst.transaction.first_due_date = payload.due_date
+        target_inst.transaction.description = new_description
+        if payload.category_id:
+            target_inst.transaction.category_id = payload.category_id
+
+    # 5. Cancela com rastreabilidade as parcelas absorvidas
+    for i in other_inst:
+        i.status = "CANCELLED"
+        i.grouped_in_id = target_inst.id
+        if i.transaction:
+            tag = f"[AGRUPADO NA PARCELA #{target_inst.id}]"
+            if tag not in (i.transaction.description or ""):
+                i.transaction.description = f"{tag} {i.transaction.description or ''}".strip()
+
+    db.commit()
+    db.refresh(target_inst)
+
+    return {
+        "status": "success",
+        "message": f"{len(installments)} lançamentos agrupados com sucesso na parcela #{target_inst.id}.",
+        "target_installment_id": target_inst.id,
+        "total_amount": target_inst.amount,
+        "due_date": str(target_inst.due_date),
+        "description": new_description
+    }
+
+
+def _build_cashflow_forecast_data(
+    company_id: int,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    customer_id: Optional[int],
+    type_filter: Optional[str],
+    include_personal: bool = False,
+    db: Session = None
+):
+    """Helper que agrupa o fluxo de caixa previsto por cliente/fornecedor com rastreabilidade."""
+    from app.models.customer import Customer
+    from app.models.financial import FinancialTransaction, FinancialInstallment, FinancialCategory, FinancialAccount
+    from datetime import date as dt_date
+
+    query = db.query(FinancialInstallment).options(
+        joinedload(FinancialInstallment.transaction).joinedload(FinancialTransaction.category),
+        joinedload(FinancialInstallment.transaction).joinedload(FinancialTransaction.customer),
+        joinedload(FinancialInstallment.account)
+    ).join(
+        FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
+    ).filter(
+        FinancialTransaction.company_id == company_id,
+        FinancialInstallment.status.in_(["PENDING", "OVERDUE"]),
+        FinancialTransaction.transaction_status != "CANCELADO"
+    )
+
+    if not include_personal:
+        query = query.outerjoin(FinancialAccount, FinancialInstallment.account_id == FinancialAccount.id)\
+            .filter(
+                (FinancialAccount.id == None) | (FinancialAccount.is_personal == False),
+                FinancialTransaction.exclude_from_reports == False,
+                FinancialInstallment.exclude_from_reports == False
+            )
+
+    if customer_id:
+        query = query.filter(FinancialTransaction.customer_id == customer_id)
+    if type_filter:
+        query = query.filter(FinancialTransaction.type == type_filter)
+    if start_date:
+        query = query.filter(FinancialInstallment.due_date >= start_date)
+    if end_date:
+        query = query.filter(FinancialInstallment.due_date <= end_date)
+
+    installments = query.order_by(FinancialTransaction.customer_id, FinancialInstallment.due_date.asc(), FinancialInstallment.id.asc()).all()
+
+    customer_dict = {}
+    for inst in installments:
+        trans = inst.transaction
+        c_id = trans.customer_id if trans else None
+        key = c_id if c_id else 0
+
+        if key not in customer_dict:
+            c_name = trans.customer.name if (trans and trans.customer) else "Geral / Sem Cliente Definido"
+            c_doc = trans.customer.document if (trans and trans.customer) else ""
+            customer_dict[key] = {
+                "customer_id": c_id,
+                "customer_name": c_name,
+                "customer_document": c_doc,
+                "total_entradas": 0.0,
+                "total_saidas": 0.0,
+                "saldo_cliente": 0.0,
+                "items": []
+            }
+
+        t_type = trans.type if trans else "RECEIVABLE"
+        val = float(inst.amount or 0.0)
+
+        if t_type == "RECEIVABLE":
+            customer_dict[key]["total_entradas"] += val
+            customer_dict[key]["saldo_cliente"] += val
+        else:
+            customer_dict[key]["total_saidas"] += val
+            customer_dict[key]["saldo_cliente"] -= val
+
+        cat_name = trans.category.name if (trans and trans.category) else "Sem Categoria"
+        acc_name = inst.account.name if inst.account else "Padrão"
+        due_str = inst.due_date.strftime("%d/%m/%Y") if inst.due_date else "-"
+        desc_str = trans.description if trans else f"Parcela #{inst.id}"
+
+        customer_dict[key]["items"].append({
+            "id": inst.id,
+            "type": t_type,
+            "category_name": cat_name,
+            "account_name": acc_name,
+            "due_date": due_str,
+            "amount": val,
+            "status": inst.status,
+            "description": desc_str
+        })
+
+    return list(customer_dict.values())
+
+
+@router.get("/financial/reports/cashflow-forecast")
+def get_cashflow_forecast_report(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    customer_id: Optional[int] = None,
+    type_filter: Optional[str] = Query(None, alias="type"),
+    include_personal: bool = Query(False, description="Incluir contas pessoais e movimentações desconsideradas"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Retorna o fluxo de caixa previsto agrupado por cliente/contato para visualização em tela."""
+    groups = _build_cashflow_forecast_data(
+        company_id=current_user.company_id,
+        start_date=start_date,
+        end_date=end_date,
+        customer_id=customer_id,
+        type_filter=type_filter,
+        include_personal=include_personal,
+        db=db
+    )
+
+    grand_total_entradas = sum(g["total_entradas"] for g in groups)
+    grand_total_saidas = sum(g["total_saidas"] for g in groups)
+    grand_saldo_liquido = grand_total_entradas - grand_total_saidas
+
+    return {
+        "groups": groups,
+        "grand_total_entradas": grand_total_entradas,
+        "grand_total_saidas": grand_total_saidas,
+        "grand_saldo_liquido": grand_saldo_liquido,
+        "total_contacts": len(groups)
+    }
+
+
+@router.get("/financial/reports/cashflow-forecast/export")
+def export_cashflow_forecast_report(
+    format: str = Query("excel", pattern="^(excel|pdf)$"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    customer_id: Optional[int] = None,
+    type_filter: Optional[str] = Query(None, alias="type"),
+    include_personal: bool = Query(False, description="Incluir contas pessoais e movimentações desconsideradas"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Exporta a projeção de fluxo de caixa por cliente em Excel (.xlsx) ou PDF (.pdf)."""
+    from app.services.financial_exports import export_cashflow_forecast_excel, export_cashflow_forecast_pdf
+    from app.models.company import Company
+
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    company_name = company.name if company else "Cronuz"
+
+    groups = _build_cashflow_forecast_data(
+        company_id=current_user.company_id,
+        start_date=start_date,
+        end_date=end_date,
+        customer_id=customer_id,
+        type_filter=type_filter,
+        include_personal=include_personal,
+        db=db
+    )
+
+    period_parts = []
+    if start_date:
+        period_parts.append(f"De {start_date.strftime('%d/%m/%Y')}")
+    if end_date:
+        period_parts.append(f"Até {end_date.strftime('%d/%m/%Y')}")
+    period_label = " - ".join(period_parts) if period_parts else "Todos os Lançamentos Previstos"
+
+    now_str = datetime.now().strftime("%Y%m%d_%H%M")
+    if format == "excel":
+        buffer = export_cashflow_forecast_excel(
+            customer_groups=groups,
+            company_name=company_name,
+            period_label=period_label
+        )
+        filename = f"Fluxo_Caixa_Previsto_Por_Cliente_{now_str}.xlsx"
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        buffer = export_cashflow_forecast_pdf(
+            customer_groups=groups,
+            company_name=company_name,
+            period_label=period_label
+        )
+        filename = f"Fluxo_Caixa_Previsto_Por_Cliente_{now_str}.pdf"
+        media_type = "application/pdf"
+
+    return StreamingResponse(
+        buffer,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+

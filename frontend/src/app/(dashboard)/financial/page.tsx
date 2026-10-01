@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { DollarSign, CheckCircle, Search, Clock, AlertCircle, Plus, X, ArrowUpCircle, ArrowDownCircle, BarChart3, TrendingUp, Building2, CreditCard, Wallet, Pencil, Eye, ChevronLeft, ChevronRight, Hash, Trash2, AlertTriangle, FileText, QrCode, Mail } from 'lucide-react';
+import { DollarSign, CheckCircle, Search, Clock, AlertCircle, Plus, X, ArrowUpCircle, ArrowDownCircle, BarChart3, TrendingUp, Building2, CreditCard, Wallet, Pencil, Eye, ChevronLeft, ChevronRight, Hash, Trash2, AlertTriangle, FileText, QrCode, Mail, Layers, Download, Loader2, ShieldAlert, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
@@ -38,6 +38,7 @@ export default function FinancialPage() {
     const [orderIdFilter, setOrderIdFilter] = useState('');
     const [searchFilter, setSearchFilter] = useState('');
     const [types, setTypes] = useState({ receivable: true, payable: true });
+    const [viewScope, setViewScope] = useState<'MANAGEMENT' | 'ALL' | 'PERSONAL'>('MANAGEMENT');
     const [startDate, setStartDate] = useState(() => {
         const d = new Date();
         return `${d.getFullYear()}-01-01`;
@@ -61,14 +62,45 @@ export default function FinancialPage() {
         installments_count: '1', customer_id: '', account_id: '', order_id: '',
         recurrence_end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0],
         customer_search_text: '',
-        keep_fixed_day: false
+        keep_fixed_day: false,
+        exclude_from_reports: false
     });
+    const [pendingCustomerInstallments, setPendingCustomerInstallments] = useState<any[]>([]);
+    const [mergeWithExisting, setMergeWithExisting] = useState(false);
+    const [selectedTargetInstallmentIds, setSelectedTargetInstallmentIds] = useState<number[]>([]);
+
     // Simulation State
     const [isSimulationOpen, setIsSimulationOpen] = useState(false);
     const [simulationAccountIds, setSimulationAccountIds] = useState<number[]>([]);
     const [selectedInstallments, setSelectedInstallments] = useState<number[]>([]);
     const [isBulkDateModalOpen, setIsBulkDateModalOpen] = useState(false);
     const [bulkDueDate, setBulkDueDate] = useState('');
+
+    // Grouping State
+    const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+    const [groupDueDate, setGroupDueDate] = useState('');
+    const [groupNotes, setGroupNotes] = useState('');
+    const [groupAccountId, setGroupAccountId] = useState('');
+    const [groupCategoryId, setGroupCategoryId] = useState('');
+    const [isGrouping, setIsGrouping] = useState(false);
+
+    // Cashflow Forecast Report Modal State
+    const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+    const [reportStartDate, setReportStartDate] = useState(() => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+    });
+    const [reportEndDate, setReportEndDate] = useState(() => {
+        const d = new Date();
+        d.setMonth(d.getMonth() + 3);
+        const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+        return `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+    });
+    const [reportType, setReportType] = useState<string>('');
+    const [reportCustomerId, setReportCustomerId] = useState<string>('');
+    const [reportData, setReportData] = useState<any>(null);
+    const [reportLoading, setReportLoading] = useState(false);
+    const [reportExporting, setReportExporting] = useState<'excel' | 'pdf' | null>(null);
 
     const [preview, setPreview] = useState<any[]>([]);
     const [customerOrders, setCustomerOrders] = useState<any[]>([]);
@@ -110,7 +142,9 @@ export default function FinancialPage() {
     useEffect(() => {
         if (page === 1) fetchInstallments();
         else setPage(1);
-    }, [statusFilter, types.receivable, types.payable]);
+        fetchMetrics();
+        fetchCashflow();
+    }, [statusFilter, types.receivable, types.payable, viewScope]);
 
     useEffect(() => {
         fetchInstallments();
@@ -220,7 +254,35 @@ export default function FinancialPage() {
             } catch (e) {}
         };
         fetchOrders();
-    }, [formData.customer_id]);
+
+        const fetchPendingInstallments = async () => {
+            if (!formData.customer_id) {
+                setPendingCustomerInstallments([]);
+                setMergeWithExisting(false);
+                setSelectedTargetInstallmentIds([]);
+                return;
+            }
+            try {
+                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/generic_installments?customer_id=${formData.customer_id}&status=PENDING&type=${formData.type}&page=1&page_size=50`, {
+                    headers: { 'Authorization': `Bearer ${getToken()}` }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    const items = data.items || [];
+                    setPendingCustomerInstallments(items);
+                    if (items.length > 0) {
+                        setSelectedTargetInstallmentIds(items.map((it: any) => it.id));
+                    } else {
+                        setSelectedTargetInstallmentIds([]);
+                        setMergeWithExisting(false);
+                    }
+                }
+            } catch (e) {
+                setPendingCustomerInstallments([]);
+            }
+        };
+        fetchPendingInstallments();
+    }, [formData.customer_id, formData.type]);
 
     const fetchAccounts = async () => {
         try {
@@ -231,16 +293,42 @@ export default function FinancialPage() {
 
     const fetchMetrics = async () => {
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/summary`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+            const incPersonal = viewScope === 'ALL' || viewScope === 'PERSONAL';
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/summary?include_personal=${incPersonal}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
             if (res.ok) setMetrics(await res.json());
         } catch (e) {}
     };
 
     const fetchCashflow = async () => {
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/cashflow`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+            const incPersonal = viewScope === 'ALL' || viewScope === 'PERSONAL';
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/cashflow?include_personal=${incPersonal}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
             if (res.ok) setCashflow(await res.json());
         } catch (e) {}
+    };
+
+    const handleToggleExclude = async (instId: number) => {
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/generic_installments/${instId}/toggle_exclude`, {
+                method: 'PATCH',
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                toast.success(data.message);
+                setInstallments(prev => prev.map(item => item.id === instId ? { 
+                    ...item, 
+                    exclude_from_reports: data.exclude_from_reports, 
+                    inst_exclude_from_reports: data.exclude_from_reports 
+                } : item));
+                fetchMetrics();
+                fetchCashflow();
+            } else {
+                toast.error("Erro ao alterar visibilidade gerencial");
+            }
+        } catch (e) {
+            toast.error("Erro de conexão");
+        }
     };
 
     const fetchInstallments = async () => {
@@ -252,6 +340,12 @@ export default function FinancialPage() {
             if (orderIdFilter) url.searchParams.append('order_id', orderIdFilter);
             if (searchFilter) url.searchParams.append('search', searchFilter);
             
+            if (viewScope === 'MANAGEMENT') {
+                url.searchParams.append('management_only', 'true');
+            } else if (viewScope === 'PERSONAL') {
+                url.searchParams.append('personal_only', 'true');
+            }
+
             if (!types.receivable && !types.payable) url.searchParams.append('type', 'NONE');
             else if (types.receivable && !types.payable) url.searchParams.append('type', 'RECEIVABLE');
             else if (!types.receivable && types.payable) url.searchParams.append('type', 'PAYABLE');
@@ -318,7 +412,9 @@ export default function FinancialPage() {
                 installments_count: final_count,
                 customer_id: formData.customer_id ? parseInt(formData.customer_id) : null,
                 account_id: formData.account_id ? parseInt(formData.account_id) : null,
-                order_id: formData.order_id ? parseInt(formData.order_id) : null
+                order_id: formData.order_id ? parseInt(formData.order_id) : null,
+                merge_mode: mergeWithExisting ? "DISTRIBUTE_MONTHLY" : "NONE",
+                target_installment_ids: (mergeWithExisting && selectedTargetInstallmentIds.length > 0) ? selectedTargetInstallmentIds : null
             };
             const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/transactions`, {
                 method: 'POST',
@@ -326,9 +422,16 @@ export default function FinancialPage() {
                 body: JSON.stringify(payload)
             });
             if (res.ok) {
-                toast.success("Lançamento salvo com sucesso!");
+                if (mergeWithExisting) {
+                    toast.success("Lançamento incorporado e somado mês a mês com sucesso!");
+                } else {
+                    toast.success("Lançamento salvo com sucesso!");
+                }
                 setIsModalOpen(false);
-                setFormData({ description: '', category_id: '', type: 'PAYABLE', transaction_status: 'CONFIRMADO', is_fixed: false, total_amount: '', issue_date: new Date().toISOString().split('T')[0], first_due_date: new Date().toISOString().split('T')[0], installments_count: '1', customer_id: '', account_id: '', order_id: '', recurrence_end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0], customer_search_text: '', keep_fixed_day: false });
+                setMergeWithExisting(false);
+                setSelectedTargetInstallmentIds([]);
+                setPendingCustomerInstallments([]);
+                setFormData({ description: '', category_id: '', type: 'PAYABLE', transaction_status: 'CONFIRMADO', is_fixed: false, total_amount: '', issue_date: new Date().toISOString().split('T')[0], first_due_date: new Date().toISOString().split('T')[0], installments_count: '1', customer_id: '', account_id: '', order_id: '', recurrence_end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0], customer_search_text: '', keep_fixed_day: false, exclude_from_reports: false });
                 fetchInstallments(); fetchMetrics(); fetchCashflow();
             } else {
                 try {
@@ -467,6 +570,153 @@ export default function FinancialPage() {
         }
     };
 
+    // Helper to check if selected installments can be grouped
+    const selectedInstObjects = installments.filter(i => selectedInstallments.includes(i.id));
+    const canGroup = selectedInstallments.length >= 2 && 
+        selectedInstObjects.length === selectedInstallments.length &&
+        selectedInstObjects.every(i => i.status !== 'PAID' && i.status !== 'CANCELLED' && !i.is_conciliated) &&
+        new Set(selectedInstObjects.map(i => i.type)).size === 1 &&
+        new Set(selectedInstObjects.map(i => i.customer_id || 0)).size === 1;
+
+    const handleOpenGroupModal = () => {
+        if (selectedInstallments.length < 2) {
+            toast.error("Selecione ao menos 2 lançamentos para agrupar.");
+            return;
+        }
+
+        const items = selectedInstObjects;
+        const typesSet = new Set(items.map(i => i.type));
+        if (typesSet.size > 1) {
+            toast.error("Não é possível agrupar receitas com despesas juntas.");
+            return;
+        }
+
+        const custSet = new Set(items.map(i => i.customer_id || 0));
+        if (custSet.size > 1) {
+            toast.error("Todos os lançamentos selecionados devem pertencer ao mesmo cliente/contato.");
+            return;
+        }
+
+        const invalidStatus = items.find(i => i.status === 'PAID' || i.status === 'CANCELLED' || i.is_conciliated);
+        if (invalidStatus) {
+            toast.error("Não é permitido agrupar lançamentos já pagos, cancelados ou conciliados.");
+            return;
+        }
+
+        const sortedDates = [...items].sort((a, b) => new Date(b.due_date).getTime() - new Date(a.due_date).getTime());
+        setGroupDueDate(sortedDates[0]?.due_date ? new Date(sortedDates[0].due_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
+        setGroupAccountId(items[0]?.account_id ? String(items[0].account_id) : '');
+        setGroupCategoryId(items[0]?.category_id ? String(items[0].category_id) : '');
+
+        const lines = items.map(i => {
+            const dt = i.due_date ? new Date(i.due_date).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '-';
+            const val = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(i.amount);
+            return `• Parcela #${i.id} (Venc: ${dt}, Valor: ${val}) - ${i.description || 'Sem descrição'}`;
+        });
+        const combined = `Agrupamento consolidado de ${items.length} lançamentos:\n` + lines.join('\n');
+        setGroupNotes(combined);
+        setIsGroupModalOpen(true);
+    };
+
+    const handleConfirmGroup = async () => {
+        if (!groupDueDate) {
+            toast.error("Informe a data de vencimento do lançamento consolidado.");
+            return;
+        }
+        setIsGrouping(true);
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/installments/group`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${getToken()}`
+                },
+                body: JSON.stringify({
+                    installment_ids: selectedInstallments,
+                    new_due_date: groupDueDate,
+                    combined_notes: groupNotes,
+                    new_account_id: groupAccountId ? parseInt(groupAccountId) : null,
+                    new_category_id: groupCategoryId ? parseInt(groupCategoryId) : null
+                })
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || 'Falha ao agrupar lançamentos.');
+            }
+
+            const data = await res.json();
+            toast.success(data.message || 'Lançamentos agrupados com sucesso!');
+            setIsGroupModalOpen(false);
+            setSelectedInstallments([]);
+            fetchInstallments();
+            fetchMetrics();
+            fetchCashflow();
+        } catch (err: any) {
+            toast.error(err.message || 'Erro ao processar agrupamento.');
+        } finally {
+            setIsGrouping(false);
+        }
+    };
+
+    const fetchCashflowForecastReport = async () => {
+        setReportLoading(true);
+        try {
+            const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/reports/cashflow-forecast`);
+            if (reportStartDate) url.searchParams.append('start_date', reportStartDate);
+            if (reportEndDate) url.searchParams.append('end_date', reportEndDate);
+            if (reportType) url.searchParams.append('type', reportType);
+            if (reportCustomerId) url.searchParams.append('customer_id', reportCustomerId);
+
+            const res = await fetch(url.toString(), {
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            });
+            if (!res.ok) throw new Error("Erro ao carregar relatório de fluxo previsto.");
+            const data = await res.json();
+            setReportData(data);
+        } catch (e: any) {
+            toast.error(e.message || "Erro ao carregar relatório.");
+        } finally {
+            setReportLoading(false);
+        }
+    };
+
+    const handleExportCashflowReport = async (format: 'excel' | 'pdf') => {
+        setReportExporting(format);
+        try {
+            const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/reports/cashflow-forecast/export`);
+            url.searchParams.append('format', format);
+            if (reportStartDate) url.searchParams.append('start_date', reportStartDate);
+            if (reportEndDate) url.searchParams.append('end_date', reportEndDate);
+            if (reportType) url.searchParams.append('type', reportType);
+            if (reportCustomerId) url.searchParams.append('customer_id', reportCustomerId);
+
+            const res = await fetch(url.toString(), {
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || "Erro ao exportar arquivo.");
+            }
+
+            const blob = await res.blob();
+            const downloadUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = format === 'excel' ? 'Fluxo_Caixa_Previsto.xlsx' : 'Fluxo_Caixa_Previsto.pdf';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(downloadUrl);
+            toast.success(`Relatório em ${format.toUpperCase()} exportado com sucesso!`);
+        } catch (e: any) {
+            toast.error(e.message || "Falha na exportação do relatório.");
+        } finally {
+            setReportExporting(null);
+        }
+    };
+
     const maxChartValue = Math.max(...cashflow.map(c => Math.max(c.Receitas, c.Despesas + c.Prospeccoes, 100)));
     const totalConsolidated = accounts.reduce((acc, curr) => acc + (curr.type !== 'CREDIT_CARD' ? curr.current_balance : 0), 0);
     const totalCreditDebt = accounts.reduce((acc, curr) => acc + (curr.type === 'CREDIT_CARD' && curr.current_balance < 0 ? Math.abs(curr.current_balance) : 0), 0);
@@ -501,12 +751,22 @@ export default function FinancialPage() {
                 
                 <div className="flex gap-2 relative z-10 w-full md:w-auto overflow-x-auto pb-2 md:pb-0 hide-scrollbar">
                     <button 
+                        onClick={() => {
+                            setIsReportModalOpen(true);
+                            fetchCashflowForecastReport();
+                        }}
+                        className="px-4 md:px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold shadow-sm transition flex items-center gap-2 text-sm whitespace-nowrap"
+                        title="Relatório de Fluxo de Caixa Previsto por Cliente (Excel / PDF)"
+                    >
+                        <FileText className="w-4 h-4"/> Relatório Previsto
+                    </button>
+                    <button 
                         onClick={() => setIsSimulationOpen(!isSimulationOpen)} 
-                        className={`px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 text-sm text-center justify-center border whitespace-nowrap ${isSimulationOpen ? 'bg-amber-500 text-white border-amber-600' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
+                        className={`px-4 md:px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 text-sm text-center justify-center border whitespace-nowrap ${isSimulationOpen ? 'bg-amber-500 text-white border-amber-600' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
                     >
                         <TrendingUp className="w-4 h-4"/> Simular Caixa
                     </button>
-                    <button onClick={() => setIsModalOpen(true)} className="px-5 py-2.5 bg-[var(--color-primary-base)] text-white rounded-xl font-semibold hover:opacity-90 shadow-sm transition flex items-center gap-2 text-sm whitespace-nowrap">
+                    <button onClick={() => setIsModalOpen(true)} className="px-4 md:px-5 py-2.5 bg-[var(--color-primary-base)] text-white rounded-xl font-semibold hover:opacity-90 shadow-sm transition flex items-center gap-2 text-sm whitespace-nowrap">
                         <Plus className="w-4 h-4"/> Novo Lançamento
                     </button>
                 </div>
@@ -621,6 +881,33 @@ export default function FinancialPage() {
                                         DESPESAS
                                     </button>
                                 </div>
+
+                                <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-sm shrink-0 w-full sm:w-auto overflow-x-auto gap-1">
+                                    <button 
+                                        type="button"
+                                        onClick={() => setViewScope('MANAGEMENT')}
+                                        className={`px-3 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap border ${viewScope === 'MANAGEMENT' ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm border-slate-200 dark:border-slate-700 font-black' : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'}`}
+                                        title="Oculta despesas de contas pessoais e movimentações marcadas fora de relatórios"
+                                    >
+                                        🏢 Empresa
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        onClick={() => setViewScope('ALL')}
+                                        className={`px-3 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap border ${viewScope === 'ALL' ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm border-slate-200 dark:border-slate-700 font-black' : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'}`}
+                                        title="Exibe todos os lançamentos e contas"
+                                    >
+                                        🌐 Todas
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        onClick={() => setViewScope('PERSONAL')}
+                                        className={`px-3 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap border ${viewScope === 'PERSONAL' ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-sm border-slate-200 dark:border-slate-700 font-black' : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'}`}
+                                        title="Exibe apenas lançamentos de contas físicas e despesas desconsideradas"
+                                    >
+                                        👤 Pessoais
+                                    </button>
+                                </div>
                                 
                                 <div className="w-full sm:w-auto min-w-[220px] shrink-0 h-11">
                                     <CustomerAutocomplete 
@@ -718,7 +1005,19 @@ export default function FinancialPage() {
                                                     <Link href={`/financial/transactions/${inst.transaction_id}`} className="font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 max-w-[200px] truncate block" title={inst.description}>
                                                         {inst.description}
                                                     </Link>
-                                                    <div className="text-[10px] font-mono bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 rounded px-1.5 py-0.5 w-fit mt-1">{inst.category_name}</div>
+                                                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                                        <span className="text-[10px] font-mono bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 rounded px-1.5 py-0.5 w-fit">{inst.category_name}</span>
+                                                        {inst.account_is_personal && (
+                                                            <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 rounded px-1.5 py-0.5 flex items-center gap-0.5" title="Conta bancária física/pessoal">
+                                                                👤 Conta PF
+                                                            </span>
+                                                        )}
+                                                        {inst.exclude_from_reports && (
+                                                            <span className="text-[10px] font-semibold bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300 rounded px-1.5 py-0.5 flex items-center gap-0.5" title="Desconsiderado das análises gerenciais da empresa">
+                                                                🚫 Fora da Análise
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </td>
                                                 <td className="px-6 py-4">
                                                     <div className="font-medium text-slate-700 dark:text-slate-200 max-w-[150px] truncate" title={inst.customer_name || 'N/A'}>
@@ -766,6 +1065,13 @@ export default function FinancialPage() {
                                                                 </button>
                                                             )
                                                         )}
+                                                        <button 
+                                                            onClick={() => handleToggleExclude(inst.id)} 
+                                                            className={`p-1.5 rounded-lg transition shrink-0 ${inst.exclude_from_reports ? 'text-amber-600 bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/20 dark:text-amber-400 dark:hover:bg-amber-900/40' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800'}`} 
+                                                            title={inst.exclude_from_reports ? "Desconsiderado das análises gerenciais da empresa. Clique para INCLUIR." : "Incluído nas análises gerenciais da empresa. Clique para DESCONSIDERAR (Gasto Pessoal/Ignorar)."}
+                                                        >
+                                                            {inst.exclude_from_reports ? <EyeOff className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />}
+                                                        </button>
                                                         {inst.status !== 'PAID' && inst.status !== 'CANCELLED' && (
                                                             <button onClick={()=>{
                                                                 setPayData({inst_id: inst.id, account_id: inst.account_id || '', amount: inst.amount, editMode: false, payment_date: new Date().toISOString().split('T')[0], category_id: inst.category_id || ''});
@@ -777,7 +1083,7 @@ export default function FinancialPage() {
                                                         {inst.status === 'PAID' && !inst.is_conciliated && (
                                                             <button onClick={()=>{
                                                                 setPayData({
-                                                                    inst_id: inst.id, 
+                                                                     inst_id: inst.id, 
                                                                     account_id: inst.account_id || '', 
                                                                     amount: inst.amount, 
                                                                     editMode: true,
@@ -936,12 +1242,144 @@ export default function FinancialPage() {
                                         </select>
                                     </div>
                                     )}
+
+                                    {/* Card de Agrupamento / Soma Mensal com Lançamentos Previstos */}
+                                    {formData.customer_id && pendingCustomerInstallments && pendingCustomerInstallments.length > 0 && (
+                                        <div className="col-span-full bg-gradient-to-br from-amber-50/80 to-indigo-50/50 dark:from-amber-950/20 dark:to-indigo-950/20 border border-amber-200 dark:border-amber-800/60 rounded-2xl p-3.5 space-y-3">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="flex items-center gap-2">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        id="merge-financial-with-existing" 
+                                                        checked={mergeWithExisting} 
+                                                        onChange={(e) => {
+                                                            const checked = e.target.checked;
+                                                            setMergeWithExisting(checked);
+                                                            if (checked) {
+                                                                setSelectedTargetInstallmentIds(pendingCustomerInstallments.map((it: any) => it.id));
+                                                            } else {
+                                                                setSelectedTargetInstallmentIds([]);
+                                                            }
+                                                        }} 
+                                                        className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                                                    />
+                                                    <label htmlFor="merge-financial-with-existing" className="text-xs font-bold text-amber-900 dark:text-amber-300 cursor-pointer flex items-center gap-1.5">
+                                                        <Layers className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                                                        Somar mês a mês com as parcelas já previstas deste contato ({pendingCustomerInstallments.length})?
+                                                    </label>
+                                                </div>
+
+                                                {mergeWithExisting && (
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSelectedTargetInstallmentIds(pendingCustomerInstallments.map((it: any) => it.id))}
+                                                            className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                                                        >
+                                                            Marcar Todas
+                                                        </button>
+                                                        <span className="text-slate-300 dark:text-slate-700 text-xs">|</span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSelectedTargetInstallmentIds([])}
+                                                            className="text-[10px] font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                                                        >
+                                                            Limpar
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {mergeWithExisting && (
+                                                <div className="pt-1 space-y-2">
+                                                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 dark:text-slate-400 px-0.5">
+                                                        <span>Parcelas que receberão a soma nos mesmos meses:</span>
+                                                        <span className="text-indigo-600 dark:text-indigo-400 font-black">
+                                                            {selectedTargetInstallmentIds.length} de {pendingCustomerInstallments.length} selecionada(s)
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+                                                        {pendingCustomerInstallments.map((it: any) => {
+                                                            const isChecked = selectedTargetInstallmentIds.includes(it.id);
+                                                            return (
+                                                                <div
+                                                                    key={it.id}
+                                                                    onClick={() => {
+                                                                        if (isChecked) {
+                                                                            setSelectedTargetInstallmentIds(selectedTargetInstallmentIds.filter(id => id !== it.id));
+                                                                        } else {
+                                                                            setSelectedTargetInstallmentIds([...selectedTargetInstallmentIds, it.id]);
+                                                                        }
+                                                                    }}
+                                                                    className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 text-xs ${
+                                                                        isChecked
+                                                                            ? 'bg-indigo-50/70 border-indigo-300 dark:bg-indigo-950/40 dark:border-indigo-700 shadow-sm'
+                                                                            : 'bg-white/80 dark:bg-slate-900 border-slate-200 dark:border-slate-800 opacity-70 hover:opacity-100'
+                                                                    }`}
+                                                                >
+                                                                    <div className="flex items-center gap-2.5 min-w-0">
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            checked={isChecked}
+                                                                            onChange={() => {}}
+                                                                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer pointer-events-none"
+                                                                        />
+                                                                        <div className="truncate">
+                                                                            <div className="flex items-center gap-1.5">
+                                                                                <span className="font-black text-indigo-700 dark:text-indigo-400">
+                                                                                    #{it.id}
+                                                                                </span>
+                                                                                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                                                                                    {it.transaction?.description || it.description || 'Lançamento'}
+                                                                                </span>
+                                                                            </div>
+                                                                            <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                                                                                Venc: {it.due_date ? new Date(it.due_date + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    <div className="text-right flex-shrink-0">
+                                                                        <div className="font-bold text-slate-900 dark:text-white">
+                                                                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(it.amount)}
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+
+                                                    <div className="p-2.5 rounded-xl bg-amber-100/70 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-950 dark:text-amber-200 space-y-1">
+                                                        <p className="font-medium text-slate-700 dark:text-slate-300">
+                                                            • O valor de cada parcela deste novo lançamento será somado diretamente na parcela correspondente do mesmo mês/ano.<br/>
+                                                            • Se o novo contrato/lançamento contemplar meses excedentes, novas parcelas serão geradas automaticamente para esses meses.
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                     <div>
                                         <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Conta Financeira Base</label>
-                                        <select value={formData.account_id} onChange={(e)=>setFormData({...formData, account_id: e.target.value})} className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm">
+                                        <select 
+                                            value={formData.account_id} 
+                                            onChange={(e) => {
+                                                const accId = e.target.value;
+                                                const selectedAcc = accounts.find(a => String(a.id) === accId);
+                                                setFormData({
+                                                    ...formData, 
+                                                    account_id: accId,
+                                                    exclude_from_reports: selectedAcc?.is_personal ? true : formData.exclude_from_reports
+                                                });
+                                            }} 
+                                            className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm"
+                                        >
                                             <option value="">(Opcional) Nenhuma Conta</option>
                                             {accounts.map(acc => (
-                                                <option key={acc.id} value={acc.id}>{acc.name} ({acc.type === 'CREDIT_CARD' ? 'Cartão' : acc.type === 'WALLET' ? 'Caixa' : 'Conta'})</option>
+                                                <option key={acc.id} value={acc.id}>
+                                                    {acc.name} ({acc.is_personal ? '👤 Pessoal' : '🏢 Empresa'}) - {acc.type === 'CREDIT_CARD' ? 'Cartão' : acc.type === 'WALLET' ? 'Caixa' : 'Conta'}
+                                                </option>
                                             ))}
                                         </select>
                                     </div>
@@ -964,6 +1402,25 @@ export default function FinancialPage() {
                                                 </label>
                                             )}
                                         </div>
+                                    </div>
+
+                                    <div className="col-span-full">
+                                        <label className="flex items-start gap-3 cursor-pointer p-3 border border-amber-200 dark:border-amber-900/50 bg-amber-50/50 dark:bg-amber-950/20 rounded-xl hover:bg-amber-50 dark:hover:bg-amber-950/30 transition">
+                                            <input 
+                                                type="checkbox" 
+                                                className="w-5 h-5 mt-0.5 rounded text-amber-600 focus:ring-amber-500" 
+                                                checked={formData.exclude_from_reports} 
+                                                onChange={(e)=>setFormData({...formData, exclude_from_reports: e.target.checked})} 
+                                            />
+                                            <div>
+                                                <span className="text-sm font-bold text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
+                                                    🚫 Desconsiderar das Análises Gerenciais da Empresa
+                                                </span>
+                                                <span className="text-xs text-amber-700 dark:text-amber-400 block mt-0.5">
+                                                    Marque para despesas/receitas pessoais (PF) ou movimentações que não devem compor o DRE, faturamento real ou fluxo de caixa empresarial.
+                                                </span>
+                                            </div>
+                                        </label>
                                     </div>
                                     
                                     {(() => {
@@ -1221,6 +1678,16 @@ export default function FinancialPage() {
                     </div>
                     <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-800 hidden md:block" />
                     <div className="flex items-center gap-2">
+                        {selectedInstallments.length >= 2 && (
+                            <button
+                                type="button"
+                                onClick={handleOpenGroupModal}
+                                className={`px-4 py-2 text-white font-semibold rounded-xl text-sm transition-colors shadow-sm flex items-center gap-1.5 ${canGroup ? 'bg-purple-600 hover:bg-purple-700 cursor-pointer' : 'bg-slate-400 opacity-60 cursor-not-allowed'}`}
+                                title={canGroup ? "Agrupar parcelas selecionadas em um único lançamento" : "Para agrupar, selecione ao menos 2 lançamentos pendentes do mesmo cliente e com o mesmo tipo (receitas ou despesas)."}
+                            >
+                                <Layers className="w-4 h-4" /> Agrupar Lançamentos
+                            </button>
+                        )}
                         <button
                             type="button"
                             onClick={() => {
@@ -1278,6 +1745,381 @@ export default function FinancialPage() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* GROUP INSTALLMENTS MODAL */}
+            {isGroupModalOpen && (
+                <div className="fixed inset-0 bg-slate-900/60 dark:bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-xl w-full shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
+                        <div className="px-6 py-5 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50 flex-shrink-0">
+                            <h3 className="font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                                <Layers className="w-5 h-5 text-purple-600" />
+                                Agrupar Lançamentos Previstos
+                            </h3>
+                            <button type="button" onClick={() => setIsGroupModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-800 p-2 rounded-full cursor-pointer">
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+
+                        <div className="p-6 space-y-5 overflow-y-auto flex-1">
+                            <div className="p-4 bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/50 rounded-2xl">
+                                <div className="text-xs font-bold text-purple-700 dark:text-purple-300 uppercase tracking-wider mb-2">
+                                    Resumo da Consolidação
+                                </div>
+                                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                                    <div>
+                                        <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                                            {selectedInstObjects[0]?.customer_name || 'Cliente'}
+                                        </div>
+                                        <div className="text-xs text-slate-500">
+                                            {selectedInstObjects.length} títulos selecionados ({selectedInstObjects[0]?.type === 'RECEIVABLE' ? 'Receitas' : 'Despesas'})
+                                        </div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-xs text-slate-500">Valor Total Consolidado:</div>
+                                        <div className="text-xl font-black text-purple-700 dark:text-purple-400">
+                                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedInstObjects.reduce((sum, i) => sum + i.amount, 0))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Detalhe dos Lançamentos Agrupados */}
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Títulos que serão consolidados:</label>
+                                <div className="max-h-36 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 bg-slate-50/50 dark:bg-slate-900/40">
+                                    {selectedInstObjects.map(inst => (
+                                        <div key={inst.id} className="p-2.5 flex items-center justify-between text-xs">
+                                            <div>
+                                                <span className="font-bold text-slate-700 dark:text-slate-300 mr-2">Fatura #{inst.id}</span>
+                                                <span className="text-slate-500 truncate inline-block max-w-[200px] align-middle">{inst.description}</span>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <span className="text-slate-400 font-medium">Venc: {inst.due_date ? new Date(inst.due_date).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '-'}</span>
+                                                <span className="font-bold text-slate-900 dark:text-white">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(inst.amount)}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="text-[11px] text-slate-400 mt-1.5">
+                                    Os títulos acima serão marcados como cancelados por agrupamento com histórico auditável preservado.
+                                </p>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Novo Vencimento Unificado *</label>
+                                    <input
+                                        type="date"
+                                        required
+                                        value={groupDueDate}
+                                        onChange={(e) => setGroupDueDate(e.target.value)}
+                                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-xs focus:ring-2 focus:ring-purple-500 outline-none dark:text-white font-medium"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Conta Financeira (Opcional)</label>
+                                    <select
+                                        value={groupAccountId}
+                                        onChange={(e) => setGroupAccountId(e.target.value)}
+                                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-xs focus:ring-2 focus:ring-purple-500 outline-none dark:text-white"
+                                    >
+                                        <option value="">(Manter conta padrão)</option>
+                                        {accounts.map(acc => (
+                                            <option key={acc.id} value={acc.id}>{acc.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Categoria Financeira (Opcional)</label>
+                                <select
+                                    value={groupCategoryId}
+                                    onChange={(e) => setGroupCategoryId(e.target.value)}
+                                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-xs focus:ring-2 focus:ring-purple-500 outline-none dark:text-white"
+                                >
+                                    <option value="">(Manter categoria)</option>
+                                    {categories
+                                        .filter(c => selectedInstObjects[0] ? c.type === selectedInstObjects[0].type : true)
+                                        .map(c => ({ ...c, hierarchy: getCategoryHierarchyName(c, categories) }))
+                                        .sort((a, b) => a.hierarchy.localeCompare(b.hierarchy))
+                                        .map(cat => (
+                                            <option key={cat.id} value={cat.id}>{cat.hierarchy}</option>
+                                        ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Observações / Composição Contábil:</label>
+                                <textarea
+                                    rows={4}
+                                    value={groupNotes}
+                                    onChange={(e) => setGroupNotes(e.target.value)}
+                                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-3 text-xs leading-relaxed outline-none dark:text-white resize-none font-mono"
+                                    placeholder="Detalhe a composição deste lançamento agrupado..."
+                                />
+                                <p className="text-[10px] text-slate-400 mt-1">
+                                    Este texto será registrado no lançamento consolidado e constará nos relatórios em PDF e Excel.
+                                </p>
+                            </div>
+
+                            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsGroupModalOpen(false)}
+                                    className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-semibold dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800 transition"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleConfirmGroup}
+                                    disabled={isGrouping}
+                                    className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-bold rounded-xl text-sm transition shadow-md flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    {isGrouping ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 animate-spin" /> Agrupando...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Layers className="w-4 h-4" /> Confirmar Agrupamento
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* CASHFLOW FORECAST REPORT MODAL */}
+            {isReportModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-slate-900/60 backdrop-blur-md">
+                    <div className="bg-white dark:bg-slate-950 rounded-3xl max-w-5xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200">
+                        {/* Header */}
+                        <div className="px-6 py-5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50 flex-shrink-0">
+                            <div>
+                                <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2.5">
+                                    <BarChart3 className="w-6 h-6 text-emerald-500" />
+                                    Relatório de Fluxo de Caixa Previsto por Cliente
+                                </h3>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                                    Demonstrativo de lançamentos previstos (entradas, saídas e composição de títulos agrupados)
+                                </p>
+                            </div>
+                            <button onClick={() => setIsReportModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* Barra de Filtros e Exportação */}
+                        <div className="p-5 border-b border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900/30 flex flex-wrap items-end gap-3 flex-shrink-0">
+                            <div className="flex flex-col gap-1 min-w-[130px] flex-1 sm:flex-none">
+                                <label className="text-[11px] font-bold uppercase text-slate-500">De (Vencimento):</label>
+                                <input
+                                    type="date"
+                                    value={reportStartDate}
+                                    onChange={(e) => setReportStartDate(e.target.value)}
+                                    className="px-3 py-1.5 border rounded-xl text-xs dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                                />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[130px] flex-1 sm:flex-none">
+                                <label className="text-[11px] font-bold uppercase text-slate-500">Até:</label>
+                                <input
+                                    type="date"
+                                    value={reportEndDate}
+                                    onChange={(e) => setReportEndDate(e.target.value)}
+                                    className="px-3 py-1.5 border rounded-xl text-xs dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                                />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[140px] flex-1 sm:flex-none">
+                                <label className="text-[11px] font-bold uppercase text-slate-500">Natureza:</label>
+                                <select
+                                    value={reportType}
+                                    onChange={(e) => setReportType(e.target.value)}
+                                    className="px-3 py-1.5 border rounded-xl text-xs dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                                >
+                                    <option value="">Todas (Entradas e Saídas)</option>
+                                    <option value="RECEIVABLE">Apenas Entradas (Receitas)</option>
+                                    <option value="PAYABLE">Apenas Saídas (Despesas)</option>
+                                </select>
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[180px] flex-1">
+                                <label className="text-[11px] font-bold uppercase text-slate-500">Filtrar por Cliente / Fornecedor:</label>
+                                <CustomerAutocomplete
+                                    value={reportCustomerId}
+                                    onChange={(id) => setReportCustomerId(id)}
+                                />
+                            </div>
+
+                            <button
+                                onClick={fetchCashflowForecastReport}
+                                disabled={reportLoading}
+                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+                            >
+                                <Search className="w-3.5 h-3.5" /> Filtrar
+                            </button>
+
+                            <div className="h-6 w-[1px] bg-slate-200 dark:bg-slate-800 hidden sm:block mx-1" />
+
+                            <div className="flex items-center gap-2 ml-auto">
+                                <button
+                                    onClick={() => handleExportCashflowReport('excel')}
+                                    disabled={reportExporting !== null}
+                                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                                    title="Baixar planilha formatada em Excel (.xlsx)"
+                                >
+                                    <Download className="w-3.5 h-3.5" />
+                                    {reportExporting === 'excel' ? 'Exportando...' : 'Exportar Excel'}
+                                </button>
+                                <button
+                                    onClick={() => handleExportCashflowReport('pdf')}
+                                    disabled={reportExporting !== null}
+                                    className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                                    title="Baixar relatório formatado em PDF (.pdf)"
+                                >
+                                    <Download className="w-3.5 h-3.5" />
+                                    {reportExporting === 'pdf' ? 'Exportando...' : 'Exportar PDF'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Conteúdo com scroll */}
+                        <div className="p-6 overflow-y-auto flex-1 space-y-6 custom-scrollbar">
+                            {/* Cards de Resumo */}
+                            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                                <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/50">
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-1 flex items-center gap-1">
+                                        <ArrowUpCircle className="w-3.5 h-3.5" /> Entradas Previstas
+                                    </div>
+                                    <div className="text-xl font-black text-emerald-700 dark:text-emerald-400">
+                                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(reportData?.grand_total_entradas || 0)}
+                                    </div>
+                                </div>
+                                <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800/50">
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400 mb-1 flex items-center gap-1">
+                                        <ArrowDownCircle className="w-3.5 h-3.5" /> Saídas Previstas
+                                    </div>
+                                    <div className="text-xl font-black text-rose-700 dark:text-rose-400">
+                                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(reportData?.grand_total_saidas || 0)}
+                                    </div>
+                                </div>
+                                <div className={`p-4 rounded-2xl border ${(reportData?.grand_saldo_liquido || 0) >= 0 ? 'bg-indigo-50 border-indigo-200 dark:bg-indigo-950/20 dark:border-indigo-800/50' : 'bg-amber-50 border-amber-200 dark:bg-amber-950/20 dark:border-amber-800/50'}`}>
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                                        Saldo Projetado Líquido
+                                    </div>
+                                    <div className={`text-xl font-black ${(reportData?.grand_saldo_liquido || 0) >= 0 ? 'text-indigo-700 dark:text-indigo-400' : 'text-amber-700 dark:text-amber-400'}`}>
+                                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(reportData?.grand_saldo_liquido || 0)}
+                                    </div>
+                                </div>
+                                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                        Total de Contatos
+                                    </div>
+                                    <div className="text-xl font-black text-slate-700 dark:text-slate-300">
+                                        {reportData?.total_contacts || 0}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Tabela Agrupada por Cliente */}
+                            {reportLoading ? (
+                                <div className="text-center py-16">
+                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500 mx-auto"></div>
+                                    <p className="text-xs text-slate-400 mt-2 font-medium">Consolidando lançamentos de fluxo previsto...</p>
+                                </div>
+                            ) : !reportData || !reportData.groups || reportData.groups.length === 0 ? (
+                                <div className="text-center py-16 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl bg-slate-50/50 dark:bg-slate-900/20">
+                                    <DollarSign className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                                    <p className="text-sm font-semibold text-slate-600 dark:text-slate-400">Nenhum lançamento previsto encontrado para os filtros selecionados.</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    {reportData.groups.map((group: any) => (
+                                        <div key={group.customer_id} className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm bg-white dark:bg-slate-900">
+                                            {/* Cabeçalho do Cliente */}
+                                            <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                                <div>
+                                                    <span className="font-bold text-slate-800 dark:text-white text-sm">
+                                                        {group.customer_name}
+                                                    </span>
+                                                    {group.customer_document && (
+                                                        <span className="text-[11px] text-slate-500 dark:text-slate-400 ml-2 font-mono">
+                                                            Doc: {group.customer_document}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-3 text-xs">
+                                                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                                                        Receitas: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(group.total_entradas)}
+                                                    </span>
+                                                    <span className="text-rose-600 dark:text-rose-400 font-semibold">
+                                                        Despesas: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(group.total_saidas)}
+                                                    </span>
+                                                    <span className={`font-black px-2 py-0.5 rounded-lg ${group.saldo_liquido >= 0 ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'}`}>
+                                                        Saldo: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(group.saldo_liquido)}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            {/* Tabela de Lançamentos */}
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-xs text-left">
+                                                    <thead className="bg-slate-50/50 dark:bg-slate-900/30 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-100 dark:border-slate-800">
+                                                        <tr>
+                                                            <th className="px-4 py-2 w-20">Fatura</th>
+                                                            <th className="px-4 py-2">Descrição / Composição</th>
+                                                            <th className="px-4 py-2 w-28">Vencimento</th>
+                                                            <th className="px-4 py-2 w-24 text-center">Natureza</th>
+                                                            <th className="px-4 py-2 w-28 text-right">Valor Previsto</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                                                        {group.installments.map((inst: any) => (
+                                                            <tr key={inst.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                                                                <td className="px-4 py-2.5 font-bold text-slate-700 dark:text-slate-300">
+                                                                    #{inst.id}
+                                                                </td>
+                                                                <td className="px-4 py-2.5">
+                                                                    <div className="font-medium text-slate-800 dark:text-slate-200">
+                                                                        {inst.description}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="px-4 py-2.5 text-slate-600 dark:text-slate-400">
+                                                                    {inst.due_date ? new Date(inst.due_date).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '-'}
+                                                                </td>
+                                                                <td className="px-4 py-2.5 text-center">
+                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${inst.type === 'RECEIVABLE' ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-rose-100 text-rose-700 border border-rose-200'}`}>
+                                                                        {inst.type === 'RECEIVABLE' ? 'RECEITA' : 'DESPESA'}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-4 py-2.5 text-right font-bold text-slate-900 dark:text-white">
+                                                                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(inst.amount)}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Rodapé do Modal */}
+                        <div className="px-6 py-4 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-200 dark:border-slate-800 flex justify-end">
+                            <button
+                                onClick={() => setIsReportModalOpen(false)}
+                                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition"
+                            >
+                                Fechar
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

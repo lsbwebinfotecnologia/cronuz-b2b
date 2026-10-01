@@ -27,6 +27,7 @@ class ProductBase(BaseModel):
     allow_purchase: Optional[bool] = None
     stock_status_label: Optional[str] = None
     cover_url: Optional[str] = None
+    horus_cod_item: Optional[int] = None
 
 class ProductCreate(ProductBase):
     characteristics: Optional[List[ProductCharacteristicCreate]] = []

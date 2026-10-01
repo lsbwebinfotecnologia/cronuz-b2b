@@ -65,9 +65,9 @@ class OrderItem(Base):
     __tablename__ = "ord_order_item"
 
     id = Column(Integer, primary_key=True, index=True)
-    order_id = Column(Integer, ForeignKey("ord_order.id"), nullable=False)
+    order_id = Column(Integer, ForeignKey("ord_order.id"), nullable=False, index=True)
     
-    product_id = Column(Integer, ForeignKey("prd_product.id"), nullable=True) # nullable if horus-only
+    product_id = Column(Integer, ForeignKey("prd_product.id"), nullable=True, index=True) # nullable if horus-only
     
     ean_isbn = Column(String(100), nullable=True) # for searching the right ERP item
     sku = Column(String(100), nullable=True) # for searching the right ERP item

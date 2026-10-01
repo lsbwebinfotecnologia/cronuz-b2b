@@ -28,6 +28,13 @@ def _get_fernet() -> Fernet:
     if _FERNET_INSTANCE is None:
         key = os.environ.get("HORUS_SQL_ENCRYPTION_KEY", "").strip()
         if not key:
+            # Tenta carregar explicitamente de backend/.env ou .env caso o app tenha sido iniciado da raiz
+            from dotenv import load_dotenv
+            load_dotenv("backend/.env")
+            load_dotenv(".env")
+            key = os.environ.get("HORUS_SQL_ENCRYPTION_KEY", "").strip()
+
+        if not key:
             raise RuntimeError(
                 "HORUS_SQL_ENCRYPTION_KEY nao configurada no .env do servidor. "
                 "Gere com: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""

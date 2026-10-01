@@ -13,8 +13,9 @@ from app.schemas.service import (
     ServiceCreate, ServiceUpdate, ServiceResponse,
     ServiceOrderCreate, ServiceOrderUpdate, ServiceOrderResponse,
     ServiceOrderBillRequest, ServiceOrderBulkStatusRequest, ServiceOrderBulkBillRequest, ServiceOrderBulkDeleteRequest,
-    ServiceOrderBulkDateRequest, ServiceOrderSplitRequest
+    ServiceOrderBulkDateRequest, ServiceOrderSplitRequest, ServiceOrderGroupRequest
 )
+from fastapi.responses import StreamingResponse
 
 router = APIRouter(tags=["services"])
 
@@ -92,19 +93,89 @@ def create_service_order(
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
     base_data = order_in.model_dump()
+    merge_mode = base_data.pop("merge_mode", "NONE")
+    target_order_ids = base_data.pop("target_order_ids", None)
     is_recurrent = base_data.get("is_recurrent", False)
     end_date = base_data.get("recurrence_end_date")
         
     from sqlalchemy import func
+    from dateutil.relativedelta import relativedelta
     max_local_id = db.query(func.max(ServiceOrder.local_id)).filter(ServiceOrder.company_id == current_user.company_id).scalar() or 0
-    
+
+    if merge_mode == "DISTRIBUTE_MONTHLY":
+        from app.models.service import Service, ServiceOrderStatus, ServiceOrderNfseStatus
+        
+        # 1. Gera lista de datas mensais que o novo serviço contempla
+        dates_to_process = [order_in.execution_date]
+        if is_recurrent and end_date:
+            curr = order_in.execution_date + relativedelta(months=1)
+            while curr <= end_date:
+                dates_to_process.append(curr)
+                curr = curr + relativedelta(months=1)
+        
+        # 2. Busca O.S. pendentes do cliente
+        query_pending = db.query(ServiceOrder).filter(
+            ServiceOrder.company_id == current_user.company_id,
+            ServiceOrder.customer_id == order_in.customer_id,
+            ServiceOrder.status.in_([ServiceOrderStatus.PENDING, ServiceOrderStatus.IN_PROGRESS]),
+            ServiceOrder.status_nfse.in_([ServiceOrderNfseStatus.NOT_ISSUED, ServiceOrderNfseStatus.ERROR])
+        )
+        if target_order_ids:
+            query_pending = query_pending.filter(ServiceOrder.id.in_(target_order_ids))
+        pending_list = query_pending.order_by(ServiceOrder.execution_date.asc(), ServiceOrder.id.asc()).all()
+        
+        # Mapeia por (ano, mês)
+        pending_by_month = {}
+        for po in pending_list:
+            if po.execution_date:
+                k = (po.execution_date.year, po.execution_date.month)
+                if k not in pending_by_month:
+                    pending_by_month[k] = po
+
+        service_obj = db.query(Service).filter(Service.id == order_in.service_id).first()
+        service_name = service_obj.name if service_obj else "Serviço Adicional"
+        
+        primary_order = None
+        for dt in dates_to_process:
+            k = (dt.year, dt.month)
+            if k in pending_by_month:
+                # Soma na O.S. existente
+                existing_os = pending_by_month.pop(k)
+                existing_os.negotiated_value = round(existing_os.negotiated_value + order_in.negotiated_value, 2)
+                
+                tag_desc = f"+ {service_name} (R$ {order_in.negotiated_value:,.2f})"
+                if order_in.custom_description:
+                    tag_desc += f": {order_in.custom_description}"
+                if existing_os.custom_description:
+                    existing_os.custom_description = f"{existing_os.custom_description}\n• {tag_desc}"
+                else:
+                    existing_os.custom_description = tag_desc
+                    
+                if not primary_order:
+                    primary_order = existing_os
+            else:
+                # Cria nova O.S. para mês que não tinha projeção
+                max_local_id += 1
+                child_data = base_data.copy()
+                child_data["execution_date"] = dt
+                child_data["is_recurrent"] = False
+                child_data["recurrence_end_date"] = None
+                child_order = ServiceOrder(**child_data, company_id=current_user.company_id, local_id=max_local_id)
+                db.add(child_order)
+                if not primary_order:
+                    primary_order = child_order
+                    
+        db.commit()
+        if primary_order:
+            db.refresh(primary_order)
+            return primary_order
+
     new_order = ServiceOrder(**base_data, company_id=current_user.company_id, local_id=max_local_id + 1)
     db.add(new_order)
     db.commit()
     db.refresh(new_order)
     
     if is_recurrent and end_date:
-        from dateutil.relativedelta import relativedelta
         current_date = order_in.execution_date + relativedelta(months=1)
         current_local_id = max_local_id + 1
         
@@ -1509,3 +1580,339 @@ def split_service_order(
         "message": f"Serviço desmembrado em {len(payload.splits)} partes com sucesso.",
         "service_order_ids": [o.id for o in new_orders]
     }
+
+
+@router.post("/service-orders/group")
+def group_service_orders(
+    payload: ServiceOrderGroupRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Agrupa múltiplas Ordens de Serviço do mesmo cliente, consolidando valores e observações.
+    As O.S. absorvidas são marcadas como Canceladas com rastreabilidade auditável.
+    """
+    if len(payload.order_ids) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="É necessário selecionar pelo menos duas Ordens de Serviço para agrupar."
+        )
+
+    orders = db.query(ServiceOrder).options(
+        joinedload(ServiceOrder.service),
+        joinedload(ServiceOrder.customer)
+    ).filter(
+        ServiceOrder.id.in_(payload.order_ids),
+        ServiceOrder.company_id == current_user.company_id
+    ).all()
+
+    if len(orders) != len(payload.order_ids):
+        raise HTTPException(status_code=404, detail="Uma ou mais Ordens de Serviço não foram encontradas.")
+
+    # 1. Valida se todas pertencem ao mesmo cliente
+    customer_ids = {o.customer_id for o in orders}
+    if len(customer_ids) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível agrupar Ordens de Serviço de clientes diferentes."
+        )
+
+    # 2. Valida segurança fiscal e contábil
+    for o in orders:
+        if o.status_nfse in [ServiceOrderNfseStatus.ISSUED, ServiceOrderNfseStatus.PROCESSING]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A O.S. #{o.local_id or o.id} já possui nota fiscal emitida ou em processamento e não pode ser agrupada."
+            )
+        if o.status == ServiceOrderStatus.COMPLETED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A O.S. #{o.local_id or o.id} já está Concluída e não pode ser agrupada."
+            )
+
+    # 3. Determina O.S. mestre
+    target_order = None
+    if payload.target_order_id:
+        target_order = next((o for o in orders if o.id == payload.target_order_id), None)
+    if not target_order:
+        sorted_orders = sorted(orders, key=lambda x: (x.execution_date, x.id))
+        target_order = sorted_orders[0]
+
+    other_orders = [o for o in orders if o.id != target_order.id]
+
+    # 4. Soma dos valores negociados
+    total_value = sum(o.negotiated_value for o in orders)
+
+    # 5. Composição de observação descritiva
+    if payload.custom_description and payload.custom_description.strip():
+        new_description = payload.custom_description.strip()
+    else:
+        desc_parts = []
+        for o in orders:
+            srv_title = o.service.name if o.service else "Serviço"
+            obs = (o.custom_description or "").strip()
+            if obs:
+                desc_parts.append(f"OS #{o.local_id or o.id} ({srv_title} - R$ {o.negotiated_value:,.2f}): {obs}")
+            else:
+                desc_parts.append(f"OS #{o.local_id or o.id} ({srv_title} - R$ {o.negotiated_value:,.2f})")
+        new_description = " | ".join(desc_parts)
+
+    target_order.negotiated_value = round(total_value, 2)
+    if payload.execution_date:
+        target_order.execution_date = payload.execution_date
+    target_order.custom_description = new_description
+
+    # 6. Rastreabilidade nas O.S. absorvidas
+    for o in other_orders:
+        o.status = ServiceOrderStatus.CANCELLED
+        o.grouped_in_id = target_order.id
+        tag = f"[AGRUPADA NA OS #{target_order.local_id or target_order.id}]"
+        if not o.custom_description or tag not in o.custom_description:
+            o.custom_description = f"{tag} {o.custom_description or ''}".strip()
+
+    db.commit()
+    db.refresh(target_order)
+
+    return {
+        "status": "success",
+        "message": f"{len(orders)} Ordens de Serviço agrupadas com sucesso na OS #{target_order.local_id or target_order.id}.",
+        "target_order_id": target_order.id,
+        "target_local_id": target_order.local_id,
+        "total_value": target_order.negotiated_value,
+        "custom_description": target_order.custom_description
+    }
+
+
+@router.get("/service-orders/pending-by-customer/{customer_id:int}")
+def get_pending_orders_by_customer(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Retorna as O.S. pendentes e não faturadas de um determinado cliente para permitir
+    ao usuário agrupar/somar projeções de serviços durante a criação.
+    """
+    orders = db.query(ServiceOrder).options(
+        joinedload(ServiceOrder.service)
+    ).filter(
+        ServiceOrder.company_id == current_user.company_id,
+        ServiceOrder.customer_id == customer_id,
+        ServiceOrder.status.in_([ServiceOrderStatus.PENDING, ServiceOrderStatus.IN_PROGRESS]),
+        ServiceOrder.status_nfse.in_([ServiceOrderNfseStatus.NOT_ISSUED, ServiceOrderNfseStatus.ERROR])
+    ).order_by(ServiceOrder.execution_date.asc(), ServiceOrder.id.asc()).all()
+
+    return [
+        {
+            "id": o.id,
+            "local_id": o.local_id,
+            "service_name": o.service.name if o.service else "Serviço",
+            "negotiated_value": o.negotiated_value,
+            "execution_date": str(o.execution_date) if o.execution_date else None,
+            "custom_description": o.custom_description,
+            "status": o.status.value if hasattr(o.status, 'value') else str(o.status),
+            "status_nfse": o.status_nfse.value if hasattr(o.status_nfse, 'value') else str(o.status_nfse)
+        }
+        for o in orders
+    ]
+
+
+def _build_services_by_customer_data(
+    company_id: int,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    customer_id: Optional[int],
+    status: Optional[str],
+    db: Session
+):
+    """Helper que agrupa os dados de serviços por cliente correlacionando pagamentos."""
+    from app.models.customer import Customer
+    from app.models.financial import FinancialTransaction, FinancialInstallment, FinancialAccount
+
+    query = db.query(ServiceOrder).options(
+        joinedload(ServiceOrder.service),
+        joinedload(ServiceOrder.customer)
+    ).filter(
+        ServiceOrder.company_id == company_id
+    )
+
+    if customer_id:
+        query = query.filter(ServiceOrder.customer_id == customer_id)
+    if start_date:
+        query = query.filter(ServiceOrder.execution_date >= start_date)
+    if end_date:
+        query = query.filter(ServiceOrder.execution_date <= end_date)
+    if status:
+        query = query.filter(ServiceOrder.status == status)
+
+    orders = query.order_by(ServiceOrder.customer_id, ServiceOrder.execution_date.asc(), ServiceOrder.id.asc()).all()
+
+    # Prepara mapa de pagamentos para O.S. faturadas/concluídas
+    completed_order_ids = [o.id for o in orders if o.status == ServiceOrderStatus.COMPLETED]
+    payments_map = {}
+    if completed_order_ids:
+        # Busca transações financeiras vinculadas a essas OSs
+        # Padrão: "Faturamento OS #{order.id}" ou customer_id + data
+        ft_query = db.query(
+            FinancialTransaction.id,
+            FinancialTransaction.description,
+            FinancialInstallment.payment_date,
+            FinancialInstallment.amount_paid,
+            FinancialInstallment.status,
+            FinancialAccount.name.label("account_name")
+        ).join(
+            FinancialInstallment, FinancialInstallment.transaction_id == FinancialTransaction.id
+        ).outerjoin(
+            FinancialAccount, FinancialInstallment.account_id == FinancialAccount.id
+        ).filter(
+            FinancialTransaction.company_id == company_id,
+            FinancialInstallment.status == "PAID"
+        ).all()
+
+        for row in ft_query:
+            desc = row.description or ""
+            for o_id in completed_order_ids:
+                if f"OS #{o_id}" in desc or f"OS {o_id}" in desc:
+                    dt_str = row.payment_date.strftime("%d/%m/%Y") if row.payment_date else None
+                    payments_map[o_id] = {
+                        "payment_date": dt_str,
+                        "account_name": row.account_name or "Caixa/Banco",
+                        "amount_paid": row.amount_paid
+                    }
+                    break
+
+    # Agrupa por cliente
+    customer_dict = {}
+    for o in orders:
+        c_id = o.customer_id
+        if c_id not in customer_dict:
+            c_name = o.customer.name if o.customer else "Sem Cliente"
+            c_doc = (o.customer.document or "") if o.customer else ""
+            customer_dict[c_id] = {
+                "customer_id": c_id,
+                "customer_name": c_name,
+                "customer_document": c_doc,
+                "total_previsto": 0.0,
+                "total_concluido": 0.0,
+                "total_cliente": 0.0,
+                "items": []
+            }
+
+        st_val = o.status.value if hasattr(o.status, 'value') else str(o.status)
+        val = float(o.negotiated_value or 0.0)
+
+        pay_info = payments_map.get(o.id, {})
+        pay_date = pay_info.get("payment_date")
+        acc_name = pay_info.get("account_name")
+
+        if st_val == "Concluido":
+            customer_dict[c_id]["total_concluido"] += val
+        elif st_val in ["Pendente", "Em Execucao"]:
+            customer_dict[c_id]["total_previsto"] += val
+        customer_dict[c_id]["total_cliente"] += val
+
+        customer_dict[c_id]["items"].append({
+            "id": o.id,
+            "local_id": o.local_id,
+            "service_name": o.service.name if o.service else "Serviço",
+            "execution_date": o.execution_date.strftime("%d/%m/%Y") if o.execution_date else "-",
+            "status": st_val,
+            "status_nfse": o.status_nfse.value if hasattr(o.status_nfse, 'value') else str(o.status_nfse),
+            "negotiated_value": val,
+            "payment_date": pay_date,
+            "account_name": acc_name,
+            "custom_description": o.custom_description or ""
+        })
+
+    return list(customer_dict.values())
+
+
+@router.get("/service-orders/reports/by-customer")
+def get_services_report_by_customer(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    customer_id: Optional[int] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Retorna dados estruturados de serviços agrupados por cliente para visualização em tela."""
+    groups = _build_services_by_customer_data(
+        company_id=current_user.company_id,
+        start_date=start_date,
+        end_date=end_date,
+        customer_id=customer_id,
+        status=status,
+        db=db
+    )
+
+    grand_total_previsto = sum(g["total_previsto"] for g in groups)
+    grand_total_concluido = sum(g["total_concluido"] for g in groups)
+    grand_total_geral = sum(g["total_cliente"] for g in groups)
+
+    return {
+        "groups": groups,
+        "grand_total_previsto": grand_total_previsto,
+        "grand_total_concluido": grand_total_concluido,
+        "grand_total_geral": grand_total_geral,
+        "total_customers": len(groups)
+    }
+
+
+@router.get("/service-orders/reports/by-customer/export")
+def export_services_report_by_customer(
+    format: str = Query("excel", pattern="^(excel|pdf)$"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    customer_id: Optional[int] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Exporta o relatório de serviços por cliente em formato Excel (.xlsx) ou PDF (.pdf)."""
+    from app.services.services_exports import export_services_by_customer_excel, export_services_by_customer_pdf
+    from app.models.company import Company
+
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    company_name = company.name if company else "Cronuz"
+
+    groups = _build_services_by_customer_data(
+        company_id=current_user.company_id,
+        start_date=start_date,
+        end_date=end_date,
+        customer_id=customer_id,
+        status=status,
+        db=db
+    )
+
+    period_parts = []
+    if start_date:
+        period_parts.append(f"De {start_date.strftime('%d/%m/%Y')}")
+    if end_date:
+        period_parts.append(f"Até {end_date.strftime('%d/%m/%Y')}")
+    period_label = " - ".join(period_parts) if period_parts else "Geral (Todos os Períodos)"
+
+    now_str = datetime.now().strftime("%Y%m%d_%H%M")
+    if format == "excel":
+        buffer = export_services_by_customer_excel(
+            customer_groups=groups,
+            company_name=company_name,
+            period_label=period_label
+        )
+        filename = f"Relatorio_Servicos_Por_Cliente_{now_str}.xlsx"
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        buffer = export_services_by_customer_pdf(
+            customer_groups=groups,
+            company_name=company_name,
+            period_label=period_label
+        )
+        filename = f"Relatorio_Servicos_Por_Cliente_{now_str}.pdf"
+        media_type = "application/pdf"
+
+    return StreamingResponse(
+        buffer,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+

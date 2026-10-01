@@ -1,15 +1,18 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
 
 class Customer(Base):
     __tablename__ = "crm_customer"
+    __table_args__ = (
+        Index('idx_crm_customer_company_doc', 'company_id', 'document'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     
     # Who "owns" this customer profile
-    company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=False, index=True)
     
     name = Column(String(255), nullable=False) # Nome Fantasia
     corporate_name = Column(String(255), nullable=True) # Razão Social
@@ -54,7 +57,7 @@ class Customer(Base):
 class Address(Base):
     __tablename__ = "crm_address"
     id = Column(Integer, primary_key=True, index=True)
-    customer_id = Column(Integer, ForeignKey("crm_customer.id"), nullable=False)
+    customer_id = Column(Integer, ForeignKey("crm_customer.id"), nullable=False, index=True)
     street = Column(String(255), nullable=False)
     number = Column(String(50), nullable=False)
     complement = Column(String(100), nullable=True)
@@ -70,7 +73,7 @@ class Address(Base):
 class Contact(Base):
     __tablename__ = "crm_contact"
     id = Column(Integer, primary_key=True, index=True)
-    customer_id = Column(Integer, ForeignKey("crm_customer.id"), nullable=False)
+    customer_id = Column(Integer, ForeignKey("crm_customer.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     email = Column(String(255), nullable=True)
     phone = Column(String(50), nullable=True)
@@ -81,8 +84,8 @@ class Contact(Base):
 class Interaction(Base):
     __tablename__ = "crm_interaction"
     id = Column(Integer, primary_key=True, index=True)
-    customer_id = Column(Integer, ForeignKey("crm_customer.id"), nullable=False)
-    seller_id = Column(Integer, ForeignKey("usr_user.id"), nullable=False) # Which seller logged this
+    customer_id = Column(Integer, ForeignKey("crm_customer.id"), nullable=False, index=True)
+    seller_id = Column(Integer, ForeignKey("usr_user.id"), nullable=False, index=True) # Which seller logged this
     
     type = Column(String(50), nullable=False) # CALL, EMAIL, MEETING, NOTE, TASK
     content = Column(Text, nullable=False)
@@ -98,8 +101,8 @@ class Interaction(Base):
 class CustomerFavorite(Base):
     __tablename__ = "crm_favorite"
     id = Column(Integer, primary_key=True, index=True)
-    customer_id = Column(Integer, ForeignKey("crm_customer.id", ondelete="CASCADE"), nullable=False)
-    product_id = Column(Integer, ForeignKey("prd_product.id", ondelete="CASCADE"), nullable=True) # If local product
+    customer_id = Column(Integer, ForeignKey("crm_customer.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("prd_product.id", ondelete="CASCADE"), nullable=True, index=True) # If local product
     sku = Column(String(100), nullable=True) # If external horus product
     name = Column(String(255), nullable=True)
     

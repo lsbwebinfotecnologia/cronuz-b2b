@@ -1,9 +1,21 @@
+import os
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
-SECRET_KEY = "SUPER_SECRET_KEY_FOR_CRONUZ_B2B_DEV"
+logger = logging.getLogger(__name__)
+
+# [SEC] A SECRET_KEY DEVE ser configurada via .env em produção.
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    if os.environ.get("ENVIRONMENT", "development").lower() == "production":
+        logger.critical("[FATAL-SECURITY] SECRET_KEY não configurada no ambiente de produção!")
+        raise RuntimeError("SECRET_KEY obrigatória em produção.")
+    logger.warning("[SECURITY] SECRET_KEY não informada no .env. Utilizando chave de desenvolvimento local.")
+    SECRET_KEY = "SUPER_SECRET_KEY_FOR_CRONUZ_B2B_DEV"
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 10080  # 7 dias (mobile B2B precisa de sessão longa)
 

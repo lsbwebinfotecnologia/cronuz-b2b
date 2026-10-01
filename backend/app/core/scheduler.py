@@ -1,6 +1,6 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.db.session import SessionLocal
 
 from app.models.order import Order
@@ -54,24 +54,31 @@ def sync_horus_order_status():
     try:
         from app.integrators.horus_orders import HorusOrders
         
-        # Filtra os pedidos que precisam de acompanhamento
-        orders = db.query(Order).filter(
+        # Filtra apenas os pedidos bookinfo pendentes de faturamento, limitando o lote para performance
+        orders = db.query(Order).options(
+            joinedload(Order.customer),
+            joinedload(Order.company)
+        ).filter(
             Order.origin == "bookinfo",
-            # Order.status == "PROCESSING" # ou SENT_TO_HORUS (depende de como está no seu banco)
-        ).all()
+            Order.invoice_xml.is_(None)
+        ).limit(50).all()
         
-        for order in orders:
-            # Pula pedidos já faturados e concluídos
-            if order.invoice_xml is not None:
-                continue
+        settings_cache = {}
 
-            customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
-            company = db.query(Company).filter(Company.id == order.company_id).first()
-            settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
+        for order in orders:
+            if order.company_id not in settings_cache:
+                settings_cache[order.company_id] = db.query(CompanySettings).filter(
+                    CompanySettings.company_id == order.company_id
+                ).first()
+            
+            settings = settings_cache[order.company_id]
             
             if not settings or not settings.horus_enabled:
                 continue
                 
+            customer = order.customer
+            company = order.company
+
             async def _fetch_horus_status():
                 horus_client = HorusOrders(db, order.company_id)
                 
@@ -135,15 +142,20 @@ def send_nfe_to_bookinfo():
             Order.origin == "bookinfo",
             Order.invoice_xml.isnot(None),
             Order.bookinfo_nfe_sent == False
-        ).all()
+        ).limit(50).all()
+
+        integrator_cache = {}
 
         for order in orders:
-            # Buscar configs da bookinfo via Integrator
-            config = db.query(Integrator).filter(
-                Integrator.company_id == order.company_id,
-                Integrator.platform == "BOOKINFO",
-                Integrator.active == True
-            ).first()
+            # Buscar configs da bookinfo via Integrator com cache por seller
+            if order.company_id not in integrator_cache:
+                integrator_cache[order.company_id] = db.query(Integrator).filter(
+                    Integrator.company_id == order.company_id,
+                    Integrator.platform == "BOOKINFO",
+                    Integrator.active == True
+                ).first()
+            
+            config = integrator_cache[order.company_id]
             
             if not config or not config.credentials:
                 continue

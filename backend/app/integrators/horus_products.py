@@ -38,9 +38,10 @@ class HorusProducts(HorusClient):
         if data_fim:
             params["DATA_FIM"] = data_fim
 
-        # OFFSET/LIMIT — obrigatório para evitar timeout no Hórus (sem limite, resposta pode ser truncada)
-        params["OFFSET"] = offset
-        params["LIMIT"] = limit if (limit is not None and limit > 0) else 50
+        # OFFSET/LIMIT — respeita a configuração de legado do Horus (horus_legacy_pagination)
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = offset
+            params["LIMIT"] = limit if (limit is not None and limit > 0) else 50
 
         # ══════════════════════════════════════════════════════════════════════
         # CONTEXTO DE EMPRESA / FILIAL / LOCAL DE ESTOQUE (Horus ERP)

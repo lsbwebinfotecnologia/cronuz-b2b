@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.dependencies import get_current_user
+from app.core.upload_security import validate_file_size_and_extension, read_file_safely
 from app.models.user import User
 from app.models.seller_branch import SellerBranch
 from app.schemas.seller_branch import (
@@ -148,11 +149,10 @@ async def upload_cert(
     """
     branch = _get_branch_or_404(db, branch_id, current_user.company_id)
 
-    if not file.filename or not file.filename.lower().endswith(".pfx"):
-        raise HTTPException(status_code=400, detail="Apenas arquivos .pfx são aceitos.")
+    validate_file_size_and_extension(file, category="cert")
 
     # Valida que o certificado pode ser lido com a senha informada
-    pfx_bytes = await file.read()
+    pfx_bytes = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
     try:
         from cryptography.hazmat.primitives.serialization import pkcs12
         pkcs12.load_key_and_certificates(pfx_bytes, password.encode())

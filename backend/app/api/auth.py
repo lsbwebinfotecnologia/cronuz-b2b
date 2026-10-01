@@ -50,20 +50,23 @@ def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
         
-    # Check if user is temporarily locked out (PROVISIONALLY DISABLED)
-    # now = datetime.now(timezone.utc)
-    # if user.locked_until and user.locked_until.replace(tzinfo=timezone.utc) > now:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-    #         detail="Sua conta foi temporariamente bloqueada por muitas tentativas falhas. Tente novamente mais tarde.",
-    #         headers={"WWW-Authenticate": "Bearer"},
-    #     )
+    # Check if user is temporarily locked out
+    now = datetime.now(timezone.utc)
+    if user.locked_until:
+        locked_time = user.locked_until if user.locked_until.tzinfo else user.locked_until.replace(tzinfo=timezone.utc)
+        if locked_time > now:
+            minutes_left = max(1, int((locked_time - now).total_seconds() / 60))
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Sua conta foi temporariamente bloqueada por muitas tentativas falhas. Tente novamente em {minutes_left} minuto(s).",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     # Verify password
     if not security.verify_password(form_data.password, user.password_hash):
-        user.failed_login_attempts += 1
-        # if user.failed_login_attempts >= 5:
-        #     user.locked_until = now + timedelta(minutes=15)
+        user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+        if user.failed_login_attempts >= 5:
+            user.locked_until = now + timedelta(minutes=15)
         
         db.commit()
         db.refresh(user)

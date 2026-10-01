@@ -23,7 +23,7 @@ class User(Base):
     tenant_id = Column(String(50), nullable=True) # Used by MASTER to restrict to specific brand (e.g. 'horus')
     
     # Nullable because MASTER doesn't have a company
-    company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=True)
+    company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=True, index=True)
     
     active = Column(Boolean, default=True, nullable=False)
     

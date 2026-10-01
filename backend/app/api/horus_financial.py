@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.core.dependencies import get_current_user
 from app.core.utils import assert_company_ownership
+from app.core.upload_security import validate_file_size_and_extension, read_file_safely
 from app.integrators.horus_sql_client import HorusSQLClient, HorusSQLConfigError
 from app.integrators.vindi_financial_parser import parse_vindi_file
 
@@ -110,8 +111,10 @@ async def preview_vindi_reconciliation(
     _assert_ownership(current_user, company_id)
     settings = _get_settings_or_404(db, company_id)
 
-    # 1. Lê os bytes do arquivo em memória
-    contents = await file.read()
+    validate_file_size_and_extension(file, category="sheet")
+
+    # 1. Lê os bytes do arquivo em memória de forma segura
+    contents = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
     if not contents:
         raise HTTPException(status_code=400, detail="O arquivo enviado está vazio.")
 

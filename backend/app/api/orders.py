@@ -29,11 +29,13 @@ async def create_pdv_order(
         raise HTTPException(status_code=403, detail="Acesso não autorizado")
 
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
-    company = db.query(Company).filter(Company.id == current_user.company_id).first()
-    customer = db.query(Customer).filter(Customer.id == payload.customer_id).first()
+    customer_query = db.query(Customer).filter(Customer.id == payload.customer_id)
+    if current_user.type != "MASTER":
+        customer_query = customer_query.filter(Customer.company_id == current_user.company_id)
+    customer = customer_query.first()
     
     if not customer:
-        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+        raise HTTPException(status_code=404, detail="Cliente não encontrado ou não pertence a esta empresa")
         
     if customer.crm_status == 'BLOCKED':
         raise HTTPException(status_code=403, detail="Cliente encontra-se pendente/bloqueado em nosso CRM. Criação de pedido negada.")

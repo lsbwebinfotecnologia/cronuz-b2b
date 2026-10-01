@@ -83,6 +83,7 @@ class CompanySettingsBase(BaseModel):
     horus_sql_cod_filial: Optional[str] = None
     horus_sql_feature_vindi_baixa: Optional[bool] = False
     horus_sql_feature_pedidos: Optional[bool] = False
+    horus_sql_feature_dbm: Optional[bool] = False
 
     # Horus Banking Parameters (Borderô)
     horus_banco_forma_pagto: Optional[str] = None

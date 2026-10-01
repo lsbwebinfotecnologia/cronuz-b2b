@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2, QrCode, Mail, Scissors } from 'lucide-react';
+import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2, QrCode, Mail, Scissors, Layers, BarChart3, Download, Users, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
@@ -96,6 +96,28 @@ export default function ServiceOrdersPage() {
     const [isSplitOpen, setIsSplitOpen] = useState(false);
     const [splittingOrder, setSplittingOrder] = useState<any>(null);
     const [splits, setSplits] = useState<any[]>([]);
+
+    // Agrupamento de O.S. (Projeções)
+    const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+    const [groupExecutionDate, setGroupExecutionDate] = useState(new Date().toISOString().split('T')[0]);
+    const [groupDescription, setGroupDescription] = useState('');
+    const [isGrouping, setIsGrouping] = useState(false);
+
+    // Sugestão de O.S. pendente no modal de criação
+    const [pendingCustomerOrders, setPendingCustomerOrders] = useState<any[]>([]);
+    const [groupWithExisting, setGroupWithExisting] = useState(false);
+    const [orderMergeMode, setOrderMergeMode] = useState<'DISTRIBUTE_MONTHLY' | 'CONSOLIDATE'>('DISTRIBUTE_MONTHLY');
+    const [selectedTargetOrderIds, setSelectedTargetOrderIds] = useState<number[]>([]);
+
+    // Relatório de Serviços por Cliente
+    const [isCustomerReportOpen, setIsCustomerReportOpen] = useState(false);
+    const [customerReportData, setCustomerReportData] = useState<any>(null);
+    const [reportLoading, setReportLoading] = useState(false);
+    const [reportStartDate, setReportStartDate] = useState<string>(`${currentMonthStr}-01`);
+    const [reportEndDate, setReportEndDate] = useState<string>(new Date(currentYear, currentDate.getMonth() + 1, 0).toISOString().split('T')[0]);
+    const [reportCustomerId, setReportCustomerId] = useState<string>('');
+    const [reportStatus, setReportStatus] = useState<string>('');
+    const [reportExporting, setReportExporting] = useState<'excel' | 'pdf' | null>(null);
 
     const applyPeriodShortcut = (shortcut: string) => {
         const now = new Date();
@@ -197,7 +219,9 @@ export default function ServiceOrdersPage() {
                 customer_id: parseInt(newOrder.customer_id),
                 service_id: parseInt(newOrder.service_id),
                 negotiated_value: parseFloat(newOrder.negotiated_value.replace(/\./g, '').replace(',', '.')),
-                recurrence_end_date: newOrder.is_recurrent && newOrder.recurrence_end_date ? newOrder.recurrence_end_date : null
+                recurrence_end_date: newOrder.is_recurrent && newOrder.recurrence_end_date ? newOrder.recurrence_end_date : null,
+                merge_mode: groupWithExisting ? orderMergeMode : "NONE",
+                target_order_ids: (groupWithExisting && selectedTargetOrderIds.length > 0) ? selectedTargetOrderIds : null
             };
             const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders`, {
                 method: 'POST',
@@ -205,8 +229,35 @@ export default function ServiceOrdersPage() {
                 body: JSON.stringify(payload)
             });
             if (res.ok) {
-                toast.success('Ordem de Serviço criada com sucesso!');
+                const createdOrder = await res.json();
+                if (groupWithExisting && orderMergeMode === 'CONSOLIDATE' && selectedTargetOrderIds.length > 0) {
+                    try {
+                        const targetId = selectedTargetOrderIds[0];
+                        const groupRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/group`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+                            body: JSON.stringify({
+                                order_ids: [...selectedTargetOrderIds, createdOrder.id],
+                                target_order_id: targetId
+                            })
+                        });
+                        if (groupRes.ok) {
+                            toast.success(`Serviço consolidado com sucesso em uma única O.S.!`);
+                        } else {
+                            toast.success('O.S. criada, porém houve falha ao consolidar.');
+                        }
+                    } catch (ge) {
+                        toast.success('O.S. criada com sucesso!');
+                    }
+                } else if (groupWithExisting && orderMergeMode === 'DISTRIBUTE_MONTHLY') {
+                    toast.success('Serviço incorporado e somado mês a mês com sucesso!');
+                } else {
+                    toast.success('Ordem de Serviço criada com sucesso!');
+                }
                 setIsCreateOpen(false);
+                setGroupWithExisting(false);
+                setSelectedTargetOrderIds([]);
+                setPendingCustomerOrders([]);
                 setNewOrder({ customer_id: '', service_id: '', negotiated_value: '', custom_description: '', execution_date: new Date().toISOString().split('T')[0], is_recurrent: false, recurrence_end_date: '' });
                 fetchOrders();
             } else {
@@ -215,6 +266,160 @@ export default function ServiceOrdersPage() {
         } catch (e) { toast.error('Servidor offline'); }
         finally {
             setIsSubmitting(false);
+        }
+    };
+
+    // Monitora seleção de cliente no modal de criação para buscar O.S. pendentes
+    useEffect(() => {
+        if (!newOrder.customer_id) {
+            setPendingCustomerOrders([]);
+            setGroupWithExisting(false);
+            setSelectedTargetOrderIds([]);
+            return;
+        }
+        const fetchPending = async () => {
+            try {
+                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/pending-by-customer/${newOrder.customer_id}`, {
+                    headers: { 'Authorization': `Bearer ${getToken()}` }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    const list = Array.isArray(data) ? data : [];
+                    setPendingCustomerOrders(list);
+                    if (list.length > 0) {
+                        // Por padrão seleciona todas as pendentes para agrupar
+                        setSelectedTargetOrderIds(list.map((po: any) => po.id));
+                    }
+                }
+            } catch (e) {}
+        };
+        fetchPending();
+    }, [newOrder.customer_id]);
+
+    const openGroupModal = () => {
+        const selectedObj = orders.filter(o => selectedOrders.includes(o.id));
+        if (selectedObj.length < 2) {
+            toast.error("Selecione pelo menos 2 Ordens de Serviço para agrupar.");
+            return;
+        }
+        const firstCust = selectedObj[0].customer_id;
+        const diffCust = selectedObj.find(o => o.customer_id !== firstCust);
+        if (diffCust) {
+            toast.error("Não é possível agrupar O.S. de clientes diferentes. Selecione apenas O.S. do mesmo cliente.");
+            return;
+        }
+        const billed = selectedObj.find(o => o.status_nfse !== 'Nao Emitida' && o.status_nfse !== 'Erro');
+        if (billed) {
+            toast.error(`A OS #${billed.local_id || billed.id} já possui nota fiscal ou faturamento e não pode ser agrupada.`);
+            return;
+        }
+        const completed = selectedObj.find(o => o.status === 'Concluido');
+        if (completed) {
+            toast.error(`A OS #${completed.local_id || completed.id} já está Concluída e não pode ser agrupada.`);
+            return;
+        }
+
+        const descParts = selectedObj.map(o => {
+            const sName = o.service_name || 'Serviço';
+            const valStr = new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(o.negotiated_value);
+            return o.custom_description 
+                ? `OS #${o.local_id || o.id} (${sName} - ${valStr}): ${o.custom_description}` 
+                : `OS #${o.local_id || o.id} (${sName} - ${valStr})`;
+        });
+        setGroupDescription(descParts.join(' | '));
+
+        const dates = selectedObj.map(o => o.execution_date).filter(Boolean).sort();
+        setGroupExecutionDate(dates[0] || new Date().toISOString().split('T')[0]);
+
+        setIsGroupModalOpen(true);
+    };
+
+    const handleConfirmGroup = async () => {
+        if (!selectedOrders || selectedOrders.length < 2) return;
+        setIsGrouping(true);
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/group`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+                body: JSON.stringify({
+                    order_ids: selectedOrders,
+                    execution_date: groupExecutionDate,
+                    custom_description: groupDescription
+                })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                toast.success(data.message || 'Ordens de Serviço agrupadas com sucesso!');
+                setIsGroupModalOpen(false);
+                setSelectedOrders([]);
+                fetchOrders();
+            } else {
+                toast.error(data.detail || 'Erro ao agrupar Ordens de Serviço.');
+            }
+        } catch (e) {
+            toast.error('Erro de conexão ao tentar agrupar O.S.');
+        } finally {
+            setIsGrouping(false);
+        }
+    };
+
+    const fetchCustomerReport = async () => {
+        setReportLoading(true);
+        try {
+            const params = new URLSearchParams();
+            if (reportStartDate) params.set('start_date', reportStartDate);
+            if (reportEndDate) params.set('end_date', reportEndDate);
+            if (reportCustomerId) params.set('customer_id', reportCustomerId);
+            if (reportStatus && reportStatus !== 'Todas') params.set('status', reportStatus);
+
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/reports/by-customer?${params.toString()}`, {
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setCustomerReportData(data);
+            } else {
+                toast.error('Erro ao buscar dados do relatório.');
+            }
+        } catch (e) {
+            toast.error('Erro de conexão ao carregar relatório.');
+        } finally {
+            setReportLoading(false);
+        }
+    };
+
+    const handleExportCustomerReport = async (format: 'excel' | 'pdf') => {
+        setReportExporting(format);
+        try {
+            const params = new URLSearchParams();
+            params.set('format', format);
+            if (reportStartDate) params.set('start_date', reportStartDate);
+            if (reportEndDate) params.set('end_date', reportEndDate);
+            if (reportCustomerId) params.set('customer_id', reportCustomerId);
+            if (reportStatus && reportStatus !== 'Todas') params.set('status', reportStatus);
+
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders/reports/by-customer/export?${params.toString()}`, {
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            });
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const ext = format === 'excel' ? 'xlsx' : 'pdf';
+                a.download = `Relatorio_Servicos_Por_Cliente_${new Date().toISOString().split('T')[0]}.${ext}`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                toast.success(`Relatório em ${format === 'excel' ? 'Excel' : 'PDF'} gerado com sucesso!`);
+            } else {
+                toast.error(`Falha ao exportar relatório em ${format.toUpperCase()}.`);
+            }
+        } catch (e) {
+            toast.error('Erro ao exportar relatório.');
+        } finally {
+            setReportExporting(null);
         }
     };
 
@@ -821,9 +1026,20 @@ export default function ServiceOrdersPage() {
                     </p>
                 </div>
                 
-                <button onClick={() => setIsCreateOpen(true)} className="px-5 py-2.5 bg-[var(--color-primary-base)] text-white rounded-xl font-semibold hover:opacity-90 shadow-sm transition flex items-center gap-2 text-sm whitespace-nowrap">
-                    <Plus className="w-4 h-4"/> Nova O.S.
-                </button>
+                <div className="flex items-center gap-3 flex-wrap">
+                    <button 
+                        onClick={() => {
+                            setIsCustomerReportOpen(true);
+                            fetchCustomerReport();
+                        }}
+                        className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl font-semibold transition flex items-center gap-2 text-sm shadow-sm"
+                    >
+                        <BarChart3 className="w-4 h-4 text-indigo-500" /> Relatório por Cliente
+                    </button>
+                    <button onClick={() => setIsCreateOpen(true)} className="px-5 py-2.5 bg-[var(--color-primary-base)] text-white rounded-xl font-semibold hover:opacity-90 shadow-sm transition flex items-center gap-2 text-sm whitespace-nowrap">
+                        <Plus className="w-4 h-4"/> Nova O.S.
+                    </button>
+                </div>
             </div>
 
             {/* Nova Action Bar de Filtros e Resumo */}
@@ -974,6 +1190,25 @@ export default function ServiceOrdersPage() {
                         >
                             <Calendar className="w-4 h-4"/> Alterar Datas
                         </button>
+
+                        {(() => {
+                            const selectedObj = orders.filter(o => selectedOrders.includes(o.id));
+                            const canGroupOS = selectedObj.length >= 2 && 
+                                selectedObj.every(o => o.customer_id === selectedObj[0].customer_id) && 
+                                selectedObj.every(o => o.status_nfse === 'Nao Emitida' || o.status_nfse === 'Erro') && 
+                                selectedObj.every(o => o.status !== 'Concluido');
+                            
+                            if (!canGroupOS) return null;
+                            return (
+                                <button
+                                    onClick={openGroupModal}
+                                    className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-bold rounded-xl text-sm transition shadow-sm flex items-center gap-2 w-full md:w-auto justify-center whitespace-nowrap"
+                                    title="Agrupar O.S. selecionadas deste cliente em uma única O.S."
+                                >
+                                    <Layers className="w-4 h-4"/> Agrupar O.S.
+                                </button>
+                            );
+                        })()}
                         
                         <div className="hidden md:block w-px h-8 bg-indigo-200 dark:bg-indigo-800/60"></div>
                         
@@ -1303,13 +1538,13 @@ export default function ServiceOrdersPage() {
 
             {/* CREATE MODAL */}
             {isCreateOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
-                    <div className="bg-white dark:bg-slate-950 rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-                        <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-slate-900/60 backdrop-blur-md">
+                    <div className="bg-white dark:bg-slate-950 rounded-3xl max-w-lg w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50 flex-shrink-0">
                             <h2 className="text-lg font-bold text-slate-900 dark:text-white">Nova Ordem de Serviço</h2>
-                            <button onClick={()=>setIsCreateOpen(false)} className="text-slate-400"><X className="w-5 h-5"/></button>
+                            <button onClick={()=>setIsCreateOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="w-5 h-5"/></button>
                         </div>
-                        <form onSubmit={handleCreateOrder} className="p-6 space-y-4">
+                        <form onSubmit={handleCreateOrder} className="p-6 space-y-4 overflow-y-auto flex-1 custom-scrollbar">
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Cliente</label>
                                 <CustomerAutocomplete 
@@ -1318,6 +1553,216 @@ export default function ServiceOrdersPage() {
                                     required 
                                 />
                             </div>
+                            {pendingCustomerOrders && pendingCustomerOrders.length > 0 && (
+                                <div className="bg-gradient-to-br from-amber-50/80 to-purple-50/50 dark:from-amber-950/20 dark:to-purple-950/20 border border-amber-200 dark:border-amber-800/60 rounded-2xl p-3.5 space-y-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2">
+                                            <input 
+                                                type="checkbox" 
+                                                id="group-with-existing" 
+                                                checked={groupWithExisting} 
+                                                onChange={(e) => {
+                                                    const checked = e.target.checked;
+                                                    setGroupWithExisting(checked);
+                                                    if (checked) {
+                                                        setSelectedTargetOrderIds(pendingCustomerOrders.map((po: any) => po.id));
+                                                    } else {
+                                                        setSelectedTargetOrderIds([]);
+                                                    }
+                                                }} 
+                                                className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                                            />
+                                            <label htmlFor="group-with-existing" className="text-xs font-bold text-amber-900 dark:text-amber-300 cursor-pointer flex items-center gap-1.5">
+                                                <Layers className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                                                Agrupar / Somar com O.S. pendentes deste cliente ({pendingCustomerOrders.length})?
+                                            </label>
+                                        </div>
+
+                                        {groupWithExisting && (
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSelectedTargetOrderIds(pendingCustomerOrders.map((po: any) => po.id))}
+                                                    className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                                                >
+                                                    Marcar Todas
+                                                </button>
+                                                <span className="text-slate-300 dark:text-slate-700 text-xs">|</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSelectedTargetOrderIds([])}
+                                                    className="text-[10px] font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                                                >
+                                                    Limpar
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {groupWithExisting && (
+                                        <div className="pt-1 space-y-3">
+                                            {/* Seletor de Modo de Agrupamento */}
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-white/90 dark:bg-slate-900/90 p-1.5 rounded-xl border border-amber-200/80 dark:border-amber-900/40">
+                                                <label 
+                                                    onClick={() => setOrderMergeMode('DISTRIBUTE_MONTHLY')}
+                                                    className={`flex items-start gap-2 p-2 rounded-lg cursor-pointer transition text-xs ${
+                                                        orderMergeMode === 'DISTRIBUTE_MONTHLY' 
+                                                            ? 'bg-amber-100/80 dark:bg-amber-900/40 text-amber-950 dark:text-amber-200 font-bold border border-amber-300 dark:border-amber-700' 
+                                                            : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                                                    }`}
+                                                >
+                                                    <input 
+                                                        type="radio" 
+                                                        name="order_merge_mode" 
+                                                        checked={orderMergeMode === 'DISTRIBUTE_MONTHLY'} 
+                                                        onChange={() => setOrderMergeMode('DISTRIBUTE_MONTHLY')}
+                                                        className="mt-0.5 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                                                    />
+                                                    <div>
+                                                        <div>Somar mês a mês</div>
+                                                        <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                                                            Soma nos mesmos meses já projetados
+                                                        </div>
+                                                    </div>
+                                                </label>
+
+                                                <label 
+                                                    onClick={() => setOrderMergeMode('CONSOLIDATE')}
+                                                    className={`flex items-start gap-2 p-2 rounded-lg cursor-pointer transition text-xs ${
+                                                        orderMergeMode === 'CONSOLIDATE' 
+                                                            ? 'bg-purple-100/80 dark:bg-purple-900/40 text-purple-950 dark:text-purple-200 font-bold border border-purple-300 dark:border-purple-700' 
+                                                            : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                                                    }`}
+                                                >
+                                                    <input 
+                                                        type="radio" 
+                                                        name="order_merge_mode" 
+                                                        checked={orderMergeMode === 'CONSOLIDATE'} 
+                                                        onChange={() => setOrderMergeMode('CONSOLIDATE')}
+                                                        className="mt-0.5 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                                                    />
+                                                    <div>
+                                                        <div>Consolidar em uma só</div>
+                                                        <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                                                            Unifica todas as selecionadas em 1 O.S.
+                                                        </div>
+                                                    </div>
+                                                </label>
+                                            </div>
+
+                                            <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 dark:text-slate-400 px-0.5">
+                                                <span>{orderMergeMode === 'DISTRIBUTE_MONTHLY' ? 'O.S. elegíveis para soma mensal:' : 'Marque as O.S. que deseja somar neste agrupamento:'}</span>
+                                                <span className="text-purple-600 dark:text-purple-400 font-black">
+                                                    {selectedTargetOrderIds.length} de {pendingCustomerOrders.length} selecionada(s)
+                                                </span>
+                                            </div>
+
+                                            {/* Lista rolável de O.S. para seleção com checkboxes */}
+                                            <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+                                                {pendingCustomerOrders.map((po: any) => {
+                                                    const isChecked = selectedTargetOrderIds.includes(po.id);
+                                                    return (
+                                                        <div
+                                                            key={po.id}
+                                                            onClick={() => {
+                                                                if (isChecked) {
+                                                                    setSelectedTargetOrderIds(selectedTargetOrderIds.filter(id => id !== po.id));
+                                                                } else {
+                                                                    setSelectedTargetOrderIds([...selectedTargetOrderIds, po.id]);
+                                                                }
+                                                            }}
+                                                            className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 text-xs ${
+                                                                isChecked
+                                                                    ? 'bg-purple-50/70 border-purple-300 dark:bg-purple-950/40 dark:border-purple-700 shadow-sm'
+                                                                    : 'bg-white/80 dark:bg-slate-900 border-slate-200 dark:border-slate-800 opacity-70 hover:opacity-100'
+                                                            }`}
+                                                        >
+                                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={isChecked}
+                                                                    onChange={() => {}}
+                                                                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 cursor-pointer pointer-events-none"
+                                                                />
+                                                                <div className="truncate">
+                                                                    <div className="flex items-center gap-1.5">
+                                                                        <span className="font-black text-purple-700 dark:text-purple-400">
+                                                                            #{po.local_id || po.id}
+                                                                        </span>
+                                                                        <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                                                                            {po.service_name}
+                                                                        </span>
+                                                                    </div>
+                                                                    {po.custom_description && (
+                                                                        <p className="text-[10px] text-slate-500 truncate mt-0.5 max-w-[240px]">
+                                                                            {po.custom_description}
+                                                                        </p>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="text-right flex-shrink-0">
+                                                                <div className="font-bold text-slate-900 dark:text-white">
+                                                                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(po.negotiated_value)}
+                                                                </div>
+                                                                <div className="text-[10px] text-slate-400">
+                                                                    Exec: {po.execution_date ? new Date(po.execution_date + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            {/* Resumo dinâmico de soma */}
+                                            {(() => {
+                                                const selectedItems = pendingCustomerOrders.filter(p => selectedTargetOrderIds.includes(p.id));
+                                                const sumSelected = selectedItems.reduce((acc, curr) => acc + (curr.negotiated_value || 0), 0);
+                                                const currentNewValue = parseFloat(newOrder.negotiated_value ? newOrder.negotiated_value.replace(/\./g, '').replace(',', '.') : '0') || 0;
+                                                const totalSum = sumSelected + currentNewValue;
+
+                                                if (orderMergeMode === 'DISTRIBUTE_MONTHLY') {
+                                                    return (
+                                                        <div className="p-2.5 rounded-xl bg-amber-100/70 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-950 dark:text-amber-200 space-y-1.5">
+                                                            <div className="font-bold text-xs flex items-center gap-1.5 text-amber-900 dark:text-amber-300">
+                                                                <Calendar className="w-3.5 h-3.5" />
+                                                                Distribuição Mensal Programada:
+                                                            </div>
+                                                            <p className="text-[10.5px] text-slate-600 dark:text-slate-300">
+                                                                O novo serviço de <strong>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(currentNewValue)}</strong> será somado diretamente às O.S. já projetadas dos mesmos meses.
+                                                            </p>
+                                                            <div className="border-t border-amber-200 dark:border-amber-800/80 pt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                                                                • Meses coincidentes: mantém vencimento original, soma os valores e adiciona a observação do novo serviço.<br/>
+                                                                • Meses excedentes: gera novas O.S. automaticamente apenas para as datas que não existiam.
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                return (
+                                                    <div className="p-2.5 rounded-xl bg-purple-100/70 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800 text-[11px] text-purple-900 dark:text-purple-200 space-y-1">
+                                                        <div className="flex items-center justify-between font-medium">
+                                                            <span>Soma das {selectedItems.length} O.S. selecionadas:</span>
+                                                            <span className="font-bold">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(sumSelected)}</span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between font-medium">
+                                                            <span>Novo serviço a criar:</span>
+                                                            <span className="font-bold">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(currentNewValue)}</span>
+                                                        </div>
+                                                        <div className="flex items-center justify-between font-black text-xs border-t border-purple-200 dark:border-purple-800/80 pt-1 text-purple-800 dark:text-purple-300">
+                                                            <span>Total Consolidado da O.S.:</span>
+                                                            <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalSum)}</span>
+                                                        </div>
+                                                        <p className="text-[10px] text-purple-700/80 dark:text-purple-300/80 pt-0.5">
+                                                            As observações de todas as O.S. selecionadas serão unificadas para a discriminação na nota (NFS-e).
+                                                        </p>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Serviço</label>
                                 <select required value={newOrder.service_id} onChange={(e) => handleServiceSelect(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-sm">
@@ -2001,6 +2446,381 @@ export default function ServiceOrdersPage() {
                     </div>
                 </div>
             )}
+
+            {/* GROUP SERVICE ORDERS MODAL */}
+            {isGroupModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+                    <div className="bg-white dark:bg-slate-950 rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/30 dark:to-indigo-950/30">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                                    <Layers className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                                    Agrupador de Ordens de Serviço
+                                </h3>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                    Consolidação de projeções e unificação de notas para o mesmo cliente
+                                </p>
+                            </div>
+                            <button onClick={() => setIsGroupModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+                            <div className="p-3.5 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-2xl text-xs text-purple-900 dark:text-purple-300 leading-relaxed">
+                                💡 As <strong>{selectedOrders.length} O.S. selecionadas</strong> serão unificadas em uma única O.S. Mestre. O valor total será somado e as observações serão combinadas para faturamento e emissão da NFS-e. As O.S. de origem ficarão arquivadas com rastreabilidade contábil.
+                            </div>
+
+                            {/* Detalhe das OS selecionadas */}
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">O.S. que serão agrupadas:</label>
+                                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                                    {orders.filter(o => selectedOrders.includes(o.id)).map(o => (
+                                        <div key={o.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">
+                                            <div>
+                                                <span className="font-black text-indigo-600 dark:text-indigo-400 mr-2">#{o.local_id || o.id}</span>
+                                                <span className="font-semibold text-slate-700 dark:text-slate-200">{o.service_name}</span>
+                                                {o.custom_description && (
+                                                    <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{o.custom_description}</p>
+                                                )}
+                                            </div>
+                                            <div className="text-right ml-3 flex-shrink-0">
+                                                <span className="font-bold text-slate-800 dark:text-white">
+                                                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(o.negotiated_value)}
+                                                </span>
+                                                <p className="text-[10px] text-slate-400">
+                                                    {o.execution_date ? new Date(o.execution_date + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Total Consolidado */}
+                            {(() => {
+                                const selectedObj = orders.filter(o => selectedOrders.includes(o.id));
+                                const totalVal = selectedObj.reduce((acc, curr) => acc + (curr.negotiated_value || 0), 0);
+                                return (
+                                    <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-2xl flex justify-between items-center">
+                                        <span className="text-xs uppercase font-bold text-emerald-700 dark:text-emerald-400">
+                                            Valor Total Consolidado:
+                                        </span>
+                                        <span className="text-xl font-black text-emerald-700 dark:text-emerald-300">
+                                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalVal)}
+                                        </span>
+                                    </div>
+                                );
+                            })()}
+
+                            {/* Data de Execução Consolidada */}
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                    Nova Data de Execução / Previsão:
+                                </label>
+                                <input 
+                                    type="date"
+                                    required
+                                    value={groupExecutionDate}
+                                    onChange={(e) => setGroupExecutionDate(e.target.value)}
+                                    className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-sm font-medium"
+                                />
+                            </div>
+
+                            {/* Observação / Detalhes da Nota */}
+                            <div>
+                                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                    Observação e Composição da Nota (NFS-e):
+                                </label>
+                                <textarea 
+                                    rows={4}
+                                    value={groupDescription}
+                                    onChange={(e) => setGroupDescription(e.target.value)}
+                                    className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-xs leading-relaxed resize-none font-sans"
+                                    placeholder="Descreva o que compõe este agrupamento de serviços..."
+                                />
+                                <p className="text-[10px] text-slate-400 mt-1">
+                                    Este texto será utilizado na discriminação do serviço ao faturar e emitir a nota fiscal.
+                                </p>
+                            </div>
+
+                            {/* Botões do Rodapé */}
+                            <div className="flex gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsGroupModalOpen(false)}
+                                    className="flex-1 py-2.5 text-center px-4 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 font-medium rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition text-sm"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleConfirmGroup}
+                                    disabled={isGrouping}
+                                    className="flex-1 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-bold rounded-xl transition shadow-md flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                                >
+                                    {isGrouping ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 animate-spin" /> Agrupando...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Layers className="w-4 h-4" /> Confirmar Agrupamento
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* CUSTOMER REPORT MODAL */}
+            {isCustomerReportOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-slate-900/60 backdrop-blur-md">
+                    <div className="bg-white dark:bg-slate-950 rounded-3xl max-w-5xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200">
+                        {/* Header */}
+                        <div className="px-6 py-5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50 flex-shrink-0">
+                            <div>
+                                <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2.5">
+                                    <BarChart3 className="w-6 h-6 text-indigo-500" />
+                                    Relatório de Serviços por Cliente
+                                </h3>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                                    Demonstrativo de serviços previstos vs concluídos com data de pagamento e exportação
+                                </p>
+                            </div>
+                            <button onClick={() => setIsCustomerReportOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* Barra de Filtros e Exportação */}
+                        <div className="p-5 border-b border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900/30 flex flex-wrap items-end gap-3 flex-shrink-0">
+                            <div className="flex flex-col gap-1 min-w-[130px] flex-1 sm:flex-none">
+                                <label className="text-[11px] font-bold uppercase text-slate-500">De (Execução):</label>
+                                <input 
+                                    type="date" 
+                                    value={reportStartDate} 
+                                    onChange={(e) => setReportStartDate(e.target.value)} 
+                                    className="px-3 py-1.5 border rounded-xl text-xs dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                                />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[130px] flex-1 sm:flex-none">
+                                <label className="text-[11px] font-bold uppercase text-slate-500">Até:</label>
+                                <input 
+                                    type="date" 
+                                    value={reportEndDate} 
+                                    onChange={(e) => setReportEndDate(e.target.value)} 
+                                    className="px-3 py-1.5 border rounded-xl text-xs dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                                />
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[120px] flex-1 sm:flex-none">
+                                <label className="text-[11px] font-bold uppercase text-slate-500">Status:</label>
+                                <select 
+                                    value={reportStatus} 
+                                    onChange={(e) => setReportStatus(e.target.value)} 
+                                    className="px-3 py-1.5 border rounded-xl text-xs dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                                >
+                                    <option value="">Todos</option>
+                                    <option value="Pendente">Pendente (Previsto)</option>
+                                    <option value="Em Execucao">Em Execução</option>
+                                    <option value="Concluido">Concluído</option>
+                                    <option value="Cancelado">Cancelado</option>
+                                </select>
+                            </div>
+                            <div className="flex flex-col gap-1 min-w-[160px] flex-1 sm:flex-none">
+                                <label className="text-[11px] font-bold uppercase text-slate-500">Filtrar Cliente:</label>
+                                <select 
+                                    value={reportCustomerId} 
+                                    onChange={(e) => setReportCustomerId(e.target.value)} 
+                                    className="px-3 py-1.5 border rounded-xl text-xs dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                                >
+                                    <option value="">Todos os Clientes</option>
+                                    {customers.map((c: any) => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <button 
+                                onClick={fetchCustomerReport} 
+                                disabled={reportLoading}
+                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+                            >
+                                <Search className="w-3.5 h-3.5" /> Filtrar
+                            </button>
+
+                            <div className="h-6 w-[1px] bg-slate-200 dark:bg-slate-800 hidden sm:block mx-1" />
+
+                            <div className="flex items-center gap-2 ml-auto">
+                                <button
+                                    onClick={() => handleExportCustomerReport('excel')}
+                                    disabled={reportExporting !== null}
+                                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                                    title="Baixar planilha formatada em Excel (.xlsx)"
+                                >
+                                    <Download className="w-3.5 h-3.5" />
+                                    {reportExporting === 'excel' ? 'Exportando...' : 'Exportar Excel'}
+                                </button>
+                                <button
+                                    onClick={() => handleExportCustomerReport('pdf')}
+                                    disabled={reportExporting !== null}
+                                    className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                                    title="Baixar relatório formatado em PDF (.pdf)"
+                                >
+                                    <Download className="w-3.5 h-3.5" />
+                                    {reportExporting === 'pdf' ? 'Exportando...' : 'Exportar PDF'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Conteúdo com scroll */}
+                        <div className="p-6 overflow-y-auto space-y-6 flex-1">
+                            {/* Cards de Métricas */}
+                            {customerReportData && (
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                    <div className="bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-800/50 p-4 rounded-2xl">
+                                        <p className="text-[10px] font-bold uppercase text-indigo-500 tracking-wider">Previsto (Em Aberto)</p>
+                                        <p className="text-lg font-black text-indigo-700 dark:text-indigo-300 mt-0.5">
+                                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(customerReportData.grand_total_previsto || 0)}
+                                        </p>
+                                    </div>
+                                    <div className="bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-800/50 p-4 rounded-2xl">
+                                        <p className="text-[10px] font-bold uppercase text-emerald-500 tracking-wider">Concluído (Realizado)</p>
+                                        <p className="text-lg font-black text-emerald-700 dark:text-emerald-300 mt-0.5">
+                                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(customerReportData.grand_total_concluido || 0)}
+                                        </p>
+                                    </div>
+                                    <div className="bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 p-4 rounded-2xl">
+                                        <p className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Total Geral</p>
+                                        <p className="text-lg font-black text-slate-800 dark:text-white mt-0.5">
+                                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(customerReportData.grand_total_geral || 0)}
+                                        </p>
+                                    </div>
+                                    <div className="bg-purple-50/70 dark:bg-purple-950/30 border border-purple-100 dark:border-purple-800/50 p-4 rounded-2xl">
+                                        <p className="text-[10px] font-bold uppercase text-purple-500 tracking-wider">Clientes com Serviços</p>
+                                        <p className="text-lg font-black text-purple-700 dark:text-purple-300 mt-0.5">
+                                            {customerReportData.total_customers || 0}
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Listagem Agrupada por Cliente */}
+                            {reportLoading ? (
+                                <div className="py-16 text-center text-slate-400">
+                                    <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-500 mb-2" />
+                                    <p className="text-sm font-medium">Carregando relatório por cliente...</p>
+                                </div>
+                            ) : !customerReportData || !customerReportData.groups || customerReportData.groups.length === 0 ? (
+                                <div className="py-16 text-center text-slate-400 border border-dashed rounded-2xl dark:border-slate-800">
+                                    <BarChart3 className="w-10 h-10 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
+                                    <p className="text-sm font-semibold">Nenhum serviço encontrado no período ou filtros selecionados.</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-5">
+                                    {customerReportData.groups.map((group: any) => (
+                                        <div key={group.customer_id} className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm bg-white dark:bg-slate-900">
+                                            {/* Cabeçalho do Cliente */}
+                                            <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                                                <div className="flex items-center gap-2">
+                                                    <Users className="w-4 h-4 text-indigo-500" />
+                                                    <span className="font-bold text-sm text-slate-800 dark:text-white">
+                                                        {group.customer_name}
+                                                    </span>
+                                                    {group.customer_document && (
+                                                        <span className="text-[11px] text-slate-400 bg-white dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700">
+                                                            {group.customer_document}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-3 text-xs">
+                                                    <span className="text-indigo-600 dark:text-indigo-400">
+                                                        Previsto: <strong>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(group.total_previsto)}</strong>
+                                                    </span>
+                                                    <span className="text-emerald-600 dark:text-emerald-400">
+                                                        Concluído: <strong>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(group.total_concluido)}</strong>
+                                                    </span>
+                                                    <span className="font-bold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg">
+                                                        Total: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(group.total_cliente)}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            {/* Tabela de Itens */}
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-xs text-left">
+                                                    <thead className="bg-slate-50/50 dark:bg-slate-900/30 text-slate-400 uppercase text-[10px] font-bold border-b border-slate-100 dark:border-slate-800">
+                                                        <tr>
+                                                            <th className="px-4 py-2.5">Nº OS</th>
+                                                            <th className="px-4 py-2.5">Serviço</th>
+                                                            <th className="px-4 py-2.5">Execução</th>
+                                                            <th className="px-4 py-2.5">Status</th>
+                                                            <th className="px-4 py-2.5">NFS-e</th>
+                                                            <th className="px-4 py-2.5 text-right">Valor</th>
+                                                            <th className="px-4 py-2.5 text-center">Data Pagamento</th>
+                                                            <th className="px-4 py-2.5">Observações / Composição</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                                        {group.items.map((it: any) => (
+                                                            <tr key={it.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
+                                                                <td className="px-4 py-2.5 font-bold text-indigo-600 dark:text-indigo-400">
+                                                                    #{it.local_id || it.id}
+                                                                </td>
+                                                                <td className="px-4 py-2.5 font-semibold text-slate-700 dark:text-slate-300">
+                                                                    {it.service_name}
+                                                                </td>
+                                                                <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">
+                                                                    {it.execution_date}
+                                                                </td>
+                                                                <td className="px-4 py-2.5">
+                                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                                        it.status === 'Concluido' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' :
+                                                                        it.status === 'Pendente' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400' :
+                                                                        it.status === 'Cancelado' ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400' :
+                                                                        'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-400'
+                                                                    }`}>
+                                                                        {it.status}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-4 py-2.5 text-slate-500 text-[11px]">
+                                                                    {it.status_nfse}
+                                                                </td>
+                                                                <td className="px-4 py-2.5 text-right font-bold text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                                                                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(it.negotiated_value)}
+                                                                </td>
+                                                                <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                                                                    {it.payment_date ? (
+                                                                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px] font-bold">
+                                                                            Pago em {it.payment_date}
+                                                                        </span>
+                                                                    ) : it.status === 'Concluido' ? (
+                                                                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 text-[10px] font-medium">
+                                                                            Aguardando Pgto
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="text-slate-400 text-[11px]">-</span>
+                                                                    )}
+                                                                </td>
+                                                                <td className="px-4 py-2.5 text-slate-500 text-[11px] max-w-xs truncate" title={it.custom_description}>
+                                                                    {it.custom_description || '-'}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
+

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, Boolean, Enum
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, Boolean, Enum, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -11,9 +11,12 @@ class ProductStatus(str, enum.Enum):
 
 class Product(Base):
     __tablename__ = "prd_product"
+    __table_args__ = (
+        Index('idx_prd_product_company_status', 'company_id', 'status'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("cmp_company.id"), nullable=False, index=True)
     
     sku = Column(String(100), nullable=False, index=True)
     name = Column(String(255), nullable=False)
@@ -33,10 +36,10 @@ class Product(Base):
     model = Column(String(100), nullable=True)
     ean_gtin = Column(String(50), nullable=True, index=True)
     
-    category_id = Column(Integer, ForeignKey("prd_category.id"), nullable=True)
-    brand_id = Column(Integer, ForeignKey("prd_brand.id"), nullable=True)
+    category_id = Column(Integer, ForeignKey("prd_category.id"), nullable=True, index=True)
+    brand_id = Column(Integer, ForeignKey("prd_brand.id"), nullable=True, index=True)
     
-    status = Column(String(50), default=ProductStatus.ACTIVE.value, nullable=False)
+    status = Column(String(50), default=ProductStatus.ACTIVE.value, nullable=False, index=True)
     
     # Internal stock metrics (in the future we might expand to prd_stock)
     stock_quantity = Column(Integer, default=0, nullable=False)
@@ -47,6 +50,7 @@ class Product(Base):
     allow_purchase = Column(Boolean, default=True, nullable=True)
     stock_status_label = Column(String(100), nullable=True)
     cover_url = Column(String(500), nullable=True)
+    horus_cod_item = Column(Integer, nullable=True, index=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

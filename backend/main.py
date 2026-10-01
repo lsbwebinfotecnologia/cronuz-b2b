@@ -144,21 +144,44 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         body_text = body.decode()
     except Exception:
         body_text = "<body não decodificável>"
-    # [SEC] log interno apenas — body_text não retornado em produção para evitar vazamento
     _main_logger.warning("[422] Validation error | body=%s | errors=%s", body_text[:200], exc.errors())
+    origin = request.headers.get("origin") or "*"
     return JSONResponse(
         status_code=422,
         content={"detail": exc.errors()},
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "*",
+        }
     )
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    # [SEC] traceback NUNCA retornado ao cliente — apenas logado internamente
     _main_logger.error("[500] %s", _traceback.format_exc())
+    origin = request.headers.get("origin") or "*"
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal Server Error"},
+        content={"detail": "Ocorreu um erro interno no servidor. Por favor, tente novamente mais tarde."},
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "*",
+        }
     )
+
+
+# [SEC] Security Headers Middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
 # [SEC] CORS — permite localhost/127.0.0.1 em desenvolvimento e apenas HTTPS em produção

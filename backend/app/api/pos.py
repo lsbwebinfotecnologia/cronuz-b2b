@@ -15,6 +15,7 @@ import openpyxl
 
 from app.db.session import get_db
 from app.core import dependencies
+from app.core.upload_security import validate_file_size_and_extension, read_file_safely
 from app.models import user as user_models
 from app.models.company import Company
 from app.models.product import Product
@@ -574,6 +575,8 @@ async def upload_pos_spreadsheet(
     """
     _assert_pos_access(current_user, company_id, db)
 
+    validate_file_size_and_extension(file, category="sheet")
+
     filename = file.filename.lower()
     suffix = ".xlsx" if filename.endswith(".xlsx") else (".csv" if filename.endswith(".csv") else "")
     if not suffix:
@@ -584,9 +587,9 @@ async def upload_pos_spreadsheet(
     _cleanup_old_imports(import_dir)
 
     # 1. Grava o arquivo enviado em um arquivo temporário no disco para streaming
+    content = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp_path = tmp.name
-        content = await file.read()
         tmp.write(content)
 
     items = []

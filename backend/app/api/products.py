@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 
 from app.db.session import get_db
@@ -87,21 +87,20 @@ def list_products(
     source: Optional[str] = None,
     customer_id: Optional[int] = Query(None, description="Obrigatório no modo B2B para tabelas de preço"),
     category_id: Optional[int] = None,
+    company_id: Optional[int] = Query(None, description="Filtrar por company_id (DBM / Admin)"),
     order_by: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
-    # If the user is logged in, restrict to their company.
-    # If not (public storefront), default to Company 1 or main catalog.
-    target_company_id = current_user.company_id if current_user and current_user.company_id else 1
-    
-    target_company_id = current_user.company_id if current_user and current_user.company_id else 1
+    # Se o usuário for master ou passar company_id explicitamente:
+    target_company_id = company_id or (current_user.company_id if current_user and current_user.company_id else 1)
     
     from app.models.company_settings import CompanySettings
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == target_company_id).first()
     
     # 1) If Horus is enabled, fetch EXCLUSIVELY from Horus as the Single Source of Truth
-    if settings and settings.horus_enabled:
+    # A menos que a requisicao seja interna do DBM ou especificamente local
+    if settings and settings.horus_enabled and source not in ("dbm", "local"):
         import asyncio
         from app.integrators.horus_products import HorusProducts
         from app.models.company import Company
@@ -211,11 +210,13 @@ def list_products(
     query = db.query(Product).filter(Product.company_id == target_company_id)
     
     if search:
-        from sqlalchemy import func
+        from sqlalchemy import func, cast, String
         search_filter = f"%{search}%"
         query = query.filter(
             (func.unaccent(Product.name).ilike(func.unaccent(search_filter))) |
-            (Product.sku.ilike(search_filter))
+            (Product.sku.ilike(search_filter)) |
+            (Product.ean_gtin.ilike(search_filter)) |
+            (cast(Product.horus_cod_item, String).ilike(search_filter))
         )
         
     if category_id:
@@ -236,9 +237,12 @@ def list_products(
     elif order_by == 'price_desc':
         query = query.order_by(Product.promotional_price.desc().nulls_last(), Product.base_price.desc())
     else:
-        query = query.order_by(Product.name.asc())
+        query = query.order_by(Product.id.desc())
 
-    local_products = query.offset(skip).limit(limit).all()
+    local_products = query.options(
+        joinedload(Product.brand_rel),
+        joinedload(Product.category)
+    ).offset(skip).limit(limit).all()
     
     # Convert local products to dictionary matching schema
     items = []
@@ -246,6 +250,12 @@ def list_products(
         item_dict = ProductResponse.from_orm(p).dict()
         item_dict["price"] = p.promotional_price if p.promotional_price else p.base_price
         item_dict["stock"] = p.stock_quantity
+        if p.brand_rel and p.brand_rel.name:
+            item_dict["brand"] = p.brand_rel.name
+        elif not item_dict.get("brand"):
+            item_dict["brand"] = p.brand or ""
+        if p.category and p.category.name:
+            item_dict["category_name"] = p.category.name
         items.append(item_dict)
 
     return {

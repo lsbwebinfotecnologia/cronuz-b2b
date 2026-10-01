@@ -12,6 +12,7 @@ from sqlalchemy import func, desc, or_
 from app.db.session import get_db
 from app.core.dependencies import get_current_user
 from app.core.utils import assert_company_ownership
+from app.core.upload_security import validate_file_size_and_extension, sanitize_filename, read_file_safely
 from app.models.company import Company
 from app.models.user import User
 from app.models.author import Author
@@ -1024,6 +1025,9 @@ async def upload_file(
     current_user: dict = Depends(get_current_user)
 ):
     assert_company_ownership(current_user, company_id)
+
+    validate_file_size_and_extension(file, category="generic", custom_max_size=15 * 1024 * 1024)
+
     project = db.query(EditorialProject).filter(
         EditorialProject.id == project_id,
         EditorialProject.company_id == company_id
@@ -1035,16 +1039,18 @@ async def upload_file(
     target_dir = UPLOAD_DIR / "sellers" / str(company_id) / "editorial" / str(project_id)
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    # Nome limpo
+    # Nome limpo e sanitizado contra Path Traversal
     timestamp = int(datetime.utcnow().timestamp())
-    clean_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
+    safe_base = sanitize_filename(file.filename or "")
+    clean_filename = f"{timestamp}_{safe_base}"
     file_path = target_dir / clean_filename
 
-    # Salva arquivo
+    # Salva arquivo de forma segura
+    content = await read_file_safely(file, max_size_bytes=15 * 1024 * 1024)
     with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        buffer.write(content)
 
-    file_size = os.path.getsize(file_path)
+    file_size = len(content)
     relative_path = f"/uploads/sellers/{company_id}/editorial/{project_id}/{clean_filename}"
 
     doc = EditorialFile(

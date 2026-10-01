@@ -17,6 +17,8 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 def get_dashboard_metrics(
     start_date: str = Query(None, description="ISO YYYY-MM-DD"),
     end_date: str = Query(None, description="ISO YYYY-MM-DD"),
+    include_personal: bool = Query(False, description="Incluir contas pessoais e despesas desconsideradas"),
+    history_months: int = Query(6, description="Quantidade de meses para o histórico de faturamento"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_optional)
 ):
@@ -153,6 +155,7 @@ def get_dashboard_metrics(
     module_editorial = getattr(company, "module_editorial", False) if company else False
     horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
+    horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
     company_logo = getattr(company, "logo", None) if company else None
 
     # Uses horus is now strongly derived from the company flag
@@ -167,11 +170,19 @@ def get_dashboard_metrics(
         "receivable": {"paid": 0.0, "pending": 0.0}
     }
     if module_financial:
-        from app.models.financial import FinancialInstallment, FinancialTransaction
+        from app.models.financial import FinancialInstallment, FinancialTransaction, FinancialAccount
         fin_query = db.query(FinancialTransaction.type, FinancialInstallment.status, func.sum(FinancialInstallment.amount).label('total'))\
             .join(FinancialInstallment, FinancialInstallment.transaction_id == FinancialTransaction.id)\
             .filter(FinancialInstallment.due_date >= start_dt.date(), FinancialInstallment.due_date < end_dt.date(), FinancialInstallment.status != "CANCELLED")
         
+        if not include_personal:
+            fin_query = fin_query.outerjoin(FinancialAccount, FinancialInstallment.account_id == FinancialAccount.id)\
+                .filter(
+                    (FinancialAccount.id == None) | (FinancialAccount.is_personal == False),
+                    FinancialTransaction.exclude_from_reports == False,
+                    FinancialInstallment.exclude_from_reports == False
+                )
+
         if company_id:
             fin_query = fin_query.filter(FinancialTransaction.company_id == company_id)
         elif current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) and current_user.tenant_id != "cronuz":
@@ -221,6 +232,83 @@ def get_dashboard_metrics(
                 service_metrics["pending"]["count"] += cnt
                 service_metrics["pending"]["value"] += v
 
+    # 6. Consolidated Revenue History (Months leading up to filtered period)
+    revenue_history = []
+    from dateutil.relativedelta import relativedelta
+    valid_months = max(1, min(int(history_months or 6), 24))
+    anchor_date = datetime(start_dt.year, start_dt.month, 1)
+    hist_start = anchor_date - relativedelta(months=valid_months - 1)
+    hist_end = anchor_date + relativedelta(months=1)
+
+    pt_months = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+    month_series = []
+    for i in range(valid_months):
+        m_dt = hist_start + relativedelta(months=i)
+        ym = m_dt.strftime("%Y-%m")
+        lbl = f"{pt_months[m_dt.month - 1]}/{str(m_dt.year)[2:]}"
+        month_series.append({"ym": ym, "label": lbl})
+
+    orders_hist_map = {}
+    from app.models.order import Order
+    ord_hist_q = db.query(
+        func.to_char(Order.created_at, 'YYYY-MM').label('ym'),
+        func.sum(Order.total).label('rev'),
+        func.count(Order.id).label('cnt')
+    ).filter(
+        Order.created_at >= hist_start,
+        Order.created_at < hist_end,
+        func.upper(Order.status).in_(["INVOICED", "FATURADO"])
+    )
+    if company_id:
+        ord_hist_q = ord_hist_q.filter(Order.company_id == company_id)
+    elif current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) and current_user.tenant_id != "cronuz":
+        ord_hist_q = ord_hist_q.join(Company, Order.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+    
+    for ym_val, rev_val, cnt_val in ord_hist_q.group_by(func.to_char(Order.created_at, 'YYYY-MM')).all():
+        orders_hist_map[str(ym_val)] = {"rev": float(rev_val or 0.0), "cnt": int(cnt_val or 0)}
+
+    services_hist_map = {}
+    from app.models.service import ServiceOrder, ServiceOrderStatus
+    from sqlalchemy import cast, String
+    svc_hist_q = db.query(
+        func.to_char(ServiceOrder.execution_date, 'YYYY-MM').label('ym'),
+        func.sum(ServiceOrder.negotiated_value).label('rev'),
+        func.count(ServiceOrder.id).label('cnt')
+    ).filter(
+        ServiceOrder.execution_date >= hist_start.date(),
+        ServiceOrder.execution_date < hist_end.date(),
+        func.upper(cast(ServiceOrder.status, String)).in_(["COMPLETED", "CONCLUIDO"])
+    )
+    if company_id:
+        svc_hist_q = svc_hist_q.filter(ServiceOrder.company_id == company_id)
+    elif current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) and current_user.tenant_id != "cronuz":
+        svc_hist_q = svc_hist_q.join(Company, ServiceOrder.company_id == Company.id).filter(Company.tenant_id == current_user.tenant_id)
+    
+    for ym_val, rev_val, cnt_val in svc_hist_q.group_by(func.to_char(ServiceOrder.execution_date, 'YYYY-MM')).all():
+        services_hist_map[str(ym_val)] = {"rev": float(rev_val or 0.0), "cnt": int(cnt_val or 0)}
+
+    for item in month_series:
+        ym = item["ym"]
+        ord_info = orders_hist_map.get(ym, {"rev": 0.0, "cnt": 0})
+        svc_info = services_hist_map.get(ym, {"rev": 0.0, "cnt": 0})
+        tot_rev = ord_info["rev"] + svc_info["rev"]
+        revenue_history.append({
+            "year_month": ym,
+            "month": ym,
+            "label": item["label"],
+            "month_label": item["label"],
+            "orders_revenue": ord_info["rev"],
+            "orders": ord_info["rev"],
+            "orders_count": ord_info["cnt"],
+            "services_revenue": svc_info["rev"],
+            "services": svc_info["rev"],
+            "services_count": svc_info["cnt"],
+            "total_revenue": tot_rev,
+            "total": tot_rev
+        })
+
+    consolidated_invoiced = invoiced_revenue + service_metrics["completed"]["value"]
+
     return {
         "active_products": active_products,
         "total_customers": total_customers,
@@ -230,8 +318,15 @@ def get_dashboard_metrics(
             "invoiced": invoiced_revenue,
             "pending": pending_revenue
         },
+        "consolidated_revenue": {
+            "total": consolidated_invoiced,
+            "orders": invoiced_revenue,
+            "services": service_metrics["completed"]["value"]
+        },
+        "revenue_history": revenue_history,
         "financial_metrics": financial_metrics,
         "service_metrics": service_metrics,
+        "include_personal": include_personal,
         "uses_horus": uses_horus,
         "horus_api_mode": settings.horus_api_mode if settings else 'B2B',
         "uses_bookinfo": uses_bookinfo,
@@ -259,6 +354,7 @@ def get_dashboard_metrics(
         "module_editorial": module_editorial,
         "horus_sql_feature_vindi_baixa": horus_sql_feature_vindi_baixa,
         "horus_sql_feature_pedidos": horus_sql_feature_pedidos,
+        "horus_sql_feature_dbm": horus_sql_feature_dbm,
         "company_logo": company_logo,
     }
 

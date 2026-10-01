@@ -3,11 +3,13 @@ from sqlalchemy.orm import Session
 import os
 import shutil
 import uuid
+import re
 from pathlib import Path
 
 from app.db.session import get_db
 from app.core.dependencies import get_current_user
 from app.models.user import User
+from app.core.upload_security import validate_file_size_and_extension, sanitize_filename, read_file_safely
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -28,29 +30,24 @@ async def upload_cover(
     if not current_user.company_id:
         raise HTTPException(status_code=400, detail="Usuário sem empresa vinculada.")
         
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="O arquivo de envio deve ser uma imagem.")
-
-    MAX_FILE_SIZE = 4 * 1024 * 1024 # 4MB
-    if file.size and file.size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="O arquivo excede o limite de 4MB.")
+    validate_file_size_and_extension(file, category="image")
 
     company_dir = STATIC_DIR / str(current_user.company_id)
     company_dir.mkdir(parents=True, exist_ok=True)
     
-    # Force extension to .jpg as per requirements
-    file_path = company_dir / f"{isbn}.jpg"
+    clean_isbn = re.sub(r"[^a-zA-Z0-9_\-]", "", isbn.strip())
+    if not clean_isbn:
+        clean_isbn = "cover"
+    file_path = company_dir / f"{clean_isbn}.jpg"
     
     try:
+        content = await read_file_safely(file, max_size_bytes=5 * 1024 * 1024)
         with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo: {str(e)}")
         
-    # Return the relative URL string that can be used on frontend
-    # Since we are saving inside `frontend/public/uploads`, the URL is `/uploads/...`
-    relative_url = f"/uploads/covers/{current_user.company_id}/{isbn}.jpg"
-    
+    relative_url = f"/uploads/covers/{current_user.company_id}/{clean_isbn}.jpg"
     return {"message": "Imagem de capa salva com sucesso.", "url": relative_url}
 
 from typing import Optional
@@ -74,26 +71,23 @@ async def upload_image(
     if current_user.type != UserRole.MASTER and target_company_id != current_user.company_id:
         raise HTTPException(status_code=403, detail="Acesso restrito. Você só pode enviar arquivos para a sua própria empresa.")
         
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="O arquivo de envio deve ser uma imagem.")
-
-    MAX_FILE_SIZE = 10 * 1024 * 1024 # 10MB
-    if file.size and file.size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="O arquivo excede o limite de 10MB.")
+    validate_file_size_and_extension(file, category="image")
 
     # Diretorio para imagens gerais
     images_dir = UPLOADS_DIR / "images" / str(target_company_id)
     images_dir.mkdir(parents=True, exist_ok=True)
     
     # Manter a extensao original com base no content type ou nome do file
-    extension = Path(file.filename).suffix if file.filename else ".jpg"
+    clean_name = sanitize_filename(file.filename or "")
+    extension = Path(clean_name).suffix.lower() if clean_name else ".jpg"
     unique_filename = f"{uuid.uuid4().hex}{extension}"
     
     file_path = images_dir / unique_filename
     
     try:
+        content = await read_file_safely(file, max_size_bytes=5 * 1024 * 1024)
         with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar o arquivo: {str(e)}")
         
@@ -116,8 +110,7 @@ async def upload_certificate(
     if current_user.type != UserRole.SELLER or current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
-    if not file.filename.endswith(".p12") and not file.filename.endswith(".pem"):
-        raise HTTPException(status_code=400, detail="O arquivo deve ser .p12 ou .pem")
+    validate_file_size_and_extension(file, category="cert")
 
     certs_dir = Path(__file__).parent.parent.parent.parent / "certs" / str(company_id)
     certs_dir.mkdir(parents=True, exist_ok=True)
@@ -126,8 +119,9 @@ async def upload_certificate(
     file_path = certs_dir / unique_filename
     
     try:
+        content = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
         with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar o certificado: {str(e)}")
         
@@ -162,8 +156,7 @@ async def upload_nfse_certificate(
     if current_user.type != UserRole.MASTER and current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
-    if not file.filename.lower().endswith(".pfx") and not file.filename.lower().endswith(".p12"):
-        raise HTTPException(status_code=400, detail="O certificado digital deve ser no formato .pfx arquivado.")
+    validate_file_size_and_extension(file, category="cert")
 
     certs_dir = Path(__file__).parent.parent.parent.parent / "certs" / "nfse" / str(company_id)
     certs_dir.mkdir(parents=True, exist_ok=True)
@@ -172,8 +165,9 @@ async def upload_nfse_certificate(
     file_path = certs_dir / unique_filename
     
     try:
+        content = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
         with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar o certificado: {str(e)}")
         
@@ -208,11 +202,8 @@ async def upload_inter_certificates(
     if current_user.type != UserRole.MASTER and current_user.company_id != company_id:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
-    if not cert_file.filename.endswith(".crt") and not cert_file.filename.endswith(".pem"):
-        raise HTTPException(status_code=400, detail="O arquivo do certificado deve ser .crt ou .pem")
-        
-    if not key_file.filename.endswith(".key"):
-        raise HTTPException(status_code=400, detail="O arquivo da chave privada deve ser .key")
+    validate_file_size_and_extension(cert_file, category="cert")
+    validate_file_size_and_extension(key_file, category="cert")
 
     certs_dir = Path(__file__).parent.parent.parent.parent / "certs" / "inter" / str(company_id)
     certs_dir.mkdir(parents=True, exist_ok=True)
@@ -270,8 +261,7 @@ async def upload_service_order_invoice(
     if not current_user.company_id:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="O arquivo deve ser um PDF.")
+    validate_file_size_and_extension(file, category="doc")
         
     order = db.query(ServiceOrder).filter(
         ServiceOrder.id == order_id,
@@ -288,8 +278,9 @@ async def upload_service_order_invoice(
     file_path = invoices_dir / unique_filename
     
     try:
+        content = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
         with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar o PDF: {str(e)}")
         
@@ -321,8 +312,7 @@ async def upload_financial_invoice(
     if not current_user.company_id:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="O arquivo deve ser um PDF.")
+    validate_file_size_and_extension(file, category="doc")
         
     trans = db.query(FinancialTransaction).filter(
         FinancialTransaction.id == transaction_id,
@@ -354,8 +344,9 @@ async def upload_financial_invoice(
     file_path = invoices_dir / unique_filename
     
     try:
+        content = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
         with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar o PDF: {str(e)}")
         
@@ -385,8 +376,7 @@ async def upload_financial_installment_boleto(
     if not current_user.company_id:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="O arquivo deve ser um PDF.")
+    validate_file_size_and_extension(file, category="doc")
         
     inst = db.query(FinancialInstallment).join(FinancialTransaction).filter(
         FinancialInstallment.id == installment_id,
@@ -403,8 +393,9 @@ async def upload_financial_installment_boleto(
     file_path = boletos_dir / unique_filename
     
     try:
+        content = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
         with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar o PDF: {str(e)}")
         

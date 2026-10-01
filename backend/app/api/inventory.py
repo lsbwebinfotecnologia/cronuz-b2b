@@ -12,6 +12,7 @@ import openpyxl
 
 from app.db.session import get_db
 from app.core import dependencies, security
+from app.core.upload_security import validate_file_size_and_extension, read_file_safely
 from app.models import user as user_models
 from app.models.company import Company
 from app.models.inventory import (
@@ -284,8 +285,9 @@ async def upload_inventory_sheet(
             detail=f"Operação bloqueada. O inventário não está em andamento (Status atual: '{inv.status}')."
         )
     
+    validate_file_size_and_extension(file, category="sheet")
     filename = file.filename.lower()
-    content = await file.read()
+    content = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
     
     raw_rows = []
     
