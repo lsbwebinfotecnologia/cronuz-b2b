@@ -102,6 +102,12 @@ export function middleware(request: NextRequest) {
   }
 
   // C. Custom Domain / Tenant Hotsite (Public)
+  if (url.pathname.startsWith('/domain/')) {
+    return NextResponse.next({
+      request: { headers: requestHeaders }
+    });
+  }
+
   if (!appDomains.includes(hostname) && !marketingDomains.includes(hostname)) {
     const isAppNativePath = url.pathname.startsWith('/store') || url.pathname.startsWith('/dashboard') || url.pathname.startsWith('/cart') || url.pathname.startsWith('/checkout') || url.pathname.startsWith('/portal-autor');
     
@@ -122,6 +128,7 @@ export function middleware(request: NextRequest) {
   const isLoginPage = url.pathname === '/login';
   const isUploads = url.pathname.startsWith('/uploads');
   const isPublicPage = 
+    url.pathname.startsWith('/domain/') ||
     url.pathname.startsWith('/h/') || 
     url.pathname.startsWith('/marketing') || 
     url.pathname.startsWith('/public/') || 
