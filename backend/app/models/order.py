@@ -45,14 +45,24 @@ class Order(Base):
     payment_condition = Column(String(50), nullable=True)
     proposal_id = Column(Integer, ForeignKey("crm_proposal.id"), nullable=True, index=True)
 
+    # Vínculo com Módulo de Escolas, Passeios e Eventos
+    event_id = Column(Integer, ForeignKey("sch_event.id", ondelete="SET NULL"), nullable=True, index=True)
+    school_customer_id = Column(Integer, ForeignKey("crm_customer.id", ondelete="SET NULL"), nullable=True, index=True)
+    event_participant_id = Column(Integer, ForeignKey("sch_event_participant.id", ondelete="SET NULL"), nullable=True, index=True)
+    delivery_type = Column(String(50), default="STANDARD", nullable=True) # STANDARD, SCHOOL_COLLECTIVE
+    recipient_student_name = Column(String(255), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     confirmed_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationship to Company and Customer
     company = relationship("Company")
-    customer = relationship("Customer")
+    customer = relationship("Customer", foreign_keys=[customer_id])
+    school = relationship("Customer", foreign_keys=[school_customer_id])
     proposal = relationship("Proposal", back_populates="converted_orders", foreign_keys=[proposal_id])
+    event = relationship("app.models.school.SchoolEvent", foreign_keys=[event_id])
+    event_participant = relationship("app.models.school.SchoolEventParticipant", foreign_keys=[event_participant_id])
     
     # Relationship to Items
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")

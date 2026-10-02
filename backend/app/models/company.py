@@ -67,6 +67,7 @@ class Company(Base):
     modulo_autores_ativo = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo Portal do Autor
     has_inventory_module = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo de Inventário
     module_editorial = Column(Boolean, default=False, nullable=False, server_default="false")      # Módulo Editorial (Pipelines e Demandas)
+    module_schools = Column(Boolean, default=False, nullable=False, server_default="false")        # Módulo de Escolas, Passeios e Eventos
 
     
     # Mobile App Modules (per-seller, managed by MASTER)

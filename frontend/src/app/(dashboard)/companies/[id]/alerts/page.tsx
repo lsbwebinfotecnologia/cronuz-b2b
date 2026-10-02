@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from '../layout';
+import { useCompany } from '../context';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types

@@ -28,6 +28,7 @@ interface Company {
   module_horus_sql?: boolean;
   modulo_autores_ativo?: boolean;
   module_editorial?: boolean;
+  module_schools?: boolean;
   active: boolean;
 }
 

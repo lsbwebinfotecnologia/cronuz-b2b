@@ -43,7 +43,9 @@ import {
   Feather,
   Boxes,
   Truck,
-  BookOpen
+  BookOpen,
+  GraduationCap,
+  Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -128,6 +130,7 @@ const sellerNavigation: NavItem[] = [
     subItems: [
        { name: 'Promoções', href: '/promotions', icon: Ticket },
        { name: 'Vitrines da Loja', href: '/marketing/showcases', icon: Store },
+       { name: 'Vitrines Dinâmicas', href: '/marketing/dynamic-showcases', icon: Sparkles },
        { name: 'Menu de Navegação', href: '/marketing/navigation', icon: Menu }
     ]
   },
@@ -186,6 +189,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
   const [hasInventoryModule, setHasInventoryModule] = useState(false);
   const [moduleEditorial, setModuleEditorial] = useState(false);
+  const [moduleSchools, setModuleSchools] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const _settingsFetchedRef = useRef(false);
@@ -208,6 +212,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        if (pathname.startsWith('/subscriptions') || pathname.startsWith('/subscribers')) initialOpen['Assinaturas'] = true;
        if (pathname.startsWith('/horus-direct') || pathname.startsWith('/dbm')) initialOpen['Horus Direct'] = true;
        if (pathname.startsWith('/editorial')) initialOpen['Editorial'] = true;
+       if (pathname.startsWith('/schools')) initialOpen['Escolas & Eventos'] = true;
        setOpenMenus(initialOpen);
        
        const fetchSettings = async () => {
@@ -242,6 +247,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
                setHasInventoryModule(data.has_inventory_module || false);
                 setModuleEditorial(data.module_editorial || false);
+                setModuleSchools(data.module_schools || false);
                if (data.company_logo) setCompanyLogo(data.company_logo);
             }
          } catch (e) {}
@@ -434,6 +440,20 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
       subItems: [
         { name: 'Projeto Editorial', href: '/editorial', icon: LayoutGrid },
         { name: 'Configurar Fluxos', href: '/editorial/settings', icon: SlidersHorizontal }
+      ]
+    });
+  }
+
+  if (moduleSchools) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Escolas & Eventos',
+      href: '/schools',
+      icon: GraduationCap,
+      subItems: [
+        { name: 'Escolas', href: '/schools', icon: Building2 },
+        { name: 'Passeios & Eventos', href: '/schools/events', icon: Ticket },
       ]
     });
   }

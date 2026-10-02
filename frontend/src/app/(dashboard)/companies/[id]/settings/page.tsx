@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Globe, Save, Search, Plus, Trash2, Link as LinkIcon, Image as ImageIcon } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from '../layout';
+import { useCompany } from '../context';
 
 export default function CompanySettingsPage() {
   const params = useParams();

@@ -7,7 +7,7 @@ import { Users, ShieldAlert, Loader2, Settings, X, Save, CheckSquare, Square, Ex
 import Link from 'next/link';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from '../layout';
+import { useCompany } from '../context';
 
 interface User {
   id: number;

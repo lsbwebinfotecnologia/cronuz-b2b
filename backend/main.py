@@ -49,7 +49,9 @@ from app.api import products
 from app.api import catalog_support
 from app.api import promotions
 from app.api import marketing_showcases
+from app.api import dynamic_showcases
 from app.api import marketing_navigation
+from app.models import dynamic_showcase as dynamic_showcase_models
 from app.api import storefront
 from app.api import upload
 from app.api import dashboard
@@ -91,6 +93,10 @@ from app.api import logistics as logistics_api
 from app.api import pos as pos_api
 from app.api import editorial as editorial_api
 from app.models import editorial as editorial_models
+from app.api import schools as schools_api
+from app.api import events as events_api
+from app.api import school_storefront as school_storefront_api
+from app.models import school as school_models
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -134,6 +140,8 @@ inventory_models.Base.metadata.create_all(bind=engine)
 pos_models.Base.metadata.create_all(bind=engine)
 product_search_log_models.Base.metadata.create_all(bind=engine)
 editorial_models.Base.metadata.create_all(bind=engine)
+school_models.Base.metadata.create_all(bind=engine)
+dynamic_showcase_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -201,6 +209,7 @@ app.include_router(products.router, tags=["products"])
 app.include_router(catalog_support.router, tags=["catalog-metadata"])
 app.include_router(promotions.router, tags=["promotions"])
 app.include_router(marketing_showcases.router, tags=["marketing"])
+app.include_router(dynamic_showcases.router, tags=["dynamic-showcases"])
 app.include_router(marketing_navigation.router, prefix="/marketing-navigation", tags=["marketing-navigation"])
 app.include_router(storefront.router, tags=["storefront"])
 app.include_router(upload.router, tags=["upload"])
@@ -243,6 +252,9 @@ app.include_router(inventory_api.public_router)
 app.include_router(logistics_api.router, tags=["logistics-wms"])
 app.include_router(pos_api.router, tags=["pos-omnichannel"])
 app.include_router(editorial_api.router)
+app.include_router(schools_api.router)
+app.include_router(events_api.router)
+app.include_router(school_storefront_api.router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -471,6 +483,7 @@ class ModuleUpdate(BaseModel):
     modulo_autores_ativo: Optional[bool] = None
     has_inventory_module: Optional[bool] = None
     module_editorial: Optional[bool] = None
+    module_schools: Optional[bool] = None
 
 @app.get("/users/{user_id}", response_model=user_schemas.User)
 def get_user_by_id(

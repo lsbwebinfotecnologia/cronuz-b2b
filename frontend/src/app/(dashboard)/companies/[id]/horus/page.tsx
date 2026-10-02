@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { Loader2, Save, Database, Key, Activity } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from '../layout';
+import { useCompany } from '../context';
 
 export default function CompanyHorusPage() {
   const { company, refreshCompany } = useCompany();

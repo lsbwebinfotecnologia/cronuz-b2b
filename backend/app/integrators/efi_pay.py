@@ -161,6 +161,21 @@ class EFIPayIntegration:
         except Exception as e:
             raise Exception(f"Erro na Geração de QRCode EFI: {str(e)}")
 
+    def detail_pix_charge(self, txid: str):
+        """
+        Consults immediate Pix Charge status via EFI API
+        """
+        if not self.certificate_path or self.client_id == "dummy_client_id":
+            return {"txid": txid, "status": "ATIVA"}
+        try:
+            gn = self._get_pix_client()
+            params = {'txid': txid}
+            return gn.pix_detail_charge(params=params)
+        except Exception as e:
+            print(f"[EFI PIX ERROR] Erro ao consultar Pix txid={txid}: {e}")
+            return {"txid": txid, "status": "ATIVA", "error": str(e)}
+
+
     def create_plan(self, name: str, amount: float, interval: int = 1):
         """
         Creates a Subscription Plan in EFI.

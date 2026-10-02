@@ -1155,16 +1155,66 @@ export default function DbmCompaniesSearchPage() {
               </div>
             )}
 
-            {/* Conteúdo da Sub-Aba: Agenda */}
+            {/* Conteúdo da Sub-Aba: Agenda / Compromissos */}
             {formSubTab === 'agenda' && (
-              <div className="py-6 text-center text-slate-500 dark:text-slate-400 text-xs">
-                <Calendar className="h-8 w-8 mx-auto mb-2 opacity-40 text-indigo-500" />
-                <p className="font-semibold text-slate-700 dark:text-slate-300">
-                  Agenda e Eventos Agendados
-                </p>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Nenhum evento pendente para esta organização.
-                </p>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                    <Calendar className="h-4 w-4 text-indigo-500" />
+                    Lista de Compromissos &amp; Eventos da Empresa
+                  </h4>
+                  <span className="text-[11px] text-slate-400">
+                    Histórico e próximos compromissos agendados
+                  </span>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs whitespace-nowrap">
+                      <thead className="bg-slate-50 dark:bg-slate-950/60 text-slate-400 uppercase text-[10px] font-bold border-b border-slate-100 dark:border-slate-800">
+                        <tr>
+                          <th className="px-4 py-2.5">Tipo</th>
+                          <th className="px-4 py-2.5">Compromisso / Assunto</th>
+                          <th className="px-4 py-2.5">Data / Prazo</th>
+                          <th className="px-4 py-2.5 text-center">Status</th>
+                          <th className="px-4 py-2.5">Responsável / Contato</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                        {formData.notes_message ? (
+                          <tr className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                            <td className="px-4 py-2.5">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                                Anotação CRM
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 font-medium text-slate-800 dark:text-slate-200 max-w-xs truncate" title={formData.notes_message}>
+                              {formData.notes_message}
+                            </td>
+                            <td className="px-4 py-2.5 text-slate-500">
+                              {new Date().toLocaleDateString('pt-BR')}
+                            </td>
+                            <td className="px-4 py-2.5 text-center">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+                                Registrado
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 text-slate-500">
+                              {formData.email || formData.phone || 'Comercial'}
+                            </td>
+                          </tr>
+                        ) : (
+                          <tr>
+                            <td colSpan={5} className="py-8 text-center text-slate-400 font-sans">
+                              <Calendar className="h-6 w-6 mx-auto mb-1.5 opacity-30 text-indigo-500" />
+                              Nenhum compromisso ou evento futuro agendado para esta empresa.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             )}
 

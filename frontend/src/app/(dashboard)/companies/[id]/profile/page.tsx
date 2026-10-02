@@ -7,7 +7,7 @@ import { Loader2, Globe, FileText, Image as ImageIcon, Save, CheckCircle2, XCirc
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { getImageUrl } from '@/lib/image_helper';
-import { useCompany } from '../layout';
+import { useCompany } from '../context';
 
 export default function CompanyProfilePage() {
   const params = useParams();

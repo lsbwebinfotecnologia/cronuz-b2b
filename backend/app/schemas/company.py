@@ -64,6 +64,7 @@ class CompanyBase(BaseModel):
     modulo_autores_ativo: bool = False
     has_inventory_module: bool = False
     module_editorial: bool = False
+    module_schools: bool = False
     active: bool = True
 
 
@@ -136,6 +137,7 @@ class CompanyUpdate(BaseModel):
     modulo_autores_ativo: Optional[bool] = None
     has_inventory_module: Optional[bool] = None
     module_editorial: Optional[bool] = None
+    module_schools: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

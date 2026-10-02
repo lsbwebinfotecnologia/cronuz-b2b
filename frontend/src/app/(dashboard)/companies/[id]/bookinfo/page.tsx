@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { Database, ShieldCheck, Play, Loader2, Save, BookOpen, FileUp, Download, Check, X, CheckCircle2 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from '../layout';
+import { useCompany } from '../context';
 
 export default function CompanyBookinfoPage() {
   const { company } = useCompany();
