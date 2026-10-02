@@ -52,20 +52,21 @@ def get_dashboard_metrics(
 
     is_master_global = bool(current_user and getattr(current_user, "type", None) == "MASTER" and not company_id)
 
-    module_b2b_native = True if is_master_global else (company.module_b2b_native if company else False)
+    # Regra Mandatória: Usuário Master NÃO deve ver informações de vendas ou faturamento dos sellers
+    module_b2b_native = False if is_master_global else (company.module_b2b_native if company else False)
     module_horus_erp = company.module_horus_erp if company else False
-    module_products = True if is_master_global else (company.module_products if company else False)
-    module_orders = True if is_master_global else (company.module_orders if company else False)
-    module_customers = True if is_master_global else (company.module_customers if company else False)
-    module_marketing = True if is_master_global else (company.module_marketing if company else False)
-    module_subscriptions = True if is_master_global else (company.module_subscriptions if company else False)
-    module_pdv = True if is_master_global else (company.module_pdv if company else False)
-    module_agents = True if is_master_global else (company.module_agents if company else False)
-    module_financial = True if is_master_global else (company.module_financial if company else False)
-    module_services = True if is_master_global else (company.module_services if company else False)
-    module_commercial = True if is_master_global else (company.module_commercial if company else False)
-    module_crm = True if is_master_global else (getattr(company, "module_crm", False) if company else False)
-    module_proposals = True if is_master_global else (company.module_proposals if company else False)
+    module_products = False if is_master_global else (company.module_products if company else False)
+    module_orders = False if is_master_global else (company.module_orders if company else False)
+    module_customers = False if is_master_global else (company.module_customers if company else False)
+    module_marketing = False if is_master_global else (company.module_marketing if company else False)
+    module_subscriptions = False if is_master_global else (company.module_subscriptions if company else False)
+    module_pdv = False if is_master_global else (company.module_pdv if company else False)
+    module_agents = False if is_master_global else (company.module_agents if company else False)
+    module_financial = False if is_master_global else (company.module_financial if company else False)
+    module_services = False if is_master_global else (company.module_services if company else False)
+    module_commercial = False if is_master_global else (company.module_commercial if company else False)
+    module_crm = False if is_master_global else (getattr(company, "module_crm", False) if company else False)
+    module_proposals = False if is_master_global else (company.module_proposals if company else False)
     module_logistica_horus = company.module_logistica_horus if company else False
     module_dropship = getattr(company, "module_dropship", False) if company else False
     module_notifications = getattr(company, "module_notifications", False) if company else False
@@ -302,18 +303,26 @@ def get_dashboard_metrics(
             "total": tot_rev
         })
 
+        invoiced_count = int(orders_by_status.get("INVOICED", 0) + orders_by_status.get("FATURADO", 0))
+        pending_count = int(sum(orders_by_status.get(st, 0) for st in ["NEW", "NOVO", "PROCESSING", "EM PROCESSAMENTO", "SENT_TO_HORUS", "DISPATCH", "AGUARDANDO"]))
+        avg_ticket = round(invoiced_revenue / invoiced_count, 2) if invoiced_count > 0 else 0.0
+
     consolidated_orders = invoiced_revenue if module_orders else 0.0
     consolidated_services = service_metrics["completed"]["value"] if module_services else 0.0
     consolidated_invoiced = consolidated_orders + consolidated_services
 
     return {
+        "is_master": is_master_global,
         "active_products": active_products,
         "total_customers": total_customers,
         "active_orders": active_orders,
         "orders_by_status": orders_by_status,
         "orders_revenue": {
             "invoiced": invoiced_revenue if module_orders else 0.0,
-            "pending": pending_revenue if module_orders else 0.0
+            "pending": pending_revenue if module_orders else 0.0,
+            "invoiced_count": invoiced_count if module_orders else 0,
+            "pending_count": pending_count if module_orders else 0,
+            "average_ticket": avg_ticket if module_orders else 0.0
         },
         "consolidated_revenue": {
             "total": consolidated_invoiced,
@@ -442,3 +451,90 @@ def test_smtp_settings(
         return {"message": "E-mail de teste enviado com sucesso!"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Falha ao enviar e-mail: {str(e)}")
+
+
+@router.get("/master-overview")
+def get_master_overview(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional)
+):
+    if not current_user or getattr(current_user, "type", None) != "MASTER":
+        raise HTTPException(status_code=403, detail="Acesso restrito ao Administrador Master.")
+    
+    query = db.query(Company)
+    if current_user.tenant_id and current_user.tenant_id != "cronuz":
+        query = query.filter(Company.tenant_id == current_user.tenant_id)
+        
+    companies = query.order_by(Company.created_at.desc()).all()
+    
+    total_sellers = len(companies)
+    active_sellers = sum(1 for c in companies if c.active)
+    inactive_sellers = total_sellers - active_sellers
+    
+    module_definitions = [
+        {"key": "b2b", "label": "B2B / Catálogo", "field": "module_products", "color": "blue"},
+        {"key": "orders", "label": "Pedidos B2B", "field": "module_orders", "color": "indigo"},
+        {"key": "customers", "label": "Clientes / CRM", "field": "module_customers", "color": "sky"},
+        {"key": "financial", "label": "Financeiro", "field": "module_financial", "color": "emerald"},
+        {"key": "services", "label": "Serviços (OS)", "field": "module_services", "color": "purple"},
+        {"key": "editorial", "label": "Editorial", "field": "module_editorial", "color": "pink"},
+        {"key": "schools", "label": "Escolas & Eventos", "field": "module_schools", "color": "amber"},
+        {"key": "horus_sql", "label": "Horus SQL Direct", "field": "module_horus_sql", "color": "cyan"},
+        {"key": "horus_erp", "label": "Horus ERP REST", "field": "module_horus_erp", "color": "teal"},
+        {"key": "logistics", "label": "Logística WMS", "field": "module_logistica_horus", "color": "orange"},
+        {"key": "authors", "label": "Portal do Autor", "field": "modulo_autores_ativo", "color": "violet"},
+        {"key": "dropship", "label": "Dropshipping", "field": "module_dropship", "color": "rose"},
+        {"key": "inventory", "label": "Inventário", "field": "has_inventory_module", "color": "lime"},
+        {"key": "pdv", "label": "PDV Omnichannel", "field": "module_pdv", "color": "emerald"},
+        {"key": "subscriptions", "label": "Assinaturas", "field": "module_subscriptions", "color": "purple"},
+        {"key": "marketing", "label": "Vitrines / Marketing", "field": "module_marketing", "color": "fuchsia"},
+    ]
+    
+    module_stats = [
+        {
+            "key": m["key"],
+            "label": m["label"],
+            "color": m["color"],
+            "count": sum(1 for c in companies if getattr(c, m["field"], False))
+        }
+        for m in module_definitions
+    ]
+    
+    sellers_list = []
+    total_active_module_assignments = 0
+    
+    for c in companies:
+        c_modules = []
+        for m in module_definitions:
+            if getattr(c, m["field"], False):
+                c_modules.append({
+                    "key": m["key"],
+                    "label": m["label"],
+                    "color": m["color"]
+                })
+        
+        total_active_module_assignments += len(c_modules)
+        
+        sellers_list.append({
+            "id": c.id,
+            "name": c.name,
+            "razao_social": c.razao_social,
+            "document": c.document,
+            "domain": c.domain,
+            "custom_domain": c.custom_domain,
+            "active": c.active,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "tenant_id": c.tenant_id,
+            "active_modules_count": len(c_modules),
+            "modules": c_modules
+        })
+        
+    return {
+        "total_sellers": total_sellers,
+        "active_sellers": active_sellers,
+        "inactive_sellers": inactive_sellers,
+        "total_module_assignments": total_active_module_assignments,
+        "module_stats": module_stats,
+        "sellers": sellers_list
+    }
+

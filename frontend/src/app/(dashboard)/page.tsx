@@ -1,775 +1,785 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import { ArrowUpRight, TrendingUp, Users, Package, ShoppingCart, RefreshCw, Clock, Target, Calendar, Building2, User, BarChart3, Layers, CheckCircle, ArrowDownRight, ShieldCheck, EyeOff } from 'lucide-react';
-import Link from 'next/link';
+import { useEffect, useState, useMemo } from 'react';
 import { getToken, getUser } from '@/lib/auth';
+import { 
+    ShoppingCart, 
+    DollarSign, 
+    TrendingUp, 
+    TrendingDown, 
+    Calendar, 
+    ArrowUpRight, 
+    AlertCircle, 
+    Layers, 
+    CheckCircle2, 
+    XCircle, 
+    Clock, 
+    Wrench, 
+    Package, 
+    Building2,
+    Store,
+    Search
+} from 'lucide-react';
 
-const defaultStats = [
-  { id: 'revenue', name: 'Faturamento Total', value: 'R$ 0,00', change: '+0%', icon: TrendingUp },
-  { id: 'orders', name: 'Pedidos Ativos', value: '0', change: '0', icon: ShoppingCart },
-  { id: 'customers', name: 'Empresas Clientes', value: '0', change: '0', icon: Users },
-  { id: 'products', name: 'Produtos Ativos', value: '0', change: '0', icon: Package },
-];
+interface MasterSeller {
+    id: number;
+    name: string;
+    razao_social: string | null;
+    document: string | null;
+    domain: string | null;
+    active: boolean;
+    active_modules_count: number;
+    modules: Array<{
+        key: string;
+        label: string;
+        color: string;
+    }>;
+}
+
+interface MasterOverviewData {
+    total_sellers: number;
+    active_sellers: number;
+    inactive_sellers: number;
+    total_module_assignments: number;
+    module_stats: Array<{
+        key: string;
+        label: string;
+        color: string;
+        count: number;
+    }>;
+    sellers: MasterSeller[];
+}
+
+interface BackendDashboardMetrics {
+    is_master: boolean;
+    active_products: number;
+    total_customers: number;
+    active_orders: number;
+    orders_by_status: Record<string, number>;
+    orders_revenue: {
+        invoiced: number;
+        pending: number;
+        invoiced_count: number;
+        pending_count: number;
+        average_ticket: number;
+    };
+    consolidated_revenue: {
+        total: number;
+        orders: number;
+        services: number;
+    };
+    revenue_history: Array<{
+        year_month: string;
+        month: string;
+        label: string;
+        month_label: string;
+        orders_revenue: number;
+        orders: number;
+        orders_count: number;
+        services_revenue: number;
+        services: number;
+        services_count: number;
+        total_revenue: number;
+        total: number;
+    }>;
+    financial_metrics: {
+        payable: { paid: number; pending: number };
+        receivable: { paid: number; pending: number };
+    };
+    service_metrics: {
+        pending: { count: number; value: number };
+        completed: { count: number; value: number };
+    };
+    module_b2b_native: boolean;
+    module_horus_erp: boolean;
+    module_products: boolean;
+    module_orders: boolean;
+    module_customers: boolean;
+    module_financial: boolean;
+    module_services: boolean;
+}
 
 export default function DashboardPage() {
-  const [horusStatus, setHorusStatus] = useState<any>(null);
-  const [metrics, setMetrics] = useState<any>(null);
-  const [recentOrders, setRecentOrders] = useState<any[]>([]);
-  const [crmTasks, setCrmTasks] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMetrics, setLoadingMetrics] = useState(true);
-  const [includePersonal, setIncludePersonal] = useState(false);
-  const [activeTooltipMonth, setActiveTooltipMonth] = useState<string | null>(null);
-  const [filterMonth, setFilterMonth] = useState(() => {
-     const d = new Date();
-     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
+    const [user, setUser] = useState<any>(null);
+    const [token, setTokenState] = useState<string | null>(null);
+    const [historyMonths, setHistoryMonths] = useState<number>(6);
+    const [loading, setLoading] = useState<boolean>(true);
+    const [error, setError] = useState<string | null>(null);
 
-  const fetchRecentOrders = async () => {
-    try {
-      const token = getToken();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/orders`, {
-         headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-         const data = await res.json();
-         // Sort descending by created_at and take top 5
-         const orders = data.items || [];
-         const sorted = orders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-         setRecentOrders(sorted.slice(0, 5));
-      }
-    } catch (error) {
-      console.error("Failed to fetch recent orders", error);
-    }
-  };
+    // Master state
+    const [masterData, setMasterData] = useState<MasterOverviewData | null>(null);
+    const [sellerSearch, setSellerSearch] = useState<string>('');
+    const [moduleFilter, setModuleFilter] = useState<string>('all');
 
-  const fetchMetrics = async () => {
-    setLoadingMetrics(true);
-    try {
-      const token = getToken();
-      if (!token) return; // Prevent fetch if no token
-      
-      const [year, month] = filterMonth.split('-');
-      const lastDay = new Date(Number(year), Number(month), 0).getDate();
-      const startDate = `${filterMonth}-01`;
-      const endDate = `${filterMonth}-${lastDay}`;
-      
-      const [resMetrics, resTasks] = await Promise.all([
-         fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/metrics?start_date=${startDate}&end_date=${endDate}&include_personal=${includePersonal}&history_months=6&t=${new Date().getTime()}`, { headers: { 'Authorization': `Bearer ${token}` } }),
-         fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/dashboard/crm-tasks`, { headers: { 'Authorization': `Bearer ${token}` } })
-      ]);
-      
-      if (resMetrics.ok) {
-         setMetrics(await resMetrics.json());
-      }
-      if (resTasks.ok) {
-         setCrmTasks(await resTasks.json());
-      }
-    } catch (error) {
-      console.error("Failed to fetch metrics", error);
-    } finally {
-      setLoadingMetrics(false);
-    }
-  };
+    // Seller state
+    const [sellerData, setSellerData] = useState<BackendDashboardMetrics | null>(null);
 
-  useEffect(() => {
-    const user = getUser();
-    if (user?.initial_page && user.initial_page !== 'DEFAULT' && user.initial_page !== '/') {
-      const target = user.initial_page.startsWith('/') ? user.initial_page : `/${user.initial_page}`;
-      window.location.href = target;
-      return;
-    }
-    fetchMetrics();
-    fetchRecentOrders();
-  }, [filterMonth, includePersonal]);
+    useEffect(() => {
+        const currentUser = getUser();
+        const currentToken = getToken();
+        setUser(currentUser);
+        setTokenState(currentToken || null);
+    }, []);
 
-  const formatBRL = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+    const isMaster = user?.type === 'MASTER';
 
-  const hasOrders = metrics ? metrics.module_orders !== false : true;
-  const hasServices = metrics ? Boolean(metrics.module_services) : false;
-  const hasFinancial = metrics ? Boolean(metrics.module_financial) : false;
+    useEffect(() => {
+        if (!token) return;
 
-  return (
-    <div className="space-y-8">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white mb-2">Visão Geral</h1>
-          <p className="text-slate-500 dark:text-slate-400">
-             {metrics?.uses_horus ? 'Bem-vindo ao B2B Horus. ' : 'Bem-vindo ao Cronuz. '}
-             Acompanhe a performance financeira e operacional da sua empresa.
-          </p>
-        </div>
-        
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
-          {/* Seletor de Escopo Gerencial vs Global - Somente se Módulo Financeiro estiver ativo */}
-          {hasFinancial && (
-            <div className="bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl flex items-center border border-slate-200 dark:border-slate-700/60 shadow-inner">
-              <button
-                type="button"
-                onClick={() => setIncludePersonal(false)}
-                className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  !includePersonal 
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' 
-                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-                title="Exibe apenas a movimentação real da empresa (ignora contas pessoais e despesas fora do relatório)"
-              >
-                <Building2 className="w-3.5 h-3.5" />
-                <span>Visão Gerencial</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setIncludePersonal(true)}
-                className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  includePersonal 
-                    ? 'bg-white dark:bg-slate-900 text-amber-600 dark:text-amber-400 shadow-sm' 
-                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-                title="Exibe todas as contas e transações, incluindo contas físicas/pessoais"
-              >
-                <User className="w-3.5 h-3.5" />
-                <span>Visão Global (PF+PJ)</span>
-              </button>
+        const fetchDashboard = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+                
+                if (isMaster) {
+                    const res = await fetch(`${apiBase}/dashboard/master-overview`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (!res.ok) throw new Error('Erro ao carregar dados consolidados do Master.');
+                    const data = await res.json();
+                    setMasterData(data);
+                } else {
+                    const res = await fetch(`${apiBase}/dashboard/metrics?history_months=${historyMonths}`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (!res.ok) throw new Error('Erro ao carregar métricas operacionais.');
+                    const data = await res.json();
+                    setSellerData(data);
+                }
+            } catch (err: any) {
+                console.error(err);
+                setError(err.message || 'Falha na requisição.');
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchDashboard();
+    }, [token, historyMonths, isMaster]);
+
+    const formatCurrency = (val: number) => {
+        return new Intl.NumberFormat('pt-BR', {
+            style: 'currency',
+            currency: 'BRL'
+        }).format(val || 0);
+    };
+
+    // Preparação dos pontos do gráfico SVG nativo para Seller
+    const chartSvgData = useMemo(() => {
+        const points = sellerData?.revenue_history || [];
+        if (!points || points.length === 0) return null;
+
+        const maxVal = Math.max(...points.map(p => p.total_revenue || p.total || 0), 1);
+        const width = 600;
+        const height = 180;
+        const padding = 20;
+
+        const coordinates = points.map((p, idx) => {
+            const val = p.total_revenue || p.total || 0;
+            const x = padding + (idx / Math.max(points.length - 1, 1)) * (width - 2 * padding);
+            const y = height - padding - (val / maxVal) * (height - 2 * padding);
+            return { x, y, date: p.label || p.month_label || p.month, total: val };
+        });
+
+        const linePath = coordinates.reduce((acc, curr, idx) => {
+            return idx === 0 ? `M ${curr.x} ${curr.y}` : `${acc} L ${curr.x} ${curr.y}`;
+        }, '');
+
+        const areaPath = coordinates.length > 0
+            ? `${linePath} L ${coordinates[coordinates.length - 1].x} ${height - padding} L ${coordinates[0].x} ${height - padding} Z`
+            : '';
+
+        return { coordinates, linePath, areaPath, maxVal, width, height, padding };
+    }, [sellerData?.revenue_history]);
+
+    if (loading && !masterData && !sellerData) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-[450px] gap-3">
+                <div className="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+                <p className="text-sm text-slate-500 font-medium">Sincronizando painel...</p>
             </div>
-          )}
+        );
+    }
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Período de Análise</label>
-            <input 
-              type="month" 
-              value={filterMonth}
-              onChange={(e) => setFilterMonth(e.target.value)}
-              className="w-full sm:w-auto border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-1.5 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm focus:ring-2 focus:ring-indigo-500/20"
-            />
-          </div>
-        </div>
-      </div>
+    if (error) {
+        return (
+            <div className="p-6 max-w-xl mx-auto my-12 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 rounded-2xl text-center">
+                <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
+                <h3 className="text-base font-semibold text-red-800 dark:text-red-300">Não foi possível carregar o dashboard</h3>
+                <p className="text-sm text-red-600 dark:text-red-400 mt-1">{error}</p>
+            </div>
+        );
+    }
 
-      {hasFinancial && !includePersonal && (
-        <div className="bg-indigo-50/70 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-indigo-800 dark:text-indigo-300">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-            <span><strong>Filtro Gerencial Ativo:</strong> As análises refletem estritamente a saúde empresarial (contas físicas e lançamentos marcados fora da análise são desconsiderados).</span>
-          </div>
-          <button type="button" onClick={() => setIncludePersonal(true)} className="underline hover:text-indigo-950 dark:hover:text-white font-medium ml-2 shrink-0">
-            Alternar para Global
-          </button>
-        </div>
-      )}
+    // ==========================================
+    // RENDER: DASHBOARD MASTER (GOVERNANÇA)
+    // ==========================================
+    if (isMaster && masterData) {
+        const filteredSellers = masterData.sellers.filter(s => {
+            const matchesSearch = 
+                (s.name.toLowerCase().includes(sellerSearch.toLowerCase())) ||
+                (s.razao_social?.toLowerCase().includes(sellerSearch.toLowerCase())) ||
+                (s.document?.includes(sellerSearch));
+            
+            const matchesModule = 
+                moduleFilter === 'all' ? true : s.modules.some(m => m.key === moduleFilter);
 
-      {/* SEÇÃO CONSOLIDADA DE FATURAMENTO (PEDIDOS + SERVIÇOS) */}
-      {(hasOrders || hasServices || hasFinancial) && (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div>
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <BarChart3 className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
-              {hasOrders && hasServices 
-                ? 'Análise de Faturamento' 
-                : hasOrders 
-                  ? 'Análise de Vendas' 
-                  : hasServices 
-                    ? 'Análise de Serviços' 
-                    : 'Visão Financeira'}
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              {hasOrders && hasServices
-                ? 'Consolidação de Pedidos de Venda Faturados e Ordens de Serviço Concluídas'
-                : hasOrders
-                  ? 'Consolidação de Pedidos de Venda Faturados no Período'
-                  : hasServices
-                    ? 'Consolidação de Ordens de Serviço Concluídas no Período'
-                    : 'Acompanhamento de entradas, saídas e resultado de caixa'}
-            </p>
-          </div>
-        </div>
+            return matchesSearch && matchesModule;
+        });
 
-        {/* CARDS DE DESTAQUE DE FATURAMENTO */}
-        <div className={`grid gap-4 ${
-          (hasOrders && hasServices && hasFinancial) ? 'sm:grid-cols-2 lg:grid-cols-4' :
-          (hasOrders && hasServices) ? 'sm:grid-cols-3' :
-          ((hasOrders || hasServices) && hasFinancial) ? 'sm:grid-cols-2' :
-          'grid-cols-1 sm:max-w-md'
-        }`}>
-          {/* Card Total Consolidado (somente quando tem tanto Pedidos quanto Serviços) */}
-          {hasOrders && hasServices && (
-            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}
-              className="rounded-2xl border border-indigo-200/80 dark:border-indigo-800/60 bg-gradient-to-br from-indigo-50/50 via-white to-white dark:from-indigo-950/30 dark:via-slate-900 dark:to-slate-900 p-5 shadow-sm"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">Faturamento Consolidado</span>
-                <div className="p-2 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 rounded-xl">
-                  <TrendingUp className="w-4 h-4" />
-                </div>
-              </div>
-              {loadingMetrics ? (
-                <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
-              ) : (
-                <div>
-                  <p className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-                    {formatBRL(metrics?.consolidated_revenue?.total || 0)}
-                  </p>
-                  {(() => {
-                    const hist = metrics?.revenue_history || [];
-                    const curIdx = hist.findIndex((h: any) => (h.month || h.year_month) === filterMonth);
-                    const prevItem = curIdx > 0 ? hist[curIdx - 1] : (hist.length > 1 ? hist[hist.length - 2] : null);
-                    const curItem = curIdx >= 0 ? hist[curIdx] : hist[hist.length - 1];
-                    const curTotal = Number(curItem?.total ?? curItem?.total_revenue ?? 0);
-                    const prevTotal = Number(prevItem?.total ?? prevItem?.total_revenue ?? 0);
-                    if (prevTotal > 0 && curItem) {
-                      const diff = curTotal - prevTotal;
-                      const pct = Math.round((diff / prevTotal) * 100);
-                      const isPos = pct >= 0;
-                      return (
-                        <div className="flex items-center gap-1 text-[11px] font-bold mt-1.5">
-                          <span className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-md ${isPos ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' : 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400'}`}>
-                            {isPos ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                            {isPos ? `+${pct}%` : `${pct}%`}
-                          </span>
-                          <span className="text-slate-400 font-normal">vs mês anterior</span>
+        return (
+            <div className="space-y-6">
+                {/* Header Master */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-200 dark:border-slate-800">
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold tracking-wider uppercase bg-primary/10 text-primary border border-primary/20">
+                                Gestão Master
+                            </span>
                         </div>
-                      );
-                    }
-                    return <p className="text-[11px] text-slate-400 mt-1">Período selecionado</p>;
-                  })()}
+                        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white mt-1">
+                            Visão Geral da Plataforma
+                        </h1>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">
+                            Acompanhamento de sellers licenciados, ativação e distribuição de recursos por empresa.
+                        </p>
+                    </div>
                 </div>
-              )}
-            </motion.div>
-          )}
 
-          {/* Card Pedidos Faturados */}
-          {hasOrders && (
-            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.3 }}
-              className={`rounded-2xl border p-5 shadow-sm ${
-                !hasServices 
-                  ? 'border-indigo-200/80 dark:border-indigo-800/60 bg-gradient-to-br from-indigo-50/50 via-white to-white dark:from-indigo-950/30 dark:via-slate-900 dark:to-slate-900' 
-                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className={`text-xs font-bold uppercase tracking-wider ${!hasServices ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}>
-                  {!hasServices ? 'Faturamento (Pedidos)' : 'Pedidos Faturados'}
-                </span>
-                <div className={`p-2 rounded-xl ${!hasServices ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' : 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400'}`}>
-                  {!hasServices ? <TrendingUp className="w-4 h-4" /> : <ShoppingCart className="w-4 h-4" />}
-                </div>
-              </div>
-              {loadingMetrics ? (
-                <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
-              ) : (
-                <div>
-                  <p className={`text-2xl font-black tracking-tight ${!hasServices ? 'text-slate-900 dark:text-white' : 'text-blue-600 dark:text-blue-400'}`}>
-                    {formatBRL(metrics?.consolidated_revenue?.orders || 0)}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-1">Vendas de produtos no período</p>
-                </div>
-              )}
-            </motion.div>
-          )}
+                {/* KPIs Master */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
+                    <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Total de Sellers</p>
+                            <div className="p-2.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 rounded-xl">
+                                <Store className="w-5 h-5" />
+                            </div>
+                        </div>
+                        <p className="text-3xl font-black text-slate-900 dark:text-white mt-2">
+                            {masterData.total_sellers}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">Empresas cadastradas no ecossistema</p>
+                    </div>
 
-          {/* Card Serviços Concluídos (somente se módulo de serviços ativo) */}
-          {hasServices && (
-            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.3 }}
-              className={`rounded-2xl border p-5 shadow-sm ${
-                !hasOrders 
-                  ? 'border-purple-200/80 dark:border-purple-800/60 bg-gradient-to-br from-purple-50/50 via-white to-white dark:from-purple-950/30 dark:via-slate-900 dark:to-slate-900' 
-                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className={`text-xs font-bold uppercase tracking-wider ${!hasOrders ? 'text-purple-700 dark:text-purple-400' : 'text-slate-500 dark:text-slate-400'}`}>
-                  {!hasOrders ? 'Faturamento (Serviços)' : 'Serviços (OS)'}
-                </span>
-                <div className="p-2 bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 rounded-xl">
-                  <Target className="w-4 h-4" />
-                </div>
-              </div>
-              {loadingMetrics ? (
-                <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
-              ) : (
-                <div>
-                  <p className="text-2xl font-bold text-purple-600 dark:text-purple-400 tracking-tight">
-                    {formatBRL(metrics?.consolidated_revenue?.services || 0)}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-1">{metrics?.service_metrics?.completed?.count || 0} ordens concluídas</p>
-                </div>
-              )}
-            </motion.div>
-          )}
+                    <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Sellers Ativos</p>
+                            <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 rounded-xl">
+                                <CheckCircle2 className="w-5 h-5" />
+                            </div>
+                        </div>
+                        <p className="text-3xl font-black text-emerald-600 dark:text-emerald-400 mt-2">
+                            {masterData.active_sellers}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">Com operação regular habilitada</p>
+                    </div>
 
-          {/* Card Balanço Financeiro Líquido (somente se módulo financeiro ativo) */}
-          {hasFinancial && (
-            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15, duration: 0.3 }}
-              className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40 p-5 shadow-sm"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Resultado Caixa</span>
-                <div className="p-2 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 rounded-xl">
-                  <Building2 className="w-4 h-4" />
+                    <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Sellers Inativos</p>
+                            <div className="p-2.5 bg-rose-50 dark:bg-rose-950/40 text-rose-600 rounded-xl">
+                                <XCircle className="w-5 h-5" />
+                            </div>
+                        </div>
+                        <p className="text-3xl font-black text-rose-600 dark:text-rose-400 mt-2">
+                            {masterData.inactive_sellers}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">Aguardando liberação ou suspensos</p>
+                    </div>
+
+                    <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Módulos Alocados</p>
+                            <div className="p-2.5 bg-purple-50 dark:bg-purple-950/40 text-purple-600 rounded-xl">
+                                <Layers className="w-5 h-5" />
+                            </div>
+                        </div>
+                        <p className="text-3xl font-black text-purple-600 dark:text-purple-400 mt-2">
+                            {masterData.total_module_assignments}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">Instâncias ativas em produção</p>
+                    </div>
                 </div>
-              </div>
-              {loadingMetrics ? (
-                <div className="h-8 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse my-1"></div>
-              ) : (() => {
-                const recPaid = metrics?.financial_metrics?.receivable?.paid || 0;
-                const payPaid = metrics?.financial_metrics?.payable?.paid || 0;
-                const net = recPaid - payPaid;
-                return (
-                  <div>
-                    <p className={`text-2xl font-bold tracking-tight ${net >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                      {formatBRL(net)}
+
+                {/* Painel de Módulos & Distribuição */}
+                <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white mb-1 flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-primary" />
+                        Adoção de Recursos pelos Sellers
+                    </h3>
+                    <p className="text-xs text-slate-500 mb-5">
+                        Quantidade de sellers operando com cada recurso do sistema
                     </p>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      {includePersonal ? 'Todas as contas' : 'Apenas contas da empresa'}
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                        {masterData.module_stats.map((mod) => (
+                            <div key={mod.key} className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 flex flex-col justify-between">
+                                <span className="text-xs font-medium text-slate-600 dark:text-slate-300 truncate" title={mod.label}>
+                                    {mod.label}
+                                </span>
+                                <div className="flex items-baseline justify-between mt-2">
+                                    <span className="text-xl font-bold text-slate-900 dark:text-white">{mod.count}</span>
+                                    <span className="text-[11px] text-slate-400">
+                                        {masterData.total_sellers > 0 ? `${Math.round((mod.count / masterData.total_sellers) * 100)}%` : '0%'}
+                                    </span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Tabela de Sellers e seus Módulos */}
+                <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+                    <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                                <Store className="w-4 h-4 text-primary" />
+                                Sellers Cadastrados & Módulos Ativos
+                            </h3>
+                            <p className="text-xs text-slate-500">
+                                Listagem completa com mapeamento de licenças individuais
+                            </p>
+                        </div>
+
+                        {/* Filtros */}
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="relative w-full sm:w-64">
+                                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                <input
+                                    type="text"
+                                    placeholder="Buscar por nome ou CNPJ..."
+                                    value={sellerSearch}
+                                    onChange={(e) => setSellerSearch(e.target.value)}
+                                    className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                />
+                            </div>
+
+                            <select
+                                value={moduleFilter}
+                                onChange={(e) => setModuleFilter(e.target.value)}
+                                className="px-3 py-1.5 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 focus:outline-none"
+                            >
+                                <option value="all">Todos os Módulos</option>
+                                {masterData.module_stats.map((mod) => (
+                                    <option key={mod.key} value={mod.key}>{mod.label}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200 dark:border-slate-800">
+                                <tr>
+                                    <th className="py-3 px-4">Seller / Empresa</th>
+                                    <th className="py-3 px-4">CNPJ / CPF</th>
+                                    <th className="py-3 px-4">Status</th>
+                                    <th className="py-3 px-4">Módulos Habilitados</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {filteredSellers.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={4} className="py-8 text-center text-slate-400">
+                                            Nenhum seller encontrado com os critérios de busca.
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    filteredSellers.map((s) => (
+                                        <tr key={s.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
+                                            <td className="py-3.5 px-4">
+                                                <div className="font-bold text-slate-900 dark:text-white">
+                                                    {s.name}
+                                                </div>
+                                                {s.razao_social && s.razao_social !== s.name && (
+                                                    <div className="text-[11px] text-slate-400">{s.razao_social}</div>
+                                                )}
+                                            </td>
+                                            <td className="py-3.5 px-4 text-slate-600 dark:text-slate-300 font-mono">
+                                                {s.document || '--'}
+                                            </td>
+                                            <td className="py-3.5 px-4">
+                                                {s.active ? (
+                                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 border border-emerald-200 dark:border-emerald-800">
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                                        Ativo
+                                                    </span>
+                                                ) : (
+                                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 dark:bg-rose-950/40 text-rose-600 border border-rose-200 dark:border-rose-800">
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                                                        Inativo
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="py-3.5 px-4">
+                                                <div className="flex flex-wrap gap-1.5 max-w-xl">
+                                                    {s.modules.length === 0 ? (
+                                                        <span className="text-[11px] text-slate-400 italic">Nenhum módulo ativo</span>
+                                                    ) : (
+                                                        s.modules.map((m) => (
+                                                            <span 
+                                                                key={m.key} 
+                                                                className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                                                            >
+                                                                {m.label}
+                                                            </span>
+                                                        ))
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ==========================================
+    // RENDER: DASHBOARD SELLER (EQUILIBRADO)
+    // ==========================================
+    const hasOrders = sellerData?.module_orders;
+    const hasServices = sellerData?.module_services;
+    const hasFinancial = sellerData?.module_financial;
+
+    const invoicedOrders = sellerData?.orders_revenue?.invoiced || 0;
+    const pendingOrders = sellerData?.orders_revenue?.pending || 0;
+    const invoicedOrdersCount = sellerData?.orders_revenue?.invoiced_count || 0;
+    const pendingOrdersCount = sellerData?.orders_revenue?.pending_count || 0;
+    const averageTicket = sellerData?.orders_revenue?.average_ticket || 0;
+
+    const completedServicesValue = sellerData?.service_metrics?.completed?.value || 0;
+    const pendingServicesCount = sellerData?.service_metrics?.pending?.count || 0;
+
+    const cashReceived = sellerData?.financial_metrics?.receivable?.paid || 0;
+    const cashExpenses = sellerData?.financial_metrics?.payable?.paid || 0;
+    const cashBalance = cashReceived - cashExpenses;
+
+    return (
+        <div className="space-y-6">
+            {/* Top Header Seller com Seletor de Período */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-200 dark:border-slate-800">
+                <div>
+                    <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+                        Painel de Controle
+                    </h1>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                        Resumo consolidado das operações e desempenho da sua empresa.
                     </p>
-                  </div>
-                );
-              })()}
-            </motion.div>
-          )}
-        </div>
-
-        {/* GRÁFICO HISTÓRICO DE FATURAMENTO MÊS A MÊS - Somente se tem Pedidos ou Serviços */}
-        {(hasOrders || hasServices) && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 shadow-sm">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100 dark:border-slate-800">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                Evolução do Faturamento Mensal
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Histórico comparativo dos meses anteriores até o período filtrado
-              </p>
-            </div>
-
-            {/* Legenda do Gráfico */}
-            <div className="flex items-center gap-4 text-xs font-semibold flex-wrap">
-              {hasOrders && (
-                <div className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded bg-blue-500"></span>
-                  <span className="text-slate-600 dark:text-slate-300">Pedidos</span>
                 </div>
-              )}
-              {hasServices && (
-                <div className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded bg-purple-500"></span>
-                  <span className="text-slate-600 dark:text-slate-300">Serviços / OS</span>
+
+                <div className="flex items-center gap-2 self-start md:self-auto bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl border border-slate-200 dark:border-slate-700/60">
+                    <Calendar className="w-4 h-4 text-slate-400 ml-2" />
+                    {[3, 6, 12].map((months) => (
+                        <button
+                            key={months}
+                            onClick={() => setHistoryMonths(months)}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                                historyMonths === months
+                                    ? 'bg-white dark:bg-slate-900 text-primary shadow-sm'
+                                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            }`}
+                        >
+                            {months} meses
+                        </button>
+                    ))}
                 </div>
-              )}
-              {hasOrders && hasServices && (
-                <div className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded bg-indigo-600"></span>
-                  <span className="text-slate-900 dark:text-white font-bold">Total Faturado</span>
-                </div>
-              )}
             </div>
-          </div>
 
-          {/* Área das Barras do Gráfico */}
-          {loadingMetrics ? (
-            <div className="h-64 flex items-center justify-center">
-              <RefreshCw className="w-6 h-6 animate-spin text-slate-300" />
-            </div>
-          ) : !metrics?.revenue_history || metrics.revenue_history.length === 0 ? (
-            <div className="h-64 flex flex-col items-center justify-center text-slate-400 text-sm">
-              <BarChart3 className="w-10 h-10 mb-2 text-slate-300 dark:text-slate-700" />
-              Nenhum dado de faturamento encontrado no período.
-            </div>
-          ) : (() => {
-            const history = metrics.revenue_history;
-            const maxVal = Math.max(...history.map((h: any) => Number(h.total ?? h.total_revenue ?? 0)), 1);
-
-            return (
-              <div className="mt-6">
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 sm:gap-4 items-end min-h-[220px]">
-                  {history.map((item: any, idx: number) => {
-                    const itemMonth = item.month || item.year_month || '';
-                    const itemLabel = item.month_label || item.label || itemMonth;
-                    const itemTotal = Number(item.total ?? item.total_revenue ?? 0);
-                    const itemOrders = Number(item.orders ?? item.orders_revenue ?? 0);
-                    const itemServices = Number(item.services ?? item.services_revenue ?? 0);
-
-                    const isSelected = itemMonth === filterMonth;
-                    const totalPct = maxVal > 0 ? Math.min(Math.round((itemTotal / maxVal) * 100), 100) : 0;
-                    const ordersHeightPct = itemTotal > 0 ? (itemOrders / itemTotal) * 100 : 0;
-                    const servicesHeightPct = itemTotal > 0 ? (itemServices / itemTotal) * 100 : 0;
-
-                    return (
-                      <div 
-                        key={itemMonth || idx} 
-                        onClick={() => setFilterMonth(itemMonth)}
-                        className={`group relative flex flex-col items-center cursor-pointer p-2.5 rounded-xl transition-all ${
-                          isSelected 
-                            ? 'bg-indigo-50/80 dark:bg-indigo-950/40 ring-2 ring-indigo-500/50' 
-                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                        }`}
-                      >
-                        {/* Tooltip flutuante no Hover / Active */}
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none absolute -top-24 z-20 bg-slate-900 text-white text-[11px] p-2.5 rounded-xl shadow-xl border border-slate-700 whitespace-nowrap min-w-[150px]">
-                          <p className="font-bold text-slate-200 border-b border-slate-700 pb-1 mb-1">{itemLabel}</p>
-                          {hasOrders && (
-                            <div className="flex justify-between gap-3 text-blue-300">
-                              <span>📦 Pedidos:</span>
-                              <span className="font-mono font-bold">{formatBRL(itemOrders)}</span>
+            {/* SEÇÃO 1: CARDS DE FATURAMENTO / RECEITA PRINCIPAL */}
+            {hasOrders && !hasServices && !hasFinancial ? (
+                /* CASO ESPECIAL: Seller com foco exclusivo em PEDIDOS/B2B (Ex: Cidade do Livro) */
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
+                    {/* Faturamento Faturado */}
+                    <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Faturamento (Pedidos)</p>
+                            <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 rounded-xl">
+                                <DollarSign className="w-5 h-5" />
                             </div>
-                          )}
-                          {hasServices && (
-                            <div className="flex justify-between gap-3 text-purple-300">
-                              <span>🛠️ Serviços:</span>
-                              <span className="font-mono font-bold">{formatBRL(itemServices)}</span>
+                        </div>
+                        <p className="text-2xl font-black text-slate-900 dark:text-white mt-2">
+                            {formatCurrency(invoicedOrders)}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-2">
+                            Total de pedidos faturados no período
+                        </p>
+                    </div>
+
+                    {/* Pedidos Faturados */}
+                    <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Pedidos Faturados</p>
+                            <div className="p-2.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 rounded-xl">
+                                <ShoppingCart className="w-5 h-5" />
                             </div>
-                          )}
-                          {hasOrders && hasServices && (
-                            <div className="flex justify-between gap-3 text-white font-bold border-t border-slate-700 pt-1 mt-1">
-                              <span>Total:</span>
-                              <span className="font-mono text-emerald-400">{formatBRL(itemTotal)}</span>
+                        </div>
+                        <p className="text-2xl font-black text-slate-900 dark:text-white mt-2">
+                            {invoicedOrdersCount}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-2">
+                            Concluídos com sucesso
+                        </p>
+                    </div>
+
+                    {/* Ticket Médio */}
+                    <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Ticket Médio</p>
+                            <div className="p-2.5 bg-purple-50 dark:bg-purple-950/40 text-purple-600 rounded-xl">
+                                <ArrowUpRight className="w-5 h-5" />
                             </div>
-                          )}
                         </div>
+                        <p className="text-2xl font-black text-slate-900 dark:text-white mt-2">
+                            {formatCurrency(averageTicket)}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-2">
+                            Média por pedido faturado
+                        </p>
+                    </div>
 
-                        {/* Valor compacto acima da barra */}
-                        <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-2 truncate max-w-full">
-                          {itemTotal >= 1000 ? `R$ ${(itemTotal / 1000).toFixed(1)}k` : formatBRL(itemTotal)}
-                        </span>
-
-                        {/* Barra do Gráfico */}
-                        <div className="w-full max-w-[48px] h-36 bg-slate-100 dark:bg-slate-800/60 rounded-xl p-1 flex items-end justify-center">
-                          <motion.div
-                            initial={{ height: 0 }}
-                            animate={{ height: `${Math.max(totalPct, 4)}%` }}
-                            transition={{ duration: 0.6, delay: idx * 0.08 }}
-                            className="w-full rounded-lg overflow-hidden flex flex-col justify-end shadow-sm"
-                          >
-                            {/* Segmento de Serviços (Topo) */}
-                            {hasServices && servicesHeightPct > 0 && (
-                              <div 
-                                style={{ height: `${servicesHeightPct}%` }}
-                                className="w-full bg-purple-500 hover:bg-purple-400 transition-colors"
-                                title={`Serviços: ${formatBRL(itemServices)}`}
-                              />
-                            )}
-                            {/* Segmento de Pedidos (Base) */}
-                            {hasOrders && ordersHeightPct > 0 && (
-                              <div 
-                                style={{ height: `${ordersHeightPct}%` }}
-                                className="w-full bg-blue-500 hover:bg-blue-400 transition-colors"
-                                title={`Pedidos: ${formatBRL(itemOrders)}`}
-                              />
-                            )}
-                            {itemTotal === 0 && (
-                              <div className="w-full h-1 bg-slate-300 dark:bg-slate-700 rounded-full" />
-                            )}
-                          </motion.div>
+                    {/* Aguardando Faturamento */}
+                    <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Aguardando Faturamento</p>
+                            <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 text-amber-600 rounded-xl">
+                                <Clock className="w-5 h-5" />
+                            </div>
                         </div>
-
-                        {/* Rótulo do Mês na Base */}
-                        <div className="mt-2.5 text-center">
-                          <span className={`text-xs block ${isSelected ? 'font-black text-indigo-600 dark:text-indigo-400' : 'font-medium text-slate-600 dark:text-slate-400'}`}>
-                            {itemLabel}
-                          </span>
-                          {isSelected && (
-                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-600 dark:bg-indigo-400 mt-0.5"></span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                        <p className="text-2xl font-black text-slate-900 dark:text-white mt-2">
+                            {formatCurrency(pendingOrders)}
+                        </p>
+                        <p className="text-xs text-amber-600 font-medium mt-2">
+                            {pendingOrdersCount} pedidos pendentes
+                        </p>
+                    </div>
                 </div>
+            ) : (
+                /* CASO GERAL: Multimódulos (Pedidos, Serviços e/ou Financeiro) */
+                <div className={`grid gap-4 md:gap-5 ${
+                    (hasOrders && hasServices && hasFinancial)
+                        ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
+                        : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+                }`}>
+                    {hasOrders && (
+                        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                            <div className="flex items-center justify-between">
+                                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Faturamento (Pedidos)</p>
+                                <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 rounded-xl">
+                                    <ShoppingCart className="w-5 h-5" />
+                                </div>
+                            </div>
+                            <p className="text-2xl font-black text-slate-900 dark:text-white mt-2">
+                                {formatCurrency(invoicedOrders)}
+                            </p>
+                            <p className="text-xs text-slate-500 mt-2">
+                                {invoicedOrdersCount} pedidos faturados
+                            </p>
+                        </div>
+                    )}
 
-                <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/60 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                  <span className="flex items-center gap-1">
-                    💡 <em>Clique em qualquer mês para filtrar os detalhes e pedidos daquele período.</em>
-                  </span>
-                  <span className="font-mono text-[11px] hidden sm:inline">
-                    Máx: {formatBRL(maxVal)}
-                  </span>
+                    {hasServices && (
+                        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                            <div className="flex items-center justify-between">
+                                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Serviços (OS Concluídas)</p>
+                                <div className="p-2.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 rounded-xl">
+                                    <Wrench className="w-5 h-5" />
+                                </div>
+                            </div>
+                            <p className="text-2xl font-black text-slate-900 dark:text-white mt-2">
+                                {formatCurrency(completedServicesValue)}
+                            </p>
+                            <p className="text-xs text-slate-500 mt-2">
+                                Ordens de serviço entregues
+                            </p>
+                        </div>
+                    )}
+
+                    {hasFinancial && (
+                        <>
+                            <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                                <div className="flex items-center justify-between">
+                                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Resultado Caixa (Líquido)</p>
+                                    <div className="p-2.5 bg-purple-50 dark:bg-purple-950/40 text-purple-600 rounded-xl">
+                                        <DollarSign className="w-5 h-5" />
+                                    </div>
+                                </div>
+                                <p className={`text-2xl font-black mt-2 ${
+                                    cashBalance >= 0 
+                                        ? 'text-slate-900 dark:text-white' 
+                                        : 'text-rose-600'
+                                }`}>
+                                    {formatCurrency(cashBalance)}
+                                </p>
+                                <p className="text-xs text-slate-500 mt-2">
+                                    Recebimentos ({formatCurrency(cashReceived)}) - Pagamentos
+                                </p>
+                            </div>
+
+                            <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+                                <div className="flex items-center justify-between">
+                                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Despesas Período</p>
+                                    <div className="p-2.5 bg-rose-50 dark:bg-rose-950/40 text-rose-600 rounded-xl">
+                                        <TrendingDown className="w-5 h-5" />
+                                    </div>
+                                </div>
+                                <p className="text-2xl font-black text-rose-600 dark:text-rose-400 mt-2">
+                                    {formatCurrency(cashExpenses)}
+                                </p>
+                                <p className="text-xs text-slate-500 mt-2">Contas pagas liquidadas</p>
+                            </div>
+                        </>
+                    )}
                 </div>
-              </div>
-            );
-          })()}
-        </div>
-        )}
-      </div>
-      )}
-
-      {/* Basic Stats Row (Customers & Products) */}
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.4 }}
-            className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 hover:bg-slate-50 shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900/40 dark:hover:bg-slate-900/60"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <Users className="h-5 w-5 text-indigo-600" />
-            </div>
-            <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Empresas Clientes</h3>
-            {loadingMetrics ? <div className="h-8 w-24 bg-slate-200 dark:bg-slate-800 rounded animate-pulse mt-1"></div> : (
-                <p className="text-2xl font-bold text-slate-900 dark:text-white">{metrics?.total_customers?.toString() || '0'}</p>
             )}
-          </motion.div>
-          
-          {metrics && metrics.module_products && (
-             <motion.div
-               initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2, duration: 0.4 }}
-               className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 hover:bg-slate-50 shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900/40 dark:hover:bg-slate-900/60"
-             >
-               <div className="flex items-center justify-between mb-4">
-                 <Package className="h-5 w-5 text-indigo-400" />
-               </div>
-               <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Produtos Cadastrados</h3>
-               {loadingMetrics ? <div className="h-8 w-24 bg-slate-200 dark:bg-slate-800 rounded animate-pulse mt-1"></div> : (
-                   <p className="text-2xl font-bold text-slate-900 dark:text-white">{metrics?.active_products?.toString() || '0'}</p>
-               )}
-             </motion.div>
-          )}
-      </div>
 
-      {/* Orders Modulo */}
-      {metrics && metrics.module_orders && (
-         <div className="mt-8">
-            <h2 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2"><ShoppingCart className="w-5 h-5 text-[var(--color-primary-base)]" /> B2B e Pedidos</h2>
-            <div className="grid gap-6 sm:grid-cols-2">
-               {/* Effectivo */}
-               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40">
-                  <h3 className="text-sm font-medium text-slate-500 mb-1 uppercase">Efetivado (Faturados)</h3>
-                  {loadingMetrics ? <div className="h-10 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
-                     <div className="flex items-center justify-between">
-                         <p className="text-3xl font-bold text-emerald-600">{formatBRL(metrics.orders_revenue?.invoiced || 0)}</p>
-                     </div>
-                  )}
-               </motion.div>
+            {/* SEÇÃO 2: GRÁFICO DE EVOLUÇÃO + PAINEL OPERACIONAL */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                {/* Gráfico */}
+                <div className="lg:col-span-2 p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 className="text-base font-bold text-slate-900 dark:text-white">Evolução Mensal</h3>
+                            <p className="text-xs text-slate-500">Faturamento consolidado por mês de competência</p>
+                        </div>
+                    </div>
 
-               {/* Previsao */}
-               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40">
-                  <h3 className="text-sm font-medium text-slate-500 mb-1 uppercase">Previsão (Pendentes / Aguard. Faturamento)</h3>
-                  {loadingMetrics ? <div className="h-10 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
-                     <div className="flex items-center justify-between">
-                         <p className="text-3xl font-bold text-blue-500">{formatBRL(metrics.orders_revenue?.pending || 0)}</p>
-                         <p className="text-sm text-slate-500">{metrics.active_orders || 0} pedidos</p>
-                     </div>
-                  )}
-               </motion.div>
+                    <div className="h-72 w-full flex items-center justify-center">
+                        {chartSvgData && chartSvgData.coordinates.length > 0 ? (
+                            <div className="w-full h-full relative">
+                                <svg 
+                                    viewBox={`0 0 ${chartSvgData.width} ${chartSvgData.height}`} 
+                                    className="w-full h-full overflow-visible"
+                                    preserveAspectRatio="none"
+                                >
+                                    <defs>
+                                        <linearGradient id="gradTotal" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.35" />
+                                            <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0.0" />
+                                        </linearGradient>
+                                    </defs>
+                                    {/* Grid Lines */}
+                                    <line x1="20" y1="20" x2={chartSvgData.width - 20} y2="20" stroke="#334155" strokeOpacity="0.15" strokeDasharray="3 3" />
+                                    <line x1="20" y1={chartSvgData.height / 2} x2={chartSvgData.width - 20} y2={chartSvgData.height / 2} stroke="#334155" strokeOpacity="0.15" strokeDasharray="3 3" />
+                                    <line x1="20" y1={chartSvgData.height - 20} x2={chartSvgData.width - 20} y2={chartSvgData.height - 20} stroke="#334155" strokeOpacity="0.15" />
+
+                                    {/* Area Fill */}
+                                    <path d={chartSvgData.areaPath} fill="url(#gradTotal)" />
+
+                                    {/* Line */}
+                                    <path d={chartSvgData.linePath} fill="none" stroke="#0ea5e9" strokeWidth="2.5" strokeLinecap="round" />
+
+                                    {/* Dots */}
+                                    {chartSvgData.coordinates.map((pt, i) => (
+                                        <circle 
+                                            key={i} 
+                                            cx={pt.x} 
+                                            cy={pt.y} 
+                                            r="3.5" 
+                                            className="fill-white stroke-sky-500 stroke-2 hover:r-5 transition-all"
+                                        >
+                                            <title>{`${pt.date}: ${formatCurrency(pt.total)}`}</title>
+                                        </circle>
+                                    ))}
+                                </svg>
+                                <div className="flex justify-between mt-2 px-1 text-[11px] text-slate-400">
+                                    {chartSvgData.coordinates.map((pt, idx) => (
+                                        <span key={idx}>{pt.date}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="text-slate-400 text-sm">
+                                Sem dados de faturamento para o período selecionado.
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Resumo Operacional Equilibrado */}
+                <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                    <div>
+                        <h3 className="text-base font-bold text-slate-900 dark:text-white mb-1">Resumo da Operação</h3>
+                        <p className="text-xs text-slate-500 mb-5">Atividades em andamento e base cadastral</p>
+
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/40 text-blue-600">
+                                        <Building2 className="w-4 h-4" />
+                                    </div>
+                                    <div>
+                                        <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Empresas Clientes</p>
+                                        <p className="text-[11px] text-slate-400">Cadastros na sua base</p>
+                                    </div>
+                                </div>
+                                <span className="text-base font-bold text-slate-900 dark:text-white">
+                                    {sellerData?.total_customers || 0}
+                                </span>
+                            </div>
+
+                            <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/40 text-purple-600">
+                                        <Package className="w-4 h-4" />
+                                    </div>
+                                    <div>
+                                        <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Produtos Ativos</p>
+                                        <p className="text-[11px] text-slate-400">Itens no catálogo</p>
+                                    </div>
+                                </div>
+                                <span className="text-base font-bold text-slate-900 dark:text-white">
+                                    {sellerData?.active_products || 0}
+                                </span>
+                            </div>
+
+                            {hasOrders && (
+                                <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50">
+                                    <div className="flex items-center gap-3">
+                                        <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-600">
+                                            <Clock className="w-4 h-4" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Pedidos em Aberto</p>
+                                            <p className="text-[11px] text-slate-400">Aguardando faturamento</p>
+                                        </div>
+                                    </div>
+                                    <span className="text-base font-bold text-amber-600">
+                                        {pendingOrdersCount}
+                                    </span>
+                                </div>
+                            )}
+
+                            {hasServices && (
+                                <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50">
+                                    <div className="flex items-center gap-3">
+                                        <div className="p-2 rounded-lg bg-cyan-100 dark:bg-cyan-900/40 text-cyan-600">
+                                            <Wrench className="w-4 h-4" />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Ordens de Serviço</p>
+                                            <p className="text-[11px] text-slate-400">OS pendentes / em execução</p>
+                                        </div>
+                                    </div>
+                                    <span className="text-base font-bold text-cyan-600">
+                                        {pendingServicesCount}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-center">
+                        <span className="text-[11px] text-slate-400">
+                            Atualizado em tempo real com base nas permissões da sua conta.
+                        </span>
+                    </div>
+                </div>
             </div>
-         </div>
-      )}
-
-      {/* Services Modulo */}
-      {metrics && metrics.module_services && (
-         <div className="mt-8">
-            <h2 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2"><Target className="w-5 h-5 text-indigo-500" /> Ordens de Serviço</h2>
-            <div className="grid gap-6 sm:grid-cols-2">
-               {/* Effectivo */}
-               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40">
-                  <h3 className="text-sm font-medium text-slate-500 mb-1 uppercase">Efetivado (Concluídas)</h3>
-                  {loadingMetrics ? <div className="h-10 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
-                     <div className="flex items-center justify-between">
-                         <p className="text-3xl font-bold text-emerald-600">{formatBRL(metrics.service_metrics?.completed?.value || 0)}</p>
-                         <p className="text-sm text-slate-500">{metrics.service_metrics?.completed?.count || 0} OS</p>
-                     </div>
-                  )}
-               </motion.div>
-
-               {/* Previsao */}
-               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40">
-                  <h3 className="text-sm font-medium text-slate-500 mb-1 uppercase">Previsão (Pendentes / Em Execução)</h3>
-                  {loadingMetrics ? <div className="h-10 w-32 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
-                     <div className="flex items-center justify-between">
-                         <p className="text-3xl font-bold text-amber-500">{formatBRL(metrics.service_metrics?.pending?.value || 0)}</p>
-                         <p className="text-sm text-slate-500">{metrics.service_metrics?.pending?.count || 0} OS</p>
-                     </div>
-                  )}
-               </motion.div>
-            </div>
-         </div>
-      )}
-
-       {/* Financial Modulo */}
-      {metrics && metrics.module_financial && (
-         <div className="mt-8">
-            <h2 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-green-500" /> Financeiro e Caixa</h2>
-            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-               {/* Receitas */}
-               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40 shadow-sm flex flex-col gap-4">
-                  <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-2">
-                     <h3 className="text-sm font-bold text-slate-900 dark:text-white uppercase">Entradas (Receitas)</h3>
-                     <ArrowUpRight className="w-4 h-4 text-green-500" />
-                  </div>
-                  {loadingMetrics ? <div className="h-16 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
-                     <>
-                        <div className="flex justify-between items-end">
-                           <span className="text-xs text-slate-500">Realizado (Recebido)</span>
-                           <span className="font-bold text-green-600 text-lg">{formatBRL(metrics.financial_metrics?.receivable?.paid || 0)}</span>
-                        </div>
-                        <div className="flex justify-between items-end">
-                           <span className="text-xs text-slate-500">Previsto (A Receber)</span>
-                           <span className="font-semibold text-slate-700 dark:text-slate-300">{formatBRL(metrics.financial_metrics?.receivable?.pending || 0)}</span>
-                        </div>
-                     </>
-                  )}
-               </motion.div>
-
-               {/* Despesas */}
-               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40 shadow-sm flex flex-col gap-4">
-                  <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-2">
-                     <h3 className="text-sm font-bold text-slate-900 dark:text-white uppercase">Saídas (Despesas)</h3>
-                     <ArrowUpRight className="w-4 h-4 text-red-500 rotate-90" />
-                  </div>
-                  {loadingMetrics ? <div className="h-16 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (
-                     <>
-                        <div className="flex justify-between items-end">
-                           <span className="text-xs text-slate-500">Realizado (Pago)</span>
-                           <span className="font-bold text-red-500 text-lg">{formatBRL(metrics.financial_metrics?.payable?.paid || 0)}</span>
-                        </div>
-                        <div className="flex justify-between items-end">
-                           <span className="text-xs text-slate-500">Previsto (A Pagar)</span>
-                           <span className="font-semibold text-slate-700 dark:text-slate-300">{formatBRL(metrics.financial_metrics?.payable?.pending || 0)}</span>
-                        </div>
-                     </>
-                  )}
-               </motion.div>
-
-               {/* Saldo Líquido */}
-               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900/40 shadow-sm flex flex-col gap-4">
-                  <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-2">
-                     <h3 className="text-sm font-bold text-slate-900 dark:text-white uppercase">Balanço Líquido</h3>
-                     <div className="w-4 h-4 rounded-full bg-slate-200 flex items-center justify-center font-bold text-[10px] text-slate-600">Σ</div>
-                  </div>
-                  {loadingMetrics ? <div className="h-16 bg-slate-200 dark:bg-slate-800 rounded animate-pulse"></div> : (() => {
-                      const netRealizado = (metrics.financial_metrics?.receivable?.paid || 0) - (metrics.financial_metrics?.payable?.paid || 0);
-                      const netPrevisto = (metrics.financial_metrics?.receivable?.pending || 0) - (metrics.financial_metrics?.payable?.pending || 0);
-                      return (
-                     <>
-                        <div className="flex justify-between items-end">
-                           <span className="text-xs text-slate-500">Saldo Atual (Efetivado)</span>
-                           <span className={`font-black text-xl ${netRealizado >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatBRL(netRealizado)}</span>
-                        </div>
-                        <div className="flex justify-between items-end">
-                           <span className="text-xs text-slate-500">Saldo Futuro (Previsto)</span>
-                           <span className={`font-bold ${netPrevisto >= 0 ? 'text-green-600' : 'text-red-500'}`}>{formatBRL(netPrevisto)}</span>
-                        </div>
-                     </>
-                     )
-                  })()}
-               </motion.div>
-            </div>
-         </div>
-      )}
-
-      <div className={`grid gap-6 ${((!metrics || metrics.module_orders) && (!metrics || metrics.module_crm)) ? 'lg:grid-cols-2' : 'lg:grid-cols-1'}`}>
-        {(!metrics || metrics.module_orders) && (
-        <motion.div 
-           initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
-           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-[300px]"
-        >
-           <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Clock className="w-5 h-5 opacity-70" /> Pedidos Recentes
-              </h2>
-              <Link href="/orders" className="text-sm font-semibold text-[var(--color-primary-base)] hover:underline">
-                Ver todos
-              </Link>
-           </div>
-           
-           <div className="p-0 flex-1 flex flex-col">
-              {recentOrders.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 text-sm p-8">
-                  <Package className="w-12 h-12 mb-3 text-slate-300 dark:text-slate-700" />
-                  Nenhum pedido recente registrado.
-                </div>
-              ) : (
-                <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {recentOrders.map(order => (
-                    <Link 
-                      key={order.id} 
-                      href={`/orders/${order.id}`}
-                      className="flex items-center justify-between p-4 sm:p-6 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors group cursor-pointer"
-                    >
-                       <div>
-                          <p className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-[var(--color-primary-base)] transition-colors">
-                            Pedido #{order.id} {order.origin === 'store' && <span className="ml-2 text-[10px] bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-slate-500">B2B Store</span>}
-                          </p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                            {new Date(order.created_at).toLocaleString('pt-BR')} • {order.customer?.fantasy_name || 'Cliente B2B'}
-                          </p>
-                       </div>
-                       <div className="text-right">
-                         <p className="text-sm font-black text-[var(--color-primary-base)] mb-1">
-                           R$ {order.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                         </p>
-                         <span className={`inline-block px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${
-                            order.status === 'CANCELLED' ? 'bg-red-100 text-red-700' : 
-                            order.status === 'INVOICED' ? 'bg-emerald-100 text-emerald-700' :
-                            'bg-indigo-100 text-indigo-700'
-                         }`}>
-                           {order.status === "NEW" ? "Novo" : 
-                            order.status === "PROCESSING" ? "Processando" :
-                            order.status === "SENT_TO_HORUS" ? "Em Processamento" :
-                            order.status === "DISPATCH" ? "Em Separação" :
-                            order.status === "INVOICED" ? "Faturado" :
-                            order.status === "CANCELLED" ? "Cancelado" : order.status}
-                         </span>
-                       </div>
-                    </Link>
-                  ))}
-                </div>
-              )}
-           </div>
-        </motion.div>
-        )}
-
-        {(!metrics || metrics.module_crm) && (
-        <motion.div 
-           initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}
-           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-[300px]"
-        >
-           <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Target className="w-5 h-5 text-amber-500" /> Minhas Tarefas (CRM)
-              </h2>
-           </div>
-           
-           <div className="p-0 flex-1 flex flex-col">
-              {loadingMetrics ? (
-                  <div className="flex-1 flex items-center justify-center p-8"><RefreshCw className="w-6 h-6 animate-spin text-slate-300" /></div>
-              ) : crmTasks.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 text-sm p-8">
-                  <Calendar className="w-12 h-12 mb-3 text-slate-200 dark:text-slate-800" />
-                  Nenhuma tarefa pendente no CRM!
-                </div>
-              ) : (
-                <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {crmTasks.map(task => (
-                    <Link 
-                      key={task.id} 
-                      href={`/customers/${task.customer_id}/crm`}
-                      className="flex items-center justify-between p-4 sm:p-5 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-colors group cursor-pointer"
-                    >
-                       <div>
-                          <p className="text-sm font-bold text-slate-800 dark:text-slate-200 group-hover:text-amber-600 transition-colors truncate max-w-[200px] sm:max-w-xs">
-                            {task.content}
-                          </p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {task.customer_name}
-                          </p>
-                       </div>
-                       <div className="text-right">
-                         <span className="inline-block px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400 mb-1">
-                           Pendente
-                         </span>
-                         <p className="text-[11px] font-mono text-slate-400 dark:text-slate-500">
-                           {new Date(task.due_date).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
-                         </p>
-                       </div>
-                    </Link>
-                  ))}
-                </div>
-              )}
-           </div>
-        </motion.div>
-        )}
-      </div>
-    </div>
-  );
+        </div>
+    );
 }
