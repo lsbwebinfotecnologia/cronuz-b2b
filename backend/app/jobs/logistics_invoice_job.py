@@ -17,6 +17,9 @@ from app.integrators.logistics.base_provider import LogisticsProvider
 
 logger = logging.getLogger("cronuz.logistics_invoice_job")
 
+# Controle de concorrencia: evita multiplos disparos simultaneos para a mesma empresa
+_running_invoice_companies = set()
+
 
 def _record_logistics_log(
     db: Session,
@@ -281,7 +284,20 @@ async def process_company_logistics_invoice(db: Session, company_id: int, limit_
     Varre pedidos da empresa que já foram conferidos (CHECKED) ou enviados (IN_LOGISTICS)
     e que possuem id_ord_sys_log, verifica se no Horus já foram faturados (FAT) e envia
     o XML e dados da NFe para a logística (WMS MKT).
+    Possui lock anti-concorrência para evitar que múltiplos workers/chamadas sobrecarreguem o WMS.
     """
+    if company_id in _running_invoice_companies:
+        logger.info(f"[LogisticsInvoiceJob] Faturamento para empresa {company_id} já em andamento. Ignorando chamada concorrente.")
+        return {"processed": 0, "invoiced": 0, "errors": 0, "message": "Faturamento para esta empresa já em andamento."}
+
+    _running_invoice_companies.add(company_id)
+    try:
+        return await _do_process_company_logistics_invoice(db, company_id, limit_orders)
+    finally:
+        _running_invoice_companies.discard(company_id)
+
+
+async def _do_process_company_logistics_invoice(db: Session, company_id: int, limit_orders: int = 20) -> Dict[str, Any]:
     log_settings = db.query(LogisticsSettings).filter(
         LogisticsSettings.company_id == company_id,
         LogisticsSettings.enabled == True
@@ -402,7 +418,7 @@ async def process_company_logistics_invoice(db: Session, company_id: int, limit_
             else:
                 stats["errors"] += 1
 
-            await asyncio.sleep(5.0)  # Delay preventivo anti-429 para a API do WMS MKT
+            await asyncio.sleep(7.0)  # Delay preventivo estrito anti-429 para a API do WMS MKT
 
     finally:
         await horus_client.close()

@@ -517,12 +517,34 @@ async def trigger_process_invoice_manually(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Aciona imediatamente a rotina de envio de Nota Fiscal (FAT -> NFe no WMS MKT) para pedidos faturados.
+    Aciona a rotina de envio de Nota Fiscal (FAT -> NFe no WMS MKT) para pedidos faturados.
+    Executa em segundo plano com lock anti-concorrencia para evitar 504 Gateway Timeout e nao travar a API do WMS.
     """
     _assert_ownership(current_user, company_id)
-    from app.jobs.logistics_invoice_job import process_company_logistics_invoice
-    res = await process_company_logistics_invoice(db, company_id)
-    return {"success": True, "result": res}
+    from app.jobs.logistics_invoice_job import _running_invoice_companies, process_company_logistics_invoice
+    import asyncio
+
+    if company_id in _running_invoice_companies:
+        return {
+            "success": True,
+            "message": "O envio de notas fiscais ja esta em andamento para esta empresa. Por favor, aguarde.",
+            "result": {"processed": 0, "invoiced": 0, "errors": 0}
+        }
+
+    async def _run_bg_invoice():
+        from app.db.session import SessionLocal
+        bg_db = SessionLocal()
+        try:
+            await process_company_logistics_invoice(bg_db, company_id)
+        finally:
+            bg_db.close()
+
+    asyncio.create_task(_run_bg_invoice())
+    return {
+        "success": True,
+        "message": "Envio de notas fiscais iniciado em segundo plano! Acompanhe a atualizacao nos logs da logistica.",
+        "result": {"processed": 0, "invoiced": 0, "errors": 0}
+    }
 
 @router.post("/companies/{company_id}/logistics/sync-from-wms")
 async def sync_orders_from_wms(

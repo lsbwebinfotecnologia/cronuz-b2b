@@ -282,16 +282,15 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
         except (ValueError, TypeError):
             min_order_number = None
 
-    now_dt = datetime.now(timezone.utc)
-    # Limita a no máximo 3 dias para garantir consulta leve e não estourar rate limit da MKT
-    start_date = (now_dt - timedelta(days=3)).strftime("%Y-%m-%d")
+    # Limita a 5 dias para cobrir fins de semana e feriados com seguranca
+    start_date = (now_dt - timedelta(days=5)).strftime("%Y-%m-%d")
     end_date = now_dt.strftime("%Y-%m-%d")
 
     provider = LogisticsProvider.factory(log_settings.provider, log_settings)
 
     try:
-        # Executa uma única requisição no WMS para tratar todos os pedidos conferidos
-        movements = await provider.get_movements(start_date, end_date, situacao="aguardando_nfe", max_pages=1)
+        # Consulta movimentos conferidos (aguardando_nfe) com protecao de paginacao
+        movements = await provider.get_movements(start_date, end_date, situacao="aguardando_nfe", max_pages=2)
     except Exception as e:
         logger.error(f"[LogisticsCheckJob] Erro ao consultar WMS para empresa {company_id}: {e}")
         return {"processed": 0, "conferred": 0, "errors": 1, "message": f"Erro WMS: {e}"}
@@ -330,8 +329,14 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
             if min_order_number and ped_num < min_order_number:
                 continue
 
-            # Checa picking finalizado
-            has_picking = bool(mov.get("picking_dh_finish") or str(mov.get("situacao", "")).lower() in ["aguardando_nfe", "conferida", "faturada"])
+            # Checa picking finalizado (suporta formato padrao MKT com pedido_status 3/4/5, fechado_em, picking_separar_dh_termino ou picking_dh_finish)
+            has_picking = bool(
+                mov.get("picking_dh_finish") or
+                mov.get("picking_separar_dh_termino") or
+                mov.get("fechado_em") or
+                str(mov.get("pedido_status", "")).strip() in ["3", "4", "5"] or
+                str(mov.get("situacao", "")).lower() in ["aguardando_nfe", "conferida", "faturada"]
+            )
             if not has_picking:
                 continue
 
