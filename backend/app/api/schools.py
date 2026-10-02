@@ -80,11 +80,12 @@ def list_schools(
     )
 
     # Buscar endereços principais
-    addresses = dict(
+    addr_rows = (
         db.query(Address.customer_id, Address.city, Address.state)
         .filter(Address.customer_id.in_(customer_ids))
         .all()
     )
+    addresses = {r[0]: (r[1], r[2]) for r in addr_rows}
 
     result = []
     for r in rows:

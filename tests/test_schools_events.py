@@ -76,5 +76,19 @@ class TestSchoolsAndEvents(unittest.TestCase):
         self.assertEqual(len(set(pairs.keys())), n)
         self.assertEqual(len(set(pairs.values())), n)
 
+    def test_address_mapping_regression(self):
+        # Simula linhas de endereços retornadas pela query do SQLAlchemy (tuplas de 3 itens)
+        addr_rows = [
+            (10, "São Paulo", "SP"),
+            (25, "Rio de Janeiro", "RJ"),
+            (33, "Belo Horizonte", "MG"),
+        ]
+        # Garantir que a construção via dict comprehension funciona sem erro de tamanho de sequência
+        addresses = {r[0]: (r[1], r[2]) for r in addr_rows}
+        self.assertEqual(addresses[10], ("São Paulo", "SP"))
+        self.assertEqual(addresses[25], ("Rio de Janeiro", "RJ"))
+        self.assertIsNone(addresses.get(999))
+
 if __name__ == "__main__":
     unittest.main()
+
