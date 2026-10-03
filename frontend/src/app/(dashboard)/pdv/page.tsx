@@ -136,6 +136,10 @@ export default function PDVPage() {
 
   // Carrinho
   const [cart, setCart] = useState<CartItem[]>([]);
+  const cartRef = useRef(cart);
+  useEffect(() => {
+    cartRef.current = cart;
+  }, [cart]);
   const [globalDiscount, setGlobalDiscount] = useState<number>(0);
 
   // Consumidor & Fixação 📌
@@ -186,6 +190,10 @@ export default function PDVPage() {
   // ─── Sincronizar catálogo da sessão selecionada para o IndexedDB ──────────
   const syncSessionProducts = useCallback(async (session: POSSessionData, silent = false) => {
     if (!companyId || !navigator.onLine) return;
+    // Sessões de Consulta em Tempo Real no Horus buscam online diretamente sob demanda
+    if (session.catalog_source === 'HORUS_REALTIME') {
+      return;
+    }
     try {
       setIsSyncingSessionCatalog(true);
       const token = getToken();
@@ -233,6 +241,11 @@ export default function PDVPage() {
       setIsSyncingSessionCatalog(false);
     }
   }, [companyId, triggerFeedback, loadSampleCatalog]);
+
+  const syncSessionProductsRef = useRef(syncSessionProducts);
+  useEffect(() => {
+    syncSessionProductsRef.current = syncSessionProducts;
+  }, [syncSessionProducts]);
 
   // ─── Manipulador de Seleção de Sessão ──────────────────────────────────────
   const handleSelectSession = useCallback(async (session: POSSessionData | null) => {
@@ -327,6 +340,11 @@ export default function PDVPage() {
     }
   }, [companyId, isSyncing, activeSession]);
 
+  const triggerSyncRef = useRef(triggerSync);
+  useEffect(() => {
+    triggerSyncRef.current = triggerSync;
+  }, [triggerSync]);
+
   // ─── 2. Inicialização & Verificação de Módulo/Configuração ──────────────────
   useEffect(() => {
     setMounted(true);
@@ -335,7 +353,7 @@ export default function PDVPage() {
     const handleOnline = () => {
       setIsOnline(true);
       toast.success('Conexão restabelecida! Sincronizando vendas...');
-      triggerSync();
+      triggerSyncRef.current();
     };
     const handleOffline = () => {
       setIsOnline(false);
@@ -353,7 +371,7 @@ export default function PDVPage() {
       }
       if (e.key === 'F2') {
         e.preventDefault();
-        if (cart.length > 0) setIsCheckoutOpen(true);
+        if (cartRef.current.length > 0) setIsCheckoutOpen(true);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -386,8 +404,8 @@ export default function PDVPage() {
       const cachedActiveSession = await getPdvSetting<POSSessionData>('activeSession');
       if (cachedActiveSession) {
         setActiveSession(cachedActiveSession);
-        if (navigator.onLine && companyId) {
-          syncSessionProducts(cachedActiveSession, true);
+        if (navigator.onLine && companyId && cachedActiveSession.catalog_source !== 'HORUS_REALTIME') {
+          syncSessionProductsRef.current(cachedActiveSession, true);
         }
       }
 
@@ -422,7 +440,7 @@ export default function PDVPage() {
 
       // Sincroniza pendências se online
       if (navigator.onLine && uCount > 0) {
-        triggerSync();
+        triggerSyncRef.current();
       }
     });
 
@@ -433,7 +451,7 @@ export default function PDVPage() {
           const pendingCount = await getUnsyncedSalesCount();
           setUnsyncedCount(pendingCount);
           if (pendingCount > 0) {
-            triggerSync();
+            triggerSyncRef.current();
           }
         } catch {}
       }
@@ -445,7 +463,7 @@ export default function PDVPage() {
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [companyId, loadSampleCatalog, syncSessionProducts, cart.length, triggerSync]);
+  }, [companyId, loadSampleCatalog]);
 
 
   // ─── 3. Busca de Produtos em Tempo Real ────────────────────────────────────
@@ -1187,11 +1205,11 @@ export default function PDVPage() {
       </div>
 
       {/* ── BANNER DE CARGA / PROGRESSO DE SESSÃO OFFLINE ───────────────────── */}
-      {isSyncingSessionCatalog && (
-        <div className="bg-indigo-600 text-white text-xs px-4 py-2 flex items-center justify-center gap-2 shadow-sm animate-pulse z-30 shrink-0">
+      {isSyncingSessionCatalog && activeSession?.catalog_source !== 'HORUS_REALTIME' && (
+        <div className="bg-indigo-600 text-white text-xs px-4 py-2 flex items-center justify-center gap-2 shadow-sm z-30 shrink-0">
           <Loader2 className="w-4 h-4 animate-spin shrink-0" />
           <span className="font-semibold">
-            Sincronizando produtos da sessão "{activeSession?.title}" para este aparelho... Aguarde um instante.
+            Sincronizando produtos da sessão &quot;{activeSession?.title}&quot; para este aparelho... Aguarde um instante.
           </span>
         </div>
       )}
