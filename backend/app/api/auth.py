@@ -101,8 +101,9 @@ def login_for_access_token(
     access_token_expires = timedelta(minutes=security.ACCESS_TOKEN_EXPIRE_MINUTES)
     expire_date = datetime.now(timezone.utc) + access_token_expires
 
-    # Invalidate previous sessions for SELLER and AGENT
-    if user.type in ["SELLER", "AGENT"]:
+    # Invalidate previous sessions for SELLER and AGENT (only one active session allowed)
+    user_type_str = user.type.value if hasattr(user.type, "value") else str(user.type)
+    if user_type_str in ["SELLER", "AGENT"]:
         db.query(UserSession).filter(
             UserSession.user_id == user.id,
             UserSession.is_active == True
@@ -111,13 +112,16 @@ def login_for_access_token(
     # Store new session
     client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")[:255] if request.headers.get("user-agent") else None
+    now_utc = datetime.now(timezone.utc)
     
     new_session = UserSession(
         user_id=user.id,
-        role=user.type,
+        role=user_type_str,
         jti=jti,
         ip_address=client_ip,
         user_agent=user_agent,
+        login_at=now_utc,
+        last_activity_at=now_utc,
         expires_at=expire_date,
         is_active=True
     )

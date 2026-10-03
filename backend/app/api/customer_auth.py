@@ -56,9 +56,10 @@ def login_customer(request: Request, payload: CustomerLoginRequest, db: Session 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     expire_date = datetime.now(timezone.utc) + access_token_expires
 
-    # Store new session
+    # Store new session (Customer is allowed to have multiple concurrent sessions)
     client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")[:255] if request.headers.get("user-agent") else None
+    now_utc = datetime.now(timezone.utc)
     
     new_session = UserSession(
         customer_id=customer.id,
@@ -66,6 +67,8 @@ def login_customer(request: Request, payload: CustomerLoginRequest, db: Session 
         jti=jti,
         ip_address=client_ip,
         user_agent=user_agent,
+        login_at=now_utc,
+        last_activity_at=now_utc,
         expires_at=expire_date,
         is_active=True
     )
