@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import { getToken, getUser } from '@/lib/auth';
+import { motion } from 'framer-motion';
 import { 
     ShoppingCart, 
     DollarSign, 
@@ -18,7 +19,8 @@ import {
     Package, 
     Building2,
     Store,
-    Search
+    Search,
+    BarChart3
 } from 'lucide-react';
 
 interface MasterSeller {
@@ -165,33 +167,7 @@ export default function DashboardPage() {
         }).format(val || 0);
     };
 
-    // Preparação dos pontos do gráfico SVG nativo para Seller
-    const chartSvgData = useMemo(() => {
-        const points = sellerData?.revenue_history || [];
-        if (!points || points.length === 0) return null;
 
-        const maxVal = Math.max(...points.map(p => p.total_revenue || p.total || 0), 1);
-        const width = 600;
-        const height = 180;
-        const padding = 20;
-
-        const coordinates = points.map((p, idx) => {
-            const val = p.total_revenue || p.total || 0;
-            const x = padding + (idx / Math.max(points.length - 1, 1)) * (width - 2 * padding);
-            const y = height - padding - (val / maxVal) * (height - 2 * padding);
-            return { x, y, date: p.label || p.month_label || p.month, total: val };
-        });
-
-        const linePath = coordinates.reduce((acc, curr, idx) => {
-            return idx === 0 ? `M ${curr.x} ${curr.y}` : `${acc} L ${curr.x} ${curr.y}`;
-        }, '');
-
-        const areaPath = coordinates.length > 0
-            ? `${linePath} L ${coordinates[coordinates.length - 1].x} ${height - padding} L ${coordinates[0].x} ${height - padding} Z`
-            : '';
-
-        return { coordinates, linePath, areaPath, maxVal, width, height, padding };
-    }, [sellerData?.revenue_history]);
 
     if (loading && !masterData && !sellerData) {
         return (
@@ -639,64 +615,172 @@ export default function DashboardPage() {
 
             {/* SEÇÃO 2: GRÁFICO DE EVOLUÇÃO + PAINEL OPERACIONAL */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                {/* Gráfico */}
-                <div className="lg:col-span-2 p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-                    <div className="flex items-center justify-between mb-4">
-                        <div>
-                            <h3 className="text-base font-bold text-slate-900 dark:text-white">Evolução Mensal</h3>
-                            <p className="text-xs text-slate-500">Faturamento consolidado por mês de competência</p>
+                {/* Gráfico Grade com Hover Tooltip */}
+                <div className="lg:col-span-2 p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col justify-between">
+                    <div>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                            <div>
+                                <h3 className="text-base font-bold text-slate-900 dark:text-white">Evolução Mensal</h3>
+                                <p className="text-xs text-slate-500">Faturamento consolidado por mês de competência</p>
+                            </div>
+
+                            {/* Legenda Dinâmica de Módulos Ativos */}
+                            <div className="flex items-center gap-3 text-xs">
+                                {hasOrders && (
+                                    <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                                        <span>Pedidos</span>
+                                    </div>
+                                )}
+                                {hasServices && (
+                                    <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
+                                        <span>Serviços</span>
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                    </div>
 
-                    <div className="h-72 w-full flex items-center justify-center">
-                        {chartSvgData && chartSvgData.coordinates.length > 0 ? (
-                            <div className="w-full h-full relative">
-                                <svg 
-                                    viewBox={`0 0 ${chartSvgData.width} ${chartSvgData.height}`} 
-                                    className="w-full h-full overflow-visible"
-                                    preserveAspectRatio="none"
-                                >
-                                    <defs>
-                                        <linearGradient id="gradTotal" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.35" />
-                                            <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0.0" />
-                                        </linearGradient>
-                                    </defs>
-                                    {/* Grid Lines */}
-                                    <line x1="20" y1="20" x2={chartSvgData.width - 20} y2="20" stroke="#334155" strokeOpacity="0.15" strokeDasharray="3 3" />
-                                    <line x1="20" y1={chartSvgData.height / 2} x2={chartSvgData.width - 20} y2={chartSvgData.height / 2} stroke="#334155" strokeOpacity="0.15" strokeDasharray="3 3" />
-                                    <line x1="20" y1={chartSvgData.height - 20} x2={chartSvgData.width - 20} y2={chartSvgData.height - 20} stroke="#334155" strokeOpacity="0.15" />
+                        {/* Área das Barras em Grade */}
+                        {(() => {
+                            const history = sellerData?.revenue_history || [];
+                            if (history.length === 0) {
+                                return (
+                                    <div className="h-64 flex flex-col items-center justify-center text-slate-400 text-sm">
+                                        <BarChart3 className="w-10 h-10 mb-2 text-slate-300 dark:text-slate-700" />
+                                        Sem dados de faturamento para o período selecionado.
+                                    </div>
+                                );
+                            }
 
-                                    {/* Area Fill */}
-                                    <path d={chartSvgData.areaPath} fill="url(#gradTotal)" />
+                            const maxVal = Math.max(...history.map(h => Number(h.total_revenue || h.total || 0)), 1);
 
-                                    {/* Line */}
-                                    <path d={chartSvgData.linePath} fill="none" stroke="#0ea5e9" strokeWidth="2.5" strokeLinecap="round" />
+                            return (
+                                <div className="mt-2">
+                                    <div className="grid grid-flow-col auto-cols-fr gap-2 sm:gap-3 items-end min-h-[220px] overflow-x-auto pb-2 pt-14">
+                                        {history.map((item, idx) => {
+                                            const itemLabel = item.month_label || item.label || item.month || '';
+                                            const itemTotal = Number(item.total_revenue ?? item.total ?? 0);
+                                            const itemOrders = Number(item.orders_revenue ?? item.orders ?? 0);
+                                            const itemServices = Number(item.services_revenue ?? item.services ?? 0);
 
-                                    {/* Dots */}
-                                    {chartSvgData.coordinates.map((pt, i) => (
-                                        <circle 
-                                            key={i} 
-                                            cx={pt.x} 
-                                            cy={pt.y} 
-                                            r="3.5" 
-                                            className="fill-white stroke-sky-500 stroke-2 hover:r-5 transition-all"
-                                        >
-                                            <title>{`${pt.date}: ${formatCurrency(pt.total)}`}</title>
-                                        </circle>
-                                    ))}
-                                </svg>
-                                <div className="flex justify-between mt-2 px-1 text-[11px] text-slate-400">
-                                    {chartSvgData.coordinates.map((pt, idx) => (
-                                        <span key={idx}>{pt.date}</span>
-                                    ))}
+                                            const totalPct = maxVal > 0 ? Math.min(Math.round((itemTotal / maxVal) * 100), 100) : 0;
+                                            
+                                            // Proporção dos módulos dentro da barra
+                                            let ordersHeightPct = 0;
+                                            let servicesHeightPct = 0;
+
+                                            if (hasOrders && hasServices) {
+                                                ordersHeightPct = itemTotal > 0 ? (itemOrders / itemTotal) * 100 : 0;
+                                                servicesHeightPct = itemTotal > 0 ? (itemServices / itemTotal) * 100 : 0;
+                                            } else if (hasOrders) {
+                                                ordersHeightPct = 100;
+                                                servicesHeightPct = 0;
+                                            } else if (hasServices) {
+                                                ordersHeightPct = 0;
+                                                servicesHeightPct = 100;
+                                            }
+
+                                            return (
+                                                <div 
+                                                    key={item.year_month || idx}
+                                                    className="group relative flex flex-col items-center p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-all cursor-default"
+                                                >
+                                                    {/* Tooltip flutuante no Hover */}
+                                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none absolute -top-20 z-30 bg-slate-900 text-white text-[11px] p-2.5 rounded-xl shadow-xl border border-slate-700 whitespace-nowrap min-w-[150px] left-1/2 -translate-x-1/2">
+                                                        <p className="font-bold text-slate-200 border-b border-slate-700 pb-1 mb-1">
+                                                            {itemLabel}
+                                                        </p>
+                                                        {hasOrders && (
+                                                            <div className="flex justify-between gap-3 text-blue-300">
+                                                                <span>📦 Pedidos:</span>
+                                                                <span className="font-mono font-bold">{formatCurrency(itemOrders)}</span>
+                                                            </div>
+                                                        )}
+                                                        {hasServices && (
+                                                            <div className="flex justify-between gap-3 text-purple-300">
+                                                                <span>🛠️ Serviços:</span>
+                                                                <span className="font-mono font-bold">{formatCurrency(itemServices)}</span>
+                                                            </div>
+                                                        )}
+                                                        {hasOrders && hasServices && (
+                                                            <div className="flex justify-between gap-3 text-white font-bold border-t border-slate-700 pt-1 mt-1">
+                                                                <span>Total:</span>
+                                                                <span className="font-mono text-emerald-400">{formatCurrency(itemTotal)}</span>
+                                                            </div>
+                                                        )}
+                                                        {!hasOrders && !hasServices && itemTotal > 0 && (
+                                                            <div className="flex justify-between gap-3 text-white font-bold">
+                                                                <span>Total:</span>
+                                                                <span className="font-mono text-emerald-400">{formatCurrency(itemTotal)}</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Valor compacto acima da barra */}
+                                                    <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-2 truncate max-w-full">
+                                                        {itemTotal >= 1000 ? `R$ ${(itemTotal / 1000).toFixed(1)}k` : formatCurrency(itemTotal)}
+                                                    </span>
+
+                                                    {/* Barra com animação */}
+                                                    <div className="w-full max-w-[48px] h-36 bg-slate-100 dark:bg-slate-800/60 rounded-xl p-1 flex items-end justify-center">
+                                                        <motion.div
+                                                            initial={{ height: 0 }}
+                                                            animate={{ height: `${Math.max(totalPct, 4)}%` }}
+                                                            transition={{ duration: 0.6, delay: idx * 0.05 }}
+                                                            className="w-full rounded-lg overflow-hidden flex flex-col justify-end shadow-sm"
+                                                        >
+                                                            {/* Segmento de Serviços (Topo) */}
+                                                            {hasServices && servicesHeightPct > 0 && (
+                                                                <div 
+                                                                    style={{ height: `${servicesHeightPct}%` }}
+                                                                    className="w-full bg-purple-500 hover:bg-purple-400 transition-colors"
+                                                                    title={`Serviços: ${formatCurrency(itemServices)}`}
+                                                                />
+                                                            )}
+                                                            {/* Segmento de Pedidos (Base) */}
+                                                            {hasOrders && ordersHeightPct > 0 && (
+                                                                <div 
+                                                                    style={{ height: `${ordersHeightPct}%` }}
+                                                                    className="w-full bg-blue-500 hover:bg-blue-400 transition-colors"
+                                                                    title={`Pedidos: ${formatCurrency(itemOrders)}`}
+                                                                />
+                                                            )}
+                                                            {!hasOrders && !hasServices && itemTotal > 0 && (
+                                                                <div 
+                                                                    style={{ height: '100%' }}
+                                                                    className="w-full bg-sky-500 hover:bg-sky-400 transition-colors"
+                                                                />
+                                                            )}
+                                                            {itemTotal === 0 && (
+                                                                <div className="w-full h-1 bg-slate-300 dark:bg-slate-700 rounded-full" />
+                                                            )}
+                                                        </motion.div>
+                                                    </div>
+
+                                                    {/* Rótulo do Mês na Base */}
+                                                    <div className="mt-2.5 text-center">
+                                                        <span className="text-xs block font-medium text-slate-600 dark:text-slate-400">
+                                                            {itemLabel}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {/* Rodapé com Dica e Máximo */}
+                                    <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/60 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                                        <span className="flex items-center gap-1 text-[11px]">
+                                            💡 <em>Passe o cursor sobre as colunas para ver o detalhamento por módulo.</em>
+                                        </span>
+                                        <span className="font-mono text-[11px] hidden sm:inline font-semibold">
+                                            Máx: {formatCurrency(maxVal)}
+                                        </span>
+                                    </div>
                                 </div>
-                            </div>
-                        ) : (
-                            <div className="text-slate-400 text-sm">
-                                Sem dados de faturamento para o período selecionado.
-                            </div>
-                        )}
+                            );
+                        })()}
                     </div>
                 </div>
 
