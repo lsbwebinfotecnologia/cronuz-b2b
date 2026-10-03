@@ -17,6 +17,7 @@ export interface PDVCatalogItem {
   stock?: number;
   horus_item_code?: string;
   product_id?: number;
+  cover_url?: string;
   source?: string;
 }
 

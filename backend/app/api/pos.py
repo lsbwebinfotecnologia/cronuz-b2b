@@ -5,6 +5,7 @@ import json
 import uuid
 import tempfile
 import time
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, List
@@ -18,8 +19,11 @@ from app.core import dependencies
 from app.core.upload_security import validate_file_size_and_extension, read_file_safely
 from app.models import user as user_models
 from app.models.company import Company
+from app.models.company_settings import CompanySettings
 from app.models.product import Product
 from app.models.customer import Customer
+from app.models.seller_branch import SellerBranch
+from app.integrators.horus_product_search import HorusProductSearch
 from app.models.pos import (
     POSSession,
     POSSessionProduct,
@@ -144,6 +148,7 @@ def create_pos_session(
         status=POSSessionStatus.OPEN.value,
         catalog_source=payload.catalog_source or POSCatalogSource.GENERAL.value,
         source_reference=payload.source_reference,
+        branch_id=payload.branch_id,
         customer_id=payload.customer_id,
         customer_name=cust_name,
         customer_document=cust_doc,
@@ -197,6 +202,8 @@ def get_pos_session(
             "status": session.status,
             "catalog_source": session.catalog_source,
             "source_reference": session.source_reference,
+            "branch_id": session.branch_id,
+            "branch_name": session.branch_name,
             "customer_id": session.customer_id,
             "customer_name": session.customer_name,
             "customer_document": session.customer_document,
@@ -232,6 +239,228 @@ def close_pos_session(
     db.commit()
     db.refresh(session)
     return session
+
+
+@router.get("/branches")
+def list_pos_branches(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """Lista as filiais ativas do seller disponíveis para vincular à sessão do PDV."""
+    _assert_pos_access(current_user, company_id, db)
+    branches = (
+        db.query(SellerBranch)
+        .filter(
+            SellerBranch.company_id == company_id,
+            SellerBranch.active == True,
+        )
+        .order_by(SellerBranch.nome)
+        .all()
+    )
+    return [
+        {
+            "id": b.id,
+            "nome": b.nome,
+            "cod_empresa": b.cod_empresa,
+            "cod_filial": b.cod_filial,
+            "cod_local": b.cod_local,
+            "active": b.active,
+        }
+        for b in branches
+    ]
+
+
+@router.get("/realtime-search")
+async def realtime_search_horus(
+    company_id: int,
+    term: str = Query(..., description="Termo de busca (ISBN, Código de Barras, Código Interno ou Nome)"),
+    session_id: Optional[int] = Query(None, description="ID da sessão do PDV"),
+    branch_id: Optional[int] = Query(None, description="ID da filial específica para saldo"),
+    search_option: Optional[str] = Query(None, description="BARRAS_ISBN | NOME | COD_ITEM"),
+    limit: int = Query(20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Busca em tempo real no Horus via Busca_Acervo (sem necessidade de ID_GUID)
+    e consulta o saldo na filial selecionada para a sessão de PDV.
+    """
+    _assert_pos_access(current_user, company_id, db)
+
+    clean_term = term.strip()
+    if not clean_term:
+        return {"items": [], "total": 0}
+
+    # Resolve filial a partir da sessão ou parâmetro direto
+    branch: Optional[SellerBranch] = None
+    if branch_id:
+        branch = db.query(SellerBranch).filter(
+            SellerBranch.id == branch_id,
+            SellerBranch.company_id == company_id,
+            SellerBranch.active == True
+        ).first()
+    elif session_id:
+        session_obj = db.query(POSSession).filter(
+            POSSession.id == session_id,
+            POSSession.company_id == company_id
+        ).first()
+        if session_obj and session_obj.branch_id:
+            branch = db.query(SellerBranch).filter(
+                SellerBranch.id == session_obj.branch_id,
+                SellerBranch.company_id == company_id,
+                SellerBranch.active == True
+            ).first()
+
+    # Determina search_option se não fornecida
+    sanitized_term = clean_term
+    digits_only = "".join(ch for ch in clean_term if ch.isdigit())
+    if not search_option:
+        if digits_only and len(digits_only) >= 7 and len(clean_term) <= len(digits_only) + 4:
+            # Código de barras / ISBN (com ou sem hífens)
+            search_option = "BARRAS_ISBN"
+            sanitized_term = digits_only
+        elif clean_term.isdigit() and len(clean_term) <= 6:
+            search_option = "COD_ITEM"
+        else:
+            search_option = "NOME"
+
+    # URL base de capas
+    settings = db.query(CompanySettings).filter(
+        CompanySettings.company_id == company_id
+    ).first()
+    cover_base_url = settings.cover_image_base_url if settings else None
+
+    try:
+        client = HorusProductSearch(db, company_id)
+    except Exception as e:
+        logger.warning(f"Erro ao instanciar HorusProductSearch: {e}")
+        raise HTTPException(status_code=400, detail=f"Configuração do Horus indisponível: {str(e)}")
+
+    try:
+        raw = await client.busca_acervo(
+            term=sanitized_term,
+            search_option=search_option,
+            limit=limit,
+        )
+    except Exception as e:
+        logger.error(f"Erro na consulta ao Horus Busca_Acervo: {e}")
+        await client.close()
+        raise HTTPException(status_code=502, detail=f"Erro ao consultar Horus: {str(e)}")
+
+    # Fallback se não encontrou e pode ser nome
+    if not raw or (isinstance(raw, dict) and (raw.get("Falha") or raw.get("FALHA") == "S")):
+        if search_option == "COD_ITEM":
+            try:
+                raw = await client.busca_acervo(term=clean_term, search_option="NOME", limit=limit)
+            except Exception:
+                pass
+        elif search_option == "BARRAS_ISBN" and not clean_term.isdigit():
+            try:
+                raw = await client.busca_acervo(term=clean_term, search_option="NOME", limit=limit)
+            except Exception:
+                pass
+
+    raw_items: List[dict] = []
+    if isinstance(raw, list):
+        for it in raw:
+            if isinstance(it, dict) and not (it.get("Falha") or it.get("FALHA") == "S"):
+                raw_items.append(it)
+    elif isinstance(raw, dict) and not (raw.get("Falha") or raw.get("FALHA") == "S"):
+        raw_items.append(raw)
+
+    if not raw_items:
+        await client.close()
+        return {
+            "items": [],
+            "total": 0,
+            "branch_id": branch.id if branch else None,
+            "branch_name": branch.nome if branch else None,
+        }
+
+    # Consulta de saldo da filial selecionada em paralelo com timeout individual
+    async def _fetch_stock(cod_item: Optional[int]) -> float:
+        if not branch or not cod_item or not branch.cod_empresa or not branch.cod_filial:
+            return 0.0
+        try:
+            stock_data = await asyncio.wait_for(
+                client.busca_estoque_filial(
+                    cod_item=cod_item,
+                    cod_empresa=branch.cod_empresa,
+                    cod_filial=branch.cod_filial,
+                ),
+                timeout=5.0
+            )
+            if isinstance(stock_data, list):
+                total_saldo = 0.0
+                for loc in stock_data:
+                    if isinstance(loc, dict):
+                        saldo_val = loc.get("SALDO_DISPONIVEL") or loc.get("QTD_SALDO") or 0.0
+                        try:
+                            total_saldo += float(saldo_val)
+                        except (ValueError, TypeError):
+                            pass
+                return total_saldo
+            elif isinstance(stock_data, dict):
+                saldo_val = stock_data.get("SALDO_DISPONIVEL") or stock_data.get("QTD_SALDO") or 0.0
+                try:
+                    return float(saldo_val)
+                except (ValueError, TypeError):
+                    return 0.0
+            return 0.0
+        except Exception as stock_err:
+            logger.debug(f"Falha ao consultar saldo do item {cod_item} na filial: {stock_err}")
+            return 0.0
+
+    stocks = []
+    try:
+        if branch:
+            stocks = await asyncio.gather(*[_fetch_stock(it.get("COD_ITEM")) for it in raw_items])
+        else:
+            stocks = [
+                float(it.get("SALDO_GERAL") or it.get("QTD_SALDO") or it.get("SALDO_DISPONIVEL") or 0.0)
+                for it in raw_items
+            ]
+    finally:
+        await client.close()
+
+    formatted_items = []
+    for idx, it in enumerate(raw_items):
+        cod_barra = str(it.get("COD_BARRA_ITEM") or it.get("BARRAS_ISBN") or it.get("COD_ITEM") or "").strip()
+        cod_item = it.get("COD_ITEM")
+        title = it.get("NOM_ITEM") or "Produto sem título"
+        publisher = it.get("NOM_EDITORA") or it.get("EDITORA") or ""
+        price_val = it.get("PRECO_VENDA") or it.get("PRECO_TABELA") or it.get("PRECO_CAPA") or 0.0
+        try:
+            price = float(price_val)
+        except (ValueError, TypeError):
+            price = 0.0
+
+        stock_val = stocks[idx] if idx < len(stocks) else 0.0
+
+        cover_url = None
+        if cover_base_url and cod_barra:
+            base = cover_base_url.rstrip("/")
+            cover_url = f"{base}/{cod_barra}.jpg"
+
+        formatted_items.append({
+            "barcode": cod_barra,
+            "sku": str(cod_item) if cod_item else cod_barra,
+            "title": title,
+            "publisher": publisher,
+            "price": price,
+            "stock": stock_val,
+            "horus_item_code": str(cod_item) if cod_item else None,
+            "cover_url": cover_url,
+            "source": "HORUS_REALTIME",
+        })
+
+    return {
+        "items": formatted_items,
+        "total": len(formatted_items),
+        "branch_id": branch.id if branch else None,
+        "branch_name": branch.nome if branch else None,
+    }
 
 
 @router.get("/sessions/{session_id}/products", response_model=POSSessionProductsListResponse)

@@ -22,12 +22,23 @@ export interface POSSessionData {
   status: string;
   catalog_source: string;
   source_reference?: string;
+  branch_id?: number;
+  branch_name?: string;
   products_count?: number;
   customer_name?: string;
   total_sales_count: number;
   total_sales_amount: number;
   opened_at: string;
   closed_at?: string;
+}
+
+export interface POSBranch {
+  id: number;
+  nome: string;
+  cod_empresa: string;
+  cod_filial: string;
+  cod_local?: string;
+  active: boolean;
 }
 
 interface POSSessionModalProps {
@@ -44,10 +55,13 @@ export default function POSSessionModal({
   onSelectSession
 }: POSSessionModalProps) {
   const [sessions, setSessions] = useState<POSSessionData[]>([]);
+  const [branches, setBranches] = useState<POSBranch[]>([]);
+  const [selectedBranchId, setSelectedBranchId] = useState<number | null>(null);
+  const [loadingBranches, setLoadingBranches] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newTitle, setNewTitle] = useState('');
-  const [newCatalogSource, setNewCatalogSource] = useState<'GENERAL' | 'SPREADSHEET' | 'CONSIGNMENT'>('GENERAL');
+  const [newCatalogSource, setNewCatalogSource] = useState<'GENERAL' | 'SPREADSHEET' | 'CONSIGNMENT' | 'HORUS_REALTIME'>('GENERAL');
   const [newSourceReference, setNewSourceReference] = useState('');
   const [creating, setCreating] = useState(false);
 
@@ -58,8 +72,31 @@ export default function POSSessionModal({
   useEffect(() => {
     if (isOpen && companyId) {
       fetchSessions();
+      fetchBranches();
     }
   }, [isOpen, companyId]);
+
+  async function fetchBranches() {
+    try {
+      setLoadingBranches(true);
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/branches`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setBranches(data);
+        if (data.length > 0 && !selectedBranchId) {
+          setSelectedBranchId(data[0].id);
+        }
+      }
+    } catch (e) {
+      console.error('Falha ao carregar filiais do PDV:', e);
+    } finally {
+      setLoadingBranches(false);
+    }
+  }
 
   async function fetchSessions() {
     try {
@@ -85,6 +122,10 @@ export default function POSSessionModal({
       toast.error('Informe o nome do evento / sessão');
       return;
     }
+    if (newCatalogSource === 'HORUS_REALTIME' && !selectedBranchId) {
+      toast.error('Selecione uma filial para a pesquisa no Horus');
+      return;
+    }
     try {
       setCreating(true);
       const token = getToken();
@@ -100,6 +141,7 @@ export default function POSSessionModal({
             title: newTitle.trim(),
             catalog_source: newCatalogSource,
             source_reference: newSourceReference.trim() || undefined,
+            branch_id: newCatalogSource === 'HORUS_REALTIME' ? selectedBranchId : undefined,
           }),
         }
       );
@@ -190,9 +232,20 @@ export default function POSSessionModal({
                   <p className="text-xs text-slate-500 dark:text-slate-400">
                     {activeSession.code} • Aberta em {new Date(activeSession.opened_at).toLocaleDateString('pt-BR')}
                   </p>
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300">
-                    {activeSession.products_count ?? 0} produtos vinculados
-                  </span>
+                  {activeSession.branch_name && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300">
+                      📍 Filial: {activeSession.branch_name}
+                    </span>
+                  )}
+                  {activeSession.catalog_source === 'HORUS_REALTIME' ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-100 dark:bg-indigo-900/40 text-indigo-800 dark:text-indigo-300">
+                      ⚡ Consulta em Tempo Real
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                      {activeSession.products_count ?? 0} produtos vinculados
+                    </span>
+                  )}
                 </div>
               </div>
               <button
@@ -245,15 +298,49 @@ export default function POSSessionModal({
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
                 >
                   <option value="GENERAL">Catálogo Geral da Editora</option>
+                  <option value="HORUS_REALTIME">Consulta em Tempo Real no Horus (por Filial)</option>
                   <option value="SPREADSHEET">Planilha Excel/CSV (Importar no PDV)</option>
                   <option value="CONSIGNMENT">Contrato de Consignação Horus</option>
                 </select>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  {newCatalogSource === 'HORUS_REALTIME' && 'Busca produtos e consulta preço de venda e saldo de estoque em tempo real na API do Horus (Busca_Acervo + Estoque) para a filial selecionada.'}
                   {newCatalogSource === 'SPREADSHEET' && 'Após abrir a sessão, utilize o botão "Carga de Produtos / Offline" para subir sua planilha. Os produtos ficarão gravados nesta sessão e carregarão automaticamente nos celulares!'}
                   {newCatalogSource === 'CONSIGNMENT' && 'Após abrir a sessão, utilize "Carga de Produtos / Offline" para puxar os itens do contrato de consignação.'}
                   {newCatalogSource === 'GENERAL' && 'Usa os produtos ativos cadastrados no sistema.'}
                 </p>
               </div>
+
+              {newCatalogSource === 'HORUS_REALTIME' && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Filial para Consulta de Estoque / Saldo no Horus *
+                  </label>
+                  {loadingBranches ? (
+                    <div className="flex items-center gap-2 text-xs text-slate-400 py-2">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando filiais...
+                    </div>
+                  ) : branches.length === 0 ? (
+                    <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300">
+                      Nenhuma filial ativa encontrada. Configure as filiais em Logística Horus → Filiais do Seller.
+                    </div>
+                  ) : (
+                    <select
+                      value={selectedBranchId || ''}
+                      onChange={(e) => setSelectedBranchId(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      {branches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.nome} (Empresa: {b.cod_empresa} / Filial: {b.cod_filial})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                    Ao consultar ou bipar produtos nesta sessão, o saldo de estoque será obtido desta filial em tempo real.
+                  </p>
+                </div>
+              )}
 
               {newCatalogSource === 'CONSIGNMENT' && (
                 <div>
@@ -307,6 +394,7 @@ export default function POSSessionModal({
                 const pCount = s.products_count ?? 0;
 
                 const sourceLabel = 
+                  s.catalog_source === 'HORUS_REALTIME' ? 'Horus Tempo Real' :
                   s.catalog_source === 'SPREADSHEET' ? 'Planilha Excel' :
                   s.catalog_source === 'CONSIGNMENT' ? 'Contrato Consignação' : 'Geral';
 
@@ -336,7 +424,12 @@ export default function POSSessionModal({
                         <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                           {sourceLabel}
                         </span>
-                        {pCount > 0 && (
+                        {s.branch_name && (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            📍 {s.branch_name}
+                          </span>
+                        )}
+                        {pCount > 0 && s.catalog_source !== 'HORUS_REALTIME' && (
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
                             {pCount} produtos
                           </span>

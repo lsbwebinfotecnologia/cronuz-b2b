@@ -15,7 +15,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Typography, Spacing, Radius } from '../../constants/theme';
 import {
   MobilePOSSession,
+  MobilePOSBranch,
   fetchPOSSessions,
+  fetchPOSBranches,
   createPOSSession,
   closePOSSession,
 } from '../../services/pdv.service';
@@ -37,18 +39,34 @@ export function POSSessionPickerModal({
 }: Props) {
   const insets = useSafeAreaInsets();
   const [sessions, setSessions] = useState<MobilePOSSession[]>([]);
+  const [branches, setBranches] = useState<MobilePOSBranch[]>([]);
+  const [selectedBranchId, setSelectedBranchId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [newTitle, setNewTitle] = useState('');
-  const [newSource, setNewSource] = useState<'GENERAL' | 'SPREADSHEET' | 'CONSIGNMENT'>('GENERAL');
+  const [newSource, setNewSource] = useState<'GENERAL' | 'SPREADSHEET' | 'CONSIGNMENT' | 'HORUS_REALTIME'>('GENERAL');
   const [newRef, setNewRef] = useState('');
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (visible && companyId) {
       loadSessions();
+      loadBranches();
     }
   }, [visible, companyId]);
+
+  async function loadBranches() {
+    if (!companyId) return;
+    try {
+      const data = await fetchPOSBranches(companyId);
+      setBranches(data);
+      if (data.length > 0 && !selectedBranchId) {
+        setSelectedBranchId(data[0].id);
+      }
+    } catch {
+      // Ignora erro se não tiver filiais
+    }
+  }
 
   async function loadSessions() {
     if (!companyId) return;
@@ -68,9 +86,19 @@ export function POSSessionPickerModal({
       Alert.alert('Atenção', 'Informe o nome do evento / sessão.');
       return;
     }
+    if (newSource === 'HORUS_REALTIME' && !selectedBranchId) {
+      Alert.alert('Atenção', 'Selecione uma filial para a busca em tempo real no Horus.');
+      return;
+    }
     setCreating(true);
     try {
-      const created = await createPOSSession(companyId, newTitle.trim(), newSource, newRef.trim());
+      const created = await createPOSSession(
+        companyId,
+        newTitle.trim(),
+        newSource,
+        newRef.trim(),
+        newSource === 'HORUS_REALTIME' ? selectedBranchId! : undefined
+      );
       Alert.alert('Sucesso', `Sessão "${created.title}" iniciada!`);
       setNewTitle('');
       setNewRef('');
@@ -142,8 +170,13 @@ export function POSSessionPickerModal({
                     <Text style={styles.activeTag}>SESSÃO ATIVA NESTE APARELHO</Text>
                     <Text style={styles.activeTitle}>{activeSession.title}</Text>
                     <Text style={styles.activeCode}>
-                      {activeSession.code} • {activeSession.products_count ?? 0} produtos vinculados
+                      {activeSession.code} • {activeSession.catalog_source === 'HORUS_REALTIME' ? '⚡ Tempo Real' : `${activeSession.products_count ?? 0} produtos`}
                     </Text>
+                    {activeSession.branch_name && (
+                      <Text style={[styles.activeCode, { color: Colors.success, marginTop: 2 }]}>
+                        📍 Filial: {activeSession.branch_name}
+                      </Text>
+                    )}
                   </View>
                   <TouchableOpacity
                     style={styles.unbindBtn}
@@ -184,6 +217,7 @@ export function POSSessionPickerModal({
                   <View style={styles.sourceRow}>
                     {[
                       { key: 'GENERAL', label: 'Geral' },
+                      { key: 'HORUS_REALTIME', label: 'Horus Tempo Real' },
                       { key: 'SPREADSHEET', label: 'Planilha' },
                       { key: 'CONSIGNMENT', label: 'Contrato' },
                     ].map((src) => (
@@ -206,6 +240,39 @@ export function POSSessionPickerModal({
                       </TouchableOpacity>
                     ))}
                   </View>
+
+                  {newSource === 'HORUS_REALTIME' && (
+                    <View style={{ marginTop: 10 }}>
+                      <Text style={styles.label}>Filial para Consulta de Estoque / Saldo *</Text>
+                      {branches.length === 0 ? (
+                        <Text style={{ fontSize: 11, color: Colors.warning, marginTop: 4 }}>
+                          Nenhuma filial ativa cadastrada. Configure em Logística Horus.
+                        </Text>
+                      ) : (
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                          {branches.map((b) => (
+                            <TouchableOpacity
+                              key={b.id}
+                              style={[
+                                styles.branchChip,
+                                selectedBranchId === b.id && styles.branchChipActive,
+                              ]}
+                              onPress={() => setSelectedBranchId(b.id)}
+                            >
+                              <Text
+                                style={[
+                                  styles.branchChipText,
+                                  selectedBranchId === b.id && styles.branchChipTextActive,
+                                ]}
+                              >
+                                {b.nome}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  )}
 
                   {newSource === 'CONSIGNMENT' && (
                     <TextInput
@@ -246,7 +313,9 @@ export function POSSessionPickerModal({
             const isActive = activeSession?.id === item.id;
             const isClosed = item.status === 'CLOSED';
             const srcLabel =
-              item.catalog_source === 'SPREADSHEET'
+              item.catalog_source === 'HORUS_REALTIME'
+                ? 'Horus Tempo Real'
+                : item.catalog_source === 'SPREADSHEET'
                 ? 'Planilha'
                 : item.catalog_source === 'CONSIGNMENT'
                 ? 'Contrato'
@@ -283,7 +352,9 @@ export function POSSessionPickerModal({
                   </View>
 
                   <Text style={styles.sessionMeta}>
-                    {item.code} • {srcLabel} • {item.products_count ?? 0} produtos
+                    {item.code} • {srcLabel}
+                    {item.branch_name ? ` • 📍 ${item.branch_name}` : ''}
+                    {item.catalog_source !== 'HORUS_REALTIME' ? ` • ${item.products_count ?? 0} produtos` : ''}
                   </Text>
                   <Text style={styles.sessionSales}>
                     {item.total_sales_count} vendas (R$ {Number(item.total_sales_amount || 0).toFixed(2)})
@@ -489,6 +560,27 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontFamily.medium,
   },
   sourceTextActive: {
+    color: Colors.white,
+    fontFamily: Typography.fontFamily.bold,
+  },
+  branchChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.bg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  branchChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primaryLight,
+  },
+  branchChipText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    fontFamily: Typography.fontFamily.medium,
+  },
+  branchChipTextActive: {
     color: Colors.white,
     fontFamily: Typography.fontFamily.bold,
   },

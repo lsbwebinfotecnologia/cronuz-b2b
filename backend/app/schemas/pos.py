@@ -5,8 +5,9 @@ from datetime import datetime
 
 class POSSessionCreate(BaseModel):
     title: str
-    catalog_source: Optional[str] = "GENERAL"  # CONSIGNMENT, HORUS_CATALOG, CRONUZ_CATALOG, SPREADSHEET, GENERAL
+    catalog_source: Optional[str] = "GENERAL"  # CONSIGNMENT, HORUS_CATALOG, CRONUZ_CATALOG, SPREADSHEET, HORUS_REALTIME, GENERAL
     source_reference: Optional[str] = None
+    branch_id: Optional[int] = None
     customer_id: Optional[int] = None
     customer_name: Optional[str] = None
     customer_document: Optional[str] = None
@@ -20,6 +21,8 @@ class POSSessionResponse(BaseModel):
     status: str
     catalog_source: str
     source_reference: Optional[str] = None
+    branch_id: Optional[int] = None
+    branch_name: Optional[str] = None
     customer_id: Optional[int] = None
     customer_name: Optional[str] = None
     customer_document: Optional[str] = None
@@ -45,6 +48,7 @@ class POSSessionProductOut(BaseModel):
     stock: float
     horus_item_code: Optional[str] = None
     product_id: Optional[int] = None
+    cover_url: Optional[str] = None
     source: Optional[str] = "SPREADSHEET"
 
     class Config:

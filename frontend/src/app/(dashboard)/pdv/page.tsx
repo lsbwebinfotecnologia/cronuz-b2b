@@ -424,7 +424,36 @@ export default function PDVPage() {
     }
     setSearching(true);
     try {
-      // 1. Busca no IndexedDB local
+      // 0. Se a sessão for Consulta em Tempo Real no Horus:
+      if (activeSession?.catalog_source === 'HORUS_REALTIME' && companyId) {
+        const token = getToken();
+        const branchParam = activeSession.branch_id ? `&branch_id=${activeSession.branch_id}` : '';
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/realtime-search?term=${encodeURIComponent(q)}&session_id=${activeSession.id}${branchParam}&limit=30`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const items = data.items || [];
+          const formatted: PDVCatalogItem[] = items.map((p: any) => ({
+            barcode: p.barcode,
+            sku: p.sku || '',
+            title: p.title || 'Sem nome',
+            publisher: p.publisher || '',
+            price: Number(p.price) || 0,
+            stock: Number(p.stock) || 0,
+            horus_item_code: p.horus_item_code,
+            product_id: p.product_id,
+            cover_url: p.cover_url,
+            source: 'HORUS_REALTIME',
+          }));
+          setSearchResults(formatted);
+          setSearching(false);
+          return;
+        }
+      }
+
+      // 1. Busca no IndexedDB local (Sessões com Planilha, Consignação ou Geral)
       const localMatches = await searchCatalogItems(q, 30);
       if (localMatches.length > 0) {
         setSearchResults(localMatches);
@@ -463,7 +492,7 @@ export default function PDVPage() {
     } finally {
       setSearching(false);
     }
-  }, [companyId]);
+  }, [companyId, activeSession]);
 
   // ─── 4. Adicionar ao Carrinho com Validação de Saldo ───────────────────────
   const addToCart = useCallback((product: PDVCatalogItem) => {
@@ -506,6 +535,90 @@ export default function PDVPage() {
   const handleOmnibarSubmit = useCallback(async (codeToProcess?: string) => {
     const raw = (codeToProcess !== undefined ? codeToProcess : omnibarInput).trim();
     if (!raw) return;
+
+    // 0. Se a sessão ativa for HORUS_REALTIME: busca direto no Horus com o leitor / omnibar
+    if (activeSession?.catalog_source === 'HORUS_REALTIME' && companyId) {
+      try {
+        const token = getToken();
+        const branchParam = activeSession.branch_id ? `&branch_id=${activeSession.branch_id}` : '';
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/realtime-search?term=${encodeURIComponent(raw)}&session_id=${activeSession.id}${branchParam}&limit=10`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const items = data.items || [];
+          if (items.length === 1) {
+            // Encontrou exatamente 1 produto (bipe ou busca exata): adiciona ao carrinho direto!
+            const it = items[0];
+            const formatted: PDVCatalogItem = {
+              barcode: it.barcode,
+              sku: it.sku || '',
+              title: it.title || 'Sem título',
+              publisher: it.publisher || '',
+              price: Number(it.price) || 0,
+              stock: Number(it.stock) || 0,
+              horus_item_code: it.horus_item_code,
+              product_id: it.product_id,
+              cover_url: it.cover_url,
+              source: 'HORUS_REALTIME',
+            };
+            addToCart(formatted);
+            setOmnibarInput('');
+            setSearchResults([]);
+            setTimeout(() => omnibarInputRef.current?.focus(), 50);
+            return;
+          } else if (items.length > 1) {
+            // Se algum item tiver código de barras exato, adiciona direto
+            const exact = items.find((x: any) => x.barcode === raw || x.sku === raw || x.horus_item_code === raw);
+            if (exact) {
+              const formatted: PDVCatalogItem = {
+                barcode: exact.barcode,
+                sku: exact.sku || '',
+                title: exact.title || 'Sem título',
+                publisher: exact.publisher || '',
+                price: Number(exact.price) || 0,
+                stock: Number(exact.stock) || 0,
+                horus_item_code: exact.horus_item_code,
+                product_id: exact.product_id,
+                cover_url: exact.cover_url,
+                source: 'HORUS_REALTIME',
+              };
+              addToCart(formatted);
+              setOmnibarInput('');
+              setSearchResults([]);
+              setTimeout(() => omnibarInputRef.current?.focus(), 50);
+              return;
+            }
+            // Vários resultados textuais: exibe no painel de resultados
+            const formattedList: PDVCatalogItem[] = items.map((p: any) => ({
+              barcode: p.barcode,
+              sku: p.sku || '',
+              title: p.title || 'Sem nome',
+              publisher: p.publisher || '',
+              price: Number(p.price) || 0,
+              stock: Number(p.stock) || 0,
+              horus_item_code: p.horus_item_code,
+              product_id: p.product_id,
+              cover_url: p.cover_url,
+              source: 'HORUS_REALTIME',
+            }));
+            setSearchResults(formattedList);
+            return;
+          }
+        }
+      } catch (err) {
+        console.error('Falha na busca em tempo real Horus:', err);
+      }
+
+      // Se não encontrou no Horus Realtime:
+      playWarningBeep();
+      triggerFeedback('error', 'Item Não Encontrado no Horus', `Nenhum produto correspondente a "${raw}" foi localizado na filial ${activeSession.branch_name || ''}.`);
+      toast.error(`Produto "${raw}" não localizado no Horus.`);
+      setOmnibarInput('');
+      setTimeout(() => omnibarInputRef.current?.focus(), 50);
+      return;
+    }
 
     // 1. Tenta correspondência exata de código de barras ou ISBN
     let item = await getCatalogItemByBarcode(raw);
@@ -569,7 +682,7 @@ export default function PDVPage() {
     }
 
     setTimeout(() => omnibarInputRef.current?.focus(), 50);
-  }, [omnibarInput, companyId, addToCart, performSearch, triggerFeedback]);
+  }, [omnibarInput, companyId, activeSession, addToCart, performSearch, triggerFeedback]);
 
   // ─── 6. Manipulação do Carrinho ───────────────────────────────────────────
   const updateQuantity = useCallback((barcode: string, delta: number) => {
@@ -1172,34 +1285,46 @@ export default function PDVPage() {
                             : 'border-slate-200 dark:border-slate-800 hover:border-emerald-500 hover:bg-slate-50 dark:hover:bg-slate-800/60 shadow-xs'
                         }`}
                       >
-                        <div>
-                          <div className="flex items-start justify-between gap-1 mb-1">
-                            <span className="font-bold text-xs text-slate-900 dark:text-white line-clamp-2 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition leading-snug">
-                              {item.title}
-                            </span>
-                          </div>
-
-                          <p className="text-[10px] text-slate-400 font-mono truncate">
-                            ISBN: {item.barcode}
-                          </p>
-                          {item.publisher && (
-                            <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                              {item.publisher}
-                            </p>
+                        <div className="flex items-start gap-2.5">
+                          {item.cover_url && (
+                            <img
+                              src={item.cover_url}
+                              alt={item.title}
+                              className="w-10 h-14 object-cover rounded-md border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLElement).style.display = 'none';
+                              }}
+                            />
                           )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start justify-between gap-1 mb-1">
+                              <span className="font-bold text-xs text-slate-900 dark:text-white line-clamp-2 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition leading-snug">
+                                {item.title}
+                              </span>
+                            </div>
 
-                          <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-                            <span
-                              className={`text-[10px] font-semibold px-1.5 py-0.2 rounded-md ${
-                                isOutOfStock
-                                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400'
-                                  : itemStock > 5
-                                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
-                                  : 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'
-                              }`}
-                            >
-                              Estoque: {itemStock}
-                            </span>
+                            <p className="text-[10px] text-slate-400 font-mono truncate">
+                              ISBN: {item.barcode}
+                            </p>
+                            {item.publisher && (
+                              <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                {item.publisher}
+                              </p>
+                            )}
+
+                            <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`text-[10px] font-semibold px-1.5 py-0.2 rounded-md ${
+                                  isOutOfStock
+                                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400'
+                                    : itemStock > 5
+                                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                                    : 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'
+                                }`}
+                              >
+                                Estoque: {itemStock}
+                              </span>
+                            </div>
                           </div>
                         </div>
 

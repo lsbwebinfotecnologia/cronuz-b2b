@@ -196,12 +196,23 @@ export interface MobilePOSSession {
   status: string;
   catalog_source: string;
   source_reference?: string;
+  branch_id?: number;
+  branch_name?: string;
   products_count: number;
   customer_name?: string;
   total_sales_count: number;
   total_sales_amount: number;
   opened_at: string;
   closed_at?: string;
+}
+
+export interface MobilePOSBranch {
+  id: number;
+  nome: string;
+  cod_empresa: string;
+  cod_filial: string;
+  cod_local?: string;
+  active: boolean;
 }
 
 export interface MobilePOSConfig {
@@ -220,16 +231,40 @@ export async function fetchPOSSessions(companyId: number): Promise<MobilePOSSess
   return Array.isArray(data) ? data : [];
 }
 
+export async function fetchPOSBranches(companyId: number): Promise<MobilePOSBranch[]> {
+  const { data } = await api.get<MobilePOSBranch[]>(`/companies/${companyId}/pos/branches`);
+  return Array.isArray(data) ? data : [];
+}
+
+export async function realtimeSearchHorus(
+  companyId: number,
+  term: string,
+  sessionId?: number,
+  branchId?: number
+): Promise<any> {
+  const { data } = await api.get(`/companies/${companyId}/pos/realtime-search`, {
+    params: {
+      term,
+      session_id: sessionId,
+      branch_id: branchId,
+    },
+    timeout: 25000,
+  });
+  return data;
+}
+
 export async function createPOSSession(
   companyId: number,
   title: string,
   catalogSource = 'GENERAL',
-  sourceReference?: string
+  sourceReference?: string,
+  branchId?: number
 ): Promise<MobilePOSSession> {
   const { data } = await api.post<MobilePOSSession>(`/companies/${companyId}/pos/sessions`, {
     title,
     catalog_source: catalogSource,
     source_reference: sourceReference || undefined,
+    branch_id: branchId || undefined,
   });
   return data;
 }

@@ -1,3 +1,4 @@
+from typing import Optional
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Numeric, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -15,6 +16,7 @@ class POSCatalogSource(str, enum.Enum):
     HORUS_CATALOG = "HORUS_CATALOG"
     CRONUZ_CATALOG = "CRONUZ_CATALOG"
     SPREADSHEET = "SPREADSHEET"
+    HORUS_REALTIME = "HORUS_REALTIME"
     GENERAL = "GENERAL"
 
 
@@ -39,6 +41,9 @@ class POSSession(Base):
     catalog_source = Column(String(50), default=POSCatalogSource.GENERAL.value, nullable=False)
     source_reference = Column(String(255), nullable=True)  # ex: "Contrato Consignação #12345" ou "planilha_evento.xlsx"
 
+    # Filial vinculada à sessão (usado para consulta de estoque/saldo em tempo real no Horus)
+    branch_id = Column(Integer, ForeignKey("cmp_seller_branch.id", ondelete="SET NULL"), nullable=True, index=True)
+
     customer_id = Column(Integer, ForeignKey("crm_customer.id", ondelete="SET NULL"), nullable=True)
     customer_name = Column(String(255), nullable=True)
     customer_document = Column(String(50), nullable=True)
@@ -58,6 +63,7 @@ class POSSession(Base):
     company = relationship("Company", foreign_keys=[company_id])
     user = relationship("User", foreign_keys=[user_id])
     customer = relationship("Customer", foreign_keys=[customer_id])
+    branch = relationship("SellerBranch", foreign_keys=[branch_id])
     sales = relationship(
         "POSSale",
         back_populates="session",
@@ -70,6 +76,10 @@ class POSSession(Base):
         cascade="all, delete-orphan",
         foreign_keys="POSSessionProduct.session_id"
     )
+
+    @property
+    def branch_name(self) -> Optional[str]:
+        return self.branch.nome if self.branch else None
 
     __table_args__ = (
         Index("idx_pos_session_company_status", "company_id", "status"),

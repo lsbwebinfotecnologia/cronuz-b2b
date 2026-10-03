@@ -25,6 +25,7 @@ import {
   syncPOSSalesBatch,
   fetchPOSSessionProducts,
   syncSessionProductsProgressive,
+  realtimeSearchHorus,
 } from '../../../services/pdv.service';
 import {
   LocalPOSProduct,
@@ -556,7 +557,7 @@ export default function PDVScreen() {
     }
   }, [omnibarText]);
 
-  // Busca no SQLite com debounce
+  // Busca com debounce (SQLite ou Horus Realtime)
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleOmnibarChange = (text: string) => {
     setOmnibarText(text);
@@ -565,26 +566,128 @@ export default function PDVScreen() {
     searchTimeoutRef.current = setTimeout(async () => {
       const clean = text.trim();
       if (!clean) {
-        const samples = await getSampleLocalProducts(30);
-        setProducts(samples);
+        if (activeSession?.catalog_source !== 'HORUS_REALTIME') {
+          const samples = await getSampleLocalProducts(30);
+          setProducts(samples);
+        } else {
+          setProducts([]);
+        }
         return;
       }
+
       setLoadingLocal(true);
       try {
-        const results = await searchLocalProducts(clean, 40);
-        setProducts(results);
+        if (activeSession?.catalog_source === 'HORUS_REALTIME' && user?.company_id) {
+          // Busca em tempo real na API do Horus
+          const data = await realtimeSearchHorus(
+            user.company_id,
+            clean,
+            activeSession.id,
+            activeSession.branch_id
+          );
+          const rawItems = data?.items || [];
+          const formatted: LocalPOSProduct[] = rawItems.map((it: any) => ({
+            barcode: it.barcode,
+            sku: it.sku,
+            title: it.title,
+            publisher: it.publisher,
+            price: Number(it.price || 0),
+            stock: Number(it.stock || 0),
+            source: 'HORUS_REALTIME' as any,
+            horus_item_code: it.horus_item_code,
+            product_id: it.product_id,
+          }));
+          setProducts(formatted);
+        } else {
+          // Busca no SQLite local
+          const results = await searchLocalProducts(clean, 40);
+          setProducts(results);
+        }
       } catch (e) {
-        console.error(e);
+        console.error('Falha na busca:', e);
       } finally {
         setLoadingLocal(false);
       }
-    }, 250);
+    }, 280);
   };
 
   // Submissão do Omnibar (Enter / Leitor Físico / Teclado)
   const handleOmnibarSubmit = async () => {
     const rawCode = omnibarText.trim();
     if (!rawCode) return;
+
+    if (activeSession?.catalog_source === 'HORUS_REALTIME' && user?.company_id) {
+      setLoadingLocal(true);
+      try {
+        const data = await realtimeSearchHorus(
+          user.company_id,
+          rawCode,
+          activeSession.id,
+          activeSession.branch_id
+        );
+        const rawItems = data?.items || [];
+        if (rawItems.length === 1) {
+          const it = rawItems[0];
+          const formatted: LocalPOSProduct = {
+            barcode: it.barcode,
+            sku: it.sku,
+            title: it.title,
+            publisher: it.publisher,
+            price: Number(it.price || 0),
+            stock: Number(it.stock || 0),
+            source: 'HORUS_REALTIME' as any,
+            horus_item_code: it.horus_item_code,
+            product_id: it.product_id,
+          };
+          handleAddItem(formatted);
+          try { Vibration.vibrate(80); } catch {}
+          setOmnibarText('');
+          setProducts([]);
+          return;
+        } else if (rawItems.length > 1) {
+          const exact = rawItems.find((x: any) => x.barcode === rawCode || x.sku === rawCode);
+          if (exact) {
+            const formatted: LocalPOSProduct = {
+              barcode: exact.barcode,
+              sku: exact.sku,
+              title: exact.title,
+              publisher: exact.publisher,
+              price: Number(exact.price || 0),
+              stock: Number(exact.stock || 0),
+              source: 'HORUS_REALTIME' as any,
+              horus_item_code: exact.horus_item_code,
+              product_id: exact.product_id,
+            };
+            handleAddItem(formatted);
+            try { Vibration.vibrate(80); } catch {}
+            setOmnibarText('');
+            setProducts([]);
+            return;
+          }
+          const formatted: LocalPOSProduct[] = rawItems.map((it: any) => ({
+            barcode: it.barcode,
+            sku: it.sku,
+            title: it.title,
+            publisher: it.publisher,
+            price: Number(it.price || 0),
+            stock: Number(it.stock || 0),
+            source: 'HORUS_REALTIME' as any,
+            horus_item_code: it.horus_item_code,
+            product_id: it.product_id,
+          }));
+          setProducts(formatted);
+          return;
+        } else {
+          Alert.alert('Não Localizado', `Nenhum produto correspondente a "${rawCode}" no Horus.`);
+          return;
+        }
+      } catch (err: any) {
+        Alert.alert('Erro Horus', err.message || 'Falha ao consultar Horus em tempo real.');
+      } finally {
+        setLoadingLocal(false);
+      }
+      return;
+    }
 
     // Busca exata pelo código de barras/ISBN
     const exact = await getLocalProductByBarcode(rawCode);
@@ -614,6 +717,38 @@ export default function PDVScreen() {
     setShowScanner(false);
     const clean = barcode.trim();
     if (!clean) return;
+
+    if (activeSession?.catalog_source === 'HORUS_REALTIME' && user?.company_id) {
+      try {
+        const data = await realtimeSearchHorus(
+          user.company_id,
+          clean,
+          activeSession.id,
+          activeSession.branch_id
+        );
+        const rawItems = data?.items || [];
+        if (rawItems.length > 0) {
+          const it = rawItems[0];
+          const formatted: LocalPOSProduct = {
+            barcode: it.barcode,
+            sku: it.sku,
+            title: it.title,
+            publisher: it.publisher,
+            price: Number(it.price || 0),
+            stock: Number(it.stock || 0),
+            source: 'HORUS_REALTIME' as any,
+            horus_item_code: it.horus_item_code,
+            product_id: it.product_id,
+          };
+          handleAddItem(formatted);
+          try { Vibration.vibrate(100); } catch {}
+          Alert.alert('Item Adicionado', `+1 ${formatted.title}`);
+          return;
+        }
+      } catch {}
+      Alert.alert('Código Lido', `Código "${clean}" não localizado no Horus.`);
+      return;
+    }
 
     const exact = await getLocalProductByBarcode(clean);
     if (exact) {
@@ -654,6 +789,14 @@ export default function PDVScreen() {
     const target = sessionToSync !== undefined ? sessionToSync : activeSession;
     if (!target || !user?.company_id) {
       setShowCatalogModal(true);
+      return;
+    }
+
+    if (target.catalog_source === 'HORUS_REALTIME') {
+      Alert.alert(
+        'Sessão em Tempo Real',
+        'Esta sessão pesquisa produtos e consulta saldos em tempo real diretamente na API do Horus para a filial configurada. Não é necessário baixar produtos offline!'
+      );
       return;
     }
 
