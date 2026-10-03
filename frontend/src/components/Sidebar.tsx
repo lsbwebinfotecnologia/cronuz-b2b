@@ -76,6 +76,7 @@ type UserData = {
 
 const masterNavigation: NavItem[] = [
   { name: 'Parceiros', href: '/companies', icon: Users },
+  { name: 'Acessos & Sessões', href: '/master/sessions', icon: UserCheck },
   { name: 'Sites Institucionais', href: '/hosted-sites', icon: Globe },
   {
     name: 'Hub Sync Bookinfo',
@@ -508,6 +509,11 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
         if (nav.name === 'Inventário' || nav.href === '/inventory') return userAllowedModules.includes('inventory') || userAllowedModules.includes('logistics');
         if (nav.name === 'Políticas e Preços' || nav.href === '/commercial-policies') return userAllowedModules.includes('commercial') || userAllowedModules.includes('settings');
         if (nav.name === 'Vendedores/Rep' || nav.href === '/agents') return userAllowedModules.includes('agents') || userAllowedModules.includes('customers');
+        if (nav.name === 'Editorial' || nav.href.startsWith('/editorial')) return userAllowedModules.includes('editorial');
+        if (nav.name === 'Escolas & Eventos' || nav.href.startsWith('/schools')) return userAllowedModules.includes('schools');
+        if (nav.name === 'Consignação' || nav.href.includes('/consignment')) return userAllowedModules.includes('consignment');
+        if (nav.name === 'Distribuidoras' || nav.href.includes('/distributors')) return userAllowedModules.includes('distributors');
+        if (nav.name === 'Download SEFAZ' || nav.href.includes('/sefaz-download')) return userAllowedModules.includes('sefaz_download') || userAllowedModules.includes('settings');
         return true;
       })
     : baseNavigation;

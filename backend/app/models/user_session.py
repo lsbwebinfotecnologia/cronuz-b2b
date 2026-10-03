@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
 
@@ -18,6 +19,12 @@ class UserSession(Base):
     user_agent = Column(String(255), nullable=True)
     
     login_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_activity_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True, index=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     
     is_active = Column(Boolean, default=True, nullable=False)
+
+    # Relationships
+    user = relationship("app.models.user.User", foreign_keys=[user_id])
+    customer = relationship("app.models.customer.Customer", foreign_keys=[customer_id])
+

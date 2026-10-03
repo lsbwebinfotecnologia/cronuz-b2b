@@ -2,6 +2,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 from app.db.session import get_db
 from app.core.security import SECRET_KEY, ALGORITHM
 from app.models.user import User, UserRole
@@ -9,6 +10,28 @@ from app.models.customer import Customer
 from app.models.user_session import UserSession
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+def _update_session_activity_throttled(db: Session, session_log: UserSession):
+    """
+    Atualiza last_activity_at de forma amortecida (a cada 60s)
+    para garantir alta performance sem floodar o banco de dados com escritas.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        last = session_log.last_activity_at
+        if last is None:
+            session_log.last_activity_at = now
+            db.commit()
+        else:
+            last_aware = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+            if (now - last_aware).total_seconds() > 60:
+                session_log.last_activity_at = now
+                db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
@@ -28,6 +51,9 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         session_log = db.query(UserSession).filter(UserSession.jti == jti).first()
         if not session_log or not session_log.is_active:
             raise credentials_exception
+
+        # Registra atividade throttled
+        _update_session_activity_throttled(db, session_log)
             
     except JWTError:
         raise credentials_exception
@@ -56,6 +82,9 @@ def get_current_user_optional(token: str = Depends(OAuth2PasswordBearer(tokenUrl
         session_log = db.query(UserSession).filter(UserSession.jti == jti).first()
         if not session_log or not session_log.is_active:
             return None
+
+        # Registra atividade throttled
+        _update_session_activity_throttled(db, session_log)
             
     except JWTError:
         return None
@@ -88,6 +117,9 @@ def get_current_customer(token: str = Depends(oauth2_scheme), db: Session = Depe
         session_log = db.query(UserSession).filter(UserSession.jti == jti).first()
         if not session_log or not session_log.is_active:
             raise credentials_exception
+
+        # Registra atividade throttled
+        _update_session_activity_throttled(db, session_log)
 
         role: str = payload.get("role")
         user_type: str = payload.get("type")

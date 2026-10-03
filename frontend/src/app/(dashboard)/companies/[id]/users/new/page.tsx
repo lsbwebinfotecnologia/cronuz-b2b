@@ -27,6 +27,9 @@ const INITIAL_PAGE_OPTIONS = [
   { value: '/inventory', label: 'Inventário' },
   { value: '/agents', label: 'Vendedores / Rep' },
   { value: '/commercial-policies', label: 'Políticas Comerciais' },
+  { value: '/editorial', label: 'Editorial' },
+  { value: '/schools', label: 'Escolas & Eventos' },
+  { value: '/settings/sefaz-download', label: 'Download SEFAZ' },
   { value: '/settings', label: 'Configurações da Loja' },
 ];
 
@@ -50,6 +53,11 @@ const MODULE_PERMISSIONS_LIST = [
   { id: 'inventory', label: 'Inventário & Balanço', description: 'Contagem de estoque e ajustes' },
   { id: 'agents', label: 'Vendedores / Rep', description: 'Gestão da equipe de vendas' },
   { id: 'commercial', label: 'Políticas Comerciais', description: 'Regras de desconto e preços' },
+  { id: 'editorial', label: 'Editorial', description: 'Projetos editoriais, pipeline de produção e profissionais' },
+  { id: 'schools', label: 'Escolas & Eventos', description: 'Gestão de escolas parceiras, passeios e eventos escolares' },
+  { id: 'consignment', label: 'Acervo Consignado', description: 'Gestão de acervos consignados e acertos de contas' },
+  { id: 'sefaz_download', label: 'Download SEFAZ (XML)', description: 'Consulta e download de notas fiscais na SEFAZ' },
+  { id: 'distributors', label: 'Distribuidoras', description: 'Gestão e repasse com distribuidoras parceiras' },
   { id: 'settings', label: 'Configurações da Loja', description: 'Parâmetros fiscais, integrações e dados' },
 ];
 
