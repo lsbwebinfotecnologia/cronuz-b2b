@@ -8,10 +8,17 @@ class POSSessionCreate(BaseModel):
     catalog_source: Optional[str] = "GENERAL"  # CONSIGNMENT, HORUS_CATALOG, CRONUZ_CATALOG, SPREADSHEET, HORUS_REALTIME, GENERAL
     source_reference: Optional[str] = None
     branch_id: Optional[int] = None
+    validate_stock: Optional[bool] = True
+    initial_cash_amount: Optional[float] = 0.00
     customer_id: Optional[int] = None
     customer_name: Optional[str] = None
     customer_document: Optional[str] = None
     notes: Optional[str] = None
+
+
+class POSSessionCloseRequest(BaseModel):
+    closed_cash_amount: Optional[float] = None  # Dinheiro apurado na gaveta
+    closing_notes: Optional[str] = None
 
 
 class POSSessionResponse(BaseModel):
@@ -23,6 +30,13 @@ class POSSessionResponse(BaseModel):
     source_reference: Optional[str] = None
     branch_id: Optional[int] = None
     branch_name: Optional[str] = None
+    validate_stock: bool = True
+    initial_cash_amount: float = 0.00
+    closed_cash_amount: Optional[float] = None
+    expected_cash_amount: Optional[float] = None
+    cash_difference: Optional[float] = None
+    closing_notes: Optional[str] = None
+    closed_by_user_id: Optional[int] = None
     customer_id: Optional[int] = None
     customer_name: Optional[str] = None
     customer_document: Optional[str] = None

@@ -24,6 +24,12 @@ export interface POSSessionData {
   source_reference?: string;
   branch_id?: number;
   branch_name?: string;
+  validate_stock?: boolean;
+  initial_cash_amount?: number;
+  closed_cash_amount?: number;
+  expected_cash_amount?: number;
+  cash_difference?: number;
+  closing_notes?: string;
   products_count?: number;
   customer_name?: string;
   total_sales_count: number;
@@ -63,6 +69,8 @@ export default function POSSessionModal({
   const [newTitle, setNewTitle] = useState('');
   const [newCatalogSource, setNewCatalogSource] = useState<'GENERAL' | 'SPREADSHEET' | 'CONSIGNMENT' | 'HORUS_REALTIME'>('GENERAL');
   const [newSourceReference, setNewSourceReference] = useState('');
+  const [newValidateStock, setNewValidateStock] = useState<boolean>(true);
+  const [newInitialCash, setNewInitialCash] = useState<string>('0.00');
   const [creating, setCreating] = useState(false);
 
   const userStr = getUser();
@@ -129,6 +137,7 @@ export default function POSSessionModal({
     try {
       setCreating(true);
       const token = getToken();
+      const initialCashNum = parseFloat(newInitialCash.replace(',', '.') || '0');
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions`,
         {
@@ -142,6 +151,8 @@ export default function POSSessionModal({
             catalog_source: newCatalogSource,
             source_reference: newSourceReference.trim() || undefined,
             branch_id: newCatalogSource === 'HORUS_REALTIME' ? selectedBranchId : undefined,
+            validate_stock: newValidateStock,
+            initial_cash_amount: isNaN(initialCashNum) ? 0 : initialCashNum,
           }),
         }
       );
@@ -155,6 +166,8 @@ export default function POSSessionModal({
       setNewTitle('');
       setNewCatalogSource('GENERAL');
       setNewSourceReference('');
+      setNewValidateStock(true);
+      setNewInitialCash('0.00');
       setShowCreateForm(false);
       fetchSessions();
       onClose();
@@ -244,6 +257,20 @@ export default function POSSessionModal({
                   ) : (
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                       {activeSession.products_count ?? 0} produtos vinculados
+                    </span>
+                  )}
+                  {activeSession.validate_stock !== false ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                      🛡️ Valida Estoque
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                      ⚡ Venda Livre (Sem Trava)
+                    </span>
+                  )}
+                  {Number(activeSession.initial_cash_amount || 0) > 0 && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                      💵 Fundo: R$ {Number(activeSession.initial_cash_amount).toFixed(2)}
                     </span>
                   )}
                 </div>
@@ -357,6 +384,59 @@ export default function POSSessionModal({
                 </div>
               )}
 
+              {/* Validação de Saldo de Estoque */}
+              <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 space-y-1">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      Validar Saldo de Estoque?
+                    </label>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {newValidateStock 
+                        ? 'Sim — Bloqueia a venda se o produto não possuir estoque suficiente.' 
+                        : 'Não — Permite vender livremente mesmo com estoque zerado.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setNewValidateStock(!newValidateStock)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      newValidateStock ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        newValidateStock ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Fundo de Troco Inicial */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Fundo de Troco Inicial (Dinheiro em Gaveta)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                    R$
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    value={newInitialCash}
+                    onChange={(e) => setNewInitialCash(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  Suprimento de dinheiro inserido no caixa na abertura para troco.
+                </p>
+              </div>
+
               <div className="flex gap-2 justify-end pt-1">
                 <button
                   onClick={() => setShowCreateForm(false)}
@@ -432,6 +512,20 @@ export default function POSSessionModal({
                         {pCount > 0 && s.catalog_source !== 'HORUS_REALTIME' && (
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
                             {pCount} produtos
+                          </span>
+                        )}
+                        {s.validate_stock !== false ? (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            🛡️ Valida Estoque
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                            ⚡ Venda Livre
+                          </span>
+                        )}
+                        {Number(s.initial_cash_amount || 0) > 0 && (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                            💵 R$ {Number(s.initial_cash_amount).toFixed(2)}
                           </span>
                         )}
                       </div>

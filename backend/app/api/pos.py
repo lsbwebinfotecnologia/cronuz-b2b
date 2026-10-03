@@ -9,13 +9,19 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status, Response
+from starlette.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_
 import openpyxl
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 
 from app.db.session import get_db
 from app.core import dependencies
+from app.core.utils import parse_horus_price
 from app.core.upload_security import validate_file_size_and_extension, read_file_safely
 from app.models import user as user_models
 from app.models.company import Company
@@ -35,6 +41,7 @@ from app.models.pos import (
 )
 from app.schemas.pos import (
     POSSessionCreate,
+    POSSessionCloseRequest,
     POSSessionResponse,
     POSSessionProductOut,
     POSSessionProductsListResponse,
@@ -149,6 +156,8 @@ def create_pos_session(
         catalog_source=payload.catalog_source or POSCatalogSource.GENERAL.value,
         source_reference=payload.source_reference,
         branch_id=payload.branch_id,
+        validate_stock=payload.validate_stock if payload.validate_stock is not None else True,
+        initial_cash_amount=payload.initial_cash_amount or 0.00,
         customer_id=payload.customer_id,
         customer_name=cust_name,
         customer_document=cust_doc,
@@ -167,7 +176,7 @@ def get_pos_session(
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
-    """Retorna detalhes de uma sessão com resumo de vendas."""
+    """Retorna detalhes de uma sessão com resumo de vendas e controle de caixa."""
     _assert_pos_access(current_user, company_id, db)
 
     session = db.query(POSSession).filter(
@@ -204,6 +213,13 @@ def get_pos_session(
             "source_reference": session.source_reference,
             "branch_id": session.branch_id,
             "branch_name": session.branch_name,
+            "validate_stock": bool(session.validate_stock),
+            "initial_cash_amount": float(session.initial_cash_amount or 0),
+            "closed_cash_amount": float(session.closed_cash_amount) if session.closed_cash_amount is not None else None,
+            "expected_cash_amount": float(session.expected_cash_amount) if session.expected_cash_amount is not None else None,
+            "cash_difference": float(session.cash_difference) if session.cash_difference is not None else None,
+            "closing_notes": session.closing_notes,
+            "closed_by_user_id": session.closed_by_user_id,
             "customer_id": session.customer_id,
             "customer_name": session.customer_name,
             "customer_document": session.customer_document,
@@ -217,14 +233,73 @@ def get_pos_session(
     }
 
 
-@router.put("/sessions/{session_id}/close", response_model=POSSessionResponse)
-def close_pos_session(
+@router.get("/sessions/{session_id}/close-summary")
+def get_session_close_summary(
     company_id: int,
     session_id: int,
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
-    """Fecha a sessão de PDV."""
+    """Retorna o resumo financeiro da sessão para conferência prévia do fechamento de caixa."""
+    _assert_pos_access(current_user, company_id, db)
+    session = db.query(POSSession).filter(
+        POSSession.id == session_id,
+        POSSession.company_id == company_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+
+    sales = db.query(POSSale).filter(
+        POSSale.session_id == session_id,
+        POSSale.status == "COMPLETED"
+    ).all()
+
+    by_method = {
+        "DINHEIRO": 0.0,
+        "PIX": 0.0,
+        "DEBITO": 0.0,
+        "CREDITO": 0.0,
+        "MISTO": 0.0,
+    }
+    total_sales_amount = 0.0
+    for s in sales:
+        m = (s.payment_method or "DINHEIRO").upper()
+        amt = float(s.total_amount or 0.0)
+        by_method[m] = by_method.get(m, 0.0) + amt
+        total_sales_amount += amt
+
+    initial_cash = float(session.initial_cash_amount or 0.0)
+    cash_sales = by_method.get("DINHEIRO", 0.0)
+    expected_cash = initial_cash + cash_sales
+
+    return {
+        "session_id": session.id,
+        "title": session.title,
+        "code": session.code,
+        "status": session.status,
+        "opened_at": session.opened_at.isoformat() if session.opened_at else None,
+        "closed_at": session.closed_at.isoformat() if session.closed_at else None,
+        "initial_cash_amount": initial_cash,
+        "cash_sales_amount": cash_sales,
+        "expected_cash_amount": expected_cash,
+        "sales_count": len(sales),
+        "total_sales_amount": total_sales_amount,
+        "by_payment_method": by_method,
+        "closed_cash_amount": float(session.closed_cash_amount) if session.closed_cash_amount is not None else None,
+        "cash_difference": float(session.cash_difference) if session.cash_difference is not None else None,
+        "closing_notes": session.closing_notes,
+    }
+
+
+@router.put("/sessions/{session_id}/close", response_model=POSSessionResponse)
+def close_pos_session(
+    company_id: int,
+    session_id: int,
+    payload: Optional[POSSessionCloseRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """Fecha a sessão de PDV registrando apuração de gaveta e valores do fechamento de caixa."""
     _assert_pos_access(current_user, company_id, db)
 
     session = db.query(POSSession).filter(
@@ -234,6 +309,27 @@ def close_pos_session(
     if not session:
         raise HTTPException(status_code=404, detail="Sessão não encontrada.")
 
+    # Total em dinheiro de vendas concluídas
+    cash_sales_total = (
+        db.query(func.coalesce(func.sum(POSSale.total_amount), 0.0))
+        .filter(
+            POSSale.session_id == session_id,
+            POSSale.status == "COMPLETED",
+            POSSale.payment_method == "DINHEIRO"
+        )
+        .scalar()
+    )
+    initial_cash = float(session.initial_cash_amount or 0.0)
+    expected_cash = initial_cash + float(cash_sales_total or 0.0)
+    session.expected_cash_amount = expected_cash
+
+    if payload and payload.closed_cash_amount is not None:
+        session.closed_cash_amount = payload.closed_cash_amount
+        session.cash_difference = float(payload.closed_cash_amount) - expected_cash
+    if payload and payload.closing_notes is not None:
+        session.closing_notes = payload.closing_notes.strip() or None
+
+    session.closed_by_user_id = current_user.id
     session.status = POSSessionStatus.CLOSED.value
     session.closed_at = datetime.utcnow()
     db.commit()
@@ -430,11 +526,17 @@ async def realtime_search_horus(
         cod_item = it.get("COD_ITEM")
         title = it.get("NOM_ITEM") or "Produto sem título"
         publisher = it.get("NOM_EDITORA") or it.get("EDITORA") or ""
-        price_val = it.get("PRECO_VENDA") or it.get("PRECO_TABELA") or it.get("PRECO_CAPA") or 0.0
-        try:
-            price = float(price_val)
-        except (ValueError, TypeError):
-            price = 0.0
+        price_val = (
+            it.get("VLR_CAPA")
+            or it.get("PRECO")
+            or it.get("VLR_ITEM")
+            or it.get("PRECO_TABELA")
+            or it.get("PRECO_VENDA")
+            or it.get("PRECO_CAPA")
+            or it.get("VLR_LIQUIDO")
+            or 0.0
+        )
+        price = parse_horus_price(price_val)
 
         stock_val = stocks[idx] if idx < len(stocks) else 0.0
 
@@ -1175,14 +1277,14 @@ def sync_pos_sales(
                 sale_item = POSSaleItem(
                     sale_id=new_sale.id,
                     product_id=it.product_id if (it.product_id and it.product_id > 0) else None,
-                    barcode=it.barcode,
-                    sku=it.sku,
-                    title=it.title,
-                    publisher=it.publisher,
-                    quantity=it.quantity,
-                    unit_price=it.unit_price,
-                    total_price=it.total_price,
-                    horus_item_code=it.horus_item_code,
+                    barcode=str(it.barcode or "SEM_BARRAS").strip()[:50],
+                    sku=str(it.sku).strip()[:100] if it.sku else None,
+                    title=str(it.title or "Item sem título").strip()[:255],
+                    publisher=str(it.publisher).strip()[:255] if it.publisher else None,
+                    quantity=max(1.0, float(it.quantity or 1.0)),
+                    unit_price=max(0.0, float(it.unit_price or 0.0)),
+                    total_price=max(0.0, float(it.total_price or 0.0)),
+                    horus_item_code=str(it.horus_item_code).strip()[:50] if it.horus_item_code else None,
                 )
                 db.add(sale_item)
 
@@ -1321,3 +1423,466 @@ def list_pos_sales(
         "skip": skip,
         "limit": limit,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RELATÓRIO ANALÍTICO DE ITENS VENDIDOS (JSON, EXCEL E PDF)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _pdf_safe(val: Optional[str]) -> str:
+    """Higieniza strings para inclusão segura no FPDF evitando problemas com latin-1."""
+    if val is None:
+        return ""
+    text = str(val).strip()
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
+class POSReportPDF(FPDF):
+    """Classe FPDF customizada para o relatório analítico do PDV."""
+    def __init__(self, company_name: str, subtitle: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.company_name = company_name
+        self.subtitle = subtitle
+
+    def header(self):
+        self.set_font("Helvetica", "B", 14)
+        self.set_text_color(30, 41, 59)  # Slate-800
+        self.cell(0, 7, _pdf_safe(f"CRONUZ B2B — {self.company_name}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.set_font("Helvetica", "", 9)
+        self.set_text_color(100, 116, 139)  # Slate-500
+        self.cell(0, 5, _pdf_safe(self.subtitle), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.set_draw_color(226, 232, 240)
+        self.set_line_width(0.3)
+        self.line(10, self.get_y() + 2, 287, self.get_y() + 2)
+        self.ln(4)
+
+    def footer(self):
+        self.set_y(-12)
+        self.set_font("Helvetica", "I", 8)
+        self.set_text_color(148, 163, 184)
+        self.cell(0, 8, _pdf_safe(f"Cronuz Omnichannel PDV  •  Página {self.page_no()} de {{nb}}"), align="C")
+
+
+@router.get("/reports/sales")
+def get_pos_sales_report(
+    company_id: int,
+    session_id: Optional[int] = Query(None, description="Filtrar por sessão específica"),
+    start_date: Optional[str] = Query(None, description="Data inicial (YYYY-MM-DD ou ISO)"),
+    end_date: Optional[str] = Query(None, description="Data final (YYYY-MM-DD ou ISO)"),
+    payment_method: Optional[str] = Query(None, description="Filtrar por forma de pagamento"),
+    status: Optional[str] = Query("COMPLETED", description="Status da venda"),
+    format: str = Query("json", description="Formato de saída: json | excel | pdf"),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Relatório detalhado de itens vendidos no PDV com ISBN, quantidade, valor,
+    forma de pagamento, sessão e consumidor.
+    Exporta nos formatos JSON, Excel (.xlsx) ou PDF (.pdf).
+    """
+    company = _assert_pos_access(current_user, company_id, db)
+
+    # Tratamento defensivo caso chamado diretamente em testes
+    if not isinstance(start_date, str):
+        start_date = None
+    if not isinstance(end_date, str):
+        end_date = None
+    if not isinstance(payment_method, str):
+        payment_method = None
+    if not isinstance(session_id, int):
+        session_id = None
+    if not isinstance(status, str):
+        status = "COMPLETED"
+    if not isinstance(format, str):
+        format = "json"
+
+    dt_start = None
+    if start_date:
+        try:
+            dt_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        except Exception:
+            try:
+                dt_start = datetime.strptime(start_date[:10], "%Y-%m-%d")
+            except Exception:
+                pass
+
+    dt_end = None
+    if end_date:
+        try:
+            dt_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+            if len(end_date) == 10:
+                dt_end = dt_end.replace(hour=23, minute=59, second=59)
+        except Exception:
+            try:
+                dt_end = datetime.strptime(end_date[:10], "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            except Exception:
+                pass
+
+    query = (
+        db.query(POSSaleItem, POSSale, POSSession)
+        .join(POSSale, POSSaleItem.sale_id == POSSale.id)
+        .outerjoin(POSSession, POSSale.session_id == POSSession.id)
+        .filter(POSSale.company_id == company_id)
+    )
+
+    if status:
+        query = query.filter(POSSale.status == status)
+    if session_id:
+        query = query.filter(POSSale.session_id == session_id)
+    if dt_start:
+        query = query.filter(POSSale.sold_at >= dt_start)
+    if dt_end:
+        query = query.filter(POSSale.sold_at <= dt_end)
+    if payment_method:
+        query = query.filter(POSSale.payment_method == payment_method.upper())
+
+    rows = query.order_by(desc(POSSale.sold_at), POSSale.id.desc(), POSSaleItem.id.asc()).all()
+
+    # Agregações
+    unique_sale_ids = set()
+    total_qty = 0.0
+    total_revenue = 0.0
+    by_payment = {}
+
+    formatted_rows = []
+    for item, sale, session in rows:
+        unique_sale_ids.add(sale.id)
+        qty = float(item.quantity or 0.0)
+        u_price = float(item.unit_price or 0.0)
+        t_price = float(item.total_price or 0.0)
+        total_qty += qty
+        total_revenue += t_price
+
+        pm = (sale.payment_method or "OUTROS").upper()
+        if pm not in by_payment:
+            by_payment[pm] = {"count": 0, "total": 0.0}
+        by_payment[pm]["count"] += 1
+        by_payment[pm]["total"] += t_price
+
+        sess_name = session.name if session else (f"Sessão #{sale.session_id}" if sale.session_id else "Avulsa")
+
+        formatted_rows.append({
+            "id": item.id,
+            "sale_id": sale.id,
+            "sale_number": sale.sale_number,
+            "sold_at": sale.sold_at.strftime("%d/%m/%Y %H:%M") if sale.sold_at else "-",
+            "sold_at_iso": sale.sold_at.isoformat() if sale.sold_at else None,
+            "session_id": sale.session_id,
+            "session_name": sess_name,
+            "barcode": item.barcode or "",
+            "sku": item.sku or "",
+            "title": item.title or "Sem descrição",
+            "publisher": item.publisher or "",
+            "quantity": qty,
+            "unit_price": u_price,
+            "total_price": t_price,
+            "payment_method": pm,
+            "customer_name": sale.customer_name or "Consumidor Final",
+            "customer_document": sale.customer_document or "",
+        })
+
+    # Resumo
+    kpis = {
+        "total_sales": len(unique_sale_ids),
+        "total_items": round(total_qty, 2),
+        "total_amount": round(total_revenue, 2),
+        "by_payment": by_payment,
+    }
+
+    # 1. Retorno JSON
+    if format == "json":
+        return {
+            "kpis": kpis,
+            "rows": formatted_rows,
+            "filters": {
+                "session_id": session_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "payment_method": payment_method,
+            }
+        }
+
+    # 2. Retorno EXCEL
+    if format == "excel":
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Itens Vendidos"
+        ws.views.sheetView[0].showGridLines = True
+
+        # Paleta de Cores e Estilos
+        title_font = Font(name="Calibri", size=15, bold=True, color="1E293B")
+        sub_font = Font(name="Calibri", size=10, italic=True, color="64748B")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        card_fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+        card_font = Font(name="Calibri", size=10, bold=True, color="334155")
+        card_val_font = Font(name="Calibri", size=12, bold=True, color="0F172A")
+        zebra_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+        thin_border = Border(
+            left=Side(style='thin', color="E2E8F0"),
+            right=Side(style='thin', color="E2E8F0"),
+            top=Side(style='thin', color="E2E8F0"),
+            bottom=Side(style='thin', color="E2E8F0")
+        )
+        total_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
+        total_font = Font(name="Calibri", size=11, bold=True, color="0F172A")
+
+        # Cabeçalho da Empresa
+        ws.merge_cells("A1:M1")
+        ws["A1"] = f"{company.name.upper()} — RELATÓRIO ANALÍTICO DE VENDAS (PDV)"
+        ws["A1"].font = title_font
+
+        periodo_txt = f"Período: {start_date or 'Início'} até {end_date or 'Hoje'}"
+        if session_id:
+            sess_obj = db.query(POSSession).filter(POSSession.id == session_id).first()
+            periodo_txt += f"  |  Sessão: {sess_obj.name if sess_obj else session_id}"
+        periodo_txt += f"  |  Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+
+        ws.merge_cells("A2:M2")
+        ws["A2"] = periodo_txt
+        ws["A2"].font = sub_font
+
+        # Cards de KPIs
+        ws["A4"] = "Vendas Únicas"
+        ws["A4"].font = card_font
+        ws["A4"].fill = card_fill
+        ws["A5"] = len(unique_sale_ids)
+        ws["A5"].font = card_val_font
+        ws["A5"].fill = card_fill
+        ws["A5"].alignment = Alignment(horizontal="center")
+
+        ws["C4"] = "Volume Itens"
+        ws["C4"].font = card_font
+        ws["C4"].fill = card_fill
+        ws["C5"] = round(total_qty, 2)
+        ws["C5"].font = card_val_font
+        ws["C5"].fill = card_fill
+        ws["C5"].alignment = Alignment(horizontal="center")
+
+        ws["E4"] = "Faturamento Total"
+        ws["E4"].font = card_font
+        ws["E4"].fill = card_fill
+        ws["E5"] = total_revenue
+        ws["E5"].font = card_val_font
+        ws["E5"].fill = card_fill
+        ws["E5"].number_format = '"R$ "#,##0.00'
+        ws["E5"].alignment = Alignment(horizontal="right")
+
+        # Tabela de Itens
+        headers = [
+            "Data / Hora", "Nº Venda", "Sessão PDV", "ISBN / Cód. Barras",
+            "SKU", "Título do Produto", "Editora", "Qtd",
+            "Vlr. Unitário", "Total Item", "Forma Pagamento", "Cliente", "CPF / CNPJ"
+        ]
+        start_row = 7
+        for col_idx, col_name in enumerate(headers, 1):
+            cell = ws.cell(row=start_row, column=col_idx, value=col_name)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = thin_border
+
+        for r_idx, row in enumerate(formatted_rows, start_row + 1):
+            fill = zebra_fill if r_idx % 2 == 0 else PatternFill(fill_type=None)
+            ws.cell(row=r_idx, column=1, value=row["sold_at"]).alignment = Alignment(horizontal="center")
+            ws.cell(row=r_idx, column=2, value=row["sale_number"]).alignment = Alignment(horizontal="center")
+            ws.cell(row=r_idx, column=3, value=row["session_name"])
+            ws.cell(row=r_idx, column=4, value=str(row["barcode"])).alignment = Alignment(horizontal="center")
+            ws.cell(row=r_idx, column=5, value=row["sku"]).alignment = Alignment(horizontal="center")
+            ws.cell(row=r_idx, column=6, value=row["title"])
+            ws.cell(row=r_idx, column=7, value=row["publisher"])
+            
+            c_qty = ws.cell(row=r_idx, column=8, value=row["quantity"])
+            c_qty.alignment = Alignment(horizontal="center")
+            c_qty.number_format = '#,##0'
+
+            c_unit = ws.cell(row=r_idx, column=9, value=row["unit_price"])
+            c_unit.alignment = Alignment(horizontal="right")
+            c_unit.number_format = '"R$ "#,##0.00'
+
+            c_tot = ws.cell(row=r_idx, column=10, value=row["total_price"])
+            c_tot.alignment = Alignment(horizontal="right")
+            c_tot.number_format = '"R$ "#,##0.00'
+
+            ws.cell(row=r_idx, column=11, value=row["payment_method"]).alignment = Alignment(horizontal="center")
+            ws.cell(row=r_idx, column=12, value=row["customer_name"])
+            ws.cell(row=r_idx, column=13, value=row["customer_document"]).alignment = Alignment(horizontal="center")
+
+            for c in range(1, 14):
+                cur_c = ws.cell(row=r_idx, column=c)
+                if fill.fill_type:
+                    cur_c.fill = fill
+                cur_c.border = thin_border
+
+        # Linha Totalizadora
+        final_row = start_row + len(formatted_rows) + 1
+        ws.cell(row=final_row, column=7, value="TOTAL GERAL").font = total_font
+        ws.cell(row=final_row, column=7).alignment = Alignment(horizontal="right")
+        ws.cell(row=final_row, column=7).fill = total_fill
+        ws.cell(row=final_row, column=7).border = thin_border
+
+        c_tot_qty = ws.cell(row=final_row, column=8, value=total_qty)
+        c_tot_qty.font = total_font
+        c_tot_qty.alignment = Alignment(horizontal="center")
+        c_tot_qty.number_format = '#,##0'
+        c_tot_qty.fill = total_fill
+        c_tot_qty.border = thin_border
+
+        ws.cell(row=final_row, column=9, value="").fill = total_fill
+        ws.cell(row=final_row, column=9).border = thin_border
+
+        c_tot_rev = ws.cell(row=final_row, column=10, value=total_revenue)
+        c_tot_rev.font = total_font
+        c_tot_rev.alignment = Alignment(horizontal="right")
+        c_tot_rev.number_format = '"R$ "#,##0.00'
+        c_tot_rev.fill = total_fill
+        c_tot_rev.border = thin_border
+
+        for c in [1, 2, 3, 4, 5, 6, 11, 12, 13]:
+            ws.cell(row=final_row, column=c, value="").fill = total_fill
+            ws.cell(row=final_row, column=c).border = thin_border
+
+        # Auto-ajuste de largura de colunas (ignora linhas de cabeçalho mesclado)
+        for col_idx in range(1, 14):
+            col_letter = get_column_letter(col_idx)
+            max_len = 0
+            for r in range(start_row, final_row + 1):
+                val_s = str(ws.cell(row=r, column=col_idx).value or "")
+                if len(val_s) > max_len:
+                    max_len = len(val_s)
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+        out_stream = io.BytesIO()
+        wb.save(out_stream)
+        file_bytes = out_stream.getvalue()
+
+        filename = f"relatorio_itens_pdv_{company_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return Response(
+            content=file_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    # 3. Retorno PDF
+    if format == "pdf":
+        subtitle_txt = f"Relatório Analítico de Itens Vendidos | Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        if session_id:
+            sess_obj = db.query(POSSession).filter(POSSession.id == session_id).first()
+            subtitle_txt += f" | Sessão: {sess_obj.name if sess_obj else session_id}"
+        if start_date or end_date:
+            subtitle_txt += f" | Período: {start_date or 'Início'} a {end_date or 'Hoje'}"
+
+        pdf = POSReportPDF(
+            company_name=company.name,
+            subtitle=subtitle_txt,
+            orientation="L",
+            unit="mm",
+            format="A4"
+        )
+        pdf.alias_nb_pages()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+
+        # Barra de KPIs Resumo
+        pdf.set_fill_color(241, 245, 249)  # Slate-100
+        pdf.set_draw_color(203, 213, 225)  # Slate-300
+        pdf.rect(10, pdf.get_y(), 277, 10, style="DF")
+
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(15, 23, 42)
+        kpi_bar = (
+            f"VENDAS REALIZADAS: {len(unique_sale_ids)}   |   "
+            f"VOLUME TOTAL DE ITENS: {int(total_qty)} un   |   "
+            f"FATURAMENTO TOTAL: R$ {total_revenue:,.2f}"
+        )
+        pdf.set_xy(12, pdf.get_y() + 2)
+        pdf.cell(273, 6, _pdf_safe(kpi_bar), align="L")
+        pdf.ln(10)
+
+        # Cabeçalho da Tabela
+        # Larguras somam 277mm (largura útil de A4 Landscape com margem 10mm)
+        col_w = {
+            "data": 24,
+            "venda": 20,
+            "sessao": 26,
+            "isbn": 28,
+            "titulo": 65,
+            "qtd": 12,
+            "vlr_unit": 20,
+            "total": 20,
+            "pagto": 26,
+            "cliente": 36,
+        }
+
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_fill_color(30, 41, 59)  # Slate-800
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_draw_color(30, 41, 59)
+
+        pdf.cell(col_w["data"], 6, "Data/Hora", border=1, fill=True, align="C")
+        pdf.cell(col_w["venda"], 6, "Nº Venda", border=1, fill=True, align="C")
+        pdf.cell(col_w["sessao"], 6, "Sessão", border=1, fill=True, align="L")
+        pdf.cell(col_w["isbn"], 6, "ISBN / Cód.", border=1, fill=True, align="C")
+        pdf.cell(col_w["titulo"], 6, "Título do Produto", border=1, fill=True, align="L")
+        pdf.cell(col_w["qtd"], 6, "Qtd", border=1, fill=True, align="C")
+        pdf.cell(col_w["vlr_unit"], 6, "Vlr Unit (R$)", border=1, fill=True, align="R")
+        pdf.cell(col_w["total"], 6, "Total (R$)", border=1, fill=True, align="R")
+        pdf.cell(col_w["pagto"], 6, "Pagamento", border=1, fill=True, align="C")
+        pdf.cell(col_w["cliente"], 6, "Cliente", border=1, fill=True, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+        # Linhas de dados
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(30, 41, 59)
+        pdf.set_draw_color(226, 232, 240)
+
+        for idx, r in enumerate(formatted_rows):
+            fill = (idx % 2 == 1)
+            if fill:
+                pdf.set_fill_color(248, 250, 252)
+            else:
+                pdf.set_fill_color(255, 255, 255)
+
+            # Trunca títulos longos para caber na célula sem quebrar altura
+            title_clean = _pdf_safe(r["title"])
+            if len(title_clean) > 38:
+                title_clean = title_clean[:35] + "..."
+
+            sess_clean = _pdf_safe(r["session_name"])
+            if len(sess_clean) > 16:
+                sess_clean = sess_clean[:14] + ".."
+
+            cli_clean = _pdf_safe(r["customer_name"])
+            if len(cli_clean) > 22:
+                cli_clean = cli_clean[:20] + ".."
+
+            pdf.cell(col_w["data"], 5, r["sold_at"], border=1, fill=True, align="C")
+            pdf.cell(col_w["venda"], 5, _pdf_safe(r["sale_number"]), border=1, fill=True, align="C")
+            pdf.cell(col_w["sessao"], 5, sess_clean, border=1, fill=True, align="L")
+            pdf.cell(col_w["isbn"], 5, _pdf_safe(r["barcode"]), border=1, fill=True, align="C")
+            pdf.cell(col_w["titulo"], 5, title_clean, border=1, fill=True, align="L")
+            pdf.cell(col_w["qtd"], 5, str(int(r["quantity"])), border=1, fill=True, align="C")
+            pdf.cell(col_w["vlr_unit"], 5, f"{r['unit_price']:,.2f}", border=1, fill=True, align="R")
+            pdf.cell(col_w["total"], 5, f"{r['total_price']:,.2f}", border=1, fill=True, align="R")
+            pdf.cell(col_w["pagto"], 5, _pdf_safe(r["payment_method"]), border=1, fill=True, align="C")
+            pdf.cell(col_w["cliente"], 5, cli_clean, border=1, fill=True, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+        # Linha Totalizadora no PDF
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_fill_color(226, 232, 240)
+        pdf.set_draw_color(203, 213, 225)
+        w_sub = col_w["data"] + col_w["venda"] + col_w["sessao"] + col_w["isbn"] + col_w["titulo"]
+        pdf.cell(w_sub, 6, "TOTAL GERAL:", border=1, fill=True, align="R")
+        pdf.cell(col_w["qtd"], 6, str(int(total_qty)), border=1, fill=True, align="C")
+        pdf.cell(col_w["vlr_unit"], 6, "-", border=1, fill=True, align="C")
+        pdf.cell(col_w["total"], 6, f"R$ {total_revenue:,.2f}", border=1, fill=True, align="R")
+        pdf.cell(col_w["pagto"] + col_w["cliente"], 6, "", border=1, fill=True, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+        pdf_bytes = bytes(pdf.output())
+        filename = f"relatorio_itens_pdv_{company_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    raise HTTPException(status_code=400, detail="Formato inválido. Use json, excel ou pdf.")

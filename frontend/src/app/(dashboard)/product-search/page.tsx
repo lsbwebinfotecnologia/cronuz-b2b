@@ -21,7 +21,7 @@ import {
   RefreshCw,
   Camera,
 } from 'lucide-react';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { getImageUrl } from '@/lib/image_helper';
 import CameraBarcodeScanner from '@/components/inventory/CameraBarcodeScanner';
 import { toast } from 'sonner';
@@ -144,8 +144,22 @@ export default function ProductSearchPage() {
   const [showCameraScanner, setShowCameraScanner] = useState(false);
 
   // Dados do seller
-  const [companyName, setCompanyName]   = useState('');
-  const [companyLogo, setCompanyLogo]   = useState<string | null>(null);
+  const [companyName, setCompanyName]   = useState<string>(() => {
+    try {
+      const u = getUser();
+      return u?.company_name || '';
+    } catch {
+      return '';
+    }
+  });
+  const [companyLogo, setCompanyLogo]   = useState<string | null>(() => {
+    try {
+      const u = getUser();
+      return u?.company_logo || null;
+    } catch {
+      return null;
+    }
+  });
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -154,25 +168,30 @@ export default function ProductSearchPage() {
     inputRef.current?.focus();
   }, []);
 
-  // Carrega logo e nome do seller via dashboard/metrics
+  // Carrega logo e nome do seller autenticado diretamente pelo cadastro da empresa
   useEffect(() => {
     const token = getToken();
     if (!token) return;
-    fetch(`${apiUrl}/dashboard/metrics`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!data) return;
-        if (data.company_logo)  setCompanyLogo(data.company_logo);
-      })
-      .catch(() => {});
 
-    // company_name vem do cookie/localStorage via getUser()
     try {
-      const raw = localStorage.getItem('cronuz_b2b_user');
-      const u = raw ? JSON.parse(raw) : null;
+      const u = getUser();
       if (u?.company_name) setCompanyName(u.company_name);
+      if (u?.company_logo) setCompanyLogo(u.company_logo);
+
+      if (u?.company_id) {
+        fetch(`${apiUrl}/companies/${u.company_id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (!data) return;
+            if (data.name) setCompanyName(data.name);
+            setCompanyLogo(data.logo || null);
+          })
+          .catch(() => {});
+      } else {
+        setCompanyLogo(null);
+      }
     } catch {}
   }, [apiUrl]);
 

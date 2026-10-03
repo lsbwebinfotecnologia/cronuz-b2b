@@ -24,12 +24,12 @@ def get_dashboard_metrics(
 ):
     # Determine the company context
     company_id = None
-    if current_user and getattr(current_user, "type", None) == "SELLER":
-         company_id = current_user.company_id
-    elif current_user and getattr(current_user, "type", None) == "MASTER":
-         company_id = None
+    if current_user and getattr(current_user, "company_id", None):
+        company_id = current_user.company_id
+    elif current_user and str(getattr(current_user, "type", "")) == "MASTER":
+        company_id = None
     else:
-         company_id = 1
+        company_id = None
 
     settings = db.query(CompanySettings)
     if company_id:
@@ -374,12 +374,12 @@ def get_dashboard_crm_tasks(
         return []
         
     company_id = None
-    if getattr(current_user, "type", None) == "SELLER":
-         company_id = current_user.company_id
-    elif getattr(current_user, "type", None) == "MASTER":
-         company_id = None
+    if current_user and getattr(current_user, "company_id", None):
+        company_id = current_user.company_id
+    elif current_user and str(getattr(current_user, "type", "")) == "MASTER":
+        company_id = None
     else:
-         company_id = 1
+        company_id = None
          
     from app.models.customer import Interaction, Customer
     

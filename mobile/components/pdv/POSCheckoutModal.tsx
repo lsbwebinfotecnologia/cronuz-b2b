@@ -168,6 +168,7 @@ export function POSCheckoutModal({
           const syncRes = await syncPOSSalesBatch(companyId, syncPayload);
           if (syncRes && syncRes.success_count > 0) {
             await markLocalSalesAsSynced([newSale.client_sale_uuid]);
+            setCompletedSale({ ...newSale, status: 'synced' });
           }
         } catch (syncErr) {
           console.warn('[POSCheckoutModal] Venda salva localmente (offline). Sincronização pendente.');
@@ -227,10 +228,23 @@ export function POSCheckoutModal({
           <View style={[styles.receiptContainer, { paddingTop: Math.max(insets.top + 10, 20) }]}>
             <View style={styles.receiptHeader}>
               <View style={styles.successBadge}>
-                <Ionicons name="checkmark-circle" size={54} color={Colors.success} />
+                <Ionicons
+                  name={completedSale.status === 'synced' ? "checkmark-circle" : "cloud-done"}
+                  size={54}
+                  color={completedSale.status === 'synced' ? Colors.success : Colors.warning}
+                />
               </View>
               <Text style={styles.receiptTitle}>Venda Concluída!</Text>
-              <Text style={styles.receiptSubtitle}>Registrada com sucesso no armazenamento local</Text>
+              <Text
+                style={[
+                  styles.receiptSubtitle,
+                  { color: completedSale.status === 'synced' ? Colors.success : Colors.warning, fontWeight: '600' }
+                ]}
+              >
+                {completedSale.status === 'synced'
+                  ? '✓ Sincronizada com o portal Cronuz'
+                  : '☁ Salva no aparelho (Modo Offline) • Sincronização automática agendada'}
+              </Text>
             </View>
 
             <View style={styles.receiptCard}>

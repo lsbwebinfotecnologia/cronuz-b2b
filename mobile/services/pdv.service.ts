@@ -198,6 +198,12 @@ export interface MobilePOSSession {
   source_reference?: string;
   branch_id?: number;
   branch_name?: string;
+  validate_stock?: boolean;
+  initial_cash_amount?: number;
+  closed_cash_amount?: number;
+  expected_cash_amount?: number;
+  cash_difference?: number;
+  closing_notes?: string;
   products_count: number;
   customer_name?: string;
   total_sales_count: number;
@@ -258,19 +264,56 @@ export async function createPOSSession(
   title: string,
   catalogSource = 'GENERAL',
   sourceReference?: string,
-  branchId?: number
+  branchId?: number,
+  validateStock = true,
+  initialCashAmount = 0.0
 ): Promise<MobilePOSSession> {
   const { data } = await api.post<MobilePOSSession>(`/companies/${companyId}/pos/sessions`, {
     title,
     catalog_source: catalogSource,
     source_reference: sourceReference || undefined,
     branch_id: branchId || undefined,
+    validate_stock: validateStock,
+    initial_cash_amount: initialCashAmount,
   });
   return data;
 }
 
-export async function closePOSSession(companyId: number, sessionId: number): Promise<MobilePOSSession> {
-  const { data } = await api.put<MobilePOSSession>(`/companies/${companyId}/pos/sessions/${sessionId}/close`);
+export interface MobilePOSCloseSummary {
+  session_id: number;
+  title: string;
+  code: string;
+  status: string;
+  opened_at: string;
+  closed_at?: string;
+  initial_cash_amount: number;
+  cash_sales_amount: number;
+  expected_cash_amount: number;
+  sales_count: number;
+  total_sales_amount: number;
+  by_payment_method: Record<string, number>;
+}
+
+export async function fetchSessionCloseSummary(
+  companyId: number,
+  sessionId: number
+): Promise<MobilePOSCloseSummary> {
+  const { data } = await api.get<MobilePOSCloseSummary>(
+    `/companies/${companyId}/pos/sessions/${sessionId}/close-summary`
+  );
+  return data;
+}
+
+export async function closePOSSession(
+  companyId: number,
+  sessionId: number,
+  closedCashAmount?: number,
+  closingNotes?: string
+): Promise<MobilePOSSession> {
+  const { data } = await api.put<MobilePOSSession>(`/companies/${companyId}/pos/sessions/${sessionId}/close`, {
+    closed_cash_amount: closedCashAmount,
+    closing_notes: closingNotes,
+  });
   return data;
 }
 

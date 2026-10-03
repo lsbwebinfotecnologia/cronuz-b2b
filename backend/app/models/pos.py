@@ -44,6 +44,17 @@ class POSSession(Base):
     # Filial vinculada à sessão (usado para consulta de estoque/saldo em tempo real no Horus)
     branch_id = Column(Integer, ForeignKey("cmp_seller_branch.id", ondelete="SET NULL"), nullable=True, index=True)
 
+    # Configuração de validação de saldo por sessão (se False, permite vender sem validar estoque)
+    validate_stock = Column(Boolean, default=True, nullable=False, index=True)
+
+    # Controle de Caixa: Abertura e Fechamento
+    initial_cash_amount = Column(Numeric(12, 2), default=0.00, nullable=False)
+    closed_cash_amount = Column(Numeric(12, 2), nullable=True)
+    expected_cash_amount = Column(Numeric(12, 2), nullable=True)
+    cash_difference = Column(Numeric(12, 2), nullable=True)
+    closing_notes = Column(Text, nullable=True)
+    closed_by_user_id = Column(Integer, ForeignKey("usr_user.id", ondelete="SET NULL"), nullable=True)
+
     customer_id = Column(Integer, ForeignKey("crm_customer.id", ondelete="SET NULL"), nullable=True)
     customer_name = Column(String(255), nullable=True)
     customer_document = Column(String(50), nullable=True)
@@ -62,6 +73,7 @@ class POSSession(Base):
     # Relacionamentos com foreign_keys explícitas
     company = relationship("Company", foreign_keys=[company_id])
     user = relationship("User", foreign_keys=[user_id])
+    closed_by_user = relationship("User", foreign_keys=[closed_by_user_id])
     customer = relationship("Customer", foreign_keys=[customer_id])
     branch = relationship("SellerBranch", foreign_keys=[branch_id])
     sales = relationship(
@@ -80,6 +92,10 @@ class POSSession(Base):
     @property
     def branch_name(self) -> Optional[str]:
         return self.branch.nome if self.branch else None
+
+    @property
+    def name(self) -> str:
+        return self.title
 
     __table_args__ = (
         Index("idx_pos_session_company_status", "company_id", "status"),

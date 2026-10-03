@@ -46,6 +46,8 @@ export function POSSessionPickerModal({
   const [newTitle, setNewTitle] = useState('');
   const [newSource, setNewSource] = useState<'GENERAL' | 'SPREADSHEET' | 'CONSIGNMENT' | 'HORUS_REALTIME'>('GENERAL');
   const [newRef, setNewRef] = useState('');
+  const [newValidateStock, setNewValidateStock] = useState<boolean>(true);
+  const [newInitialCash, setNewInitialCash] = useState<string>('0.00');
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -92,16 +94,21 @@ export function POSSessionPickerModal({
     }
     setCreating(true);
     try {
+      const initialCashNum = parseFloat(newInitialCash.replace(',', '.') || '0');
       const created = await createPOSSession(
         companyId,
         newTitle.trim(),
         newSource,
         newRef.trim(),
-        newSource === 'HORUS_REALTIME' ? selectedBranchId! : undefined
+        newSource === 'HORUS_REALTIME' ? selectedBranchId! : undefined,
+        newValidateStock,
+        isNaN(initialCashNum) ? 0 : initialCashNum
       );
       Alert.alert('Sucesso', `Sessão "${created.title}" iniciada!`);
       setNewTitle('');
       setNewRef('');
+      setNewValidateStock(true);
+      setNewInitialCash('0.00');
       setShowCreate(false);
       onSelectSession(created);
       onClose();
@@ -284,6 +291,50 @@ export function POSSessionPickerModal({
                     />
                   )}
 
+                  {/* Validação de Estoque */}
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={styles.label}>Validar Saldo de Estoque?</Text>
+                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                      <TouchableOpacity
+                        onPress={() => setNewValidateStock(true)}
+                        style={[
+                          styles.sourceBtn,
+                          newValidateStock && styles.sourceBtnActive,
+                          { flex: 1, alignItems: 'center' }
+                        ]}
+                      >
+                        <Text style={[styles.sourceText, newValidateStock && styles.sourceTextActive]}>
+                          🛡️ Sim (Trava s/ saldo)
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setNewValidateStock(false)}
+                        style={[
+                          styles.sourceBtn,
+                          !newValidateStock && styles.sourceBtnActive,
+                          { flex: 1, alignItems: 'center' }
+                        ]}
+                      >
+                        <Text style={[styles.sourceText, !newValidateStock && styles.sourceTextActive]}>
+                          ⚡ Não (Venda livre)
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {/* Fundo de Troco Inicial */}
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={styles.label}>Fundo de Troco Inicial (R$)</Text>
+                    <TextInput
+                      style={[styles.input, { marginTop: 4 }]}
+                      placeholder="0.00"
+                      placeholderTextColor={Colors.textMuted}
+                      keyboardType="numeric"
+                      value={newInitialCash}
+                      onChangeText={setNewInitialCash}
+                    />
+                  </View>
+
                   <View style={styles.createActions}>
                     <TouchableOpacity
                       onPress={() => setShowCreate(false)}
@@ -355,6 +406,8 @@ export function POSSessionPickerModal({
                     {item.code} • {srcLabel}
                     {item.branch_name ? ` • 📍 ${item.branch_name}` : ''}
                     {item.catalog_source !== 'HORUS_REALTIME' ? ` • ${item.products_count ?? 0} produtos` : ''}
+                    {item.validate_stock !== false ? ' • 🛡️ Valida Estoque' : ' • ⚡ Venda Livre'}
+                    {Number(item.initial_cash_amount || 0) > 0 ? ` • 💵 Fundo R$ ${Number(item.initial_cash_amount).toFixed(2)}` : ''}
                   </Text>
                   <Text style={styles.sessionSales}>
                     {item.total_sales_count} vendas (R$ {Number(item.total_sales_amount || 0).toFixed(2)})

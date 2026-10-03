@@ -130,11 +130,13 @@ def login_for_access_token(
     )
     
     company_name = "Sede Master Cronuz"
+    company_logo = None
     mobile_modules = None
     if user.company_id:
         company = db.query(Company).filter(Company.id == user.company_id).first()
         if company:
             company_name = company.name
+            company_logo = company.logo
             # Retorna módulos mobile para sellers
             if user.type == "SELLER" and hasattr(company, "mobile_modules"):
                 raw = dict(company.mobile_modules or {})
@@ -158,6 +160,7 @@ def login_for_access_token(
         "type": user.type,
         "company_id": user.company_id,
         "company_name": company_name,
+        "company_logo": company_logo,
         "tenant_id": user.tenant_id,
         "initial_page": getattr(user, "initial_page", None),
         "allowed_modules": getattr(user, "allowed_modules", None)

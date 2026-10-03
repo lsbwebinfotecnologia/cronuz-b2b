@@ -12,6 +12,8 @@ import {
   Image,
   Vibration,
   ScrollView,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -765,6 +767,19 @@ export default function PDVScreen() {
 
   // Adicionar ao carrinho
   const handleAddItem = (prod: LocalPOSProduct) => {
+    // Validação de saldo de estoque respeitando a sessão ativa
+    const shouldValidateStock = activeSession ? (activeSession.validate_stock !== false) : true;
+    const availableStock = prod.stock !== undefined ? Number(prod.stock) : 0;
+
+    if (shouldValidateStock && availableStock <= 0) {
+      try { Vibration.vibrate(200); } catch {}
+      Alert.alert(
+        'Produto Sem Estoque',
+        `"${prod.title}" não possui saldo disponível para venda nesta sessão.`
+      );
+      return;
+    }
+
     const pdvProd: PDVProduct = {
       id: prod.product_id ?? undefined,
       name: prod.title,
@@ -899,17 +914,16 @@ export default function PDVScreen() {
     }
   };
 
-  // Sincronização em Nuvem de Vendas Pendentes
-  const handleSyncPendingSales = async () => {
-    if (!user?.company_id) {
-      Alert.alert('Aviso', 'Empresa não identificada.');
-      return;
-    }
+  // Sincronização em Nuvem de Vendas Pendentes (Manual ou Automática)
+  const handleSyncPendingSales = useCallback(async (silent = false) => {
+    if (!user?.company_id || syncingSales) return;
     setSyncingSales(true);
     try {
       const pendings = await getPendingLocalSales();
       if (pendings.length === 0) {
-        Alert.alert('Sincronização', 'Todas as vendas já estão sincronizadas com o portal web!');
+        if (!silent) {
+          Alert.alert('Sincronização', 'Todas as vendas já estão sincronizadas com o portal web!');
+        }
         setPendingSalesCount(0);
         return;
       }
@@ -946,22 +960,62 @@ export default function PDVScreen() {
       };
 
       const res = await syncPOSSalesBatch(user.company_id, payload);
-      const syncedUuids = pendings.map((p) => p.client_sale_uuid);
+      const syncedUuids = (res?.synced_uuids && res.synced_uuids.length > 0)
+        ? res.synced_uuids
+        : pendings.map((p) => p.client_sale_uuid);
       await markLocalSalesAsSynced(syncedUuids);
 
       const pending = await getPendingLocalSalesCount();
       setPendingSalesCount(pending);
 
-      Alert.alert(
-        'Sincronização Concluída',
-        `✓ ${res.success_count || pendings.length} vendas enviadas com sucesso ao portal web Cronuz!`
-      );
+      if (!silent) {
+        Alert.alert(
+          'Sincronização Concluída',
+          `✓ ${res.success_count || syncedUuids.length} venda(s) enviada(s) com sucesso ao portal web Cronuz!`
+        );
+      }
     } catch (err: any) {
-      Alert.alert('Erro ao Sincronizar', err?.message || 'Falha ao sincronizar vendas. Verifique sua internet.');
+      if (!silent) {
+        Alert.alert('Erro ao Sincronizar', err?.message || 'Falha ao sincronizar vendas. Verifique sua internet.');
+      } else {
+        console.warn('[AutoSync] Tentativa em background falhou (sem conexão ou rede instável):', err?.message);
+      }
     } finally {
       setSyncingSales(false);
     }
-  };
+  }, [user?.company_id, syncingSales, activeSession?.id]);
+
+  // ─── Auto-Sync ao Voltar a Internet & Ao Reabrir o App (AppState) ────────────
+  useEffect(() => {
+    // 1. Quando o operador volta para o aplicativo (desbloqueio / retorno ao app)
+    const sub = AppState.addEventListener('change', async (nextState: AppStateStatus) => {
+      if (nextState === 'active') {
+        try {
+          const count = await getPendingLocalSalesCount();
+          setPendingSalesCount(count);
+          if (count > 0) {
+            handleSyncPendingSales(true);
+          }
+        } catch {}
+      }
+    });
+
+    // 2. Heartbeat de auto-recuperação a cada 20 segundos se houver vendas pendentes
+    const interval = setInterval(async () => {
+      try {
+        const count = await getPendingLocalSalesCount();
+        setPendingSalesCount(count);
+        if (count > 0) {
+          handleSyncPendingSales(true);
+        }
+      } catch {}
+    }, 20000);
+
+    return () => {
+      sub.remove();
+      clearInterval(interval);
+    };
+  }, [handleSyncPendingSales]);
 
   return (
     <View style={styles.container}>
@@ -1003,7 +1057,7 @@ export default function PDVScreen() {
           {pendingSalesCount > 0 && (
             <TouchableOpacity
               style={styles.syncPendingBtn}
-              onPress={handleSyncPendingSales}
+              onPress={() => handleSyncPendingSales(false)}
               disabled={syncingSales}
               activeOpacity={0.7}
             >

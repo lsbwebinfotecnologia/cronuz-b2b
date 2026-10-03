@@ -38,7 +38,8 @@ import {
   X,
   BookOpen,
   ArrowLeft,
-  Check
+  Check,
+  FileSpreadsheet
 } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
@@ -69,6 +70,8 @@ import POSCatalogLoadModal from '@/components/pdv/POSCatalogLoadModal';
 import POSSessionModal, { POSSessionData } from '@/components/pdv/POSSessionModal';
 import POSSalesHistoryModal from '@/components/pdv/POSSalesHistoryModal';
 import POSReceiptModal from '@/components/pdv/POSReceiptModal';
+import POSCashCloseModal from '@/components/pdv/POSCashCloseModal';
+import POSSalesReportModal from '@/components/pdv/POSSalesReportModal';
 
 interface CartItem extends PDVCatalogItem {
   quantity: number;
@@ -106,11 +109,16 @@ export default function PDVPage() {
   const [isCatalogModalOpen, setIsCatalogModalOpen] = useState(false);
   const [isSessionModalOpen, setIsSessionModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isCashCloseModalOpen, setIsCashCloseModalOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [completedSale, setCompletedSale] = useState<PDVPendingSaleRecord | null>(null);
 
   // Sessão Ativa
   const [activeSession, setActiveSession] = useState<POSSessionData | null>(null);
   const [isSyncingSessionCatalog, setIsSyncingSessionCatalog] = useState(false);
+
+  // Regra de Validação de Estoque: prioriza a diretriz da sessão ativa se houver
+  const isStockValidationActive = activeSession ? (activeSession.validate_stock !== false) : validateStock;
 
   // Scanner Câmera & Input Unificado Omnibar
   const [showCameraScanner, setShowCameraScanner] = useState(false);
@@ -237,7 +245,89 @@ export default function PDVPage() {
     }
   }, [syncSessionProducts]);
 
-  // ─── 1. Inicialização & Verificação de Módulo/Configuração ──────────────────
+  // ─── 1. Sincronizador de Vendas Offline ─────────────────────────────────────
+  const triggerSync = useCallback(async () => {
+    if (!navigator.onLine || !companyId || isSyncing) return;
+    try {
+      setIsSyncing(true);
+      const pending = await getPendingSales('pending');
+      if (pending.length === 0) {
+        setUnsyncedCount(0);
+        return;
+      }
+
+      const token = getToken();
+      const payload = {
+        sales: pending.map((s) => ({
+          client_sale_uuid: s.client_sale_uuid,
+          sale_number: s.sale_number,
+          session_id: s.session_id,
+          customer_name: s.customer_name,
+          customer_document: s.customer_document,
+          customer_id: s.customer_id,
+          payment_method: s.payment_method,
+          payment_details: s.payment_details,
+          subtotal: s.subtotal,
+          discount: s.discount,
+          total_amount: s.total_amount,
+          items_count: s.items_count,
+          sold_at: s.sold_at,
+          origin: s.origin,
+          notes: s.notes,
+          items: s.items.map((it) => ({
+            barcode: it.barcode,
+            sku: it.sku,
+            title: it.title,
+            publisher: it.publisher,
+            quantity: it.quantity,
+            unit_price: it.unit_price,
+            total_price: it.total_price,
+            horus_item_code: it.horus_item_code,
+            product_id: it.product_id,
+          })),
+        })),
+        session_id: activeSession?.id || undefined,
+      };
+
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sync-sales`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.synced_uuids && data.synced_uuids.length > 0) {
+          await markSalesAsSynced(data.synced_uuids);
+          const remaining = await getUnsyncedSalesCount();
+          setUnsyncedCount(remaining);
+          toast.success(`✓ ${data.synced_uuids.length} venda(s) sincronizada(s) com a nuvem com sucesso!`);
+        }
+        if (data.failed_count && data.failed_count > 0) {
+          playWarningBeep();
+          const firstErr = data.errors?.[0]?.error || 'Erro no registro';
+          toast.error(`Atenção: ${data.failed_count} venda(s) apresentaram inconsistência ao sincronizar: ${firstErr}`);
+        }
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.error('Falha HTTP ao sincronizar vendas:', res.status, errText);
+        toast.warning('Aviso de Rede: Servidor temporariamente inacessível. As vendas continuam salvas no aparelho e serão sincronizadas automaticamente.');
+      }
+    } catch (e: any) {
+      console.error('Falha na sincronização em background', e);
+      toast.warning('Instabilidade de conexão: As vendas continuam salvas com segurança no aparelho.');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [companyId, isSyncing, activeSession]);
+
+  // ─── 2. Inicialização & Verificação de Módulo/Configuração ──────────────────
   useEffect(() => {
     setMounted(true);
     setIsOnline(navigator.onLine);
@@ -336,84 +426,27 @@ export default function PDVPage() {
       }
     });
 
+    // Heartbeat automático a cada 25 segundos para re-tentar pendências silenciosamente
+    const syncInterval = setInterval(async () => {
+      if (navigator.onLine) {
+        try {
+          const pendingCount = await getUnsyncedSalesCount();
+          setUnsyncedCount(pendingCount);
+          if (pendingCount > 0) {
+            triggerSync();
+          }
+        } catch {}
+      }
+    }, 25000);
+
     return () => {
+      clearInterval(syncInterval);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [companyId, loadSampleCatalog, syncSessionProducts, cart.length]);
+  }, [companyId, loadSampleCatalog, syncSessionProducts, cart.length, triggerSync]);
 
-  // ─── 2. Sincronizador de Vendas Offline ─────────────────────────────────────
-  const triggerSync = useCallback(async () => {
-    if (!navigator.onLine || !companyId || isSyncing) return;
-    try {
-      setIsSyncing(true);
-      const pending = await getPendingSales('pending');
-      if (pending.length === 0) {
-        setUnsyncedCount(0);
-        return;
-      }
-
-      const token = getToken();
-      const payload = {
-        sales: pending.map((s) => ({
-          client_sale_uuid: s.client_sale_uuid,
-          sale_number: s.sale_number,
-          session_id: s.session_id,
-          customer_name: s.customer_name,
-          customer_document: s.customer_document,
-          customer_id: s.customer_id,
-          payment_method: s.payment_method,
-          payment_details: s.payment_details,
-          subtotal: s.subtotal,
-          discount: s.discount,
-          total_amount: s.total_amount,
-          items_count: s.items_count,
-          sold_at: s.sold_at,
-          origin: s.origin,
-          notes: s.notes,
-          items: s.items.map((it) => ({
-            barcode: it.barcode,
-            sku: it.sku,
-            title: it.title,
-            publisher: it.publisher,
-            quantity: it.quantity,
-            unit_price: it.unit_price,
-            total_price: it.total_price,
-            horus_item_code: it.horus_item_code,
-            product_id: it.product_id,
-          })),
-        })),
-        session_id: activeSession?.id || undefined,
-      };
-
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sync-sales`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(payload),
-        }
-      );
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.synced_uuids && data.synced_uuids.length > 0) {
-          await markSalesAsSynced(data.synced_uuids);
-          const remaining = await getUnsyncedSalesCount();
-          setUnsyncedCount(remaining);
-          toast.success(`${data.synced_uuids.length} vendas sincronizadas com sucesso!`);
-        }
-      }
-    } catch (e) {
-      console.error('Falha na sincronização em background', e);
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [companyId, isSyncing, activeSession]);
 
   // ─── 3. Busca de Produtos em Tempo Real ────────────────────────────────────
   const performSearch = useCallback(async (query: string) => {
@@ -500,8 +533,8 @@ export default function PDVPage() {
     const currentQtyInCart = existing ? existing.quantity : 0;
     const availableStock = product.stock !== undefined ? Number(product.stock) : 0;
 
-    // Se validação de saldo estiver ativa no cadastro do seller:
-    if (validateStock) {
+    // Se validação de saldo estiver ativa (pela sessão ou geral):
+    if (isStockValidationActive) {
       if (availableStock <= 0) {
         playWarningBeep();
         triggerFeedback('error', 'Produto Esgotado / Sem Saldo', `"${product.title.substring(0, 30)}..." não pode ser vendido sem estoque.`);
@@ -529,7 +562,7 @@ export default function PDVPage() {
     playSuccessBeep();
     const newQty = currentQtyInCart + 1;
     triggerFeedback('success', `Adicionado: ${product.title.substring(0, 35)}...`, `Qtd no carrinho: ${newQty} • R$ ${(product.price * newQty).toFixed(2)}`);
-  }, [cart, validateStock, triggerFeedback]);
+  }, [cart, isStockValidationActive, triggerFeedback]);
 
   // ─── 5. Omnibar: Bipe de Código ou Busca Textual ───────────────────────────
   const handleOmnibarSubmit = useCallback(async (codeToProcess?: string) => {
@@ -689,7 +722,7 @@ export default function PDVPage() {
     const item = cart.find((i) => i.barcode === barcode);
     if (!item) return;
 
-    if (delta > 0 && validateStock) {
+    if (delta > 0 && isStockValidationActive) {
       const availableStock = item.stock !== undefined ? Number(item.stock) : 0;
       if (item.quantity + delta > availableStock) {
         playWarningBeep();
@@ -710,7 +743,7 @@ export default function PDVPage() {
         })
         .filter(Boolean) as CartItem[]
     );
-  }, [cart, validateStock, triggerFeedback]);
+  }, [cart, isStockValidationActive, triggerFeedback]);
 
   const removeItem = useCallback((barcode: string) => {
     setCart((prev) => prev.filter((i) => i.barcode !== barcode));
@@ -806,13 +839,23 @@ export default function PDVPage() {
         toast.info(`Cliente "${customerName}" mantido fixado.`);
       }
 
-      // Sincronização em background se online
+      // Feedback sonoro e visual diferenciado entre Online e Offline
       if (navigator.onLine) {
+        toast.success(`Venda ${saleNumber} registrada! Transmitindo à nuvem...`);
         triggerSync();
+      } else {
+        toast.warning(
+          `Venda ${saleNumber} salva no dispositivo (Modo Offline). O sistema sincronizará automaticamente assim que a conexão retornar.`,
+          { duration: 6000 }
+        );
       }
     } catch (e: any) {
-      console.error('Erro ao registrar venda', e);
-      toast.error('Erro ao gravar venda localmente.');
+      console.error('Falha crítica ao gravar venda localmente:', e);
+      playWarningBeep();
+      toast.error(
+        `Falha Crítica: Não foi possível salvar a venda no banco local (${e?.message || 'Erro IndexedDB'}). A mercadoria NÃO deve ser liberada antes de tentar novamente.`,
+        { duration: 9000 }
+      );
     }
   };
 
@@ -922,14 +965,14 @@ export default function PDVPage() {
 
             <span
               className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
-                validateStock
+                isStockValidationActive
                   ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
                   : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
               }`}
-              title={validateStock ? 'Validação de saldo ativa: bloqueia itens sem estoque' : 'Venda sem estoque liberada'}
+              title={isStockValidationActive ? 'Validação de saldo ativa: bloqueia itens sem estoque' : 'Venda sem estoque liberada'}
             >
-              {validateStock ? <ShieldAlert className="w-3 h-3" /> : <Zap className="w-3 h-3" />}
-              <span className="hidden md:inline">{validateStock ? 'Valida Saldo' : 'Vende s/ Saldo'}</span>
+              {isStockValidationActive ? <ShieldAlert className="w-3 h-3" /> : <Zap className="w-3 h-3" />}
+              <span className="hidden md:inline">{isStockValidationActive ? 'Valida Saldo' : 'Vende s/ Saldo'}</span>
             </span>
           </div>
         </div>
@@ -969,6 +1012,28 @@ export default function PDVPage() {
             <BarChart3 className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Vendas</span>
           </button>
+
+          {/* Relatórios Analíticos (Excel e PDF) */}
+          <button
+            onClick={() => setIsReportModalOpen(true)}
+            className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition"
+            title="Relatórios analíticos de vendas em Excel e PDF"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Relatórios</span>
+          </button>
+
+          {/* Fechar Caixa da Sessão Ativa */}
+          {activeSession && (
+            <button
+              onClick={() => setIsCashCloseModalOpen(true)}
+              className="px-2.5 py-1.5 rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-1.5 transition shadow-xs"
+              title="Conferir gaveta e fechar caixa desta sessão"
+            >
+              <Lock className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+              <span className="hidden md:inline">Fechar Caixa</span>
+            </button>
+          )}
 
           {/* Alternar Modo Tela Cheia / Modo Caixa */}
           <button
@@ -1270,7 +1335,7 @@ export default function PDVPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-2.5">
                   {displayedProducts.map((item) => {
                     const itemStock = item.stock !== undefined ? Number(item.stock) : 0;
-                    const isOutOfStock = validateStock && itemStock <= 0;
+                    const isOutOfStock = isStockValidationActive && itemStock <= 0;
                     const isInCart = cart.some((c) => c.barcode === item.barcode);
 
                     return (
@@ -1748,6 +1813,23 @@ export default function PDVPage() {
           omnibarInputRef.current?.focus();
         }}
         isCustomerPinned={isCustomerPinned}
+      />
+
+      <POSCashCloseModal
+        isOpen={isCashCloseModalOpen}
+        onClose={() => setIsCashCloseModalOpen(false)}
+        session={activeSession}
+        onSessionClosed={async () => {
+          setActiveSession(null);
+          await setPdvSetting('activeSession', null);
+          await loadSampleCatalog();
+        }}
+      />
+
+      <POSSalesReportModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        activeSession={activeSession}
       />
 
     </div>
