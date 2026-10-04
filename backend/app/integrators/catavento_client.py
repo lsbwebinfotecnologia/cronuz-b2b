@@ -94,15 +94,21 @@ class CataventoClient:
                 data = resp.json()
                 if data.get("Codigo") == 200 and data.get("Token"):
                     self._token = data["Token"]
-                    # Token expira em 2 horas de inatividade conforme docs da WinBooks Web
-                    self._token_expires = datetime.now(timezone.utc) + timedelta(hours=2)
+                    # Token expira após 30 min sem uso conforme docs WinBooks. Usamos 25 min como margem de segurança.
+                    self._token_expires = datetime.now(timezone.utc) + timedelta(minutes=25)
                     self.token_renewed  = True
                     self.new_token      = self._token
                     self.last_auth_error = None
                     logger.info("[CataventoClient] Token renovado com sucesso.")
                     return True
                 else:
-                    self.last_auth_error = data.get("Mensagem") or "Credenciais da Catavento recusadas."
+                    msgs = data.get("Mensagens") or data.get("Mensagem")
+                    if isinstance(msgs, list):
+                        self.last_auth_error = "; ".join(str(m) for m in msgs)
+                    elif msgs:
+                        self.last_auth_error = str(msgs)
+                    else:
+                        self.last_auth_error = "Credenciais da Catavento recusadas."
             elif resp.status_code in (401, 403):
                 self.last_auth_error = "E-mail ou senha da Catavento inválidos."
             else:
@@ -206,6 +212,9 @@ class CataventoClient:
                 # Trata resposta de produto não encontrado (objeto zerado)
                 if data.get("Estoque") is None and not data.get("CodigoDeBarras"):
                     return {"found": False, "saldo": 0, "error": None, "raw": data}
+
+                # Atualiza a validade do token por mais 25 minutos devido à atividade
+                self._token_expires = datetime.now(timezone.utc) + timedelta(minutes=25)
 
                 return {
                     "found":    True,
