@@ -27,7 +27,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 CATAVENTO_DEFAULT_BASE_URL = "https://api.cataventobr.com.br"
-CATAVENTO_TIMEOUT = httpx.Timeout(6.0, connect=3.0, read=4.5)
+CATAVENTO_TIMEOUT = httpx.Timeout(22.0, connect=5.0, read=20.0)
 DEFAULT_HEADERS = {
     "Accept": "application/json",
     "User-Agent": "CronuzB2B/1.0",
@@ -76,7 +76,7 @@ class CataventoClient:
         """
         Gera/renova o token via POST /Sistema/Seguranca/Autenticar.
         Retorna True se bem-sucedido, False se falhar.
-        Documentação WinBooks: token expira após 2h de inatividade.
+        Documentação WinBooks: token expira após 30 min de inatividade.
         """
         if not self.username or not self.password:
             self.last_auth_error = "E-mail ou senha da Catavento não configurados."
@@ -84,7 +84,7 @@ class CataventoClient:
 
         url = f"{self.base_url}/Sistema/Seguranca/Autenticar"
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0), follow_redirects=True) as client:
                 resp = await client.post(
                     url,
                     json={"Email": self.username, "Senha": self.password},
@@ -146,9 +146,8 @@ class CataventoClient:
         """
         Consulta estoque de um produto pelo código de barras (ISBN).
         
-        Utiliza prioritariamente a rota otimizada /BDIApi/Produto/Situacao?codigo=<isbn>,
-        que retorna diretamente o status de estoque sem o overhead de joins com sinopses,
-        autores e categorias do ERP WinBooks.
+        Utiliza a rota funcional POST /BDIApi/Produto/BuscarVarios com payload [isbn],
+        que responde com a lista de dados reais de estoque e preço no WinBooks.
         """
         if not await self._ensure_token():
             return {
@@ -158,26 +157,19 @@ class CataventoClient:
                 "raw": {},
             }
 
-        headers = {"API_TOKEN": self._token, **DEFAULT_HEADERS}
-        params = {"codigo": isbn}
+        headers = {
+            "API_TOKEN": self._token,
+            "Content-Type": "application/json",
+            **DEFAULT_HEADERS,
+        }
 
         try:
             async with httpx.AsyncClient(timeout=CATAVENTO_TIMEOUT, follow_redirects=True) as client:
-                # 1. Rota rápida documentada: /BDIApi/Produto/Situacao
-                url_situacao = f"{self.base_url}/BDIApi/Produto/Situacao"
-                resp = await client.get(url_situacao, params=params, headers=headers)
+                url_buscar = f"{self.base_url}/BDIApi/Produto/BuscarVarios"
+                resp = await client.post(url_buscar, json=[isbn], headers=headers)
 
-                # Se a rota /Situacao responder 404 de endpoint não encontrado ou erro inesperado,
-                # fazemos fallback transparente para /BDIApi/Produto/Buscar
                 if resp.status_code == 404:
-                    # Pode ser produto inexistente OU rota inexistente. Checa se o corpo é JSON de produto
-                    try:
-                        data = resp.json()
-                        if isinstance(data, dict):
-                            return {"found": False, "saldo": 0, "error": None, "raw": data}
-                    except Exception:
-                        pass
-                    return {"found": False, "saldo": 0, "error": None, "raw": {}}
+                    return {"found": False, "saldo": 0, "error": None, "raw": []}
 
                 if resp.status_code == 403:
                     # Token expirou no servidor — re-autentica UMA vez
@@ -191,41 +183,35 @@ class CataventoClient:
                         "raw": {},
                     }
 
-                # Fallback para /Buscar se /Situacao falhar com erro de servidor (ex: 500 ou 405)
-                if resp.status_code not in (200, 404):
-                    url_buscar = f"{self.base_url}/BDIApi/Produto/Buscar"
-                    resp = await client.get(url_buscar, params=params, headers=headers)
-                    if resp.status_code == 404:
-                        return {"found": False, "saldo": 0, "error": None, "raw": {}}
-                    if resp.status_code != 200:
-                        return {
-                            "found": False,
-                            "saldo": 0,
-                            "error": f"Serviço Catavento indisponível (HTTP {resp.status_code}).",
-                            "raw": {},
-                        }
+                if resp.status_code != 200:
+                    return {
+                        "found": False,
+                        "saldo": 0,
+                        "error": f"Serviço Catavento indisponível (HTTP {resp.status_code}).",
+                        "raw": {},
+                    }
 
                 data = resp.json()
                 if not data:
-                    return {"found": False, "saldo": 0, "error": None, "raw": {}}
+                    return {"found": False, "saldo": 0, "error": None, "raw": []}
 
-                # Trata resposta de produto não encontrado (objeto zerado)
-                if data.get("Estoque") is None and not data.get("CodigoDeBarras"):
-                    return {"found": False, "saldo": 0, "error": None, "raw": data}
+                if isinstance(data, list) and len(data) > 0:
+                    prod = data[0]
+                    # Atualiza a validade do token por mais 25 minutos devido à atividade
+                    self._token_expires = datetime.now(timezone.utc) + timedelta(minutes=25)
 
-                # Atualiza a validade do token por mais 25 minutos devido à atividade
-                self._token_expires = datetime.now(timezone.utc) + timedelta(minutes=25)
+                    return {
+                        "found":    True,
+                        "saldo":    int(prod.get("Estoque") or 0),
+                        "preco":    float(prod.get("Preco") or 0),
+                        "situacao": prod.get("Situacao"),
+                        "titulo":   (prod.get("Descricao") or "").strip(),
+                        "editora":  (prod.get("Editora") or "").strip(),
+                        "raw":      prod,
+                        "error":    None,
+                    }
 
-                return {
-                    "found":    True,
-                    "saldo":    int(data.get("Estoque") or 0),
-                    "preco":    float(data.get("Preco") or 0),
-                    "situacao": data.get("Situacao"),
-                    "titulo":   (data.get("Descricao") or "").strip(),
-                    "editora":  (data.get("Editora") or "").strip(),
-                    "raw":      data,
-                    "error":    None,
-                }
+                return {"found": False, "saldo": 0, "error": None, "raw": data}
 
         except httpx.TimeoutException:
             return {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Catavento (Timeout).", "raw": {}}

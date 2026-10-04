@@ -253,7 +253,10 @@ async def test_distributor_connection(
             row.token        = client.new_token
             row.token_expires = client.token_expires
             db.commit()
-        return {"ok": ok, "message": "Autenticado com sucesso!" if ok else "Falha na autenticação. Verifique usuário e senha."}
+        return {
+            "ok": ok,
+            "message": "Autenticado com sucesso!" if ok else (client.last_auth_error or "Falha na autenticação. Verifique usuário e senha.")
+        }
 
     elif slug == "disal":
         from app.integrators.disal_client import DisalClient

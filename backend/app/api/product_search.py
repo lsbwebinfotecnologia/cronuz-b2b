@@ -369,9 +369,9 @@ async def get_distributor_stock(
             token_expires=dist.token_expires,
         )
         try:
-            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=6.5)
+            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=25.0)
         except asyncio.TimeoutError:
-            result = {"found": False, "saldo": 0, "error": "Catavento temporariamente lenta (timeout de 6.5s)."}
+            result = {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Catavento (Timeout de 25s)."}
         except Exception as e:
             result = {"found": False, "saldo": 0, "error": f"Erro de comunicação com a Catavento: {e}"}
 
