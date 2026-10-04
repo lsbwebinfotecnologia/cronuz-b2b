@@ -7,14 +7,16 @@ Autenticação:
   POST /Sistema/Seguranca/Autenticar
   Body: {"Email": "...", "Senha": "..."}
   Response: {"Codigo": 200, "Token": "..."}
-  → Token cacheado em dst_distributor.token e renovado ao receber 403.
+  → Token expira após 2h de inatividade e é cacheado em dst_distributor.token.
 
-Consulta de estoque por ISBN:
-  GET /BDIApi/Produto/Buscar?codigo=<ISBN>
+Consulta rápida de situação/estoque por ISBN:
+  GET /BDIApi/Produto/Situacao?codigo=<ISBN>
   Header: API_TOKEN: <token>
-  Response: {"Estoque": <int>, "Preco": <float>, "CodigoDeBarras": "...", ...}
+  Response: {"CodigoDeBarras": "...", "Estoque": <int>, "Preco": <float>, "Situacao": <int>, ...}
+  (Rota leve que não carrega resenhas e autores pesados do ERP).
 
-Rate limit: sem limite documentado — usar com moderação.
+Consulta detalhada (fallback):
+  GET /BDIApi/Produto/Buscar?codigo=<ISBN>
 """
 
 from typing import Optional, Dict, Any
@@ -24,7 +26,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-CATAVENTO_DEFAULT_BASE_URL = "http://api.cataventobr.com.br"
+CATAVENTO_DEFAULT_BASE_URL = "https://api.cataventobr.com.br"
+CATAVENTO_TIMEOUT = httpx.Timeout(6.0, connect=3.0, read=4.5)
+DEFAULT_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": "CronuzB2B/1.0",
+}
 
 
 class CataventoClient:
@@ -45,10 +52,8 @@ class CataventoClient:
         token_expires: Optional[datetime] = None,
     ):
         raw_url = (base_url or CATAVENTO_DEFAULT_BASE_URL).strip().rstrip("/")
-        # O endpoint HTTPS da Catavento sofre com travamento/timeout de SSL na rota de busca.
-        # Forçamos http:// para garantir resposta imediata idêntica à integração PHP estável.
-        if "api.cataventobr.com.br" in raw_url and raw_url.startswith("https://"):
-            raw_url = "http://" + raw_url[len("https://"):]
+        if not raw_url.startswith("http://") and not raw_url.startswith("https://"):
+            raw_url = f"https://{raw_url}"
         self.base_url       = raw_url
         self.username       = username
         self.password       = password
@@ -71,7 +76,7 @@ class CataventoClient:
         """
         Gera/renova o token via POST /Sistema/Seguranca/Autenticar.
         Retorna True se bem-sucedido, False se falhar.
-        Token tem validade de ~23h (definida pelo servidor).
+        Documentação WinBooks: token expira após 2h de inatividade.
         """
         if not self.username or not self.password:
             self.last_auth_error = "E-mail ou senha da Catavento não configurados."
@@ -79,18 +84,18 @@ class CataventoClient:
 
         url = f"{self.base_url}/Sistema/Seguranca/Autenticar"
         try:
-            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), follow_redirects=True) as client:
                 resp = await client.post(
                     url,
                     json={"Email": self.username, "Senha": self.password},
-                    headers={"Content-Type": "application/json"},
+                    headers={"Content-Type": "application/json", **DEFAULT_HEADERS},
                 )
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("Codigo") == 200 and data.get("Token"):
                     self._token = data["Token"]
-                    # Token expira em 23 horas (conservador)
-                    self._token_expires = datetime.now(timezone.utc) + timedelta(hours=23)
+                    # Token expira em 2 horas de inatividade conforme docs da WinBooks Web
+                    self._token_expires = datetime.now(timezone.utc) + timedelta(hours=2)
                     self.token_renewed  = True
                     self.new_token      = self._token
                     self.last_auth_error = None
@@ -134,9 +139,10 @@ class CataventoClient:
     async def get_stock_by_isbn(self, isbn: str) -> Dict[str, Any]:
         """
         Consulta estoque de um produto pelo código de barras (ISBN).
-
-        GET /BDIApi/Produto/Buscar?codigo=<isbn>
-        Header: API_TOKEN: <token>
+        
+        Utiliza prioritariamente a rota otimizada /BDIApi/Produto/Situacao?codigo=<isbn>,
+        que retorna diretamente o status de estoque sem o overhead de joins com sinopses,
+        autores e categorias do ERP WinBooks.
         """
         if not await self._ensure_token():
             return {
@@ -146,56 +152,71 @@ class CataventoClient:
                 "raw": {},
             }
 
-        url = f"{self.base_url}/BDIApi/Produto/Buscar"
+        headers = {"API_TOKEN": self._token, **DEFAULT_HEADERS}
+        params = {"codigo": isbn}
+
         try:
-            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-                resp = await client.get(
-                    url,
-                    params={"codigo": isbn},
-                    headers={"API_TOKEN": self._token},
-                )
+            async with httpx.AsyncClient(timeout=CATAVENTO_TIMEOUT, follow_redirects=True) as client:
+                # 1. Rota rápida documentada: /BDIApi/Produto/Situacao
+                url_situacao = f"{self.base_url}/BDIApi/Produto/Situacao"
+                resp = await client.get(url_situacao, params=params, headers=headers)
 
-            if resp.status_code == 404:
-                return {"found": False, "saldo": 0, "error": None, "raw": {}}
+                # Se a rota /Situacao responder 404 de endpoint não encontrado ou erro inesperado,
+                # fazemos fallback transparente para /BDIApi/Produto/Buscar
+                if resp.status_code == 404:
+                    # Pode ser produto inexistente OU rota inexistente. Checa se o corpo é JSON de produto
+                    try:
+                        data = resp.json()
+                        if isinstance(data, dict):
+                            return {"found": False, "saldo": 0, "error": None, "raw": data}
+                    except Exception:
+                        pass
+                    return {"found": False, "saldo": 0, "error": None, "raw": {}}
 
-            if resp.status_code == 403:
-                # Token expirou no servidor — re-autentica UMA vez
-                logger.warning("[CataventoClient] Token rejeitado (403), re-autenticando...")
-                if await self.authenticate():
-                    return await self.get_stock_by_isbn(isbn)
+                if resp.status_code == 403:
+                    # Token expirou no servidor — re-autentica UMA vez
+                    logger.warning("[CataventoClient] Token rejeitado (403), re-autenticando...")
+                    if await self.authenticate():
+                        return await self.get_stock_by_isbn(isbn)
+                    return {
+                        "found": False,
+                        "saldo": 0,
+                        "error": self.last_auth_error or "Sessão expirada na Catavento (403).",
+                        "raw": {},
+                    }
+
+                # Fallback para /Buscar se /Situacao falhar com erro de servidor (ex: 500 ou 405)
+                if resp.status_code not in (200, 404):
+                    url_buscar = f"{self.base_url}/BDIApi/Produto/Buscar"
+                    resp = await client.get(url_buscar, params=params, headers=headers)
+                    if resp.status_code == 404:
+                        return {"found": False, "saldo": 0, "error": None, "raw": {}}
+                    if resp.status_code != 200:
+                        return {
+                            "found": False,
+                            "saldo": 0,
+                            "error": f"Serviço Catavento indisponível (HTTP {resp.status_code}).",
+                            "raw": {},
+                        }
+
+                data = resp.json()
+                if not data:
+                    return {"found": False, "saldo": 0, "error": None, "raw": {}}
+
+                # Trata resposta de produto não encontrado (objeto zerado)
+                if data.get("Estoque") is None and not data.get("CodigoDeBarras"):
+                    return {"found": False, "saldo": 0, "error": None, "raw": data}
+
                 return {
-                    "found": False,
-                    "saldo": 0,
-                    "error": self.last_auth_error or "Sessão expirada na Catavento (403).",
-                    "raw": {},
+                    "found":    True,
+                    "saldo":    int(data.get("Estoque") or 0),
+                    "preco":    float(data.get("Preco") or 0),
+                    "situacao": data.get("Situacao"),
+                    "titulo":   (data.get("Descricao") or "").strip(),
+                    "editora":  (data.get("Editora") or "").strip(),
+                    "raw":      data,
+                    "error":    None,
                 }
-
-            if resp.status_code != 200:
-                return {
-                    "found": False,
-                    "saldo": 0,
-                    "error": f"Serviço Catavento indisponível (HTTP {resp.status_code}).",
-                    "raw": {},
-                }
-
-            data = resp.json()
-            if not data:
-                return {"found": False, "saldo": 0, "error": None, "raw": {}}
-
-            # Trata resposta de produto não encontrado (objeto zerado)
-            if data.get("Estoque") is None and not data.get("CodigoDeBarras"):
-                return {"found": False, "saldo": 0, "error": None, "raw": data}
-
-            return {
-                "found":    True,
-                "saldo":    int(data.get("Estoque") or 0),
-                "preco":    float(data.get("Preco") or 0),
-                "situacao": data.get("Situacao"),
-                "titulo":   (data.get("Descricao") or "").strip(),
-                "editora":  (data.get("Editora") or "").strip(),
-                "raw":      data,
-                "error":    None,
-            }
 
         except httpx.TimeoutException:
             return {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Catavento (Timeout).", "raw": {}}

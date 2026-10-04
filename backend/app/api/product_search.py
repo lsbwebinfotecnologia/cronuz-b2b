@@ -369,9 +369,9 @@ async def get_distributor_stock(
             token_expires=dist.token_expires,
         )
         try:
-            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=25.0)
+            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=6.5)
         except asyncio.TimeoutError:
-            result = {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Catavento (Timeout)."}
+            result = {"found": False, "saldo": 0, "error": "Catavento temporariamente lenta (timeout de 6.5s)."}
         except Exception as e:
             result = {"found": False, "saldo": 0, "error": f"Erro de comunicação com a Catavento: {e}"}
 
@@ -647,7 +647,9 @@ def get_master_search_metrics(
             func.count(func.nullif(ProductSearchLog.source == "web", False)).label("searches_web"),
             func.count(func.nullif(ProductSearchLog.source == "app", False)).label("searches_app"),
             func.count(distinct(ProductSearchLog.company_id)).label("unique_sellers_count"),
+            func.string_agg(Company.name.distinct(), "|||").label("seller_names"),
         )
+        .join(Company, Company.id == ProductSearchLog.company_id)
         .filter(ProductSearchLog.created_at >= cutoff_date)
     )
     if company_id:
@@ -678,6 +680,7 @@ def get_master_search_metrics(
             "searches_web": r[6],
             "searches_app": r[7],
             "unique_sellers_count": r[8],
+            "seller_names": [s.strip() for s in (r[9] or "").split("|||") if s.strip()],
         }
         for r in prod_results
     ]

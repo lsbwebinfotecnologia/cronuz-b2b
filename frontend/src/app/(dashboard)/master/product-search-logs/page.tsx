@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Package,
   ShieldAlert,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -45,6 +46,7 @@ interface TopProduct {
   searches_web: number;
   searches_app: number;
   unique_sellers_count: number;
+  seller_names?: string[];
 }
 
 interface TopSeller {
@@ -99,6 +101,7 @@ export default function MasterProductSearchLogsPage() {
   const [summary, setSummary] = useState<MetricsSummary | null>(null);
   const [topProducts, setTopProducts] = useState<TopProduct[]>([]);
   const [topSellers, setTopSellers] = useState<TopSeller[]>([]);
+  const [selectedProductSellers, setSelectedProductSellers] = useState<TopProduct | null>(null);
   
   // Logs paginados
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -628,8 +631,20 @@ export default function MasterProductSearchLogsPage() {
                           )}
                         </div>
                       </td>
-                      <td className="px-5 py-4 text-center font-medium text-slate-700 dark:text-slate-300">
-                        {p.unique_sellers_count} seller(s)
+                      <td className="px-5 py-4 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedProductSellers(p)}
+                          title={
+                            p.seller_names && p.seller_names.length > 0
+                              ? `Sellers que consultaram:\n• ${p.seller_names.join('\n• ')}`
+                              : 'Clique para ver detalhes'
+                          }
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 transition group cursor-pointer border border-slate-200/80 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 shadow-2xs"
+                        >
+                          <Building2 className="w-3.5 h-3.5 text-slate-400 group-hover:text-[var(--color-primary-base)] transition-colors" />
+                          <span>{p.unique_sellers_count} seller(s)</span>
+                        </button>
                       </td>
                       <td className="px-5 py-4 text-right text-xs text-slate-500">
                         {formatDate(p.last_searched_at)}
@@ -872,6 +887,103 @@ export default function MasterProductSearchLogsPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── MODAL DE SELLERS QUE PESQUISARAM O PRODUTO ────────── */}
+      {selectedProductSellers && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="relative w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-teal-500/10 text-teal-600 dark:text-teal-400 flex items-center justify-center flex-shrink-0">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-900 dark:text-white leading-tight">
+                    Sellers que Pesquisaram
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1 max-w-[260px]" title={selectedProductSellers.product_name}>
+                    {selectedProductSellers.product_name}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedProductSellers(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Resumo do Produto */}
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 text-xs space-y-1.5">
+              {selectedProductSellers.isbn && (
+                <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                  <span>ISBN / Barras:</span>
+                  <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                    {selectedProductSellers.isbn}
+                  </span>
+                </div>
+              )}
+              {selectedProductSellers.cod_item && (
+                <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                  <span>Código Horus:</span>
+                  <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                    {selectedProductSellers.cod_item}
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                <span>Total de Consultas:</span>
+                <span className="font-bold text-teal-600 dark:text-teal-400">
+                  {selectedProductSellers.total_searches} buscas
+                </span>
+              </div>
+            </div>
+
+            {/* Lista dos Sellers */}
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2">
+                {selectedProductSellers.seller_names?.length || selectedProductSellers.unique_sellers_count} Organização(ões) Encontrada(s)
+              </span>
+
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {selectedProductSellers.seller_names && selectedProductSellers.seller_names.length > 0 ? (
+                  selectedProductSellers.seller_names.map((name, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-slate-50/80 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-xs text-slate-800 dark:text-slate-200 font-semibold"
+                    >
+                      <div className="w-6 h-6 rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400 flex items-center justify-center flex-shrink-0 text-[11px] font-bold">
+                        {i + 1}
+                      </div>
+                      <span className="flex-1 truncate" title={name}>
+                        {name}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-400 text-center py-4">
+                    Nenhum seller específico identificado nos logs.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setSelectedProductSellers(null)}
+                className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs transition"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
