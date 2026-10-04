@@ -20,6 +20,7 @@ import logging
 from app.db.session import get_db, SessionLocal
 from app.core.dependencies import get_current_user
 from app.models.user import User
+from app.models.company import Company
 from app.models.seller_branch import SellerBranch
 from app.models.company_settings import CompanySettings
 from app.models.product_search_log import ProductSearchLog
@@ -580,5 +581,249 @@ def get_search_logs(
             for l in logs
         ],
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Painel Exclusivo MASTER — Análise e Inteligência Geral de Consultas
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.get("/master/metrics")
+def get_master_search_metrics(
+    days: int = Query(30, ge=1, le=365, description="Intervalo em dias para análise"),
+    limit: int = Query(20, ge=1, le=100, description="Quantidade máxima de itens no ranking"),
+    company_id: Optional[int] = Query(None, description="Filtrar por seller específico"),
+    source: Optional[str] = Query(None, description="Filtrar por canal: web | app | physical_scanner"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Retorna métricas gerenciais e consolidadas de buscas para o usuário MASTER.
+    Permite dimensionar o volume de consultas, distribuição de canais,
+    produtos mais procurados e engajamento por seller.
+    """
+    user_type = getattr(current_user, "type", None)
+    if hasattr(user_type, "value"):
+        user_type = user_type.value
+    if user_type != "MASTER":
+        raise HTTPException(status_code=403, detail="Acesso restrito ao perfil MASTER.")
+
+    from sqlalchemy import func, desc, distinct
+    from datetime import datetime, timedelta, timezone
+
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+
+    base_query = db.query(ProductSearchLog).filter(ProductSearchLog.created_at >= cutoff_date)
+    if company_id:
+        base_query = base_query.filter(ProductSearchLog.company_id == company_id)
+    if source:
+        base_query = base_query.filter(ProductSearchLog.source == source)
+
+    # 1. KPIs Gerais
+    total_searches = base_query.count()
+    searches_web = base_query.filter(ProductSearchLog.source == "web").count()
+    searches_app = base_query.filter(ProductSearchLog.source == "app").count()
+    
+    total_sellers_active = db.query(distinct(ProductSearchLog.company_id)).filter(
+        ProductSearchLog.created_at >= cutoff_date
+    )
+    if company_id:
+        total_sellers_active = total_sellers_active.filter(ProductSearchLog.company_id == company_id)
+    if source:
+        total_sellers_active = total_sellers_active.filter(ProductSearchLog.source == source)
+    total_sellers_count = total_sellers_active.count()
+
+    matched_searches = base_query.filter(ProductSearchLog.total_results > 0).count()
+    unmatched_searches = base_query.filter(ProductSearchLog.total_results == 0).count()
+
+    # 2. Ranking Top Produtos / Termos
+    prod_query = (
+        db.query(
+            ProductSearchLog.search_term,
+            ProductSearchLog.matched_isbn,
+            ProductSearchLog.matched_name,
+            ProductSearchLog.matched_cod_item,
+            func.count(ProductSearchLog.id).label("total_searches"),
+            func.max(ProductSearchLog.created_at).label("last_searched_at"),
+            func.count(func.nullif(ProductSearchLog.source == "web", False)).label("searches_web"),
+            func.count(func.nullif(ProductSearchLog.source == "app", False)).label("searches_app"),
+            func.count(distinct(ProductSearchLog.company_id)).label("unique_sellers_count"),
+        )
+        .filter(ProductSearchLog.created_at >= cutoff_date)
+    )
+    if company_id:
+        prod_query = prod_query.filter(ProductSearchLog.company_id == company_id)
+    if source:
+        prod_query = prod_query.filter(ProductSearchLog.source == source)
+
+    prod_results = (
+        prod_query.group_by(
+            ProductSearchLog.search_term,
+            ProductSearchLog.matched_isbn,
+            ProductSearchLog.matched_name,
+            ProductSearchLog.matched_cod_item,
+        )
+        .order_by(desc("total_searches"))
+        .limit(limit)
+        .all()
+    )
+
+    top_products = [
+        {
+            "search_term": r[0],
+            "isbn": r[1],
+            "product_name": r[2] or r[0],
+            "cod_item": r[3],
+            "total_searches": r[4],
+            "last_searched_at": r[5].isoformat() if r[5] else None,
+            "searches_web": r[6],
+            "searches_app": r[7],
+            "unique_sellers_count": r[8],
+        }
+        for r in prod_results
+    ]
+
+    # 3. Ranking Sellers Mais Ativos no Busca Preço
+    seller_query = (
+        db.query(
+            Company.id.label("company_id"),
+            Company.name.label("company_name"),
+            Company.document.label("company_document"),
+            Company.logo.label("company_logo"),
+            func.count(ProductSearchLog.id).label("total_searches"),
+            func.max(ProductSearchLog.created_at).label("last_searched_at"),
+            func.count(func.nullif(ProductSearchLog.source == "web", False)).label("searches_web"),
+            func.count(func.nullif(ProductSearchLog.source == "app", False)).label("searches_app"),
+        )
+        .join(Company, Company.id == ProductSearchLog.company_id)
+        .filter(ProductSearchLog.created_at >= cutoff_date)
+    )
+    if company_id:
+        seller_query = seller_query.filter(ProductSearchLog.company_id == company_id)
+    if source:
+        seller_query = seller_query.filter(ProductSearchLog.source == source)
+
+    seller_results = (
+        seller_query.group_by(Company.id, Company.name, Company.document, Company.logo)
+        .order_by(desc("total_searches"))
+        .limit(20)
+        .all()
+    )
+
+    top_sellers = [
+        {
+            "company_id": s[0],
+            "company_name": s[1],
+            "company_document": s[2],
+            "company_logo": s[3],
+            "total_searches": s[4],
+            "last_searched_at": s[5].isoformat() if s[5] else None,
+            "searches_web": s[6],
+            "searches_app": s[7],
+        }
+        for s in seller_results
+    ]
+
+    return {
+        "days": days,
+        "filter_company_id": company_id,
+        "filter_source": source,
+        "summary": {
+            "total_searches": total_searches,
+            "searches_web": searches_web,
+            "searches_app": searches_app,
+            "total_sellers_active": total_sellers_count,
+            "matched_searches": matched_searches,
+            "unmatched_searches": unmatched_searches,
+            "success_rate_percent": round((matched_searches / total_searches * 100), 1) if total_searches > 0 else 0,
+        },
+        "top_products": top_products,
+        "top_sellers": top_sellers,
+    }
+
+
+@router.get("/master/logs")
+def get_master_search_logs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100),
+    company_id: Optional[int] = Query(None, description="Filtrar por seller"),
+    source: Optional[str] = Query(None, description="Filtrar por canal: web | app | physical_scanner"),
+    q: Optional[str] = Query(None, description="Filtrar por termo, ISBN ou nome"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Retorna logs detalhados e paginados de buscas para o usuário MASTER.
+    Exibe dados do Seller (razão social / nome fantasia e CNPJ) e dados do operador/usuário.
+    """
+    user_type = getattr(current_user, "type", None)
+    if hasattr(user_type, "value"):
+        user_type = user_type.value
+    if user_type != "MASTER":
+        raise HTTPException(status_code=403, detail="Acesso restrito ao perfil MASTER.")
+
+    from sqlalchemy import desc, or_
+
+    query = (
+        db.query(
+            ProductSearchLog,
+            Company.name.label("company_name"),
+            Company.document.label("company_document"),
+            User.name.label("user_name"),
+            User.email.label("user_email"),
+        )
+        .join(Company, Company.id == ProductSearchLog.company_id)
+        .outerjoin(User, User.id == ProductSearchLog.user_id)
+    )
+
+    if company_id:
+        query = query.filter(ProductSearchLog.company_id == company_id)
+    if source:
+        query = query.filter(ProductSearchLog.source == source)
+    if q and q.strip():
+        term_clean = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                ProductSearchLog.search_term.ilike(term_clean),
+                ProductSearchLog.matched_isbn.ilike(term_clean),
+                ProductSearchLog.matched_name.ilike(term_clean),
+                Company.name.ilike(term_clean),
+            )
+        )
+
+    total = query.count()
+    rows = (
+        query.order_by(desc(ProductSearchLog.created_at))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    items = []
+    for log, comp_name, comp_doc, usr_name, usr_email in rows:
+        items.append({
+            "id": log.id,
+            "company_id": log.company_id,
+            "company_name": comp_name,
+            "company_document": comp_doc,
+            "user_id": log.user_id,
+            "user_name": usr_name,
+            "user_email": usr_email,
+            "search_term": log.search_term,
+            "search_option": log.search_option,
+            "source": log.source,
+            "matched_cod_item": log.matched_cod_item,
+            "matched_isbn": log.matched_isbn,
+            "matched_name": log.matched_name,
+            "total_results": log.total_results,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+        })
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+    }
+
 
 

@@ -77,6 +77,7 @@ type UserData = {
 const masterNavigation: NavItem[] = [
   { name: 'Parceiros', href: '/companies', icon: Users },
   { name: 'Acessos & Sessões', href: '/master/sessions', icon: UserCheck },
+  { name: 'Logs Busca Preço', href: '/master/product-search-logs', icon: ScanBarcode },
   { name: 'Sites Institucionais', href: '/hosted-sites', icon: Globe },
   {
     name: 'Hub Sync Bookinfo',
