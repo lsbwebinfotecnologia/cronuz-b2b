@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
+import ServiceOrdersProjectionChart from '@/components/services/ServiceOrdersProjectionChart';
 
 export default function ServiceOrdersPage() {
     const [orders, setOrders] = useState<any[]>([]);
@@ -1041,6 +1042,17 @@ export default function ServiceOrdersPage() {
                     </button>
                 </div>
             </div>
+            
+            {/* Gráfico Compacto de Projeção Anual & Histórico de O.S. */}
+            <ServiceOrdersProjectionChart 
+                customerFilter={customerFilter}
+                onSelectMonthFilter={(start, end) => {
+                    setStartDate(start);
+                    setEndDate(end);
+                    setActivePeriodShortcut('custom');
+                    setPage(1);
+                }}
+            />
 
             {/* Nova Action Bar de Filtros e Resumo */}
             <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col gap-5">
