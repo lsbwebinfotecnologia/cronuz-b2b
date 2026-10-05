@@ -1919,134 +1919,173 @@ def export_services_report_by_customer(
 
 @router.get("/service-orders/projection-chart")
 def get_service_orders_projection_chart(
-    months_past: int = Query(3, ge=1, le=12),
-    months_future: int = Query(12, ge=1, le=24),
+    year: Optional[int] = Query(None, description="Ano de referência (ex: 2026). Se omitido, usa o ano corrente."),
     customer_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Retorna histórico dos meses anteriores (realizado) e projeção dos próximos meses (1 ano)
-    para alimentar o gráfico compacto de projeção e faturamento futuro de serviços.
+    Retorna histórico e projeção dos 12 meses do ano selecionado (Jan a Dez),
+    além do comparativo do mesmo mês no ano anterior (YoY), para permitir
+    análise de projeção de serviços e meta de faturamento.
     """
     from dateutil.relativedelta import relativedelta
     from sqlalchemy import func, case
     import calendar
 
-    # Nomes dos meses em português abreviados
     PT_MONTHS = ["", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
     today = date.today()
-    current_month_start = today.replace(day=1)
-    
-    # Início do período (ex: 3 meses atrás)
-    start_date = current_month_start - relativedelta(months=months_past)
-    
-    # Fim do período (ex: 12 meses futuros)
-    end_date = (current_month_start + relativedelta(months=months_future + 1)) - relativedelta(days=1)
+    target_year = year if year else today.year
+    current_year_month_key = today.strftime("%Y-%m")
 
-    # Agregação SQL por mês e ano
-    month_col = func.to_char(ServiceOrder.execution_date, 'YYYY-MM')
+    # Início e fim do ano selecionado: 01/01/{target_year} até 31/12/{target_year}
+    start_date = date(target_year, 1, 1)
+    end_date = date(target_year, 12, 31)
 
-    q = db.query(
-        month_col.label("month_key"),
-        func.sum(case((ServiceOrder.status == ServiceOrderStatus.COMPLETED, ServiceOrder.negotiated_value), else_=0.0)).label("total_completed"),
-        func.sum(case((ServiceOrder.status.in_([ServiceOrderStatus.PENDING, ServiceOrderStatus.IN_PROGRESS]), ServiceOrder.negotiated_value), else_=0.0)).label("total_pending"),
-        func.sum(case((ServiceOrder.status == ServiceOrderStatus.CANCELLED, ServiceOrder.negotiated_value), else_=0.0)).label("total_cancelled"),
-        func.sum(ServiceOrder.negotiated_value).label("total_all"),
-        func.count(case((ServiceOrder.status == ServiceOrderStatus.COMPLETED, 1))).label("count_completed"),
-        func.count(case((ServiceOrder.status.in_([ServiceOrderStatus.PENDING, ServiceOrderStatus.IN_PROGRESS]), 1))).label("count_pending"),
-        func.count(ServiceOrder.id).label("count_total")
+    # Início e fim do ano anterior: 01/01/{target_year - 1} até 31/12/{target_year - 1}
+    prev_start_date = date(target_year - 1, 1, 1)
+    prev_end_date = date(target_year - 1, 12, 31)
+
+    # Coleta os anos disponíveis no banco de dados para o dropdown no frontend
+    years_query = db.query(
+        func.distinct(func.extract('year', ServiceOrder.execution_date))
     ).filter(
         ServiceOrder.company_id == current_user.company_id,
-        ServiceOrder.execution_date >= start_date,
-        ServiceOrder.execution_date <= end_date
-    )
+        ServiceOrder.execution_date.isnot(None)
+    ).all()
+    
+    available_years = sorted(list({int(y[0]) for y in years_query if y[0] is not None} | {today.year, target_year, target_year + 1}))
 
-    if customer_id:
-        q = q.filter(ServiceOrder.customer_id == customer_id)
+    # Helper de agregação SQL por mês
+    month_col = func.to_char(ServiceOrder.execution_date, 'YYYY-MM')
 
-    db_rows = q.group_by(month_col).all()
-    rows_map = {row.month_key: row for row in db_rows}
+    def query_period_stats(dt_start: date, dt_end: date):
+        q = db.query(
+            month_col.label("month_key"),
+            func.sum(case((ServiceOrder.status == ServiceOrderStatus.COMPLETED, ServiceOrder.negotiated_value), else_=0.0)).label("total_completed"),
+            func.sum(case((ServiceOrder.status.in_([ServiceOrderStatus.PENDING, ServiceOrderStatus.IN_PROGRESS]), ServiceOrder.negotiated_value), else_=0.0)).label("total_pending"),
+            func.sum(case((ServiceOrder.status == ServiceOrderStatus.CANCELLED, ServiceOrder.negotiated_value), else_=0.0)).label("total_cancelled"),
+            func.sum(ServiceOrder.negotiated_value).label("total_all"),
+            func.count(case((ServiceOrder.status == ServiceOrderStatus.COMPLETED, 1))).label("count_completed"),
+            func.count(case((ServiceOrder.status.in_([ServiceOrderStatus.PENDING, ServiceOrderStatus.IN_PROGRESS]), 1))).label("count_pending"),
+            func.count(ServiceOrder.id).label("count_total")
+        ).filter(
+            ServiceOrder.company_id == current_user.company_id,
+            ServiceOrder.execution_date >= dt_start,
+            ServiceOrder.execution_date <= dt_end
+        )
+        if customer_id:
+            q = q.filter(ServiceOrder.customer_id == customer_id)
+        return {r.month_key: r for r in q.group_by(month_col).all()}
 
-    # Gera a sequência cronológica completa sem lacunas
-    total_months = months_past + 1 + months_future
+    # Executa agregação para o ano selecionado e para o ano anterior
+    current_year_map = query_period_stats(start_date, end_date)
+    prev_year_map = query_period_stats(prev_start_date, prev_end_date)
+
     series = []
     
-    current_key = current_month_start.strftime("%Y-%m")
-    
-    past_completed_sum = 0.0
-    past_months_count = 0
-    forecast_12m_sum = 0.0
-    forecast_3m_sum = 0.0
+    year_completed_sum = 0.0
+    year_pending_sum = 0.0
+    prev_year_completed_sum = 0.0
+    prev_year_total_sum = 0.0
+
     current_month_total = 0.0
     current_month_completed = 0.0
     current_month_pending = 0.0
+    current_month_prev_year = 0.0
 
-    for i in range(-months_past, months_future + 1):
-        m_date = current_month_start + relativedelta(months=i)
+    for m in range(1, 13):
+        m_date = date(target_year, m, 1)
         key = m_date.strftime("%Y-%m")
-        month_label = f"{PT_MONTHS[m_date.month]}/{m_date.strftime('%y')}"
+        prev_key = f"{target_year - 1}-{m:02d}"
         
-        row = rows_map.get(key)
-        
+        row = current_year_map.get(key)
+        prev_row = prev_year_map.get(prev_key)
+
         completed_val = float(row.total_completed or 0.0) if row else 0.0
         pending_val = float(row.total_pending or 0.0) if row else 0.0
         cancelled_val = float(row.total_cancelled or 0.0) if row else 0.0
         count_completed = int(row.count_completed or 0) if row else 0
         count_pending = int(row.count_pending or 0) if row else 0
         count_total = int(row.count_total or 0) if row else 0
-        
-        is_current = (key == current_key)
-        is_past = (i < 0)
-        is_future = (i > 0)
 
-        # Atualiza métricas estatísticas
-        if is_past:
-            past_completed_sum += completed_val
-            past_months_count += 1
-        elif is_current:
+        # Ano anterior correspondente
+        prev_completed = float(prev_row.total_completed or 0.0) if prev_row else 0.0
+        prev_pending = float(prev_row.total_pending or 0.0) if prev_row else 0.0
+        prev_total = prev_completed + prev_pending
+        prev_count_completed = int(prev_row.count_completed or 0) if prev_row else 0
+
+        is_current = (key == current_year_month_key)
+        is_past = (m_date < today.replace(day=1))
+        is_future = (m_date > today.replace(day=1))
+
+        year_completed_sum += completed_val
+        year_pending_sum += pending_val
+        prev_year_completed_sum += prev_completed
+        prev_year_total_sum += prev_total
+
+        if is_current:
             current_month_completed = completed_val
             current_month_pending = pending_val
             current_month_total = completed_val + pending_val
-        elif is_future:
-            forecast_12m_sum += (completed_val + pending_val)
-            if i <= 3:
-                forecast_3m_sum += (completed_val + pending_val)
+            current_month_prev_year = prev_completed
+
+        # Variação em relação ao mesmo mês do ano anterior (YoY)
+        current_active = completed_val + pending_val
+        diff_val = current_active - prev_completed
+        growth_pct = round(((current_active - prev_completed) / prev_completed) * 100, 1) if prev_completed > 0 else (100.0 if current_active > 0 else 0.0)
 
         series.append({
             "key": key,
-            "label": month_label,
-            "year": m_date.year,
-            "month": m_date.month,
+            "label": f"{PT_MONTHS[m]}/{str(target_year)[2:]}",
+            "month_name": PT_MONTHS[m],
+            "year": target_year,
+            "month": m,
             "is_current": is_current,
             "is_past": is_past,
             "is_future": is_future,
             "completed": completed_val,
             "pending": pending_val,
             "cancelled": cancelled_val,
-            "total_active": completed_val + pending_val,
+            "total_active": current_active,
             "count_completed": count_completed,
             "count_pending": count_pending,
-            "count_total": count_total
+            "count_total": count_total,
+            # Comparativo ano anterior
+            "prev_year_key": prev_key,
+            "prev_year_completed": prev_completed,
+            "prev_year_total": prev_total,
+            "prev_year_count_completed": prev_count_completed,
+            "diff_prev_year": round(diff_val, 2),
+            "growth_prev_year_pct": growth_pct
         })
 
-    avg_past_monthly = round(past_completed_sum / max(past_months_count, 1), 2)
-    next_12m_avg = round(forecast_12m_sum / max(months_future, 1), 2)
+    year_total_active = year_completed_sum + year_pending_sum
+    year_diff_prev = year_total_active - prev_year_completed_sum
+    year_growth_pct = round((year_diff_prev / prev_year_completed_sum) * 100, 1) if prev_year_completed_sum > 0 else (100.0 if year_total_active > 0 else 0.0)
 
     return {
+        "year": target_year,
+        "available_years": available_years,
         "series": series,
         "summary": {
-            "months_past": months_past,
-            "months_future": months_future,
-            "avg_past_monthly": avg_past_monthly,
+            "target_year": target_year,
+            "prev_year": target_year - 1,
+            "year_completed_total": round(year_completed_sum, 2),
+            "year_pending_total": round(year_pending_sum, 2),
+            "year_total_active": round(year_total_active, 2),
+            "year_monthly_avg": round(year_total_active / 12, 2),
+            "prev_year_completed_total": round(prev_year_completed_sum, 2),
+            "prev_year_monthly_avg": round(prev_year_completed_sum / 12, 2),
+            "year_diff_prev": round(year_diff_prev, 2),
+            "year_growth_pct": year_growth_pct,
             "current_month_completed": current_month_completed,
             "current_month_pending": current_month_pending,
             "current_month_total": current_month_total,
-            "forecast_3m_total": round(forecast_3m_sum, 2),
-            "forecast_12m_total": round(forecast_12m_sum, 2),
-            "forecast_12m_monthly_avg": next_12m_avg
+            "current_month_prev_year": current_month_prev_year
         }
     }
+
 
 
