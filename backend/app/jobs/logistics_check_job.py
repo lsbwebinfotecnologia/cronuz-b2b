@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import math
@@ -9,10 +10,13 @@ from app.models.logistics_settings import LogisticsSettings
 from app.models.logistics_order import LogisticsOrder
 from app.models.logistics_order_log import LogisticsOrderLog
 from app.models.company_settings import CompanySettings
+from app.models.company import Company
+from app.models.user import User
 from app.integrators.horus_logistics import HorusLogisticsClient
 from app.integrators.logistics.base_provider import LogisticsProvider
 
-logger = logging.getLogger("cronuz.logistics_check_job")
+logger = logging.getLogger("background_jobs")
+
 
 
 def _record_logistics_log(
@@ -283,6 +287,7 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
             min_order_number = None
 
     # Limita a 5 dias para cobrir fins de semana e feriados com seguranca
+    now_dt = datetime.now(timezone.utc)
     start_date = (now_dt - timedelta(days=5)).strftime("%Y-%m-%d")
     end_date = now_dt.strftime("%Y-%m-%d")
 
@@ -472,7 +477,7 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
     return stats
 
 
-async def run_logistics_check_job():
+async def _run_logistics_check_async():
     """
     Executa a conferência automática WMS para todas as empresas ativas com auto_check ligado.
     """
@@ -493,6 +498,23 @@ async def run_logistics_check_job():
                 inv_res = await process_company_logistics_invoice(db, st.company_id)
                 logger.info(f"[LogisticsInvoiceJob] Faturamento Empresa {st.company_id}: {inv_res}")
             except Exception as e:
-                logger.error(f"[LogisticsCheckJob] Erro na empresa {st.company_id}: {e}")
+                logger.error(f"[LogisticsCheckJob] Erro na empresa {st.company_id}: {e}", exc_info=True)
     finally:
         db.close()
+
+
+def run_logistics_check_job():
+    """
+    Ponto de entrada síncrono para o APScheduler (BackgroundScheduler).
+    Cria um novo event loop e executa a rotina assíncrona de conferência WMS.
+    """
+    logger.info("[LogisticsCheckJob] Iniciando ciclo de conferência WMS...")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_run_logistics_check_async())
+    except Exception as e:
+        logger.error(f"[LogisticsCheckJob] Erro crítico no job de conferência: {e}", exc_info=True)
+    finally:
+        loop.close()
+    logger.info("[LogisticsCheckJob] Ciclo de conferência concluído.")

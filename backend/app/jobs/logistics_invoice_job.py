@@ -12,10 +12,12 @@ from app.models.logistics_settings import LogisticsSettings
 from app.models.logistics_order import LogisticsOrder
 from app.models.logistics_order_log import LogisticsOrderLog
 from app.models.company_settings import CompanySettings
+from app.models.company import Company
+from app.models.user import User
 from app.integrators.horus_logistics import HorusLogisticsClient
 from app.integrators.logistics.base_provider import LogisticsProvider
 
-logger = logging.getLogger("cronuz.logistics_invoice_job")
+logger = logging.getLogger("background_jobs")
 
 # Controle de concorrencia: evita multiplos disparos simultaneos para a mesma empresa
 _running_invoice_companies = set()
@@ -426,7 +428,7 @@ async def _do_process_company_logistics_invoice(db: Session, company_id: int, li
     return stats
 
 
-async def run_logistics_invoice_job():
+async def _run_logistics_invoice_async():
     """Executa a rotina de envio de NFe para todas as empresas com logística habilitada."""
     db = SessionLocal()
     try:
@@ -438,6 +440,23 @@ async def run_logistics_invoice_job():
                 res = await process_company_logistics_invoice(db, st.company_id)
                 logger.info(f"[LogisticsInvoiceJob] Empresa {st.company_id}: {res}")
             except Exception as e:
-                logger.error(f"[LogisticsInvoiceJob] Erro na empresa {st.company_id}: {e}")
+                logger.error(f"[LogisticsInvoiceJob] Erro na empresa {st.company_id}: {e}", exc_info=True)
     finally:
         db.close()
+
+
+def run_logistics_invoice_job():
+    """
+    Ponto de entrada síncrono para o APScheduler (BackgroundScheduler).
+    Cria um novo event loop e executa a rotina assíncrona de envio de faturamento para o WMS.
+    """
+    logger.info("[LogisticsInvoiceJob] Iniciando ciclo de envio de notas fiscais ao WMS...")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_run_logistics_invoice_async())
+    except Exception as e:
+        logger.error(f"[LogisticsInvoiceJob] Erro crítico no job de faturamento: {e}", exc_info=True)
+    finally:
+        loop.close()
+    logger.info("[LogisticsInvoiceJob] Ciclo de envio de notas fiscais concluído.")

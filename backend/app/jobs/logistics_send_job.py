@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List
@@ -8,11 +9,12 @@ from app.models.logistics_settings import LogisticsSettings
 from app.models.logistics_order import LogisticsOrder
 from app.models.company_settings import CompanySettings
 from app.models.company import Company
+from app.models.user import User
 from app.integrators.horus_orders import HorusOrders
 from app.integrators.horus_clients import HorusClients
 from app.integrators.logistics.base_provider import LogisticsProvider
 
-logger = logging.getLogger("cronuz.logistics_send_job")
+logger = logging.getLogger("background_jobs")
 
 def _only_digits(v: str) -> str:
     return "".join(c for c in str(v) if c.isdigit()) if v else ""
@@ -182,6 +184,7 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
             if not cod_ped:
                 continue
 
+            now = datetime.now(timezone.utc)
             stats["processed"] += 1
 
             # 1. Verifica se já está na fila com ID confirmado ou em situação finalizada
@@ -505,12 +508,10 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
     return stats
 
 
-def run_logistics_auto_send_job():
+async def _run_logistics_auto_send_async():
     """
-    Função síncrona chamada pelo APScheduler a cada 15 minutos.
-    Dispara o envio automático para todas as empresas ativas.
+    Varre todas as empresas com logística ativa e feature_auto_send habilitada.
     """
-    import asyncio
     db = SessionLocal()
     try:
         active_settings = db.query(LogisticsSettings).filter(
@@ -523,9 +524,26 @@ def run_logistics_auto_send_job():
 
         for s in active_settings:
             try:
-                res = asyncio.run(process_company_logistics_send(db, s.company_id))
-                logger.info(f"[LogisticsJob] Empresa {s.company_id}: {res}")
+                res = await process_company_logistics_send(db, s.company_id)
+                logger.info(f"[LogisticsSendJob] Empresa {s.company_id}: {res}")
             except Exception as e:
-                logger.error(f"[LogisticsJob] Falha na execução da empresa {s.company_id}: {e}")
+                logger.error(f"[LogisticsSendJob] Falha na execução da empresa {s.company_id}: {e}", exc_info=True)
     finally:
         db.close()
+
+
+def run_logistics_auto_send_job():
+    """
+    Função síncrona chamada pelo APScheduler a cada 15 minutos.
+    Dispara o envio automático de pedidos LEX para todas as empresas ativas.
+    """
+    logger.info("[LogisticsSendJob] Iniciando ciclo de envio automático ao WMS...")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_run_logistics_auto_send_async())
+    except Exception as e:
+        logger.error(f"[LogisticsSendJob] Erro crítico no job de envio: {e}", exc_info=True)
+    finally:
+        loop.close()
+    logger.info("[LogisticsSendJob] Ciclo de envio automático concluído.")
