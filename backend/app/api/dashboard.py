@@ -164,17 +164,23 @@ def get_dashboard_metrics(
         "receivable": {"paid": 0.0, "pending": 0.0}
     }
     if module_financial:
-        from app.models.financial import FinancialInstallment, FinancialTransaction, FinancialAccount
+        from app.models.financial import FinancialInstallment, FinancialTransaction, FinancialAccount, FinancialCategory
         fin_query = db.query(FinancialTransaction.type, FinancialInstallment.status, func.sum(FinancialInstallment.amount).label('total'))\
             .join(FinancialInstallment, FinancialInstallment.transaction_id == FinancialTransaction.id)\
-            .filter(FinancialInstallment.due_date >= start_dt.date(), FinancialInstallment.due_date < end_dt.date(), FinancialInstallment.status != "CANCELLED")
+            .join(FinancialCategory, FinancialTransaction.category_id == FinancialCategory.id)\
+            .filter(
+                FinancialInstallment.due_date >= start_dt.date(),
+                FinancialInstallment.due_date < end_dt.date(),
+                FinancialInstallment.status != "CANCELLED",
+                FinancialTransaction.exclude_from_reports == False,
+                FinancialInstallment.exclude_from_reports == False,
+                FinancialCategory.name != "Transferência entre Contas"
+            )
         
         if not include_personal:
             fin_query = fin_query.outerjoin(FinancialAccount, FinancialInstallment.account_id == FinancialAccount.id)\
                 .filter(
-                    (FinancialAccount.id == None) | (FinancialAccount.is_personal == False),
-                    FinancialTransaction.exclude_from_reports == False,
-                    FinancialInstallment.exclude_from_reports == False
+                    (FinancialAccount.id == None) | (FinancialAccount.is_personal == False)
                 )
 
         if company_id:

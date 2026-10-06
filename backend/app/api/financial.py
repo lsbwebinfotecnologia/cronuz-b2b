@@ -1244,14 +1244,15 @@ def transfer_account(data: BankTransferRequest, db: Session = Depends(get_db), c
     t_out = FinancialTransaction(
         company_id=cid, description=data.description, category_id=cat_out.id, type="PAYABLE",
         transaction_status="CONFIRMADO", is_fixed=False, total_amount=data.amount, issue_date=data.transfer_date,
-        first_due_date=data.transfer_date
+        first_due_date=data.transfer_date, exclude_from_reports=True
     )
     db.add(t_out)
     db.flush()
     
     i_out = FinancialInstallment(
         transaction_id=t_out.id, number=1, due_date=data.transfer_date, amount=data.amount, status="PAID",
-        account_id=src.id, payment_date=datetime.now(), is_conciliated=True, conciliated_at=datetime.now()
+        account_id=src.id, payment_date=datetime.now(), is_conciliated=True, conciliated_at=datetime.now(),
+        exclude_from_reports=True
     )
     db.add(i_out)
     
@@ -1267,14 +1268,15 @@ def transfer_account(data: BankTransferRequest, db: Session = Depends(get_db), c
     t_in = FinancialTransaction(
         company_id=cid, description=data.description, category_id=cat_in.id, type="RECEIVABLE",
         transaction_status="CONFIRMADO", is_fixed=False, total_amount=data.amount, issue_date=data.transfer_date,
-        first_due_date=data.transfer_date
+        first_due_date=data.transfer_date, exclude_from_reports=True
     )
     db.add(t_in)
     db.flush()
     
     i_in = FinancialInstallment(
         transaction_id=t_in.id, number=1, due_date=data.transfer_date, amount=data.amount, status="PAID",
-        account_id=dst.id, payment_date=datetime.now(), is_conciliated=True, conciliated_at=datetime.now()
+        account_id=dst.id, payment_date=datetime.now(), is_conciliated=True, conciliated_at=datetime.now(),
+        exclude_from_reports=True
     )
     db.add(i_in)
     
