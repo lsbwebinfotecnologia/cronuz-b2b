@@ -53,9 +53,9 @@ export default function DbmCompaniesSearchPage() {
   const router = useRouter();
 
   // Seller Context (Empresa logada)
-  const [companyId, setCompanyId] = useState<number>(() => {
+  const [companyId, setCompanyId] = useState<number | undefined>(() => {
     const user = getUser();
-    return user?.company_id || 4;
+    return user?.company_id;
   });
 
   useEffect(() => {
@@ -342,7 +342,7 @@ export default function DbmCompaniesSearchPage() {
 
       const payload = {
         id: formData.id > 0 ? formData.id : null,
-        seller_company_id: companyId || 4,
+        seller_company_id: companyId || undefined,
         document: cleanDoc,
         name: formData.name.trim(),
         razao_social: formData.razao_social?.trim() || formData.name.trim(),
@@ -528,8 +528,8 @@ export default function DbmCompaniesSearchPage() {
               Authorization: `Bearer ${token}`
             },
             body: JSON.stringify({
-              company_id: companyId || 4,
-              seller_company_id: companyId || 4,
+              company_id: companyId || undefined,
+              seller_company_id: companyId || undefined,
               items: chunk
             })
           }

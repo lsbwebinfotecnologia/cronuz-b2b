@@ -26,13 +26,43 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.core.dependencies import get_current_user
 from app.core.upload_security import validate_file_size_and_extension, read_file_safely, sanitize_filename
-from app.models.company import Company
+from app.models.user import User, UserRole
 from app.models.customer import Customer
 from app.models.company_settings import CompanySettings
 from app.integrators.horus_sql_client import HorusSQLClient, HorusSQLConfigError
 
 router = APIRouter(prefix="/dbm", tags=["dbm"])
 log = logging.getLogger(__name__)
+
+
+def _resolve_seller_id(current_user: User, company_id: Optional[int] = None) -> int:
+    is_master = False
+    if hasattr(current_user, "type"):
+        user_type = current_user.type
+        type_str = user_type.value if hasattr(user_type, "value") else str(user_type or "")
+        is_master = type_str.upper() == "MASTER"
+    elif isinstance(current_user, dict):
+        is_master = str(current_user.get("type", "")).upper() == "MASTER"
+
+    if is_master and company_id and company_id > 0:
+        return company_id
+
+    seller_id = None
+    if hasattr(current_user, "company_id"):
+        seller_id = current_user.company_id
+    elif isinstance(current_user, dict):
+        seller_id = current_user.get("company_id")
+
+    if not seller_id and company_id and company_id > 0:
+        seller_id = company_id
+
+    if not seller_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Seller não identificado. É necessário estar vinculado a uma empresa para gerenciar empresas no DBM."
+        )
+    return seller_id
+
 
 
 def _sanitize_doc(doc: str) -> str:
@@ -152,7 +182,7 @@ def lookup_horus_company(
     check_cliente: bool = Query(True, description="Consultar tabela CLIENTES do Horus"),
     check_fornecedor: bool = Query(True, description="Consultar tabela FORNECEDORES do Horus"),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Pesquisa no banco SQL Server do Horus ERP por CPF/CNPJ:
@@ -165,12 +195,7 @@ def lookup_horus_company(
         raise HTTPException(status_code=400, detail="CNPJ/CPF inválido ou vazio para consulta no Horus.")
 
     # Identifica o seller / empresa ativo
-    target_company_id = company_id
-    if not target_company_id:
-        if isinstance(current_user, dict):
-            target_company_id = current_user.get("company_id")
-        else:
-            target_company_id = getattr(current_user, "company_id", None)
+    target_company_id = _resolve_seller_id(current_user, company_id)
 
     # Identificar CompanySettings correspondente
     settings = None
@@ -361,60 +386,64 @@ def lookup_horus_company(
 @router.get("/companies", response_model=dict)
 def list_dbm_companies(
     company_id: Optional[int] = Query(None, description="Seller ativo para filtro contextual"),
-    search: Optional[str] = Query(None, description="Busca por Apelido, Razão Social, CNPJ ou Códigos Horus"),
+    search: Optional[str] = Query(None, description="Busca por Fantasia (apelido), Razão Social, CNPJ ou Códigos Horus"),
     uf: Optional[str] = Query(None, description="Filtro por UF"),
     limit: int = Query(100, ge=1, le=500),
     skip: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Lista e busca empresas cadastradas no Cronuz para a tela DBM.
+    Lista e busca empresas do Seller (tabela crm_customer) para a tela DBM.
+    Garante isolamento absoluto por seller_company_id (sem expor outras empresas/tenants do sistema).
     """
-    query = db.query(Company)
+    seller_id = _resolve_seller_id(current_user, company_id)
+
+    query = db.query(Customer).filter(Customer.company_id == seller_id)
 
     if uf and uf.strip():
-        query = query.filter(func.upper(Company.state) == uf.strip().upper())
+        query = query.filter(func.upper(Customer.state) == uf.strip().upper())
 
     if search and search.strip():
         term = f"%{search.strip()}%"
         clean_term = _sanitize_doc(search.strip())
-        
+
         filters = [
-            Company.name.ilike(term),
-            Company.razao_social.ilike(term),
-            Company.document.ilike(term),
+            Customer.name.ilike(term),
+            Customer.corporate_name.ilike(term),
+            Customer.document.ilike(term),
         ]
         if clean_term:
-            filters.append(func.regexp_replace(Company.document, r"\D", "", "g").ilike(f"%{clean_term}%"))
+            filters.append(func.regexp_replace(Customer.document, r"\D", "", "g").ilike(f"%{clean_term}%"))
             if clean_term.isdigit():
-                filters.append(Company.id == int(clean_term))
-                filters.append(Company.horus_cod_cli == int(clean_term))
-                filters.append(Company.horus_cod_fornecedor == int(clean_term))
+                clean_num = int(clean_term)
+                filters.append(Customer.id == clean_num)
+                filters.append(Customer.horus_cod_cli == clean_num)
+                filters.append(Customer.horus_cod_fornecedor == clean_num)
 
         query = query.filter(or_(*filters))
 
     total = query.count()
-    companies = query.order_by(Company.id.desc()).offset(skip).limit(limit).all()
+    customers = query.order_by(Customer.id.desc()).offset(skip).limit(limit).all()
 
     items = []
-    for c in companies:
+    for c in customers:
         items.append({
             "id": c.id,
             "document": c.document or "",
             "name": c.name or "",
-            "razao_social": c.razao_social or c.name or "",
+            "razao_social": c.corporate_name or c.name or "",
             "city": c.city or "",
             "state": c.state or "",
-            "group_name": getattr(c, "group_name", None) or "",
-            "segment": getattr(c, "segment", None) or "",
-            "notes_message": getattr(c, "notes_message", None) or "",
-            "customer_account": getattr(c, "customer_account", None) or "",
-            "royalties_data": getattr(c, "royalties_data", None) or "",
-            "is_cliente": getattr(c, "is_cliente", True) if getattr(c, "is_cliente", None) is not None else True,
-            "is_fornecedor": getattr(c, "is_fornecedor", False) if getattr(c, "is_fornecedor", None) is not None else False,
-            "horus_cod_cli": getattr(c, "horus_cod_cli", None),
-            "horus_cod_fornecedor": getattr(c, "horus_cod_fornecedor", None),
+            "group_name": c.group_name or "",
+            "segment": c.segment or "",
+            "notes_message": c.notes_message or "",
+            "customer_account": c.customer_account or "",
+            "royalties_data": c.royalties_data or "",
+            "is_cliente": c.is_cliente if c.is_cliente is not None else True,
+            "is_fornecedor": c.is_fornecedor if c.is_fornecedor is not None else False,
+            "horus_cod_cli": c.horus_cod_cli,
+            "horus_cod_fornecedor": c.horus_cod_fornecedor,
             "created_at": c.created_at.isoformat() if c.created_at else None,
         })
 
@@ -429,33 +458,38 @@ def list_dbm_companies(
 @router.get("/companies/{id}")
 def get_dbm_company(
     id: int,
+    company_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Retorna os dados completos da empresa pelo Código Cronuz (ID).
+    Retorna os dados completos da empresa do seller pelo Código (Customer ID).
     """
-    company = db.query(Company).filter(Company.id == id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="Empresa não encontrada no Cronuz.")
+    seller_id = _resolve_seller_id(current_user, company_id)
+    cust = db.query(Customer).filter(
+        Customer.id == id,
+        Customer.company_id == seller_id
+    ).first()
+    if not cust:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada para este seller.")
 
     return {
-        "id": company.id,
-        "document": company.document or "",
-        "name": company.name or "",
-        "razao_social": company.razao_social or company.name or "",
-        "city": company.city or "",
-        "state": company.state or "",
-        "group_name": getattr(company, "group_name", None) or "",
-        "segment": getattr(company, "segment", None) or "",
-        "notes_message": getattr(company, "notes_message", None) or "",
-        "customer_account": getattr(company, "customer_account", None) or "",
-        "royalties_data": getattr(company, "royalties_data", None) or "",
-        "is_cliente": getattr(company, "is_cliente", True) if getattr(company, "is_cliente", None) is not None else True,
-        "is_fornecedor": getattr(company, "is_fornecedor", False) if getattr(company, "is_fornecedor", None) is not None else False,
-        "horus_cod_cli": getattr(company, "horus_cod_cli", None),
-        "horus_cod_fornecedor": getattr(company, "horus_cod_fornecedor", None),
-        "created_at": company.created_at.isoformat() if company.created_at else None,
+        "id": cust.id,
+        "document": cust.document or "",
+        "name": cust.name or "",
+        "razao_social": cust.corporate_name or cust.name or "",
+        "city": cust.city or "",
+        "state": cust.state or "",
+        "group_name": cust.group_name or "",
+        "segment": cust.segment or "",
+        "notes_message": cust.notes_message or "",
+        "customer_account": cust.customer_account or "",
+        "royalties_data": cust.royalties_data or "",
+        "is_cliente": cust.is_cliente if cust.is_cliente is not None else True,
+        "is_fornecedor": cust.is_fornecedor if cust.is_fornecedor is not None else False,
+        "horus_cod_cli": cust.horus_cod_cli,
+        "horus_cod_fornecedor": cust.horus_cod_fornecedor,
+        "created_at": cust.created_at.isoformat() if cust.created_at else None,
     }
 
 
@@ -463,70 +497,68 @@ def get_dbm_company(
 def save_dbm_company(
     payload: DbmCompanySavePayload,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Cadastra ou atualiza uma empresa no DBM:
-    - Valida se já existe na tabela cmp_company (por ID ou por CNPJ/CPF).
+    Cadastra ou atualiza uma empresa do seller (crm_customer):
+    - Valida se já existe na tabela crm_customer do seller (por ID ou por CNPJ/CPF).
     - Se já existir, atualiza os dados e vínculos com Horus.
-    - Se não existir, cadastra com os campos necessários e obrigatórios.
-    - Grava o código do Horus numérico puro (sem prefixo 'H').
+    - Se não existir, cadastra isolado na conta deste seller.
+    - NUNCA altera ou polui a tabela cmp_company (SaaS tenants).
     """
+    seller_id = _resolve_seller_id(current_user, payload.seller_company_id)
+
     clean_doc = _sanitize_doc(payload.document)
     if not clean_doc:
         raise HTTPException(status_code=400, detail="CNPJ / CPF é obrigatório para cadastrar a empresa.")
 
     apelido = (payload.name or "").strip()
     if not apelido:
-        raise HTTPException(status_code=400, detail="Empresa (Apelido) é obrigatório.")
+        raise HTTPException(status_code=400, detail="Fantasia (apelido) é obrigatório.")
 
     razao_social = (payload.razao_social or apelido).strip()
 
-    # Validação de existência
-    existing_company = None
+    # Validação de existência no escopo do seller
+    existing_cust = None
     if payload.id and payload.id > 0:
-        existing_company = db.query(Company).filter(Company.id == payload.id).first()
+        existing_cust = db.query(Customer).filter(
+            Customer.id == payload.id,
+            Customer.company_id == seller_id
+        ).first()
 
-    if not existing_company:
-        existing_company = db.query(Company).filter(
+    if not existing_cust:
+        existing_cust = db.query(Customer).filter(
+            Customer.company_id == seller_id,
             or_(
-                func.regexp_replace(Company.document, r"\D", "", "g") == clean_doc,
-                Company.document == payload.document.strip()
+                func.regexp_replace(Customer.document, r"\D", "", "g") == clean_doc,
+                Customer.document == payload.document.strip()
             )
         ).first()
 
-    status_action = "updated" if existing_company else "created"
+    status_action = "updated" if existing_cust else "created"
 
-    if existing_company:
-        # Atualiza a empresa existente
-        existing_company.name = apelido
-        existing_company.razao_social = razao_social
-        existing_company.city = (payload.city or "").strip() or None
-        existing_company.state = (payload.state or "").strip().upper() or None
-        existing_company.group_name = (payload.group_name or "").strip() or None
-        existing_company.segment = (payload.segment or "").strip() or None
-        existing_company.notes_message = (payload.notes_message or "").strip() or None
-        existing_company.customer_account = (payload.customer_account or "").strip() or None
-        existing_company.royalties_data = (payload.royalties_data or "").strip() or None
-        existing_company.is_cliente = payload.is_cliente
-        existing_company.is_fornecedor = payload.is_fornecedor
-        existing_company.horus_cod_cli = payload.horus_cod_cli
-        existing_company.horus_cod_fornecedor = payload.horus_cod_fornecedor
-        
-        target_company = existing_company
+    if existing_cust:
+        existing_cust.name = apelido
+        existing_cust.corporate_name = razao_social
+        existing_cust.document = clean_doc
+        existing_cust.city = (payload.city or "").strip() or None
+        existing_cust.state = (payload.state or "").strip().upper() or None
+        existing_cust.group_name = (payload.group_name or "").strip() or None
+        existing_cust.segment = (payload.segment or "").strip() or None
+        existing_cust.notes_message = (payload.notes_message or "").strip() or None
+        existing_cust.customer_account = (payload.customer_account or "").strip() or None
+        existing_cust.royalties_data = (payload.royalties_data or "").strip() or None
+        existing_cust.is_cliente = payload.is_cliente
+        existing_cust.is_fornecedor = payload.is_fornecedor
+        existing_cust.horus_cod_cli = payload.horus_cod_cli
+        existing_cust.horus_cod_fornecedor = payload.horus_cod_fornecedor
+        target_cust = existing_cust
     else:
-        # Cadastra uma nova empresa no Cronuz
-        domain_slug = f"empresa-{clean_doc}"
-        # Garante unicidade do domain
-        duplicate_domain = db.query(Company).filter(Company.domain == domain_slug).first()
-        if duplicate_domain:
-            domain_slug = f"empresa-{clean_doc}-{int(func.extract('epoch', func.now()))}"
-
-        new_company = Company(
-            document=clean_doc,
+        new_cust = Customer(
+            company_id=seller_id,
             name=apelido,
-            razao_social=razao_social,
-            domain=domain_slug,
+            corporate_name=razao_social,
+            document=clean_doc,
             city=(payload.city or "").strip() or None,
             state=(payload.state or "").strip().upper() or None,
             group_name=(payload.group_name or "").strip() or None,
@@ -538,78 +570,36 @@ def save_dbm_company(
             is_fornecedor=payload.is_fornecedor,
             horus_cod_cli=payload.horus_cod_cli,
             horus_cod_fornecedor=payload.horus_cod_fornecedor,
-            tenant_id="cronuz",
-            active=True
+            customer_type="PJ" if len(clean_doc) > 11 else "PF",
         )
-        db.add(new_company)
+        db.add(new_cust)
         db.flush()
-        target_company = new_company
-
-    # Se informado seller_company_id, sincroniza também na tabela crm_customer do seller
-    if payload.seller_company_id and payload.seller_company_id > 0:
-        cust = db.query(Customer).filter(
-            Customer.company_id == payload.seller_company_id,
-            func.regexp_replace(Customer.document, r"\D", "", "g") == clean_doc
-        ).first()
-
-        if cust:
-            cust.name = apelido
-            cust.corporate_name = razao_social
-            cust.city = (payload.city or "").strip() or None
-            cust.state = (payload.state or "").strip().upper() or None
-            cust.group_name = (payload.group_name or "").strip() or None
-            cust.segment = (payload.segment or "").strip() or None
-            cust.notes_message = (payload.notes_message or "").strip() or None
-            cust.customer_account = (payload.customer_account or "").strip() or None
-            cust.royalties_data = (payload.royalties_data or "").strip() or None
-            cust.is_cliente = payload.is_cliente
-            cust.is_fornecedor = payload.is_fornecedor
-            cust.horus_cod_cli = payload.horus_cod_cli
-            cust.horus_cod_fornecedor = payload.horus_cod_fornecedor
-        else:
-            new_cust = Customer(
-                company_id=payload.seller_company_id,
-                name=apelido,
-                corporate_name=razao_social,
-                document=clean_doc,
-                city=(payload.city or "").strip() or None,
-                state=(payload.state or "").strip().upper() or None,
-                group_name=(payload.group_name or "").strip() or None,
-                segment=(payload.segment or "").strip() or None,
-                notes_message=(payload.notes_message or "").strip() or None,
-                customer_account=(payload.customer_account or "").strip() or None,
-                royalties_data=(payload.royalties_data or "").strip() or None,
-                is_cliente=payload.is_cliente,
-                is_fornecedor=payload.is_fornecedor,
-                horus_cod_cli=payload.horus_cod_cli,
-                horus_cod_fornecedor=payload.horus_cod_fornecedor,
-                customer_type="PJ"
-            )
-            db.add(new_cust)
+        target_cust = new_cust
 
     db.commit()
-    db.refresh(target_company)
+    db.refresh(target_cust)
 
     return {
         "success": True,
         "action": status_action,
         "message": f"Empresa {status_action} com sucesso no Cronuz!",
         "company": {
-            "id": target_company.id,
-            "document": target_company.document,
-            "name": target_company.name,
-            "razao_social": target_company.razao_social,
-            "city": target_company.city,
-            "state": target_company.state,
-            "group_name": getattr(target_company, "group_name", None),
-            "segment": getattr(target_company, "segment", None),
-            "notes_message": getattr(target_company, "notes_message", None),
-            "customer_account": getattr(target_company, "customer_account", None),
-            "royalties_data": getattr(target_company, "royalties_data", None),
-            "is_cliente": getattr(target_company, "is_cliente", True),
-            "is_fornecedor": getattr(target_company, "is_fornecedor", False),
-            "horus_cod_cli": getattr(target_company, "horus_cod_cli", None),
-            "horus_cod_fornecedor": getattr(target_company, "horus_cod_fornecedor", None),
+            "id": target_cust.id,
+            "document": target_cust.document,
+            "name": target_cust.name,
+            "razao_social": target_cust.corporate_name,
+            "city": target_cust.city,
+            "state": target_cust.state,
+            "group_name": target_cust.group_name,
+            "segment": target_cust.segment,
+            "notes_message": target_cust.notes_message,
+            "customer_account": target_cust.customer_account,
+            "royalties_data": target_cust.royalties_data,
+            "is_cliente": target_cust.is_cliente,
+            "is_fornecedor": target_cust.is_fornecedor,
+            "horus_cod_cli": target_cust.horus_cod_cli,
+            "horus_cod_fornecedor": target_cust.horus_cod_fornecedor,
+            "created_at": target_cust.created_at.isoformat() if target_cust.created_at else None,
         }
     }
 
@@ -666,7 +656,7 @@ async def parse_dbm_companies_sheet(
     file: UploadFile = File(...),
     company_id: Optional[int] = Form(None),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Recebe planilha (.xlsx ou .csv), valida integridade e tamanho (máx 10 MB),
@@ -676,13 +666,7 @@ async def parse_dbm_companies_sheet(
     file_bytes = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
 
     # Identificar seller / isolamento de pastas
-    target_seller_id = company_id
-    if not target_seller_id:
-        if isinstance(current_user, dict):
-            target_seller_id = current_user.get("company_id")
-        else:
-            target_seller_id = getattr(current_user, "company_id", None)
-    target_seller_id = target_seller_id or 1
+    target_seller_id = _resolve_seller_id(current_user, company_id)
 
     # Salva na pasta isolada de uploads do seller (uploads/<company_id>/sheets/)
     upload_dir = Path("uploads") / str(target_seller_id) / "sheets"
@@ -802,30 +786,22 @@ async def parse_dbm_companies_sheet(
 def process_dbm_companies_import_batch(
     payload: DbmImportBatchPayload,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Processa um lote de empresas parseadas da planilha:
+    Processa um lote de empresas parseadas da planilha para o Seller (crm_customer):
     1. Para cada empresa, busca dados no Horus pelo codigo_horus (tabela CLIENTES + FORNECEDORES).
     2. Preserva os dados informados na planilha (apelido, grupo, segmento, obs, royalties, account).
-    3. Cadastra ou atualiza na base Cronuz (cmp_company e crm_customer).
+    3. Cadastra ou atualiza na tabela crm_customer do Seller.
+    4. NUNCA toca na tabela cmp_company (SaaS tenants).
     """
-    target_company_id = payload.company_id
-    if not target_company_id:
-        if isinstance(current_user, dict):
-            target_company_id = current_user.get("company_id")
-        else:
-            target_company_id = getattr(current_user, "company_id", None)
-
-    seller_company_id = payload.seller_company_id or target_company_id
+    seller_id = _resolve_seller_id(current_user, payload.seller_company_id or payload.company_id)
 
     # Identificar CompanySettings correspondente
-    settings = None
-    if target_company_id:
-        settings = db.query(CompanySettings).filter(CompanySettings.company_id == target_company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
 
     # Empresa de conexão Horus SQL
-    sql_company_id = target_company_id
+    sql_company_id = seller_id
     if not (settings and settings.horus_sql_enabled):
         active_sql = db.query(CompanySettings).filter(CompanySettings.horus_sql_enabled == True).first()
         if active_sql:
@@ -932,57 +908,52 @@ def process_dbm_companies_import_batch(
             fechamento_roy = (item.fechamento_roy or "").strip() or None
             account = (item.account or "").strip() or None
 
-            # 4. Localização / Atualização / Criação no PostgreSQL (cmp_company)
-            existing_comp = db.query(Company).filter(
+            # 4. Localização / Atualização / Criação no crm_customer DO SELLER
+            existing_cust = db.query(Customer).filter(
+                Customer.company_id == seller_id,
                 or_(
-                    Company.horus_cod_cli == cod_cli,
-                    func.regexp_replace(Company.document, r"\D", "", "g") == clean_doc,
-                    Company.document == clean_doc
+                    Customer.horus_cod_cli == cod_cli,
+                    func.regexp_replace(Customer.document, r"\D", "", "g") == clean_doc,
+                    Customer.document == clean_doc
                 )
             ).first()
 
-            action = "UPDATED" if existing_comp else "CREATED"
+            action = "UPDATED" if existing_cust else "CREATED"
 
-            if existing_comp:
-                # Mantém os dados da planilha e atualiza os vínculos
-                existing_comp.name = apelido
+            if existing_cust:
+                existing_cust.name = apelido
                 if nom_cli:
-                    existing_comp.razao_social = nom_cli
-                if clean_doc and not existing_comp.document:
-                    existing_comp.document = clean_doc
+                    existing_cust.corporate_name = nom_cli
+                if clean_doc:
+                    existing_cust.document = clean_doc
                 if city_horus:
-                    existing_comp.city = city_horus
+                    existing_cust.city = city_horus
                 if uf_horus:
-                    existing_comp.state = uf_horus
+                    existing_cust.state = uf_horus
                 if grupo:
-                    existing_comp.group_name = grupo
+                    existing_cust.group_name = grupo
                 if segmento:
-                    existing_comp.segment = segmento
+                    existing_cust.segment = segmento
                 if obs:
-                    existing_comp.notes_message = obs
+                    existing_cust.notes_message = obs
                 if account:
-                    existing_comp.customer_account = account
+                    existing_cust.customer_account = account
                 if fechamento_roy:
-                    existing_comp.royalties_data = fechamento_roy
+                    existing_cust.royalties_data = fechamento_roy
 
-                existing_comp.is_cliente = True
-                existing_comp.horus_cod_cli = cod_cli
+                existing_cust.is_cliente = True
+                existing_cust.horus_cod_cli = cod_cli
                 if is_fornecedor and horus_cod_fornecedor:
-                    existing_comp.is_fornecedor = True
-                    existing_comp.horus_cod_fornecedor = horus_cod_fornecedor
+                    existing_cust.is_fornecedor = True
+                    existing_cust.horus_cod_fornecedor = horus_cod_fornecedor
 
-                target_comp = existing_comp
+                target_cust = existing_cust
             else:
-                domain_slug = f"empresa-{clean_doc}"
-                duplicate_domain = db.query(Company).filter(Company.domain == domain_slug).first()
-                if duplicate_domain:
-                    domain_slug = f"empresa-{clean_doc}-{cod_cli}"
-
-                new_comp = Company(
+                new_cust = Customer(
+                    company_id=seller_id,
                     document=clean_doc,
                     name=apelido,
-                    razao_social=razao_social,
-                    domain=domain_slug,
+                    corporate_name=razao_social,
                     city=city_horus,
                     state=uf_horus,
                     group_name=grupo,
@@ -994,66 +965,11 @@ def process_dbm_companies_import_batch(
                     is_fornecedor=is_fornecedor,
                     horus_cod_cli=cod_cli,
                     horus_cod_fornecedor=horus_cod_fornecedor,
-                    tenant_id="cronuz",
-                    active=True
+                    customer_type="PJ" if len(clean_doc) > 11 else "PF",
                 )
-                db.add(new_comp)
+                db.add(new_cust)
                 db.flush()
-                target_comp = new_comp
-
-            # 5. Sincronização em crm_customer se seller_company_id informado
-            if seller_company_id and seller_company_id > 0:
-                cust = db.query(Customer).filter(
-                    Customer.company_id == seller_company_id,
-                    or_(
-                        Customer.horus_cod_cli == cod_cli,
-                        func.regexp_replace(Customer.document, r"\D", "", "g") == clean_doc
-                    )
-                ).first()
-
-                if cust:
-                    cust.name = apelido
-                    if nom_cli:
-                        cust.corporate_name = nom_cli
-                    if city_horus:
-                        cust.city = city_horus
-                    if uf_horus:
-                        cust.state = uf_horus
-                    if grupo:
-                        cust.group_name = grupo
-                    if segmento:
-                        cust.segment = segmento
-                    if obs:
-                        cust.notes_message = obs
-                    if account:
-                        cust.customer_account = account
-                    if fechamento_roy:
-                        cust.royalties_data = fechamento_roy
-                    cust.is_cliente = True
-                    cust.horus_cod_cli = cod_cli
-                    if is_fornecedor and horus_cod_fornecedor:
-                        cust.is_fornecedor = True
-                        cust.horus_cod_fornecedor = horus_cod_fornecedor
-                else:
-                    new_cust = Customer(
-                        company_id=seller_company_id,
-                        name=apelido,
-                        corporate_name=razao_social,
-                        document=clean_doc,
-                        city=city_horus,
-                        state=uf_horus,
-                        group_name=grupo,
-                        segment=segmento,
-                        notes_message=obs,
-                        customer_account=account,
-                        royalties_data=fechamento_roy,
-                        is_cliente=True,
-                        is_fornecedor=is_fornecedor,
-                        horus_cod_cli=cod_cli,
-                        horus_cod_fornecedor=horus_cod_fornecedor,
-                        customer_type="PJ"
-                    )
-                    db.add(new_cust)
+                target_cust = new_cust
 
             db.commit()
 
@@ -1063,7 +979,7 @@ def process_dbm_companies_import_batch(
                 "apelido": apelido,
                 "razao_social": razao_social,
                 "document": clean_doc,
-                "company_id": target_comp.id,
+                "company_id": target_cust.id,
                 "action": action,
                 "status": "SUCCESS",
                 "message": f"Empresa '{apelido}' ({action.lower()}) vinculada ao Horus #{cod_cli}"
@@ -1083,6 +999,7 @@ def process_dbm_companies_import_batch(
 
     return {
         "success": True,
+        "seller_company_id": seller_id,
         "total_processed": len(results),
         "results": results
     }
