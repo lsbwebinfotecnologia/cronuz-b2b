@@ -12,6 +12,147 @@ from app.schemas.order import OrderResponse, PDVOrderCreate
 
 router = APIRouter(tags=["orders"])
 
+async def send_order_to_horus(order: Order, db: Session) -> dict:
+    from app.models.company_settings import CompanySettings
+    from app.models.company import Company
+    from app.models.customer import Customer
+    from app.models.order import OrderItem
+    from app.models.order_log import OrderLog
+    from app.models.product import Product
+    from app.integrators.horus_orders import HorusOrders
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
+    if not settings or not settings.horus_enabled or getattr(settings, "horus_api_mode", "B2B") != "B2B":
+        return {
+            "success": False,
+            "is_horus": False,
+            "reason": "not_horus_company",
+            "detail": "Empresa não possui integração Hórus B2B ativa. Pedido mantido no Cronuz."
+        }
+
+    customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+    if not customer or not customer.id_guid:
+        return {
+            "success": False,
+            "is_horus": False,
+            "reason": "cronuz_customer",
+            "detail": "Cliente não possui cadastro no Hórus (ID_GUID ausente). Pedido mantido no Cronuz."
+        }
+
+    company = db.query(Company).filter(Company.id == order.company_id).first()
+    if not company or not company.document:
+        return {
+            "success": False,
+            "is_horus": True,
+            "reason": "company_missing_doc",
+            "detail": "CNPJ da empresa não configurado para envio ao Hórus."
+        }
+
+    # Se já foi integrado previamente, não reenvia cabeçalho
+    if order.horus_pedido_venda:
+        return {
+            "success": True,
+            "is_horus": True,
+            "horus_id": order.horus_pedido_venda,
+            "detail": f"Pedido já integrado ao Hórus (#{order.horus_pedido_venda})."
+        }
+
+    horus_client = HorusOrders(db, order.company_id)
+    try:
+        cod_origem = order.customer_order_ref if order.customer_order_ref else order.id
+        order_res = await horus_client.send_order(
+            id_doc=customer.document,
+            id_guid=customer.id_guid,
+            cnpj_destino=company.document,
+            cod_pedido_origem=cod_origem,
+            type_order=order.type_order or "V",
+            obs=f"PDV VENDA {order.id}"
+        )
+
+        if not order_res or order_res.get("error"):
+            err_msg = order_res.get("msg") if order_res else "Resposta sem dados do Hórus"
+            log_err = OrderLog(order_id=order.id, old_status=order.status, new_status=order.status, note=f"Hórus recusou envio: {err_msg}")
+            db.add(log_err)
+            db.commit()
+            return {
+                "success": False,
+                "is_horus": True,
+                "reason": "horus_rejected",
+                "detail": err_msg
+            }
+
+        horus_ped_venda = order_res.get("COD_PED_VENDA")
+        if not horus_ped_venda:
+            err_msg = "Hórus não retornou o COD_PED_VENDA."
+            log_err = OrderLog(order_id=order.id, old_status=order.status, new_status=order.status, note=err_msg)
+            db.add(log_err)
+            db.commit()
+            return {
+                "success": False,
+                "is_horus": True,
+                "reason": "no_horus_id",
+                "detail": err_msg
+            }
+
+        # Envia os itens
+        items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+        for it in items:
+            isbn_or_sku = it.ean_isbn or it.sku
+            if not isbn_or_sku and it.product_id:
+                prod = db.query(Product).filter(Product.id == it.product_id).first()
+                if prod:
+                    isbn_or_sku = prod.ean_gtin or prod.sku
+
+            await horus_client.send_order_item(
+                id_doc=customer.document,
+                id_guid=customer.id_guid,
+                cnpj_destino=company.document,
+                cod_pedido_origem=cod_origem,
+                isbn=isbn_or_sku,
+                qty=it.quantity,
+                price=it.unit_price
+            )
+
+        # Atualiza status do pedido no Horus
+        try:
+            await horus_client.alt_status_pedido(
+                id_doc=customer.document,
+                id_guid=customer.id_guid,
+                cnpj_destino=company.document,
+                cod_pedido_origem=cod_origem
+            )
+        except Exception as e:
+            print(f"Aviso ao chamar AltStatus_Pedido: {e}")
+
+        old_status = order.status
+        order.horus_pedido_venda = str(horus_ped_venda).strip()
+        order.status = "SENT_TO_HORUS"
+        log_horus = OrderLog(order_id=order.id, old_status=old_status, new_status="SENT_TO_HORUS", note=f"Integrado ao Hórus: #{horus_ped_venda}")
+        db.add(log_horus)
+        db.commit()
+
+        return {
+            "success": True,
+            "is_horus": True,
+            "horus_id": order.horus_pedido_venda,
+            "detail": f"Pedido enviado com sucesso ao Hórus (#{horus_ped_venda})"
+        }
+    except Exception as e:
+        err_msg = str(e)
+        print(f"Erro ao integrar pedido {order.id} ao Hórus: {err_msg}")
+        log_err = OrderLog(order_id=order.id, old_status=order.status, new_status=order.status, note=f"Exceção integração Hórus: {err_msg}")
+        db.add(log_err)
+        db.commit()
+        return {
+            "success": False,
+            "is_horus": True,
+            "reason": "exception",
+            "detail": err_msg
+        }
+    finally:
+        await horus_client.close()
+
+
 @router.post("/orders", response_model=dict)
 async def create_pdv_order(
     payload: PDVOrderCreate,
@@ -28,6 +169,7 @@ async def create_pdv_order(
     if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
         raise HTTPException(status_code=403, detail="Acesso não autorizado")
 
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
     customer_query = db.query(Customer).filter(Customer.id == payload.customer_id)
     if current_user.type != "MASTER":
@@ -132,64 +274,28 @@ async def create_pdv_order(
         db.add(new_item)
     db.commit()
 
-    # Horus Integration (B2B Mode)
+    # Integração Hórus com verificação de segurança:
+    # Se a empresa tem Hórus ativo e o cliente tem cadastro no Hórus (id_guid), integra automaticamente.
+    # Caso contrário, o pedido é mantido com segurança exclusivamente no Cronuz.
+    horus_result = None
     if settings and settings.horus_enabled and getattr(settings, "horus_api_mode", "B2B") == "B2B":
         if customer.id_guid:
-            from app.integrators.horus_orders import HorusOrders
-            horus_client = HorusOrders(db, current_user.company_id)
-            
-            try:
-                order_res = await horus_client.send_order(
-                    id_doc=customer.document,
-                    id_guid=customer.id_guid,
-                    cnpj_destino=company.document,
-                    cod_pedido_origem=order.customer_order_ref if order.customer_order_ref else order.id,
-                    type_order=order.type_order,
-                    obs=f"PDV VENDA {order.id}"
-                )
-                
-                if order_res and not order_res.get("error"):
-                    horus_ped_venda = order_res.get("COD_PED_VENDA")
-                    
-                    for item in payload.items:
-                        prod_ref = None
-                        if item.product_id:
-                            prod_ref = db.query(Product).filter(Product.id == item.product_id).first()
-                        
-                        isbn_or_sku = item.ean_isbn or item.sku or (prod_ref.ean_gtin if prod_ref and prod_ref.ean_gtin else (prod_ref.sku if prod_ref else None))
-                        
-                        await horus_client.send_order_item(
-                            id_doc=customer.document,
-                            id_guid=customer.id_guid,
-                            cnpj_destino=company.document,
-                            cod_pedido_origem=order.customer_order_ref if order.customer_order_ref else order.id,
-                            isbn=isbn_or_sku,
-                            qty=item.quantity,
-                            price=item.unit_price
-                        )
-                            
-                    # Atualiza status do pedido no Horus
-                    try:
-                        await horus_client.alt_status_pedido(
-                            id_doc=customer.document,
-                            id_guid=customer.id_guid,
-                            cnpj_destino=company.document,
-                            cod_pedido_origem=order.customer_order_ref if order.customer_order_ref else order.id
-                        )
-                    except Exception as e:
-                        print(f"Error calling AltStatus_Pedido in PDV order: {e}")
+            horus_result = await send_order_to_horus(order, db)
+        else:
+            log_cronuz = OrderLog(order_id=order.id, old_status="NEW", new_status=order.status, note="Venda mantida no Cronuz (cliente sem integração com Hórus)")
+            db.add(log_cronuz)
+            db.commit()
+    else:
+        log_cronuz = OrderLog(order_id=order.id, old_status="NEW", new_status=order.status, note="Venda mantida no Cronuz (empresa sem integração Hórus)")
+        db.add(log_cronuz)
+        db.commit()
 
-                    order.horus_pedido_venda = str(horus_ped_venda).strip() if horus_ped_venda else None
-                    order.status = "SENT_TO_HORUS"
-                    log_horus = OrderLog(order_id=order.id, old_status="NEW", new_status="SENT_TO_HORUS")
-                    db.add(log_horus)
-                    db.commit()
-            except Exception as e:
-                print(f"Error syncing PDV order to Horus: {e}")
-            finally:
-                await horus_client.close()
-
-    return {"status": "success", "order_id": order.id, "horus_id": order.horus_pedido_venda}
+    return {
+        "status": "success",
+        "order_id": order.id,
+        "horus_id": order.horus_pedido_venda,
+        "horus_result": horus_result
+    }
 
 
 @router.get("/orders", response_model=dict)
@@ -252,7 +358,8 @@ def get_orders(
                 "id": o.customer.id,
                 "corporate_name": o.customer.corporate_name,
                 "fantasy_name": o.customer.name,
-                "document": o.customer.document
+                "document": o.customer.document,
+                "id_guid": o.customer.id_guid
             }
         result_items.append(order_dict)
     
@@ -497,7 +604,8 @@ async def get_order_detail(
             "fantasy_name": order.customer.name,
             "document": order.customer.document,
             "email": order.customer.email,
-            "phone": order.customer.phone
+            "phone": order.customer.phone,
+            "id_guid": order.customer.id_guid
         }
 
     # Fetch company settings for product images
@@ -854,6 +962,32 @@ async def manual_sync_horus(
             await horus_client.close()
 
     raise HTTPException(status_code=400, detail="Configurações Horus ou dados do cliente/empresa inválidos.")
+
+
+@router.post("/orders/{order_id}/send-horus", response_model=dict)
+async def manual_send_to_horus(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.type not in ["MASTER", "SELLER", "AGENT"]:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    query = db.query(Order).filter(Order.id == order_id)
+    if current_user.type == "SELLER":
+        query = query.filter(Order.company_id == current_user.company_id)
+    elif current_user.type == "AGENT":
+        query = query.filter(Order.company_id == current_user.company_id, Order.agent_id == current_user.id)
+    order = query.first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+
+    result = await send_order_to_horus(order, db)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("detail", "Falha ao enviar pedido ao Hórus"))
+    return result
+
 
 @router.get("/metrics")
 def get_orders_metrics(

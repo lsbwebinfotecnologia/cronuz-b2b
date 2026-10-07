@@ -12,6 +12,7 @@ interface Customer {
     corporate_name: string;
     fantasy_name: string;
     document: string;
+    id_guid?: string;
 }
 
 interface OrderItem {
@@ -377,8 +378,14 @@ export default function OrdersPage() {
                                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 uppercase w-fit tracking-wider">
                                                         HORUS #{order.horus_pedido_venda}
                                                     </span>
+                                                ) : order.customer?.id_guid ? (
+                                                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-600 dark:text-amber-400" title="Cliente Hórus - aguardando integração">
+                                                        <Clock className="w-3 h-3" /> Horus Pendente
+                                                    </span>
                                                 ) : (
-                                                    <span className="text-xs text-slate-400 italic">Horus Pendente</span>
+                                                    <span className="text-xs text-slate-400 italic" title="Cliente exclusivo Cronuz (sem vínculo com Hórus ERP)">
+                                                        Cronuz Direto
+                                                    </span>
                                                 )}
                                             </div>
                                         </td>

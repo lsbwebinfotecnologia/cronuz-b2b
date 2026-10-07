@@ -15,6 +15,7 @@ interface Customer {
     document: string;
     email: string;
     phone: string;
+    id_guid?: string;
 }
 
 interface OrderItem {
@@ -98,6 +99,7 @@ export default function OrderDetailPage() {
     const [horusPreviewLoading, setHorusPreviewLoading] = useState(false);
     const [horusPreviewData, setHorusPreviewData] = useState<any>(null);
     const [horusSyncing, setHorusSyncing] = useState(false);
+    const [isSendingToHorus, setIsSendingToHorus] = useState(false);
     const [interEnabled, setInterEnabled] = useState(false);
 
     const fetchSettings = async (companyId: number) => {
@@ -308,6 +310,30 @@ export default function OrderDetailPage() {
         }
     };
 
+    const handleSendToHorus = async () => {
+        if (!order) return;
+        setIsSendingToHorus(true);
+        try {
+            const token = getToken();
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const res = await fetch(`${apiUrl}/orders/${order.id}/send-horus`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                toast.success(`Pedido enviado ao Hórus com sucesso! Código: #${data.horus_id}`);
+                fetchOrder();
+            } else {
+                toast.error(`Falha ao enviar ao Hórus: ${data.detail || data.msg || 'Erro desconhecido'}`);
+            }
+        } catch (e: any) {
+            toast.error("Falha de conexão ao enviar pedido ao Hórus.");
+        } finally {
+            setIsSendingToHorus(false);
+        }
+    };
+
     if (loading) {
         return (
             <div className="p-8 flex items-center justify-center h-64">
@@ -367,6 +393,28 @@ export default function OrderDetailPage() {
                     <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-semibold uppercase tracking-wide ${statusColorMap[order.status] || "bg-slate-100 text-slate-800"}`}>
                         {statusLabelMap[order.status] || order.status}
                     </span>
+
+                    {!order.horus_pedido_venda && (
+                        order.customer?.id_guid ? (
+                            <button
+                                onClick={handleSendToHorus}
+                                disabled={isSendingToHorus}
+                                className="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-sm shadow-indigo-500/20 disabled:opacity-50 cursor-pointer"
+                                title="Enviar este pedido para o ERP Hórus"
+                            >
+                                {isSendingToHorus ? (
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                    <Send className="w-3.5 h-3.5" />
+                                )}
+                                Enviar ao Hórus
+                            </button>
+                        ) : (
+                            <span className="inline-flex items-center px-3 py-1 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700" title="Cliente exclusivo Cronuz (sem integração com Hórus ERP)">
+                                Venda Interna Cronuz
+                            </span>
+                        )
+                    )}
 
                     {interEnabled && (
                         <button
