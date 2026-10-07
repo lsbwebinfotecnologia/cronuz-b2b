@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -95,6 +95,17 @@ class Company(Base):
     nfse_sit_simples_nacional = Column(String(5), nullable=True, default="1") # 1=Não Optante, 2=MEI, 3=ME/EPP
     cert_path = Column(String(500), nullable=True)
     cert_password = Column(String(255), nullable=True)
+    
+    # DBM & CRM Fields
+    group_name = Column(String(150), nullable=True)
+    segment = Column(String(150), nullable=True)
+    notes_message = Column(Text, nullable=True)
+    customer_account = Column(String(150), nullable=True)
+    royalties_data = Column(Text, nullable=True)
+    is_cliente = Column(Boolean, default=True, nullable=False, server_default="true")
+    is_fornecedor = Column(Boolean, default=False, nullable=False, server_default="false")
+    horus_cod_cli = Column(Integer, nullable=True, index=True)
+    horus_cod_fornecedor = Column(Integer, nullable=True, index=True)
     
     active = Column(Boolean, default=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

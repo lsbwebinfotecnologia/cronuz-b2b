@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, Index
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, Index, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -40,6 +40,19 @@ class Customer(Base):
     commercial_policy_id = Column(Integer, ForeignKey("crm_commercial_policy.id", ondelete="SET NULL"), nullable=True)
     default_group_id = Column(Integer, ForeignKey("crm_customer_group.id", ondelete="SET NULL"), nullable=True)
     crm_status = Column(String(50), default="ACTIVE", nullable=False) # LEAD, NEGOTIATION, ACTIVE, BLOCKED, CHURN_ALERT
+    
+    # DBM & CRM Fields
+    group_name = Column(String(150), nullable=True)
+    segment = Column(String(150), nullable=True)
+    notes_message = Column(Text, nullable=True)
+    customer_account = Column(String(150), nullable=True)
+    royalties_data = Column(Text, nullable=True)
+    is_cliente = Column(Boolean, default=True, nullable=False, server_default="true")
+    is_fornecedor = Column(Boolean, default=False, nullable=False, server_default="false")
+    horus_cod_cli = Column(Integer, nullable=True, index=True)
+    horus_cod_fornecedor = Column(Integer, nullable=True, index=True)
+    city = Column(String(100), nullable=True)
+    state = Column(String(50), nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

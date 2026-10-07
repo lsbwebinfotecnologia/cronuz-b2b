@@ -98,6 +98,7 @@ from app.api import events as events_api
 from app.api import school_storefront as school_storefront_api
 from app.models import school as school_models
 from app.api import master_sessions
+from app.api import dbm as dbm_api
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -257,6 +258,7 @@ app.include_router(schools_api.router)
 app.include_router(events_api.router)
 app.include_router(school_storefront_api.router)
 app.include_router(master_sessions.router)
+app.include_router(dbm_api.router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
