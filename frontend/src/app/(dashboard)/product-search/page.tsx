@@ -302,6 +302,14 @@ export default function ProductSearchPage() {
     }
   }, [apiUrl, autoFetchDistributors]);
 
+  // Helper para manter o campo selecionado por completo para novos bipes
+  const selectSearchInput = useCallback(() => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, []);
+
   // ── Executa busca de produto ───────────────
   const executeSearch = useCallback(async (
     customTerm?: string,
@@ -358,11 +366,18 @@ export default function ProductSearchPage() {
       toast.error(err.message || 'Falha na busca.');
     } finally {
       setSearchLoading(false);
+      // Mantém o campo focado e 100% selecionado para o próximo bipe sem necessidade de apagar manualmente
+      if (optValue === 'BARRAS_ISBN' || optValue === 'COD_ITEM') {
+        setTimeout(selectSearchInput, 50);
+      }
     }
-  }, [searchTerm, selectedOption, apiUrl, selectProduct]);
+  }, [searchTerm, selectedOption, apiUrl, selectProduct, selectSearchInput]);
 
   const handleSearch = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (selectedOption.value === 'BARRAS_ISBN' || selectedOption.value === 'COD_ITEM') {
+      selectSearchInput();
+    }
     executeSearch();
   };
 
@@ -375,6 +390,7 @@ export default function ProductSearchPage() {
     setSelectedOption(isbnOpt);
     toast.success(`Código lido: ${clean}`);
     executeSearch(clean, 'BARRAS_ISBN');
+    setTimeout(selectSearchInput, 50);
   };
 
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -382,12 +398,16 @@ export default function ProductSearchPage() {
       e.preventDefault();
       const clean = searchTerm.trim();
       if (!clean) return;
-      if (/^\d{10,14}$/.test(clean)) {
+      const isBarcode = /^\d{10,14}$/.test(clean);
+      if (isBarcode) {
         const isbnOpt = SEARCH_OPTIONS.find(o => o.value === 'BARRAS_ISBN') || SEARCH_OPTIONS[0];
         setSelectedOption(isbnOpt);
         executeSearch(clean, 'BARRAS_ISBN');
       } else {
         executeSearch(clean);
+      }
+      if (selectedOption.value === 'BARRAS_ISBN' || selectedOption.value === 'COD_ITEM' || isBarcode) {
+        setTimeout(selectSearchInput, 10);
       }
     }
   };
@@ -421,6 +441,7 @@ export default function ProductSearchPage() {
           setSelectedOption(isbnOpt);
           executeSearch(candidate, 'BARRAS_ISBN', 'physical_scanner');
           barcodeBuffer = '';
+          setTimeout(selectSearchInput, 30);
         }
       } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         barcodeBuffer += e.key;
@@ -429,7 +450,7 @@ export default function ProductSearchPage() {
 
     window.addEventListener('keydown', onGlobalKeyDown);
     return () => window.removeEventListener('keydown', onGlobalKeyDown);
-  }, [executeSearch]);
+  }, [executeSearch, selectSearchInput]);
 
   // ──────────────────────────────────────────
   // Content (reutilizado em normal e fullscreen)
@@ -507,7 +528,14 @@ export default function ProductSearchPage() {
                   name="search_option"
                   value={opt.value}
                   checked={active}
-                  onChange={() => { setSelectedOption(opt); inputRef.current?.focus(); }}
+                  onChange={() => {
+                    setSelectedOption(opt);
+                    if (opt.value === 'BARRAS_ISBN' || opt.value === 'COD_ITEM') {
+                      setTimeout(selectSearchInput, 30);
+                    } else {
+                      inputRef.current?.focus();
+                    }
+                  }}
                   className="sr-only"
                 />
                 <Icon className="w-3.5 h-3.5" />
@@ -522,10 +550,20 @@ export default function ProductSearchPage() {
           <div className="relative flex-1">
             <input
               ref={inputRef}
-              type={selectedOption.value === 'COD_ITEM' ? 'number' : 'text'}
+              type="text"
+              inputMode={selectedOption.value === 'COD_ITEM' ? 'numeric' : 'text'}
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              onFocus={e => e.target.select()}
+              onFocus={e => {
+                if (selectedOption.value === 'BARRAS_ISBN' || selectedOption.value === 'COD_ITEM') {
+                  e.target.select();
+                }
+              }}
+              onClick={e => {
+                if (selectedOption.value === 'BARRAS_ISBN' || selectedOption.value === 'COD_ITEM') {
+                  (e.target as HTMLInputElement).select();
+                }
+              }}
               onKeyDown={handleInputKeyDown}
               placeholder={selectedOption.placeholder}
               className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 pl-4 pr-11 py-2.5 text-sm shadow-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
