@@ -41,6 +41,13 @@ class CompanySettings(Base):
     bookinfo_purchase_interval_minutes = Column(Integer, default=15, nullable=False) # Intervalo do job de compras em minutos (default 15)
     bookinfo_purchase_last_run = Column(DateTime(timezone=True), nullable=True)
     bookinfo_notify_processing_early = Column(Boolean, default=False, nullable=False) # True = avisar antes de faturar
+    bookinfo_analysis_timing = Column(String(30), default='BEFORE_CONFERENCE', nullable=False) # BEFORE_CONFERENCE or AFTER_CONFERENCE
+    bookinfo_min_stock_buffer = Column(Integer, default=0, nullable=False) # Buffer de estoque minimo
+    bookinfo_block_consign_low_stock = Column(Boolean, default=False, nullable=False) # Bloqueia consignacao com estoque critico
+    bookinfo_consign_low_stock_threshold = Column(Integer, default=5, nullable=False) # Limite de estoque critico para consignacao
+    bookinfo_check_existing_consign_balance = Column(Boolean, default=False, nullable=False) # Checa saldo consignado atual com cliente
+    bookinfo_max_consign_client_units = Column(Integer, default=10, nullable=False) # Teto maximo de unidades consignadas por cliente
+    bookinfo_allow_partial_fulfill = Column(Boolean, default=True, nullable=False) # Permite atendimento parcial nas regras
     metabooks_api_key = Column(String(255), nullable=True)
     cover_image_base_url = Column(String(500), nullable=True)
     

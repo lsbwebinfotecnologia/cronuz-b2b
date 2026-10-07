@@ -288,6 +288,7 @@ async def get_order_detail(
                         "situation_detail": it.situation_detail,
                         "sit_manual_change": it.sit_manual_change,
                         "partner_item_id": it.partner_item_id,
+                        "has_erp_registration": getattr(it, "has_erp_registration", True),
                         "analysed_at": it.analysed_at.isoformat() if it.analysed_at else None,
                     }
                     for it in analysed_items_db
@@ -360,10 +361,24 @@ async def get_order_detail(
                         "document": company.document
                     }
 
+            cmp_settings = db.query(CompanySettings).filter(
+                CompanySettings.company_id == (local_order.company_id if local_order else current_user.company_id)
+            ).first()
+            settings_data = {
+                "bookinfo_analysis_timing": cmp_settings.bookinfo_analysis_timing if cmp_settings and cmp_settings.bookinfo_analysis_timing else "BEFORE_CONFERENCE",
+                "bookinfo_min_stock_buffer": cmp_settings.bookinfo_min_stock_buffer if cmp_settings else 0,
+                "bookinfo_block_consign_low_stock": cmp_settings.bookinfo_block_consign_low_stock if cmp_settings else False,
+                "bookinfo_consign_low_stock_threshold": cmp_settings.bookinfo_consign_low_stock_threshold if cmp_settings else 5,
+                "bookinfo_check_existing_consign_balance": cmp_settings.bookinfo_check_existing_consign_balance if cmp_settings else False,
+                "bookinfo_max_consign_client_units": cmp_settings.bookinfo_max_consign_client_units if cmp_settings else None,
+                "bookinfo_allow_partial_fulfill": cmp_settings.bookinfo_allow_partial_fulfill if cmp_settings and cmp_settings.bookinfo_allow_partial_fulfill is not None else True,
+            }
+
             return {
                 "order_internal": order_internal,
                 "customer": customer_data,
                 "company": company_data,
+                "settings": settings_data,
                 "timeline": timeline,
                 "bookinfo_api": bookinfo_data,
                 "bookinfo_payload": None
@@ -804,6 +819,7 @@ VALID_SITUATIONS = {
     "esgotado",
     "fora_catalogo",
     "item_nao_comercializado",
+    "sem_cadastro_erp",
     "item_rejeitado",
 }
 
@@ -923,15 +939,23 @@ async def analyse_order_items(
 
         hr = horus_map.get(isbn)
 
-        # --- processSituation (replica PHP) ---
+        # --- processSituation com Regras Comerciais Flexíveis ---
+        min_buffer = getattr(settings, "bookinfo_min_stock_buffer", 0) or 0
+        block_consign_low = getattr(settings, "bookinfo_block_consign_low_stock", False)
+        consign_threshold = getattr(settings, "bookinfo_consign_low_stock_threshold", 5) or 5
+        allow_partial = getattr(settings, "bookinfo_allow_partial_fulfill", True)
+        is_consign = (local_order.type_order == "C")
+
         if hr is None:
-            auto_situation = "item_nao_comercializado"
-            detail         = "não comercializado"
+            auto_situation = "sem_cadastro_erp"
+            detail         = "Item não localizado no catálogo do ERP Hórus"
             avail_qty      = 0
             price_gross    = 0.0
             disc_allowed   = 0.0
+            has_erp_reg    = False
         else:
-            avail_qty   = int(hr.get("SALDO_DISPONIVEL", 0))
+            has_erp_reg = True
+            avail_qty   = int(hr.get("SALDO_DISPONIVEL", 0) or 0)
             price_gross = float(str(hr.get("VLR_CAPA", 0) or 0).replace(",", "."))
             disc_allowed = float(str(hr.get("VLR_DESC_CLI", 0) or 0).replace(",", "."))
             sit_item    = hr.get("SITUACAO_ITEM", "")
@@ -944,17 +968,27 @@ async def analyse_order_items(
                 detail = "fora de catálogo"
             else:
                 details_list = []
+                if min_buffer > 0:
+                    details_list.append(f"buffer mín {min_buffer}")
+
                 if req_discount > disc_allowed:
                     details_list.append("divergência de desconto")
-                if avail_qty >= req_qty:
+
+                effective_stock = max(0, avail_qty - min_buffer)
+
+                # Regra: se consignação e estoque baixo/crítico
+                if is_consign and block_consign_low and avail_qty <= consign_threshold:
+                    auto_situation = "sem_estoque"
+                    details_list.append(f"consignação retida (estoque crítico {avail_qty} un)")
+                elif effective_stock >= req_qty:
                     auto_situation = "reservado_total"
                     details_list.append("disponível")
-                elif avail_qty > 0:
+                elif effective_stock > 0 and allow_partial:
                     auto_situation = "atendimento_parcial_sem_reserva"
-                    details_list.append("atendimento parcial")
+                    details_list.append(f"atendimento parcial ({effective_stock}/{req_qty})")
                 else:
                     auto_situation = "sem_estoque"
-                    details_list.append("sem estoque")
+                    details_list.append("sem estoque livre")
                 detail = "; ".join(details_list)
 
         # Upsert: busca pelo isbn + order_id
@@ -973,6 +1007,7 @@ async def analyse_order_items(
             existing_item.discount_allowed = disc_allowed
             existing_item.partner_discount = req_discount
             existing_item.partner_item_id  = partner_item_id
+            existing_item.has_erp_registration = has_erp_reg
             existing_item.analysed_at      = now
             existing_item.quantity_requested = req_qty
             # Atualiza nome/editora se vier do Horus
@@ -999,6 +1034,7 @@ async def analyse_order_items(
                 discount_allowed  = disc_allowed,
                 partner_discount  = req_discount,
                 sit_manual_change = False,
+                has_erp_registration = has_erp_reg,
                 partner_item_id   = partner_item_id,
                 analysed_at       = now,
             )
@@ -1017,6 +1053,7 @@ async def analyse_order_items(
             "partner_situation": existing_item.partner_situation,
             "situation_detail": detail,
             "sit_manual_change": existing_item.sit_manual_change,
+            "has_erp_registration": has_erp_reg,
             "analysed_at": now.isoformat(),
         })
 
@@ -1098,6 +1135,204 @@ async def update_item_situation(
         "item_id": item_id,
         "old_situation": old_situation,
         "new_situation": payload.situation,
+    }
+
+
+@router.post("/orders/{order_id}/analyse-post-conference")
+async def analyse_order_post_conference(
+    order_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Executa a análise de itens PÓS-CONFERÊNCIA e PÓS-FATURAMENTO no Horus ERP:
+    Confronta os itens solicitados pela Bookinfo com os itens efetivamente conferidos e faturados no ERP.
+    Detecta automaticamente se o item foi faturado integral, faturado parcial, cortado na conferência
+    ou se não possui cadastro no catálogo do ERP.
+    """
+    from datetime import datetime as dt
+    from app.integrators.horus_orders import HorusOrders
+    from app.models.product import Product
+
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+
+    local_order = db.query(Order).filter(
+        Order.company_id == current_user.company_id,
+        Order.external_id == order_id,
+        Order.origin == "bookinfo"
+    ).first()
+
+    if not local_order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+
+    if not local_order.horus_pedido_venda:
+        raise HTTPException(
+            status_code=400,
+            detail="Para realizar a análise pós-conferência, o pedido precisa ter sido previamente enviado ao Horus ERP (código de pedido de venda pendente)."
+        )
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    if not settings or not settings.horus_url:
+        raise HTTPException(status_code=400, detail="ERP Horus não configurado para esta empresa.")
+
+    horus_orders = HorusOrders(db=db, company_id=current_user.company_id)
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
+
+    # 1. Consulta itens faturados/conferidos no Horus
+    horus_items_list = []
+    try:
+        raw_items = await horus_orders.get_order_items(local_order.horus_pedido_venda, limit=5000)
+        if raw_items and isinstance(raw_items, list):
+            horus_items_list = raw_items
+    except Exception as e:
+        print(f"[analyse-post-conference] Erro ao buscar itens do pedido no Horus: {e}")
+
+    # Monta mapa de itens do Horus por ISBN
+    horus_items_map: Dict[str, dict] = {}
+    for h_it in horus_items_list:
+        isbn_key = str(h_it.get("BARRAS_ISBN") or h_it.get("COD_BARRA_ITEM") or "").strip()
+        if isbn_key:
+            horus_items_map[isbn_key] = h_it
+
+    now = dt.utcnow()
+    results = []
+    summary: Dict[str, int] = {}
+
+    for item in local_order.items:
+        isbn = (item.ean_isbn or item.sku or "").strip()
+        h_match = horus_items_map.get(isbn)
+
+        if h_match:
+            has_erp_reg = True
+            # Quantidade faturada/atendida no Horus
+            fulfilled_qty = int(h_match.get("QTD_ATENDIDA") or h_match.get("QTD_FATURADA") or h_match.get("QTD_PEDIDA") or 0)
+            item.quantity_fulfilled = fulfilled_qty
+            item.has_erp_registration = True
+
+            if not item.sit_manual_change:
+                if fulfilled_qty >= item.quantity_requested:
+                    item.partner_situation = "reservado_total"
+                    item.situation_detail  = f"Faturado e conferido integralmente ({fulfilled_qty} un)"
+                elif fulfilled_qty > 0:
+                    item.partner_situation = "atendimento_parcial_sem_reserva"
+                    item.situation_detail  = f"Conferido e faturado parcialmente ({fulfilled_qty}/{item.quantity_requested} un)"
+                else:
+                    item.partner_situation = "sem_estoque"
+                    item.situation_detail  = "Item cortado na conferência física / faturamento do ERP"
+        else:
+            # Item não localizado no retorno do Horus
+            has_erp_reg = False
+            item.has_erp_registration = False
+            item.quantity_fulfilled = 0
+            if not item.sit_manual_change:
+                item.partner_situation = "sem_cadastro_erp"
+                item.situation_detail  = "Item não localizado no catálogo do ERP Hórus"
+
+        item.analysed_at = now
+        sit = item.partner_situation or "sem_estoque"
+        summary[sit] = summary.get(sit, 0) + 1
+
+        results.append({
+            "isbn13": item.ean_isbn,
+            "name": item.name,
+            "brand": item.brand,
+            "qty_requested": item.quantity_requested,
+            "qty_fulfilled": item.quantity_fulfilled,
+            "partner_situation": item.partner_situation,
+            "situation_detail": item.situation_detail,
+            "has_erp_registration": item.has_erp_registration,
+            "sit_manual_change": item.sit_manual_change,
+            "analysed_at": now.isoformat()
+        })
+
+    local_order.validated_items_erp = True
+    local_order.updated_at = now
+
+    log_entry = OrderLog(
+        order_id   = local_order.id,
+        old_status = local_order.status,
+        new_status = local_order.status,
+        note       = f"Análise Pós-Conferência Horus executada: {len(results)} itens confrontados com o faturamento do ERP."
+    )
+    db.add(log_entry)
+    db.commit()
+
+    return {
+        "error": False,
+        "message": "Análise pós-conferência concluída com sucesso.",
+        "order_id": order_id,
+        "horus_pedido_venda": local_order.horus_pedido_venda,
+        "summary": summary,
+        "items": results
+    }
+
+
+@router.get("/orders/{order_id}/suggestions")
+async def get_order_suggestions(
+    order_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Retorna sugestões inteligentes de títulos (lançamentos e produtos com boa saída)
+    que o cliente ainda não incluiu no pedido atual e tem potencial de compra/consignação.
+    """
+    from app.models.product import Product
+
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+
+    local_order = db.query(Order).filter(
+        Order.company_id == current_user.company_id,
+        Order.external_id == order_id,
+        Order.origin == "bookinfo"
+    ).first()
+
+    if not local_order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+
+    existing_isbns = {i.ean_isbn for i in local_order.items if i.ean_isbn}
+
+    suggestions = []
+
+    # 1. Busca produtos locais destacados e novidades do catálogo Cronuz
+    local_products = db.query(Product).filter(
+        Product.company_id == current_user.company_id,
+        Product.is_active == True,
+        Product.stock_balance > 0
+    ).order_by(
+        Product.is_featured.desc(),
+        Product.created_at.desc(),
+        Product.stock_balance.desc()
+    ).limit(30).all()
+
+    for p in local_products:
+        isbn = p.isbn or p.ean or p.sku or ""
+        if isbn and isbn in existing_isbns:
+            continue
+
+        reason = "Lançamento recente com estoque disponível" if p.is_featured else "Produto com boa saída no catálogo"
+        suggestions.append({
+            "product_id": p.id,
+            "isbn": isbn,
+            "title": p.name,
+            "brand": p.brand or "Editora",
+            "cover_url": p.cover_url or None,
+            "price": float(p.price or 0.0),
+            "stock_balance": int(p.stock_balance or 0),
+            "reason": reason
+        })
+
+        if len(suggestions) >= 8:
+            break
+
+    return {
+        "error": False,
+        "order_id": order_id,
+        "total_suggestions": len(suggestions),
+        "suggestions": suggestions
     }
 
 

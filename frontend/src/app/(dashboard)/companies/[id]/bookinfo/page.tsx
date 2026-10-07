@@ -18,11 +18,15 @@ export default function CompanyBookinfoPage() {
     token: '',
     bookinfo_sync_enabled: false,
     bookinfo_notify_processing_early: false,
-    bookinfo_purchase_auto: false
+    bookinfo_purchase_auto: false,
+    bookinfo_analysis_timing: 'BEFORE_CONFERENCE',
+    bookinfo_min_stock_buffer: 0,
+    bookinfo_block_consign_low_stock: false,
+    bookinfo_consign_low_stock_threshold: 5,
+    bookinfo_check_existing_consign_balance: false,
+    bookinfo_max_consign_client_units: 10,
+    bookinfo_allow_partial_fulfill: true,
   });
-
-
-
 
   useEffect(() => {
     async function fetchIntegration() {
@@ -61,14 +65,28 @@ export default function CompanyBookinfoPage() {
               token: (creds as any).Token || '',
               bookinfo_sync_enabled: settings.bookinfo_sync_enabled || false,
               bookinfo_notify_processing_early: settings.bookinfo_notify_processing_early || false,
-              bookinfo_purchase_auto: settings.bookinfo_purchase_auto || false
+              bookinfo_purchase_auto: settings.bookinfo_purchase_auto || false,
+              bookinfo_analysis_timing: settings.bookinfo_analysis_timing || 'BEFORE_CONFERENCE',
+              bookinfo_min_stock_buffer: settings.bookinfo_min_stock_buffer || 0,
+              bookinfo_block_consign_low_stock: settings.bookinfo_block_consign_low_stock || false,
+              bookinfo_consign_low_stock_threshold: settings.bookinfo_consign_low_stock_threshold ?? 5,
+              bookinfo_check_existing_consign_balance: settings.bookinfo_check_existing_consign_balance || false,
+              bookinfo_max_consign_client_units: settings.bookinfo_max_consign_client_units ?? 10,
+              bookinfo_allow_partial_fulfill: settings.bookinfo_allow_partial_fulfill !== false,
             });
           } else {
             setFormData(prev => ({
               ...prev,
               bookinfo_sync_enabled: settings.bookinfo_sync_enabled || false,
               bookinfo_notify_processing_early: settings.bookinfo_notify_processing_early || false,
-              bookinfo_purchase_auto: settings.bookinfo_purchase_auto || false
+              bookinfo_purchase_auto: settings.bookinfo_purchase_auto || false,
+              bookinfo_analysis_timing: settings.bookinfo_analysis_timing || 'BEFORE_CONFERENCE',
+              bookinfo_min_stock_buffer: settings.bookinfo_min_stock_buffer || 0,
+              bookinfo_block_consign_low_stock: settings.bookinfo_block_consign_low_stock || false,
+              bookinfo_consign_low_stock_threshold: settings.bookinfo_consign_low_stock_threshold ?? 5,
+              bookinfo_check_existing_consign_balance: settings.bookinfo_check_existing_consign_balance || false,
+              bookinfo_max_consign_client_units: settings.bookinfo_max_consign_client_units ?? 10,
+              bookinfo_allow_partial_fulfill: settings.bookinfo_allow_partial_fulfill !== false,
             }));
           }
         }
@@ -87,11 +105,12 @@ export default function CompanyBookinfoPage() {
     if (type === 'checkbox') {
         const checked = (e.target as HTMLInputElement).checked;
         setFormData(prev => ({ ...prev, [name]: checked }));
+    } else if (type === 'number') {
+        setFormData(prev => ({ ...prev, [name]: parseInt(value) || 0 }));
     } else {
         setFormData(prev => ({ ...prev, [name]: value }));
     }
   };
-
 
   async function handleSaveSettings(e: React.FormEvent) {
     e.preventDefault();
@@ -126,7 +145,14 @@ export default function CompanyBookinfoPage() {
         body: JSON.stringify({
            bookinfo_sync_enabled: formData.bookinfo_sync_enabled,
            bookinfo_notify_processing_early: formData.bookinfo_notify_processing_early,
-           bookinfo_purchase_auto: formData.bookinfo_purchase_auto
+           bookinfo_purchase_auto: formData.bookinfo_purchase_auto,
+           bookinfo_analysis_timing: formData.bookinfo_analysis_timing,
+           bookinfo_min_stock_buffer: formData.bookinfo_min_stock_buffer,
+           bookinfo_block_consign_low_stock: formData.bookinfo_block_consign_low_stock,
+           bookinfo_consign_low_stock_threshold: formData.bookinfo_consign_low_stock_threshold,
+           bookinfo_check_existing_consign_balance: formData.bookinfo_check_existing_consign_balance,
+           bookinfo_max_consign_client_units: formData.bookinfo_max_consign_client_units,
+           bookinfo_allow_partial_fulfill: formData.bookinfo_allow_partial_fulfill,
         })
       });
 
@@ -244,6 +270,158 @@ export default function CompanyBookinfoPage() {
                     <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
                   </div>
                 </label>
+              </div>
+
+              {/* Seletor: Momento da Análise de Itens (Master -> Seller) */}
+              <div className="flex flex-col gap-3 border-b border-slate-100 dark:border-slate-800/60 pb-5">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Momento da Análise de Itens
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Define o fluxo operacional de análise e comunicação de situação de itens com a Bookinfo.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
+                  <label className={`cursor-pointer rounded-xl border p-3.5 transition-all flex flex-col gap-1.5 ${
+                    formData.bookinfo_analysis_timing === 'BEFORE_CONFERENCE'
+                      ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 ring-1 ring-emerald-500'
+                      : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-slate-900 dark:text-white">Antes da Conferência (Padrão)</span>
+                      <input
+                        type="radio"
+                        name="bookinfo_analysis_timing"
+                        value="BEFORE_CONFERENCE"
+                        checked={formData.bookinfo_analysis_timing === 'BEFORE_CONFERENCE'}
+                        onChange={handleInputChange}
+                        className="text-emerald-600 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Analisa o saldo do estoque no Hórus, envia a avaliação à Bookinfo e aguarda para gerar o pedido no ERP.
+                    </p>
+                  </label>
+
+                  <label className={`cursor-pointer rounded-xl border p-3.5 transition-all flex flex-col gap-1.5 ${
+                    formData.bookinfo_analysis_timing === 'AFTER_CONFERENCE'
+                      ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 ring-1 ring-emerald-500'
+                      : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-slate-900 dark:text-white">Pós-Conferência / Faturamento</span>
+                      <input
+                        type="radio"
+                        name="bookinfo_analysis_timing"
+                        value="AFTER_CONFERENCE"
+                        checked={formData.bookinfo_analysis_timing === 'AFTER_CONFERENCE'}
+                        onChange={handleInputChange}
+                        className="text-emerald-600 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Envia o pedido direto ao Hórus para conferência e emissão da NF-e; analisa e envia a situação real após o faturamento.
+                    </p>
+                  </label>
+                </div>
+              </div>
+
+              {/* Bloco: Regras Comerciais por Seller */}
+              <div className="space-y-4 border-b border-slate-100 dark:border-slate-800/60 pb-5">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-500" /> Regras Comerciais de Atendimento por Seller
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Parâmetros flexíveis aplicados automaticamente ao analisar o estoque e pedidos deste seller.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-1">
+                  <div className="space-y-1.5 bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Buffer de Estoque Mínimo</label>
+                    <input
+                      type="number"
+                      name="bookinfo_min_stock_buffer"
+                      min="0"
+                      value={formData.bookinfo_min_stock_buffer}
+                      onChange={handleInputChange}
+                      className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 py-1.5 px-3 text-sm text-slate-900 dark:text-white font-medium"
+                    />
+                    <p className="text-[11px] text-slate-400">Unidades retidas como reserva de segurança.</p>
+                  </div>
+
+                  <div className="space-y-1.5 bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Estoque Crítico Consignação</label>
+                    <input
+                      type="number"
+                      name="bookinfo_consign_low_stock_threshold"
+                      min="0"
+                      value={formData.bookinfo_consign_low_stock_threshold}
+                      onChange={handleInputChange}
+                      className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 py-1.5 px-3 text-sm text-slate-900 dark:text-white font-medium"
+                    />
+                    <p className="text-[11px] text-slate-400">Gatilho de estoque baixo para travar consignação.</p>
+                  </div>
+
+                  <div className="space-y-1.5 bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Teto Consignado por Cliente</label>
+                    <input
+                      type="number"
+                      name="bookinfo_max_consign_client_units"
+                      min="1"
+                      value={formData.bookinfo_max_consign_client_units}
+                      onChange={handleInputChange}
+                      className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 py-1.5 px-3 text-sm text-slate-900 dark:text-white font-medium"
+                    />
+                    <p className="text-[11px] text-slate-400">Máximo de exemplares consignados permitidos por título.</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                  <label className="flex items-center justify-between p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer">
+                    <div className="pr-2">
+                      <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 block">Bloquear Consignação em Estoque Baixo</span>
+                      <span className="text-[11px] text-slate-400">Prioriza venda direta faturada</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      name="bookinfo_block_consign_low_stock"
+                      checked={formData.bookinfo_block_consign_low_stock}
+                      onChange={handleInputChange}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer">
+                    <div className="pr-2">
+                      <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 block">Checar Saldo Já Consignado</span>
+                      <span className="text-[11px] text-slate-400">Evita sobre-estoque no cliente</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      name="bookinfo_check_existing_consign_balance"
+                      checked={formData.bookinfo_check_existing_consign_balance}
+                      onChange={handleInputChange}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 cursor-pointer">
+                    <div className="pr-2">
+                      <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 block">Permitir Atendimento Parcial</span>
+                      <span className="text-[11px] text-slate-400">Atende quantidade disponível</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      name="bookinfo_allow_partial_fulfill"
+                      checked={formData.bookinfo_allow_partial_fulfill}
+                      onChange={handleInputChange}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                    />
+                  </label>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

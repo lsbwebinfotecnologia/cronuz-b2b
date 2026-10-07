@@ -24,6 +24,7 @@ const SITUATION_LABELS: Record<string, string> = {
   esgotado: 'Esgotado',
   fora_catalogo: 'Fora de Catálogo',
   item_nao_comercializado: 'Não Comercializado',
+  sem_cadastro_erp: 'Sem Cadastro no ERP',
   item_rejeitado: 'Rejeitado',
 };
 
@@ -34,6 +35,7 @@ const SITUATION_STYLE: Record<string, string> = {
   esgotado: 'bg-rose-100 text-rose-800 border-rose-200 dark:bg-rose-500/20 dark:text-rose-400 dark:border-rose-500/30',
   fora_catalogo: 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-500/20 dark:text-orange-400 dark:border-orange-500/30',
   item_nao_comercializado: 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
+  sem_cadastro_erp: 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-700',
   item_rejeitado: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-700',
 };
 
@@ -44,6 +46,7 @@ const SITUATION_BORDER: Record<string, string> = {
   esgotado: 'border-l-4 border-l-rose-500 dark:border-l-rose-600',
   fora_catalogo: 'border-l-4 border-l-orange-500 dark:border-l-orange-600',
   item_nao_comercializado: 'border-l-4 border-l-slate-400 dark:border-l-slate-600',
+  sem_cadastro_erp: 'border-l-4 border-l-purple-500 dark:border-l-purple-600',
   item_rejeitado: 'border-l-4 border-l-red-600 dark:border-l-red-700',
 };
 
@@ -100,12 +103,16 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
 
   const [orderData, setOrderData] = useState<any>(null);
   const [loading, setLoading]     = useState(true);
-  const [activeTab, setActiveTab] = useState<'BOOKINFO' | 'HORUS'>('BOOKINFO');
+  const [activeTab, setActiveTab] = useState<'BOOKINFO' | 'HORUS' | 'SUGGESTIONS'>('BOOKINFO');
 
   // Itens analisados (persistidos no BD)
   const [analysedItems, setAnalysedItems] = useState<any[]>([]);
   const [summary, setSummary]             = useState<Record<string, number>>({});
   const [lastAnalysedAt, setLastAnalysedAt] = useState<string | null>(null);
+
+  // Sugestões comerciais
+  const [suggestions, setSuggestions]               = useState<any[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
   // Filtros/Ordenação dos itens analisados
   const [sortBy, setSortBy]       = useState<'title' | 'qty' | 'situation' | 'default'>('default');
@@ -113,19 +120,23 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSituation, setSelectedSituation] = useState<string | null>(null);
 
-  const handleTabChange = (tab: 'BOOKINFO' | 'HORUS') => {
+  const handleTabChange = (tab: 'BOOKINFO' | 'HORUS' | 'SUGGESTIONS') => {
     setActiveTab(tab);
     setSelectedSituation(null);
-    if (tab === 'BOOKINFO' && sortBy === 'situation') {
+    if (tab !== 'HORUS' && sortBy === 'situation') {
       setSortBy('default');
+    }
+    if (tab === 'SUGGESTIONS' && suggestions.length === 0) {
+      fetchSuggestions();
     }
   };
 
   // Estados de loading por ação
-  const [isAnalysing,     setIsAnalysing]     = useState(false);
-  const [isAcknowledging, setIsAcknowledging] = useState(false);
-  const [isSubmitting,    setIsSubmitting]     = useState(false);
-  const [updatingItem,    setUpdatingItem]     = useState<number | null>(null);
+  const [isAnalysing,         setIsAnalysing]         = useState(false);
+  const [isAnalysingPost,     setIsAnalysingPost]     = useState(false);
+  const [isAcknowledging,     setIsAcknowledging]     = useState(false);
+  const [isSubmitting,        setIsSubmitting]        = useState(false);
+  const [updatingItem,        setUpdatingItem]        = useState<number | null>(null);
 
   const parseBookinfoDate = (dateStr: string | null | undefined): Date | null => {
     if (!dateStr) return null;
@@ -146,6 +157,25 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
     const d = new Date(dateStr);
     return isNaN(d.getTime()) ? null : d;
   };
+
+  // ── Fetch sugestões comerciais ─────────────────────────────────────────────
+  const fetchSuggestions = useCallback(async () => {
+    setLoadingSuggestions(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/bookinfo/orders/${params.id}/suggestions`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSuggestions(data.suggestions || []);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar sugestões:', err);
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  }, [params.id]);
 
   // ── Fetch pedido (com itens analisados do BD) ──────────────────────────────
   const fetchOrderDetails = useCallback(async () => {
@@ -206,7 +236,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
     }
   };
 
-  // ── ANALISAR ITENS (persiste no BD) ───────────────────────────────────────
+  // ── ANALISAR ITENS (PRÉ-CONFERÊNCIA - persiste no BD) ─────────────────────
   const analyseItems = async () => {
     setIsAnalysing(true);
     try {
@@ -231,6 +261,34 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
       toast.error(err.message);
     } finally {
       setIsAnalysing(false);
+    }
+  };
+
+  // ── ANALISAR PÓS-CONFERÊNCIA (NF-e/Expedição Hórus) ───────────────────────
+  const analysePostConference = async () => {
+    setIsAnalysingPost(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/bookinfo/orders/${params.id}/analyse-post-conference`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao analisar pós-conferência');
+
+      setAnalysedItems(data.items || []);
+      setSummary(data.summary || {});
+      const now = new Date().toISOString();
+      setLastAnalysedAt(now);
+      setActiveTab('HORUS');
+
+      toast.success(`Análise pós-conferência realizada! ${data.analysed} item(ns) confrontado(s) com a NF-e.`);
+      await fetchOrderDetails();
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setIsAnalysingPost(false);
     }
   };
 
@@ -313,6 +371,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const orderInternal = orderData.order_internal || {};
   const customer      = orderData.customer || {};
   const company       = orderData.company || {};
+  const orderSettings = orderData.settings || {};
   const bookinfoItems = order.itens || [];
 
   // Ordena os itens analisados se houver ordenação ativa
@@ -508,6 +567,14 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
               <span className={`inline-flex items-center px-2.5 py-1 rounded text-[10px] font-bold uppercase shadow-sm ${order.compraConsignacao === 'S' ? 'bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-500/20 dark:text-amber-400 dark:border-amber-500/30' : 'bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-400 dark:border-emerald-500/30'}`}>
                 {order.compraConsignacao === 'S' ? 'CONSIGNAÇÃO' : 'VENDA B2B'}
               </span>
+              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold uppercase shadow-sm ${
+                orderSettings.bookinfo_analysis_timing === 'AFTER_CONFERENCE'
+                  ? 'bg-purple-100 text-purple-800 border border-purple-200 dark:bg-purple-900/30 dark:text-purple-300'
+                  : 'bg-blue-100 text-blue-800 border border-blue-200 dark:bg-blue-900/30 dark:text-blue-300'
+              }`}>
+                <SlidersHorizontal className="w-3 h-3" />
+                {orderSettings.bookinfo_analysis_timing === 'AFTER_CONFERENCE' ? 'Fluxo: Pós-Conferência (NF-e)' : 'Fluxo: Pré-Conferência'}
+              </span>
               {isBlocked && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold uppercase bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm">
                   <Lock className="w-3 h-3" /> Integrado ao Horus #{orderInternal.horus_pedido_venda}
@@ -675,6 +742,13 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                   <ShoppingCart className="w-4 h-4" />
                   Bookinfo Original ({bookinfoItems.length})
                 </button>
+                <button
+                  onClick={() => handleTabChange('SUGGESTIONS')}
+                  className={`py-4 font-semibold text-sm border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'SUGGESTIONS' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                >
+                  <Sparkles className="w-4 h-4 text-amber-500" />
+                  Sugestões Comerciais {suggestions.length > 0 && `(${suggestions.length})`}
+                </button>
               </div>
 
               <div className="flex gap-2 my-2 flex-wrap">
@@ -690,7 +764,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                   </button>
                 )}
 
-                {/* Analisar / Revalidar */}
+                {/* Analisar Pré-Conferência / Revalidar */}
                 {canAnalyse && (
                   <button
                     onClick={analyseItems}
@@ -705,7 +779,22 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                       ? <><RefreshCw className="w-4 h-4 animate-spin" /> Analisando...</>
                       : isAlreadyAnalysed
                         ? <><RotateCcw className="w-4 h-4" /> Revalidar Itens</>
-                        : <><Play className="w-4 h-4" /> Analisar Itens</>
+                        : <><Play className="w-4 h-4" /> Analisar Pré-Conferência</>
+                    }
+                  </button>
+                )}
+
+                {/* Analisar Pós-Conferência (NF-e/Expedição Hórus) */}
+                {orderInternal.id && (orderSettings?.bookinfo_analysis_timing === 'AFTER_CONFERENCE' || isBlocked) && (
+                  <button
+                    onClick={analysePostConference}
+                    disabled={isAnalysingPost}
+                    className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50 shadow-sm"
+                    title="Confronta a NF-e e conferência física do ERP Hórus contra os itens solicitados"
+                  >
+                    {isAnalysingPost
+                      ? <><RefreshCw className="w-4 h-4 animate-spin" /> Verificando NF-e...</>
+                      : <><Package className="w-4 h-4" /> Analisar Pós-Conferência (NF-e)</>
                     }
                   </button>
                 )}
@@ -940,7 +1029,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                   )}
                 </div>
 
-              ) : (
+              ) : activeTab === 'HORUS' ? (
                 /* ── Tab Análise Horus ── */
                 analysedItems.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-slate-500 p-8 text-center space-y-5">
@@ -975,9 +1064,16 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                           
                           {/* 1. Detalhes do Item */}
                           <div className="flex-1 min-w-[250px] space-y-2">
-                            <h4 className="font-bold text-slate-800 dark:text-white text-sm leading-snug">
-                              {ev.name || 'Item não localizado no Horus'}
-                            </h4>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="font-bold text-slate-800 dark:text-white text-sm leading-snug">
+                                {ev.name || 'Item não localizado no Horus'}
+                              </h4>
+                              {(ev.has_erp_registration === false || ev.partner_situation === 'sem_cadastro_erp') && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                                  <AlertCircle className="w-3 h-3" /> Sem Cadastro no Hórus
+                                </span>
+                              )}
+                            </div>
                             <div className="flex flex-wrap items-center gap-2 text-xs">
                               <span className="font-mono text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800/80 px-2.5 py-1 rounded-md border border-slate-200/50 dark:border-slate-700/50 shadow-sm">
                                 {ev.isbn13 || ev.ean_isbn}
@@ -1065,6 +1161,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                                   <option value="esgotado">Esgotado</option>
                                   <option value="fora_catalogo">Fora de Catálogo</option>
                                   <option value="item_nao_comercializado">Não Comercializado</option>
+                                  <option value="sem_cadastro_erp">Sem Cadastro no ERP</option>
                                   <option value="item_rejeitado">Rejeitar Item</option>
                                 </select>
                                 <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none text-slate-400">
@@ -1107,6 +1204,89 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                     )}
                   </div>
                 )
+              ) : (
+                /* ── Tab Sugestões Comerciais ── */
+                <div className="p-6 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 gap-3">
+                    <div>
+                      <h3 className="font-bold text-slate-900 dark:text-white text-base flex items-center gap-2">
+                        <Sparkles className="w-5 h-5 text-amber-500" /> Sugestões Comerciais Inteligentes
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        Produtos com boa saída e novidades do catálogo com estoque livre que o cliente não tem neste pedido.
+                      </p>
+                    </div>
+                    <button
+                      onClick={fetchSuggestions}
+                      disabled={loadingSuggestions}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition disabled:opacity-50 w-fit"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${loadingSuggestions ? 'animate-spin' : ''}`} />
+                      Atualizar Sugestões
+                    </button>
+                  </div>
+
+                  {loadingSuggestions ? (
+                    <div className="py-16 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
+                      <RefreshCw className="w-6 h-6 animate-spin text-indigo-500" />
+                      <p className="text-sm font-medium">Buscando as melhores sugestões para este cliente...</p>
+                    </div>
+                  ) : suggestions.length === 0 ? (
+                    <div className="py-16 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
+                      <Package className="w-8 h-8 opacity-40 mb-1" />
+                      <p className="font-bold text-sm">Nenhuma sugestão encontrada</p>
+                      <p className="text-xs">Todos os títulos do catálogo com saldo livre já constam no pedido ou o estoque está esgotado.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {suggestions.map((item, sIdx) => (
+                        <div
+                          key={item.product_id || sIdx}
+                          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between hover:shadow-md transition-all border-l-4 border-l-amber-500"
+                        >
+                          <div>
+                            <div className="flex items-start justify-between gap-2 mb-2">
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800">
+                                {item.reason}
+                              </span>
+                              <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded">
+                                {item.stock_balance} un disponíveis
+                              </span>
+                            </div>
+                            <h4 className="font-bold text-slate-900 dark:text-white text-sm line-clamp-2 leading-tight">
+                              {item.title}
+                            </h4>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                              {item.brand && `Editora: ${item.brand}`}
+                            </p>
+                          </div>
+
+                          <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block">Preço de Capa</span>
+                              <span className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(item.price || 0)}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (item.isbn) {
+                                  navigator.clipboard.writeText(item.isbn);
+                                  toast.success(`ISBN ${item.isbn} copiado!`);
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold transition cursor-pointer"
+                              title="Copiar ISBN para sugerir ao cliente"
+                            >
+                              Copiar ISBN: <span className="font-mono">{item.isbn}</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>

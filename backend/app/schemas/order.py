@@ -47,6 +47,15 @@ class OrderItemResponse(OrderItemBase):
     id: int
     order_id: int
     total_price: float
+    partner_situation: Optional[str] = None
+    situation_detail: Optional[str] = None
+    available_qty: Optional[int] = 0
+    price_gross: Optional[float] = 0.0
+    discount_allowed: Optional[float] = 0.0
+    partner_discount: Optional[float] = 0.0
+    sit_manual_change: Optional[bool] = False
+    has_erp_registration: Optional[bool] = True
+    analysed_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

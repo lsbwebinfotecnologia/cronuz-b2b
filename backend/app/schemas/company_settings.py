@@ -23,6 +23,13 @@ class CompanySettingsBase(BaseModel):
     bookinfo_purchase_auto: Optional[bool] = False
     bookinfo_purchase_interval_minutes: Optional[int] = 15
     bookinfo_notify_processing_early: Optional[bool] = False
+    bookinfo_analysis_timing: Optional[str] = "BEFORE_CONFERENCE"
+    bookinfo_min_stock_buffer: Optional[int] = 0
+    bookinfo_block_consign_low_stock: Optional[bool] = False
+    bookinfo_consign_low_stock_threshold: Optional[int] = 5
+    bookinfo_check_existing_consign_balance: Optional[bool] = False
+    bookinfo_max_consign_client_units: Optional[int] = 10
+    bookinfo_allow_partial_fulfill: Optional[bool] = True
     metabooks_api_key: Optional[str] = None
     cover_image_base_url: Optional[str] = None
     allow_backorder: Optional[bool] = False
