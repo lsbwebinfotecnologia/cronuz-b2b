@@ -294,21 +294,45 @@ async def get_order_detail(
                     for it in analysed_items_db
                 ]
 
+                customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
+                company = db.query(Company).filter(Company.id == local_order.company_id).first()
+
+                horus_status = None
+                horus_invoice = False
+                if local_order.horus_pedido_venda:
+                    try:
+                        from app.integrators.horus_orders import HorusOrders
+                        horus_client = HorusOrders(db, current_user.company_id)
+                        h_order = await horus_client.get_order(
+                            id_doc=customer.document if customer else None,
+                            id_guid=customer.id_guid if customer else None,
+                            cnpj_destino=company.document if company else None,
+                            cod_pedido_origem=None,
+                            cod_ped_venda=local_order.horus_pedido_venda,
+                            ignore_customer_context=True
+                        )
+                        await horus_client.close()
+                        if h_order:
+                            h_data = h_order[0] if isinstance(h_order, list) else h_order
+                            if isinstance(h_data, dict):
+                                horus_status = (h_data.get("STATUS_PEDIDO_VENDA") or h_data.get("STATUS_PEDIDO") or "").strip().upper()
+                                horus_invoice = bool(h_data.get("NOTA_FISCAL"))
+                    except Exception as e:
+                        print(f"[get_order_detail] Erro ao consultar status Horus #{local_order.horus_pedido_venda}: {e}")
+
                 order_internal = {
                     "id": local_order.id,
                     "status": local_order.status,
                     "tracking_code": local_order.tracking_code,
                     "horus_pedido_venda": local_order.horus_pedido_venda,
+                    "horus_status": horus_status,
+                    "horus_invoice": horus_invoice,
                     "created_at": local_order.created_at.isoformat() if local_order.created_at else None,
                     "bookinfo_nfe_sent": local_order.bookinfo_nfe_sent,
                     "validated_items_erp": local_order.validated_items_erp,
                     "validated_items_partner": local_order.validated_items_partner,
                     "analysed_items": analysed_items_list,
                 }
-
-                
-                customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
-                company = db.query(Company).filter(Company.id == local_order.company_id).first()
                 
                 if customer:
                     customer_data = {
@@ -791,19 +815,117 @@ async def evaluate_submit(
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
     local_order = db.query(Order).filter(Order.company_id == current_user.company_id, Order.external_id == order_id).first()
-    if local_order and local_order.horus_pedido_venda:
-         raise HTTPException(status_code=400, detail="Pedido já integrado ao Horus ERP. Modificações bloqueadas.")
-        
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    is_after_conference = settings and settings.bookinfo_analysis_timing == "AFTER_CONFERENCE"
+
+    if is_after_conference:
+        if not local_order or not local_order.horus_pedido_venda:
+            raise HTTPException(
+                status_code=400,
+                detail="No fluxo Pós-Conferência, o pedido precisa primeiro ser enviado ao Hórus ERP."
+            )
+        if not local_order.validated_items_erp:
+            raise HTTPException(
+                status_code=400,
+                detail="No fluxo Pós-Conferência, a conferência física no Hórus precisa ser validada (Status LFT ou FAT) antes de processar na Bookinfo."
+            )
+    else:
+        if local_order and local_order.horus_pedido_venda:
+            raise HTTPException(status_code=400, detail="Pedido já integrado ao Horus ERP. Modificações bloqueadas.")
+
+    # Sanitiza situações internas para os códigos aceitos pela API Bookinfo
+    sanitized_items = []
+    for it in payload.items:
+        it_dict = it if isinstance(it, dict) else (it.dict() if hasattr(it, "dict") else dict(it))
+        sit = str(it_dict.get("status") or "").upper()
+        if sit in ["SEM_CADASTRO_ERP", "ITEM_REJEITADO"]:
+            it_dict["status"] = "ITEM_NAO_COMERCIALIZADO"
+            it_dict["quantidadeEfetiva"] = 0
+        sanitized_items.append(it_dict)
+
     async with get_bookinfo_client(current_user.company_id, db) as client:
         try:
             # POST /pedido/{idOrder}/avaliacao
-            put_resp = await client.post(f"/pedido/{order_id}/avaliacao", json=payload.items)
+            put_resp = await client.post(f"/pedido/{order_id}/avaliacao", json=sanitized_items)
             put_resp.raise_for_status()
+
+            if local_order:
+                local_order.validated_items_partner = True
+                local_order.status = "EVALUATED"
+                db.commit()
+
             return {"error": False, "message": "Avaliação sincronizada com sucesso!"}
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=f"Erro na plataforma Bookinfo: {e.response.text}")
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Falha ao contatar servidor Bookinfo: {str(e)}")
+
+
+@router.post("/orders/{order_id}/send-horus")
+async def send_bookinfo_order_to_horus(
+    order_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Envia o pedido da Bookinfo diretamente para o ERP Hórus como veio da Bookinfo
+    (sem corte prévio), gerando o número do pedido de venda no Hórus para conferência física.
+    """
+    from app.api.orders import send_order_to_horus
+
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+
+    local_order = db.query(Order).filter(
+        Order.company_id == current_user.company_id,
+        Order.external_id == order_id,
+        Order.origin == "bookinfo"
+    ).first()
+
+    # Se ainda não estiver espelhado localmente, busca na Bookinfo e cria
+    if not local_order:
+        async with get_bookinfo_client(current_user.company_id, db) as client:
+            resp = await client.get(f"/pedido/{order_id}")
+            if resp.status_code != 200:
+                raise HTTPException(status_code=404, detail="Pedido não localizado na Bookinfo.")
+            bk_data = resp.json()
+            
+            # Localiza ou valida o cliente
+            cnpj_str = bk_data.get("cnpjComprador", "")
+            clean_cnpj = "".join(filter(str.isdigit, str(cnpj_str)))
+            customer = db.query(Customer).filter(
+                Customer.document == clean_cnpj,
+                Customer.company_id == current_user.company_id
+            ).first()
+            if not customer:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cliente {bk_data.get('nomeComprador')} (CNPJ: {clean_cnpj}) não encontrado na base Cronuz. Cadastre-o primeiro."
+                )
+
+            local_order = __upsert_bookinfo_order_local(db, current_user.company_id, customer.id, bk_data)
+
+    if local_order.horus_pedido_venda:
+        return {
+            "success": True,
+            "horus_pedido_venda": local_order.horus_pedido_venda,
+            "message": f"Pedido já integrado ao Hórus (#{local_order.horus_pedido_venda})"
+        }
+
+    # Executa o envio para o Hórus
+    res = await send_order_to_horus(local_order, db)
+    if not res.get("success"):
+        raise HTTPException(
+            status_code=400,
+            detail=res.get("detail") or "Falha ao enviar pedido ao Hórus ERP."
+        )
+
+    return {
+        "success": True,
+        "horus_pedido_venda": local_order.horus_pedido_venda,
+        "message": f"Pedido enviado ao Hórus com sucesso (#{local_order.horus_pedido_venda})!"
+    }
 
 # ---------------------------------------------------------------------------
 # ANALYSE ITEMS — persiste resultado da análise Horus no banco local
@@ -1179,6 +1301,31 @@ async def analyse_order_post_conference(
     horus_orders = HorusOrders(db=db, company_id=current_user.company_id)
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
+
+    # 0. Verifica o status do pedido no Horus (deve ser LFT ou FAT para confirmar conferência física)
+    horus_status = ""
+    try:
+        raw_h_order = await horus_orders.get_order(
+            id_doc=customer.document if customer else None,
+            id_guid=customer.id_guid if customer else None,
+            cnpj_destino=company.document if company else None,
+            cod_pedido_origem=None,
+            cod_ped_venda=local_order.horus_pedido_venda,
+            ignore_customer_context=True
+        )
+        if raw_h_order:
+            h_data = raw_h_order[0] if isinstance(raw_h_order, list) else raw_h_order
+            if isinstance(h_data, dict):
+                horus_status = (h_data.get("STATUS_PEDIDO_VENDA") or h_data.get("STATUS_PEDIDO") or "").strip().upper()
+    except Exception as e:
+        print(f"[analyse-post-conference] Aviso ao consultar status do pedido no Horus: {e}")
+
+    if horus_status not in ["LFT", "FAT"]:
+        status_label = horus_status if horus_status else "Em Digitação/Expedição"
+        raise HTTPException(
+            status_code=400,
+            detail=f"O pedido #{local_order.horus_pedido_venda} ainda não concluiu a conferência física no ERP Hórus (Status atual: '{status_label}'). A análise pós-conferência só pode ser finalizada após o pedido atingir o status LFT (Liberado Faturamento) ou FAT (Faturado)."
+        )
 
     # 1. Consulta itens faturados/conferidos no Horus
     horus_items_list = []
