@@ -1785,9 +1785,18 @@ def group_financial_installments(
     # 3. Consolidação de valores
     total_amount = sum(i.amount for i in installments)
 
-    # 4. Composição da descrição/observação
-    if payload.description and payload.description.strip():
-        new_description = payload.description.strip()
+    # 4. Normalização de parâmetros com compatibilidade total
+    resolved_due_date = payload.due_date or payload.new_due_date
+    if not resolved_due_date:
+        raise HTTPException(status_code=400, detail="Data de vencimento é obrigatória.")
+
+    resolved_account_id = payload.account_id if payload.account_id is not None else payload.new_account_id
+    resolved_category_id = payload.category_id if payload.category_id is not None else payload.new_category_id
+    resolved_description = (payload.description or payload.combined_notes or "").strip()
+
+    # Composição da descrição/observação
+    if resolved_description:
+        new_description = resolved_description
     else:
         desc_parts = []
         for i in installments:
@@ -1796,17 +1805,17 @@ def group_financial_installments(
         new_description = "Lançamento Agrupado: " + " + ".join(desc_parts)
 
     target_inst.amount = round(total_amount, 2)
-    target_inst.due_date = payload.due_date
-    if payload.account_id:
-        target_inst.account_id = payload.account_id
+    target_inst.due_date = resolved_due_date
+    if resolved_account_id:
+        target_inst.account_id = resolved_account_id
 
     # Atualiza a transação mestre
     if target_inst.transaction:
         target_inst.transaction.total_amount = round(total_amount, 2)
-        target_inst.transaction.first_due_date = payload.due_date
+        target_inst.transaction.first_due_date = resolved_due_date
         target_inst.transaction.description = new_description
-        if payload.category_id:
-            target_inst.transaction.category_id = payload.category_id
+        if resolved_category_id:
+            target_inst.transaction.category_id = resolved_category_id
 
     # 5. Cancela com rastreabilidade as parcelas absorvidas
     for i in other_inst:

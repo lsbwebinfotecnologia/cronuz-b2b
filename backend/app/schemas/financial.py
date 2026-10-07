@@ -189,9 +189,13 @@ class FinancialBulkUpdateDateRequest(BaseModel):
 class FinancialInstallmentsGroupRequest(BaseModel):
     installment_ids: List[int]
     target_installment_id: Optional[int] = None
-    due_date: date
+    due_date: Optional[date] = None
+    new_due_date: Optional[date] = None
     account_id: Optional[int] = None
+    new_account_id: Optional[int] = None
     category_id: Optional[int] = None
+    new_category_id: Optional[int] = None
     description: Optional[str] = None
+    combined_notes: Optional[str] = None
 
 

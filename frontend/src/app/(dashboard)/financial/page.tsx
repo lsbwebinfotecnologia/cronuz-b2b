@@ -633,16 +633,28 @@ export default function FinancialPage() {
                 },
                 body: JSON.stringify({
                     installment_ids: selectedInstallments,
+                    due_date: groupDueDate,
                     new_due_date: groupDueDate,
+                    description: groupNotes,
                     combined_notes: groupNotes,
+                    account_id: groupAccountId ? parseInt(groupAccountId) : null,
                     new_account_id: groupAccountId ? parseInt(groupAccountId) : null,
+                    category_id: groupCategoryId ? parseInt(groupCategoryId) : null,
                     new_category_id: groupCategoryId ? parseInt(groupCategoryId) : null
                 })
             });
 
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || 'Falha ao agrupar lançamentos.');
+                let msg = 'Falha ao agrupar lançamentos.';
+                if (typeof err.detail === 'string') {
+                    msg = err.detail;
+                } else if (Array.isArray(err.detail)) {
+                    msg = err.detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
+                } else if (err.message && typeof err.message === 'string') {
+                    msg = err.message;
+                }
+                throw new Error(msg);
             }
 
             const data = await res.json();
