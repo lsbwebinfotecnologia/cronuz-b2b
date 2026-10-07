@@ -7,10 +7,11 @@ import {
   Layers, ArrowLeft, CheckCircle2, Play, Save, Info, AlertTriangle,
   AlertCircle, ShoppingCart, DollarSign, Wallet, CreditCard, Package,
   Sparkles, RefreshCw, RotateCcw, Lock, Clock, ArrowUpDown,
-  Search, ArrowUp, ArrowDown, SlidersHorizontal
+  Search, ArrowUp, ArrowDown, SlidersHorizontal, FileSpreadsheet
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
+import * as XLSX from 'xlsx';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -57,14 +58,37 @@ function SituationBadge({ situation, manual }: { situation: string; manual?: boo
   );
 }
 
-function SummaryPill({ situation, count }: { situation: string; count: number }) {
+function SummaryPill({
+  situation,
+  count,
+  isSelected,
+  onClick,
+}: {
+  situation: string;
+  count: number;
+  isSelected?: boolean;
+  onClick?: () => void;
+}) {
   const label = SITUATION_LABELS[situation] || situation;
   const style = SITUATION_STYLE[situation] || 'bg-slate-100 text-slate-600 border-slate-200';
   return (
-    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all shadow-sm ${style}`}>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all shadow-sm cursor-pointer select-none active:scale-95 ${style} ${
+        isSelected
+          ? 'ring-2 ring-indigo-500 ring-offset-2 dark:ring-offset-slate-900 shadow-md scale-105 font-extrabold'
+          : 'hover:opacity-90 hover:shadow opacity-85 hover:opacity-100'
+      }`}
+      title={`Filtrar por ${label}`}
+    >
       <span>{label}</span>
-      <span className="font-extrabold text-sm px-1.5 py-0.2 bg-white/40 dark:bg-black/20 rounded-md">{count}</span>
-    </div>
+      <span className={`font-extrabold text-xs px-1.5 py-0.5 rounded-md ${
+        isSelected ? 'bg-indigo-600 text-white dark:bg-indigo-500' : 'bg-white/50 dark:bg-black/20'
+      }`}>
+        {count}
+      </span>
+    </button>
   );
 }
 
@@ -87,9 +111,11 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const [sortBy, setSortBy]       = useState<'title' | 'qty' | 'situation' | 'default'>('default');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSituation, setSelectedSituation] = useState<string | null>(null);
 
   const handleTabChange = (tab: 'BOOKINFO' | 'HORUS') => {
     setActiveTab(tab);
+    setSelectedSituation(null);
     if (tab === 'BOOKINFO' && sortBy === 'situation') {
       setSortBy('default');
     }
@@ -333,8 +359,11 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
     return title.includes(q) || isbn.includes(q);
   });
 
-  // Filtragem dos itens analisados por busca (título, ISBN ou editora)
+  // Filtragem dos itens analisados por busca (título, ISBN ou editora) e situação
   const filteredSortedItems = sortedItems.filter((ev: any) => {
+    if (selectedSituation && ev.partner_situation !== selectedSituation) {
+      return false;
+    }
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
     const title = (ev.name || '').toLowerCase();
@@ -342,6 +371,111 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
     const brand = (ev.brand || '').toLowerCase();
     return title.includes(q) || isbn.includes(q) || brand.includes(q);
   });
+
+  // Exportação para planilha Excel (.xlsx)
+  const handleExportExcel = () => {
+    try {
+      if (activeTab === 'HORUS') {
+        if (!analysedItems || analysedItems.length === 0) {
+          toast.error('Nenhum item analisado para exportar.');
+          return;
+        }
+
+        // Se houver filtro ativo, exporta os filtrados da tela; caso contrário, todos analisados
+        const itemsToExport = filteredSortedItems.length > 0 ? filteredSortedItems : analysedItems;
+
+        const dataToExport = itemsToExport.map((it: any) => {
+          const qtyReq = Number(it.qty_requested ?? it.quantity_requested ?? 0);
+          const qtyAvail = Number(it.available_qty ?? 0);
+          const grossPrice = Number(it.price_gross || 0);
+          const propDiscount = Number(it.partner_discount || 0);
+          const authDiscount = Number(it.discount_allowed || 0);
+          const netPrice = Math.round(grossPrice * (1 - propDiscount / 100) * 100) / 100;
+          const netTotal = Math.round(netPrice * qtyReq * 100) / 100;
+          const situationLabel = SITUATION_LABELS[it.partner_situation] || it.partner_situation || 'Sem Estoque';
+
+          return {
+            'ISBN / EAN': it.isbn13 || it.ean_isbn || '',
+            'Título': it.name || 'Item não localizado no Horus',
+            'Editora': it.brand && it.brand !== 'ND' ? it.brand : '',
+            'Qtd. Pedida': qtyReq,
+            'Saldo Hórus': qtyAvail,
+            'Preço Capa (R$)': grossPrice,
+            'Desc. Proposto (%)': propDiscount,
+            'Desc. Autorizado (%)': authDiscount,
+            'Preço Líquido (R$)': netPrice,
+            'Total Líquido (R$)': netTotal,
+            'Situação': situationLabel,
+            'Detalhes Situação': it.situation_detail || '',
+            'Ajuste Manual': it.sit_manual_change ? 'Sim' : 'Não',
+          };
+        });
+
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+
+        const colWidths = Object.keys(dataToExport[0] || {}).map(key => {
+          const maxLen = Math.max(
+            key.length,
+            ...dataToExport.map(r => String((r as any)[key] ?? '').length)
+          );
+          return { wch: Math.min(Math.max(maxLen + 2, 10), 60) };
+        });
+        ws['!cols'] = colWidths;
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Itens Analisados');
+
+        const orderCode = order.pedidoCliente || order.numero || orderInternal.id || params.id;
+        const filterSuffix = selectedSituation ? `_${selectedSituation}` : '';
+        XLSX.writeFile(wb, `Pedido_Bookinfo_${orderCode}_Itens${filterSuffix}.xlsx`);
+        toast.success(`Planilha gerada com sucesso! (${itemsToExport.length} itens exportados)`);
+      } else {
+        if (!bookinfoItems || bookinfoItems.length === 0) {
+          toast.error('Nenhum item do pedido para exportar.');
+          return;
+        }
+
+        const itemsToExport = filteredBookinfoItems.length > 0 ? filteredBookinfoItems : bookinfoItems;
+        const dataToExport = itemsToExport.map((it: any) => {
+          const qty = Number(it.quantidade ?? 0);
+          const propDiscount = Number(it.descontoProposto || 0);
+          const grossPrice = Number(it.precoCapa || 0);
+          const netPrice = Number(it.precoLiquido || 0);
+          const netTotal = Number(it.totalLiquido || (netPrice * qty));
+
+          return {
+            'ISBN / EAN': it.isbn13 || '',
+            'Título': it.titulo || it.nome || '',
+            'Qtd. Pedida': qty,
+            'Desc. Proposto (%)': propDiscount,
+            'Preço Capa (R$)': grossPrice,
+            'Preço Líquido (R$)': netPrice,
+            'Total Líquido (R$)': netTotal,
+          };
+        });
+
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+        const colWidths = Object.keys(dataToExport[0] || {}).map(key => {
+          const maxLen = Math.max(
+            key.length,
+            ...dataToExport.map(r => String((r as any)[key] ?? '').length)
+          );
+          return { wch: Math.min(Math.max(maxLen + 2, 10), 60) };
+        });
+        ws['!cols'] = colWidths;
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Itens Bookinfo');
+
+        const orderCode = order.pedidoCliente || order.numero || orderInternal.id || params.id;
+        XLSX.writeFile(wb, `Pedido_Bookinfo_${orderCode}_Original.xlsx`);
+        toast.success(`Planilha gerada com sucesso! (${itemsToExport.length} itens exportados)`);
+      }
+    } catch (err: any) {
+      console.error('Erro ao exportar Excel:', err);
+      toast.error('Falha ao exportar planilha Excel.');
+    }
+  };
 
   const isBlocked         = !!orderInternal.horus_pedido_venda;
   const isAlreadyAnalysed = orderInternal.validated_items_erp === true || analysedItems.length > 0;
@@ -601,17 +735,67 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
             {activeTab === 'HORUS' && analysedItems.length > 0 && (
               <div className="px-6 py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/10 flex flex-wrap gap-3 items-center justify-between">
                 <div className="flex flex-wrap gap-2 items-center">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Resumo:</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Filtrar:</span>
+
+                  {/* Botão Todos */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSituation(null)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all shadow-sm cursor-pointer select-none active:scale-95 ${
+                      !selectedSituation
+                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-md ring-2 ring-indigo-400'
+                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/60'
+                    }`}
+                    title="Mostrar todos os itens"
+                  >
+                    <span>Todos</span>
+                    <span className={`font-extrabold text-xs px-1.5 py-0.5 rounded-md ${
+                      !selectedSituation ? 'bg-white/30 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                    }`}>
+                      {analysedItems.length}
+                    </span>
+                  </button>
+
+                  {/* Pílulas de Situação Interativas */}
                   {Object.entries(summary).map(([sit, count]) => (
-                    <SummaryPill key={sit} situation={sit} count={count as number} />
+                    <SummaryPill
+                      key={sit}
+                      situation={sit}
+                      count={count as number}
+                      isSelected={selectedSituation === sit}
+                      onClick={() => setSelectedSituation(prev => prev === sit ? null : sit)}
+                    />
                   ))}
+
+                  {/* Limpar filtro se ativo */}
+                  {selectedSituation && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSituation(null)}
+                      className="text-xs font-bold text-rose-500 hover:text-rose-600 underline ml-1 cursor-pointer transition"
+                    >
+                      Limpar filtro
+                    </button>
+                  )}
                 </div>
-                {lastAnalysedAt && (
-                  <span className="flex items-center gap-1 text-[10px] text-slate-400 font-medium">
-                    <Clock className="w-3.5 h-3.5" />
-                    Última análise: {new Date(lastAnalysedAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
-                  </span>
-                )}
+
+                <div className="flex items-center gap-3">
+                  {lastAnalysedAt && (
+                    <span className="hidden sm:flex items-center gap-1 text-[10px] text-slate-400 font-medium">
+                      <Clock className="w-3.5 h-3.5" />
+                      Última análise: {new Date(lastAnalysedAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleExportExcel}
+                    className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm cursor-pointer"
+                    title="Exportar detalhes dos itens para planilha Excel (.xlsx)"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>Exportar Excel</span>
+                  </button>
+                </div>
               </div>
             )}
 
@@ -692,6 +876,18 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                       Limpar
                     </button>
                   )}
+
+                  {activeTab === 'BOOKINFO' && bookinfoItems.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleExportExcel}
+                      className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm cursor-pointer ml-auto"
+                      title="Exportar itens originais da Bookinfo para planilha Excel (.xlsx)"
+                    >
+                      <FileSpreadsheet className="w-4 h-4" />
+                      <span>Exportar Excel</span>
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -739,7 +935,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                     <div className="text-center py-12 text-slate-400 dark:text-slate-500 flex flex-col items-center justify-center gap-2">
                       <Search className="w-8 h-8 opacity-40 mb-2" />
                       <p className="font-bold text-sm">Nenhum item localizado</p>
-                      <p className="text-xs">Não encontramos nenhum item correspondente à busca "{searchQuery}".</p>
+                      <p className="text-xs">Não encontramos nenhum item correspondente à busca &quot;{searchQuery}&quot;.</p>
                     </div>
                   )}
                 </div>
@@ -893,7 +1089,20 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                       <div className="text-center py-12 text-slate-400 dark:text-slate-500 flex flex-col items-center justify-center gap-2">
                         <Search className="w-8 h-8 opacity-40 mb-2" />
                         <p className="font-bold text-sm">Nenhum item localizado</p>
-                        <p className="text-xs">Não encontramos nenhum item correspondente à busca "{searchQuery}".</p>
+                        <p className="text-xs">
+                          {selectedSituation
+                            ? `Nenhum item encontrado com a situação "${SITUATION_LABELS[selectedSituation] || selectedSituation}"${searchQuery ? ` e busca "${searchQuery}"` : ''}.`
+                            : `Não encontramos nenhum item correspondente à busca "${searchQuery}".`}
+                        </p>
+                        {(selectedSituation || searchQuery) && (
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedSituation(null); setSearchQuery(''); }}
+                            className="mt-2 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                          >
+                            Limpar filtros
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
