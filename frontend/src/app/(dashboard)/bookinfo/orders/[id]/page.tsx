@@ -416,7 +416,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
         const colWidths = Object.keys(dataToExport[0] || {}).map(key => {
           const maxLen = Math.max(
             key.length,
-            ...dataToExport.map(r => String((r as any)[key] ?? '').length)
+            ...dataToExport.map((r: any) => String(r[key] ?? '').length)
           );
           return { wch: Math.min(Math.max(maxLen + 2, 10), 60) };
         });
@@ -458,7 +458,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
         const colWidths = Object.keys(dataToExport[0] || {}).map(key => {
           const maxLen = Math.max(
             key.length,
-            ...dataToExport.map(r => String((r as any)[key] ?? '').length)
+            ...dataToExport.map((r: any) => String(r[key] ?? '').length)
           );
           return { wch: Math.min(Math.max(maxLen + 2, 10), 60) };
         });
