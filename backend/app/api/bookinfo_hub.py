@@ -679,7 +679,8 @@ async def evaluate_preview(
          horus_res = await horus_client.busca_acervo_b2b(
               id_doc=id_doc,
               id_guid=id_guid,
-              isbns=isbns_payload
+              isbns=isbns_payload,
+              limit=5000
          )
          # Format returned payload into a easily searchable dict by ISBN
          # Note: Depending on horus version, response might be a LIST or standard Dict
@@ -879,7 +880,8 @@ async def analyse_order_items(
         horus_res = await horus_client.busca_acervo_b2b(
             id_doc=id_doc,
             id_guid=id_guid,
-            isbns=isbns_payload
+            isbns=isbns_payload,
+            limit=5000
         )
         horus_items = horus_res if isinstance(horus_res, list) else []
         if isinstance(horus_res, dict):

@@ -41,7 +41,10 @@ class HorusProducts(HorusClient):
         # OFFSET/LIMIT — respeita a configuração de legado do Horus (horus_legacy_pagination)
         if not getattr(self._settings, 'horus_legacy_pagination', False):
             params["OFFSET"] = offset
-            params["LIMIT"] = limit if (limit is not None and limit > 0) else 50
+            if isbns:
+                params["LIMIT"] = max(limit or 0, 5000)
+            else:
+                params["LIMIT"] = limit if (limit is not None and limit > 0) else 50
 
         # ══════════════════════════════════════════════════════════════════════
         # CONTEXTO DE EMPRESA / FILIAL / LOCAL DE ESTOQUE (Horus ERP)
