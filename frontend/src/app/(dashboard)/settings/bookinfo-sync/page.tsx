@@ -309,6 +309,30 @@ export default function BookinfoSyncQueuePage() {
 
     const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
+    const handleAutoStep = async (orderId: number) => {
+        setActionLoading(orderId);
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/queue/${orderId}/auto-step`, {
+                method: 'POST',
+                headers: { 
+                    'Authorization': `Bearer ${getToken()}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            const data = await res.json();
+            if (res.ok) {
+                toast.success(data.message || 'Etapa executada com sucesso!');
+                fetchQueue();
+            } else {
+                toast.error(data.detail || 'Falha ao executar avanço automático');
+            }
+        } catch (e) {
+            toast.error('Erro de rede ao conectar com a API.');
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
     const runAutoSyncBatch = async () => {
         if (!orders || orders.length === 0) {
             toast.info('Nenhum pedido na fila para processar.');
@@ -323,6 +347,9 @@ export default function BookinfoSyncQueuePage() {
         const token = getToken();
         const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+        let processedCount = 0;
+        let advancedCount = 0;
+
         try {
             for (let i = 0; i < itemsToProcess.length; i++) {
                 const order = itemsToProcess[i];
@@ -330,45 +357,32 @@ export default function BookinfoSyncQueuePage() {
                 setActionLoading(order.id);
                 
                 try {
-                    let syncRes = await fetch(`${baseUrl}/orders/${order.id}/sync-horus?search_type=venda`, {
+                    const res = await fetch(`${baseUrl}/bookinfo/queue/${order.id}/auto-step`, {
                         method: 'POST',
-                        headers: { 'Authorization': `Bearer ${token}` }
-                    });
-                    
-                    if (!syncRes.ok) {
-                        await delay(2000);
-                        syncRes = await fetch(`${baseUrl}/orders/${order.id}/sync-horus?search_type=origem`, {
-                            method: 'POST',
-                            headers: { 'Authorization': `Bearer ${token}` }
-                        });
-                    }
-
-                    await delay(2000);
-
-                    if (syncRes.ok) {
-                        const xmlRes = await fetch(`${baseUrl}/bookinfo/queue/${order.id}/sync`, {
-                            method: 'POST',
-                            headers: { 'Authorization': `Bearer ${token}` }
-                        });
-                        const xmlData = await xmlRes.json();
-                        
-                        if (xmlRes.ok && xmlData.status === 'success') {
-                            await delay(2000);
-                            await fetch(`${baseUrl}/bookinfo/queue/${order.id}/complete`, {
-                                method: 'POST',
-                                headers: { 'Authorization': `Bearer ${token}` }
-                            });
+                        headers: { 
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
                         }
+                    });
+                    const data = await res.json();
+                    
+                    if (res.ok) {
+                        advancedCount++;
+                        toast.success(`Pedido #${order.id}: ${data.message || 'Etapa executada!'}`);
+                    } else {
+                        console.warn(`Aviso auto-step #${order.id}:`, data.detail);
+                        toast.info(`Pedido #${order.id}: ${data.detail || 'Etapa pendente'}`);
                     }
-                } catch (e) {
+                } catch (e: any) {
                     console.error("Erro processando auto-lote id:", order.id, e);
                 }
 
-                await delay(2000);
+                processedCount++;
+                await delay(1200);
                 setActionLoading(null);
             }
             
-            toast.success(`Lote de ${limitToProcess} itens processado com sucesso!`);
+            toast.success(`Lote de ${processedCount} itens processado (${advancedCount} avanços realizados)!`);
         } finally {
             setIsAutoRunning(false);
             setAutoRunProgress({ current: 0, total: 0 });
@@ -839,8 +853,21 @@ export default function BookinfoSyncQueuePage() {
                                                     </div>
                                                 </td>
                                                 <td className="px-5 py-4">
-                                                    <div className="font-mono text-slate-300 bg-black/20 px-2 py-0.5 rounded text-xs truncate max-w-[150px]" title={order.external_id || 'N/A'}>
-                                                        {order.external_id || <span className="text-slate-500 italic">Sem ID Bookinfo</span>}
+                                                    <div className="flex items-center gap-1.5">
+                                                        <div className="font-mono text-slate-300 bg-black/20 px-2 py-0.5 rounded text-xs truncate max-w-[150px]" title={order.external_id || 'N/A'}>
+                                                            {order.external_id || <span className="text-slate-500 italic">Sem ID Bookinfo</span>}
+                                                        </div>
+                                                        {order.external_id && (
+                                                            <a 
+                                                                href={`/bookinfo/orders/${order.external_id}`}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="p-1 text-slate-500 hover:text-indigo-400 hover:bg-slate-800 rounded transition"
+                                                                title="Abrir Análise Manual deste Pedido"
+                                                            >
+                                                                <ExternalLink className="w-3 h-3" />
+                                                            </a>
+                                                        )}
                                                     </div>
                                                     {order.partner_reference && (
                                                         <div className="text-xs text-sky-400 mt-1 border border-sky-900/50 bg-sky-900/10 px-1 inline-block rounded">
@@ -898,6 +925,16 @@ export default function BookinfoSyncQueuePage() {
                                                     
                                                     {order.status !== 'CONCLUIDO' && (
                                                         <>
+                                                            <button
+                                                                onClick={() => handleAutoStep(order.id)}
+                                                                disabled={actionLoading === order.id}
+                                                                className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-purple-500/50 bg-purple-500/10 hover:bg-purple-600 hover:text-white text-purple-300"
+                                                                title="Avançar próxima etapa automaticamente com regras de estoque e configuração da empresa"
+                                                            >
+                                                                {actionLoading === order.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Terminal className="w-3 h-3" />}
+                                                                Auto-Avançar
+                                                            </button>
+
                                                             <button
                                                                 onClick={() => handleSync(order.id)}
                                                                 disabled={actionLoading === order.id || !order.horus_pedido_venda}

@@ -2608,3 +2608,518 @@ async def get_bookinfo_order_details(
         "bookinfo_api": bookinfo_data,
         "bookinfo_payload": None
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# MOTOR UNIFICADO DE AUTOMAÇÃO DE PEDIDOS BOOKINFO (AUTO-STEP)
+# ══════════════════════════════════════════════════════════════════════
+
+async def _auto_analyse_items(order: Order, settings: CompanySettings, db: Session) -> int:
+    """
+    Executa a análise de itens do pedido no ERP Hórus aplicando as regras comerciais
+    (buffer de estoque, bloqueio de consignação crítica, desconto autorizado e saldo consignado).
+    """
+    from datetime import datetime as dt
+    # 1. Busca dados do pedido na Bookinfo
+    async with get_bookinfo_client(order.company_id, db) as client:
+        resp = await client.get(f"/pedido/{order.external_id}")
+        resp.raise_for_status()
+        bk_order = resp.json()
+
+    items = bk_order.get("itens", [])
+    if not items:
+        return 0
+
+    # 2. Contexto do cliente no Horus
+    cnpj = bk_order.get("cnpjComprador", "0")
+    id_doc, id_guid = await _get_horus_customer_context(db, order.company_id, cnpj, settings)
+    if not id_guid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cliente CNPJ {cnpj} não possui ID GUID no Hórus para consultar acervo."
+        )
+
+    isbns_payload = [{"BARRAS_ISBN": item.get("isbn13")} for item in items if item.get("isbn13")]
+    horus_client = HorusProducts(db=db, company_id=order.company_id)
+    horus_res = await horus_client.busca_acervo_b2b(
+        id_doc=id_doc,
+        id_guid=id_guid,
+        isbns=isbns_payload,
+        limit=5000
+    )
+    horus_items = horus_res if isinstance(horus_res, list) else []
+    if isinstance(horus_res, dict):
+        if "itens" in horus_res:
+            horus_items = horus_res["itens"]
+        elif "COD_ITEM" in horus_res:
+            horus_items = [horus_res]
+
+    horus_map = {}
+    for hi in horus_items:
+        isbn_key = str(hi.get("COD_BARRA_ITEM") or hi.get("BARRAS_ISBN") or "")
+        if isbn_key:
+            horus_map[isbn_key] = hi
+
+    # 3. Aplica regras comerciais e upsert em ord_order_item
+    min_buffer = getattr(settings, "bookinfo_min_stock_buffer", 0) or 0
+    block_consign_low = getattr(settings, "bookinfo_block_consign_low_stock", False)
+    consign_threshold = getattr(settings, "bookinfo_consign_low_stock_threshold", 5) or 5
+    allow_partial = getattr(settings, "bookinfo_allow_partial_fulfill", True)
+    is_consign = (order.type_order == "C")
+    now = dt.utcnow()
+
+    analysed_count = 0
+    for req_item in items:
+        isbn = str(req_item.get("isbn13", "") or "")
+        if not isbn:
+            continue
+
+        req_qty = int(req_item.get("quantidade", 0))
+        req_discount = float(req_item.get("descontoProposto", 0.0))
+        partner_item_id = str(req_item.get("id") or "")
+        hr = horus_map.get(isbn)
+
+        if hr is None:
+            auto_situation = "sem_cadastro_erp"
+            detail = "Item não localizado no catálogo do ERP Hórus"
+            avail_qty = 0
+            price_gross = 0.0
+            disc_allowed = 0.0
+            has_erp_reg = False
+        else:
+            has_erp_reg = True
+            avail_qty = int(hr.get("SALDO_DISPONIVEL", 0) or 0)
+            price_gross = float(str(hr.get("VLR_CAPA", 0) or 0).replace(",", "."))
+            disc_allowed = float(str(hr.get("VLR_DESC_CLI", 0) or 0).replace(",", "."))
+            sit_item = hr.get("SITUACAO_ITEM", "")
+
+            if sit_item == "FE":
+                auto_situation = "esgotado"
+                detail = "esgotado"
+            elif sit_item == "FC":
+                auto_situation = "fora_catalogo"
+                detail = "fora de catálogo"
+            else:
+                details_list = []
+                if min_buffer > 0:
+                    details_list.append(f"buffer mín {min_buffer}")
+                if req_discount > disc_allowed:
+                    details_list.append("divergência de desconto")
+
+                effective_stock = max(0, avail_qty - min_buffer)
+                if is_consign and block_consign_low and avail_qty <= consign_threshold:
+                    auto_situation = "sem_estoque"
+                    details_list.append(f"consignação retida (estoque crítico {avail_qty} un)")
+                elif effective_stock >= req_qty:
+                    auto_situation = "reservado_total"
+                    details_list.append("disponível")
+                elif effective_stock > 0 and allow_partial:
+                    auto_situation = "atendimento_parcial_sem_reserva"
+                    details_list.append(f"atendimento parcial ({effective_stock}/{req_qty})")
+                else:
+                    auto_situation = "sem_estoque"
+                    details_list.append("sem estoque livre")
+                detail = "; ".join(details_list)
+
+        try:
+            remessa_raw = hr.get("REMESSA") if hr else None
+            consigned_bal = int(float(str(remessa_raw).replace(',', '.'))) if remessa_raw else 0
+        except (ValueError, TypeError):
+            consigned_bal = 0
+
+        existing_item = db.query(OrderItem).filter(
+            OrderItem.order_id == order.id,
+            OrderItem.ean_isbn == isbn
+        ).first()
+
+        if existing_item:
+            if not existing_item.sit_manual_change:
+                existing_item.partner_situation = auto_situation
+                existing_item.situation_detail = detail
+            existing_item.available_qty = avail_qty
+            existing_item.price_gross = price_gross
+            existing_item.discount_allowed = disc_allowed
+            existing_item.partner_discount = req_discount
+            existing_item.partner_item_id = partner_item_id
+            existing_item.consigned_balance = consigned_bal
+            existing_item.has_erp_registration = has_erp_reg
+            existing_item.analysed_at = now
+            existing_item.quantity_requested = req_qty
+            if hr:
+                existing_item.name = hr.get("NOM_ITEM") or existing_item.name
+                existing_item.brand = hr.get("NOM_EDITORA") or existing_item.brand
+        else:
+            title = (hr.get("NOM_ITEM") if hr else None) or req_item.get("titulo") or "ND"
+            brand = (hr.get("NOM_EDITORA") if hr else None) or "ND"
+            existing_item = OrderItem(
+                order_id=order.id,
+                ean_isbn=isbn,
+                name=title,
+                brand=brand,
+                quantity=req_qty,
+                quantity_requested=req_qty,
+                quantity_fulfilled=0,
+                unit_price=0.0,
+                total_price=0.0,
+                partner_situation=auto_situation,
+                situation_detail=detail,
+                available_qty=avail_qty,
+                price_gross=price_gross,
+                discount_allowed=disc_allowed,
+                partner_discount=req_discount,
+                sit_manual_change=False,
+                has_erp_registration=has_erp_reg,
+                partner_item_id=partner_item_id,
+                consigned_balance=consigned_bal,
+                analysed_at=now,
+            )
+            db.add(existing_item)
+        analysed_count += 1
+
+    order.validated_items_erp = True
+    order.updated_at = now
+    db.commit()
+    return analysed_count
+
+
+async def _auto_submit_bookinfo_evaluation(order: Order, db: Session):
+    """
+    Monta a avaliação com base nos itens analisados e submete para POST /pedido/{id}/avaliacao na Bookinfo.
+    """
+    items_db = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+    if not items_db:
+        raise HTTPException(status_code=400, detail="Pedido não possui itens analisados para submissão.")
+
+    payload_items = []
+    for it in items_db:
+        sit = str(it.partner_situation or "sem_estoque").upper()
+        if sit in ["SEM_CADASTRO_ERP", "ITEM_REJEITADO", "ESGOTADO", "FORA_CATALOGO", "ITEM_NAO_COMERCIALIZADO", "SEM_ESTOQUE"]:
+            effective_qty = 0
+            send_status = "ITEM_NAO_COMERCIALIZADO" if sit in ["SEM_CADASTRO_ERP", "ITEM_REJEITADO"] else sit
+        else:
+            effective_qty = it.quantity_fulfilled if (it.quantity_fulfilled and it.quantity_fulfilled > 0) else max(0, min(it.quantity_requested, it.available_qty or it.quantity_requested))
+            send_status = sit
+
+        payload_items.append({
+            "isbn13": it.ean_isbn or it.sku,
+            "quantidadeEfetiva": effective_qty,
+            "status": send_status,
+            "descontoEfetivo": float(it.partner_discount or 0),
+            "precoCapa": float(it.price_gross or 0)
+        })
+
+    async with get_bookinfo_client(order.company_id, db) as client:
+        resp = await client.post(f"/pedido/{order.external_id}/avaliacao", json=payload_items)
+        resp.raise_for_status()
+
+    order.validated_items_partner = True
+    order.status = "EVALUATED"
+    db.commit()
+
+
+async def _auto_confront_and_submit_post_conference(order: Order, settings: CompanySettings, db: Session):
+    """
+    Para Pós-Conferência: confronta itens faturados no Hórus e envia a avaliação à Bookinfo.
+    """
+    from datetime import datetime as dt
+    from app.integrators.horus_orders import HorusOrders
+
+    horus_orders = HorusOrders(db=db, company_id=order.company_id)
+    raw_items = await horus_orders.get_order_items(order.horus_pedido_venda, limit=5000)
+    await horus_orders.close()
+
+    horus_items_map = {}
+    if raw_items and isinstance(raw_items, list):
+        for h_it in raw_items:
+            k = str(h_it.get("BARRAS_ISBN") or h_it.get("COD_BARRA_ITEM") or "").strip()
+            if k:
+                horus_items_map[k] = h_it
+
+    now = dt.utcnow()
+    items_db = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+    for item in items_db:
+        isbn = (item.ean_isbn or item.sku or "").strip()
+        h_match = horus_items_map.get(isbn)
+        if h_match:
+            fulfilled_qty = int(h_match.get("QTD_ATENDIDA") or h_match.get("QTD_FATURADA") or h_match.get("QTD_PEDIDA") or 0)
+            item.quantity_fulfilled = fulfilled_qty
+            item.has_erp_registration = True
+            if not item.sit_manual_change:
+                if fulfilled_qty >= item.quantity_requested:
+                    item.partner_situation = "reservado_total"
+                    item.situation_detail = f"Faturado e conferido integralmente ({fulfilled_qty} un)"
+                elif fulfilled_qty > 0:
+                    item.partner_situation = "atendimento_parcial_sem_reserva"
+                    item.situation_detail = f"Conferido e faturado parcialmente ({fulfilled_qty}/{item.quantity_requested} un)"
+                else:
+                    item.partner_situation = "sem_estoque"
+                    item.situation_detail = "Item cortado na conferência física do ERP"
+        else:
+            item.quantity_fulfilled = 0
+            if not item.sit_manual_change:
+                item.partner_situation = "sem_cadastro_erp"
+                item.situation_detail = "Item não localizado no faturamento do ERP"
+        item.analysed_at = now
+
+    order.validated_items_erp = True
+    db.commit()
+
+    # Envia avaliação pós-conferência à Bookinfo
+    await _auto_submit_bookinfo_evaluation(order, db)
+
+
+async def _auto_sync_nfe_and_complete(order: Order, h_data: dict, db: Session) -> dict:
+    """
+    Para pedidos faturados (FAT): envia XML da NFe para a Bookinfo e finaliza com CONCLUIDO.
+    """
+    import json
+    from app.models.integrator import Integrator
+
+    # 1. Envia NFe se ainda pendente
+    if not order.bookinfo_nfe_sent:
+        nf = h_data.get("NOTA_FISCAL")
+        if not nf or not isinstance(nf, dict):
+            return {"status": "partial", "message": "Pedido está FAT, porém tag NOTA_FISCAL não retornada pelo Hórus."}
+
+        xml_base64 = nf.get("XML_Base64")
+        nro_nf = nf.get("NRO_NOTA_FISCAL")
+        chave_nfe = nf.get("CHAVE_ACESSO_NFE")
+
+        if not xml_base64:
+            return {"status": "partial", "message": "XML da NF não disponível no retorno do Hórus."}
+
+        order.invoice_xml = xml_base64
+        order.invoice_number = nro_nf
+        order.invoice_key = chave_nfe
+        order.status = "INVOICED"
+        db.commit()
+
+        config = db.query(Integrator).filter(
+            Integrator.company_id == order.company_id,
+            Integrator.platform == "BOOKINFO",
+            Integrator.active == True
+        ).first()
+
+        if config and config.credentials:
+            creds = json.loads(config.credentials) if isinstance(config.credentials, str) else config.credentials
+            env = creds.get("Ambiente", "PROD")
+            token = creds.get("Token", "")
+            base_url = "https://bookhub-api.bookinfo.com.br" if env == "PROD" else "https://bookhub-api-hml.bookinfo.com.br"
+            bookinfo_pedido_id = order.tracking_code or order.external_id
+
+            payload = {
+                "base64": order.invoice_xml,
+                "tipo_arquivo": "application/xml",
+                "nome_arquivo": f"NFe_{order.invoice_number or 'Autorizada'}.xml"
+            }
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            async with httpx.AsyncClient(verify=False) as client:
+                res_xml = await client.post(f"{base_url}/pedido/{bookinfo_pedido_id}/nota-fiscal/base64", headers=headers, json=payload, timeout=20.0)
+                if res_xml.status_code in [200, 201, 204]:
+                    order.bookinfo_nfe_sent = True
+                    db.commit()
+
+    # 2. Conclusão do Pedido na Bookinfo
+    config = db.query(Integrator).filter(
+        Integrator.company_id == order.company_id,
+        Integrator.platform == "BOOKINFO",
+        Integrator.active == True
+    ).first()
+    if config and config.credentials:
+        creds = json.loads(config.credentials) if isinstance(config.credentials, str) else config.credentials
+        env = creds.get("Ambiente", "PROD")
+        token = creds.get("Token", "")
+        base_url = "https://bookhub-api.bookinfo.com.br" if env == "PROD" else "https://bookhub-api-hml.bookinfo.com.br"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+        async with httpx.AsyncClient(verify=False) as client:
+            resp = await client.put(f"{base_url}/pedido/{order.external_id}/avaliacao/CONCLUIDO", headers=headers, timeout=15.0)
+            if resp.status_code in [200, 201, 204]:
+                order.status = "CONCLUIDO"
+                db.commit()
+                return {"status": "success", "message": f"NFe transmitida e pedido #{order.horus_pedido_venda} marcado como CONCLUÍDO na Bookinfo!"}
+
+    order.status = "CONCLUIDO"
+    db.commit()
+    return {"status": "success", "message": f"Pedido #{order.horus_pedido_venda} finalizado no Cronuz."}
+
+
+@router.post("/queue/{order_id}/auto-step")
+async def advance_bookinfo_order_auto(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Executa autonomamente o próximo passo do ciclo de vida do pedido Bookinfo,
+    respeitando rigorosamente a configuração da empresa (Pré vs Pós Conferência)
+    e as políticas comerciais de estoque, buffer, consignação e faturamento.
+    """
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+
+    order = db.query(Order).filter(Order.id == order_id, Order.origin == "bookinfo").first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+
+    if current_user.type == UserRole.SELLER and order.company_id != current_user.company_id:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado para esta empresa.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
+    if not settings or not settings.horus_url:
+        raise HTTPException(status_code=400, detail="ERP Hórus não configurado para a empresa do pedido.")
+
+    is_after_conference = (getattr(settings, "bookinfo_analysis_timing", "BEFORE_CONFERENCE") == "AFTER_CONFERENCE")
+    company = db.query(Company).filter(Company.id == order.company_id).first()
+    customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+
+    # ──────────────────────────────────────────────────────────────────
+    # ESTÁGIO 0: Pedido já concluído
+    # ──────────────────────────────────────────────────────────────────
+    if order.status == "CONCLUIDO":
+        return {
+            "step": "ALREADY_COMPLETED",
+            "status": order.status,
+            "message": "Pedido já está 100% concluído e faturado na Bookinfo.",
+            "order_id": order.id,
+            "horus_pedido_venda": order.horus_pedido_venda,
+            "can_advance": False
+        }
+
+    from app.integrators.horus_orders import HorusOrders
+    from app.api.orders import send_order_to_horus
+
+    # ──────────────────────────────────────────────────────────────────
+    # ESTÁGIO 1: Pedido Novo (sem vínculo com Horus ERP)
+    # ──────────────────────────────────────────────────────────────────
+    if not order.horus_pedido_venda:
+        # Se for PÓS-CONFERÊNCIA:
+        # Deve ser transmitido integralmente ao Horus para separação no depósito
+        if is_after_conference:
+            res_horus = await send_order_to_horus(order, db)
+            if not res_horus.get("success"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Falha ao enviar pedido ao Hórus para conferência: {res_horus.get('detail')}"
+                )
+            order.status = "SENT_TO_HORUS"
+            db.commit()
+            return {
+                "step": "SENT_TO_HORUS",
+                "status": order.status,
+                "message": f"Pedido enviado ao Hórus (#{order.horus_pedido_venda}) para separação e conferência física no depósito.",
+                "order_id": order.id,
+                "horus_pedido_venda": order.horus_pedido_venda,
+                "can_advance": True
+            }
+
+        # Se for PRÉ-CONFERÊNCIA:
+        # 1.1 Análise comercial de acervo e estoques no Horus
+        if not order.validated_items_erp or not order.items:
+            await _auto_analyse_items(order, settings, db)
+
+        # 1.2 Submete avaliação para a Bookinfo se ainda pendente
+        if not order.validated_items_partner:
+            await _auto_submit_bookinfo_evaluation(order, db)
+
+        # 1.3 Envia pedido aprovado ao Horus
+        res_horus = await send_order_to_horus(order, db)
+        if not res_horus.get("success"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Avaliação enviada à Bookinfo, mas falhou ao enviar ao Hórus: {res_horus.get('detail')}"
+            )
+        order.status = "SENT_TO_HORUS"
+        db.commit()
+        return {
+            "step": "PROCESSED_AND_SENT",
+            "status": order.status,
+            "message": f"Itens analisados e aprovados na Bookinfo; pedido gerado no Hórus (#{order.horus_pedido_venda}).",
+            "order_id": order.id,
+            "horus_pedido_venda": order.horus_pedido_venda,
+            "can_advance": True
+        }
+
+    # ──────────────────────────────────────────────────────────────────
+    # ESTÁGIO 2: Pedido no Horus, Avaliação Bookinfo Pendente (PÓS-CONFERÊNCIA)
+    # ──────────────────────────────────────────────────────────────────
+    if is_after_conference and not order.validated_items_partner:
+        horus_orders = HorusOrders(db=db, company_id=order.company_id)
+        raw_h_order = await horus_orders.get_order(
+            id_doc=customer.document if customer else None,
+            id_guid=customer.id_guid if customer else None,
+            cnpj_destino=company.document if company else None,
+            cod_pedido_origem=None,
+            cod_ped_venda=order.horus_pedido_venda,
+            ignore_customer_context=True
+        )
+        await horus_orders.close()
+
+        h_data = raw_h_order[0] if (raw_h_order and isinstance(raw_h_order, list)) else (raw_h_order or {})
+        horus_status = (h_data.get("STATUS_PEDIDO_VENDA") or h_data.get("STATUS_PEDIDO") or "").strip().upper()
+
+        if horus_status not in ["LFT", "FAT"]:
+            status_label = horus_status if horus_status else "Em Digitação/Expedição"
+            return {
+                "step": "WAITING_CONFERENCE",
+                "status": order.status,
+                "horus_status": horus_status,
+                "message": f"Pedido #{order.horus_pedido_venda} aguardando conferência física no depósito (Status Hórus: '{status_label}').",
+                "order_id": order.id,
+                "horus_pedido_venda": order.horus_pedido_venda,
+                "can_advance": False
+            }
+
+        # Status LFT ou FAT: Confronta itens com o faturamento do ERP e despacha para a Bookinfo
+        await _auto_confront_and_submit_post_conference(order, settings, db)
+        return {
+            "step": "CONFERENCE_EVALUATED",
+            "status": order.status,
+            "horus_status": horus_status,
+            "message": f"Conferência física confirmada ({horus_status})! Itens confrontados e avaliação enviada à Bookinfo.",
+            "order_id": order.id,
+            "horus_pedido_venda": order.horus_pedido_venda,
+            "can_advance": True
+        }
+
+    # ──────────────────────────────────────────────────────────────────
+    # ESTÁGIO 3: Avaliado na Bookinfo, Aguardando NFe e Conclusão
+    # ──────────────────────────────────────────────────────────────────
+    horus_orders = HorusOrders(db=db, company_id=order.company_id)
+    raw_h_order = await horus_orders.get_order(
+        id_doc=customer.document if customer else None,
+        id_guid=customer.id_guid if customer else None,
+        cnpj_destino=company.document if company else None,
+        cod_pedido_origem=None,
+        cod_ped_venda=order.horus_pedido_venda,
+        ignore_customer_context=True
+    )
+    await horus_orders.close()
+
+    h_data = raw_h_order[0] if (raw_h_order and isinstance(raw_h_order, list)) else (raw_h_order or {})
+    horus_status = (h_data.get("STATUS_PEDIDO_VENDA") or h_data.get("STATUS_PEDIDO") or "").strip().upper()
+
+    if horus_status != "FAT":
+        status_label = horus_status if horus_status else "Aguardando Faturamento"
+        return {
+            "step": "WAITING_INVOICE",
+            "status": order.status,
+            "horus_status": horus_status,
+            "message": f"Pedido aprovado na Bookinfo; aguardando emissão da NFe no Hórus (Status Hórus: '{status_label}').",
+            "order_id": order.id,
+            "horus_pedido_venda": order.horus_pedido_venda,
+            "can_advance": False
+        }
+
+    # Horus está FAT: Executa transmissão da NFe e conclusão
+    res_nfe = await _auto_sync_nfe_and_complete(order, h_data, db)
+    return {
+        "step": "COMPLETED",
+        "status": order.status,
+        "horus_status": horus_status,
+        "message": res_nfe.get("message", "NFe transmitida e pedido CONCLUÍDO na Bookinfo com sucesso!"),
+        "order_id": order.id,
+        "horus_pedido_venda": order.horus_pedido_venda,
+        "can_advance": False
+    }
+
