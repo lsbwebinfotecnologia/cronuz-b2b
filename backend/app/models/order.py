@@ -100,6 +100,7 @@ class OrderItem(Base):
     sit_manual_change = Column(Boolean, nullable=False, default=False)    # True se alterado manualmente
     has_erp_registration = Column(Boolean, nullable=False, default=True) # False se item não cadastrado no ERP
     partner_item_id   = Column(String(100), nullable=True)   # ID do item na plataforma parceira
+    consigned_balance = Column(Integer, nullable=False, default=0)        # Saldo consignado no cliente (campo REMESSA Horus)
     analysed_at       = Column(DateTime, nullable=True)      # Timestamp da última análise
 
     # Relationships

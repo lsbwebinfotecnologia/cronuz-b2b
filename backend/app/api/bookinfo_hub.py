@@ -344,6 +344,7 @@ async def get_order_detail(
                         "situation_detail": it.situation_detail,
                         "sit_manual_change": it.sit_manual_change,
                         "partner_item_id": it.partner_item_id,
+                        "consigned_balance": int(getattr(it, "consigned_balance", 0) or 0),
                         "has_erp_registration": getattr(it, "has_erp_registration", True),
                         "analysed_at": it.analysed_at.isoformat() if it.analysed_at else None,
                     }
@@ -1200,6 +1201,13 @@ async def analyse_order_items(
                     details_list.append("sem estoque livre")
                 detail = "; ".join(details_list)
 
+        # Saldo consignado do cliente no Horus (campo REMESSA)
+        try:
+            remessa_raw = hr.get("REMESSA") if hr else None
+            consigned_bal = int(float(str(remessa_raw).replace(',', '.'))) if remessa_raw else 0
+        except (ValueError, TypeError):
+            consigned_bal = 0
+
         # Upsert: busca pelo isbn + order_id
         existing_item = db.query(OrderItem).filter(
             OrderItem.order_id == local_order.id,
@@ -1216,6 +1224,7 @@ async def analyse_order_items(
             existing_item.discount_allowed = disc_allowed
             existing_item.partner_discount = req_discount
             existing_item.partner_item_id  = partner_item_id
+            existing_item.consigned_balance = consigned_bal
             existing_item.has_erp_registration = has_erp_reg
             existing_item.analysed_at      = now
             existing_item.quantity_requested = req_qty
@@ -1245,6 +1254,7 @@ async def analyse_order_items(
                 sit_manual_change = False,
                 has_erp_registration = has_erp_reg,
                 partner_item_id   = partner_item_id,
+                consigned_balance = consigned_bal,
                 analysed_at       = now,
             )
             db.add(existing_item)
@@ -1256,6 +1266,7 @@ async def analyse_order_items(
             "brand": existing_item.brand,
             "qty_requested": req_qty,
             "available_qty": avail_qty,
+            "consigned_balance": consigned_bal,
             "price_gross": price_gross,
             "discount_allowed": float(disc_allowed),
             "partner_discount": float(req_discount),
@@ -1483,6 +1494,7 @@ async def analyse_order_post_conference(
             "qty_fulfilled": item.quantity_fulfilled,
             "partner_situation": item.partner_situation,
             "situation_detail": item.situation_detail,
+            "consigned_balance": int(getattr(item, "consigned_balance", 0) or 0),
             "has_erp_registration": item.has_erp_registration,
             "sit_manual_change": item.sit_manual_change,
             "analysed_at": now.isoformat()

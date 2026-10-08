@@ -431,6 +431,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
             'Editora': it.brand && it.brand !== 'ND' ? it.brand : '',
             'Qtd. Pedida': qtyReq,
             'Saldo Hórus': qtyAvail,
+            'Saldo Consignado': Number(it.consigned_balance ?? 0),
             'Preço Capa (R$)': grossPrice,
             'Desc. Proposto (%)': propDiscount,
             'Desc. Autorizado (%)': authDiscount,
@@ -1190,6 +1191,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                 {filteredSortedItems.map((ev: any, idx: number) => {
                   const qtyRequested = ev.qty_requested ?? ev.quantity_requested ?? 0;
                   const qtyAvailable = ev.available_qty ?? 0;
+                  const consignedBalance = Number(ev.consigned_balance ?? 0);
                   const hasStock = qtyAvailable >= qtyRequested;
                   const partnerDiscount = Number(ev.partner_discount || 0);
                   const discountAllowed = Number(ev.discount_allowed || 0);
@@ -1222,27 +1224,39 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                               Editora: <strong className="text-slate-700 dark:text-slate-300">{ev.brand}</strong>
                             </span>
                           )}
+                          {consignedBalance > 0 && (
+                            <span className="inline-flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded border border-amber-200 dark:border-amber-800">
+                              Consignado: <strong>{consignedBalance} un</strong>
+                            </span>
+                          )}
                         </div>
                       </div>
 
                       {/* 2. Métricas (Quantidades, Descontos, Situação) */}
                       <div className="flex flex-wrap items-center gap-3 sm:gap-6 shrink-0">
 
-                        {/* Quantidades */}
-                        <div className={`flex items-center gap-3 px-3 py-2 rounded-xl border min-w-[130px] justify-around shadow-sm ${
+                        {/* Quantidades e Saldos */}
+                        <div className={`flex items-center gap-2.5 sm:gap-3 px-3 py-2 rounded-xl border min-w-[170px] justify-around shadow-sm ${
                           hasStock
                             ? 'bg-emerald-50/50 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800/60'
                             : 'bg-rose-50/50 border-rose-200 dark:bg-rose-950/20 dark:border-rose-800/60'
                         }`}>
-                          <div className="text-center">
+                          <div className="text-center" title="Quantidade solicitada no pedido">
                             <span className="text-[9px] text-slate-400 uppercase font-bold block">Pedida</span>
                             <span className="text-sm font-black text-slate-800 dark:text-slate-200">{qtyRequested}</span>
                           </div>
                           <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
-                          <div className="text-center">
+                          <div className="text-center" title="Estoque livre no Hórus ERP">
                             <span className="text-[9px] text-slate-400 uppercase font-bold block">Saldo</span>
                             <span className={`text-sm font-black ${hasStock ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
                               {qtyAvailable}
+                            </span>
+                          </div>
+                          <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
+                          <div className="text-center" title="Saldo consignado atual do cliente para este item">
+                            <span className="text-[9px] text-amber-500 uppercase font-bold block">Consig.</span>
+                            <span className="text-sm font-black text-amber-600 dark:text-amber-400">
+                              {consignedBalance}
                             </span>
                           </div>
                         </div>
