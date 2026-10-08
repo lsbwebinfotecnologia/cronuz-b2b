@@ -8,7 +8,7 @@ import {
   AlertCircle, ShoppingCart, DollarSign, Wallet, CreditCard, Package,
   Sparkles, RefreshCw, Lock, Clock, ArrowUpDown,
   Search, ArrowUp, ArrowDown, SlidersHorizontal, FileSpreadsheet,
-  Send, Check, X, ExternalLink, HelpCircle
+  Send, Check, X, ExternalLink, RotateCcw
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -288,7 +288,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
     }
   };
 
-  // ── Analisar Catálogo & Estoque (Pré-Conferência) ──────────────────────────
+  // ── Analisar / Reavaliar Itens (Catálogo & Estoque Horus) ──────────────────
   const analyseItems = async () => {
     setIsAnalysing(true);
     try {
@@ -307,7 +307,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
       setLastAnalysedAt(now);
       setActiveTab('HORUS');
 
-      toast.success(`Análise concluída! ${data.analysed} item(ns) processado(s).`);
+      toast.success(`Análise concluída com sucesso! ${data.analysed} item(ns) consultados no Hórus.`);
       await fetchOrderDetails(true);
     } catch (err: any) {
       toast.error(err.message);
@@ -335,7 +335,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
       setLastAnalysedAt(now);
       setActiveTab('HORUS');
 
-      toast.success(`Análise pós-conferência concluída! ${data.analysed} item(ns) confrontado(s).`);
+      toast.success(`Análise pós-conferência concluída! ${data.analysed} item(ns) confrontado(s) com a conferência.`);
       await fetchOrderDetails(true);
     } catch (err: any) {
       toast.error(err.message);
@@ -510,55 +510,57 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const orderSettings = orderData.settings || {};
   const bookinfoItems = order.itens || [];
 
-  const isPostConference = orderSettings.bookinfo_analysis_timing === 'AFTER_CONFERENCE';
-  const horusPedidoVenda = orderInternal.horus_pedido_venda;
-  const horusStatus      = (orderInternal.horus_status || '').toUpperCase().trim();
-  const horusInvoice     = orderInternal.horus_invoice;
-  const isHorusConferred = horusStatus === 'LFT' || horusStatus === 'FAT';
-  const hasAnalysedItems = analysedItems.length > 0;
+  const orderStatus        = (order.status || '').toUpperCase().trim();
+  const isPostConference   = orderSettings.bookinfo_analysis_timing === 'AFTER_CONFERENCE';
+  const horusPedidoVenda   = orderInternal.horus_pedido_venda;
+  const horusStatus        = (orderInternal.horus_status || '').toUpperCase().trim();
+  const horusInvoice       = orderInternal.horus_invoice;
+  const isHorusConferred   = horusStatus === 'LFT' || horusStatus === 'FAT';
+  const hasAnalysedItems   = analysedItems.length > 0;
 
-  // Lógica de liberação dos botões de acordo com a regra configurada
-  let canSendHorus = false;
-  let canAnalyse = false;
+  // Pedidos concluídos / finalizados na Bookinfo (somente leitura)
+  const isCompletedOnBookinfo = [
+    'PROCESSADO', 'FATURADO', 'CONCLUIDO', 'CANCELADO', 'FINALIZADO', 'ENTREGUE'
+  ].includes(orderStatus) || !!orderInternal.validated_items_partner;
+
+  // Lógica de habilitação dos botões
   let canSubmit = false;
-  let workflowAlert = null;
+  let canSendHorus = false;
+  let workflowStepTitle = '';
+  let workflowStepDescription = '';
 
-  if (isPostConference) {
-    // FLUXO PÓS-CONFERÊNCIA:
-    // 1. Enviar para o Hórus como veio da Bookinfo
+  if (isCompletedOnBookinfo) {
+    workflowStepTitle = 'Pedido Concluído e Sincronizado na Bookinfo';
+    workflowStepDescription = 'As situações dos itens e quantidades atendidas foram consolidadas com a plataforma Bookinfo. Este pedido está em modo somente leitura.';
+  } else if (isPostConference) {
+    // Modo PÓS-CONFERÊNCIA:
     if (!horusPedidoVenda) {
       canSendHorus = true;
-      workflowAlert = {
-        type: 'info',
-        title: 'Passo 1: Envio ao ERP Hórus Obrigatório',
-        message: 'Neste seller, a regra configurada é Pós-Conferência. O pedido deve ser enviado ao Hórus na íntegra para que o depósito faça a separação física antes de qualquer corte ou processamento na Bookinfo.'
-      };
+      workflowStepTitle = 'Etapa 1: Pré-Análise & Envio ao ERP Hórus';
+      workflowStepDescription = hasAnalysedItems
+        ? 'Pré-análise realizada! Agora envie o pedido na íntegra para o Hórus para que o depósito inicie a conferência física.'
+        : 'Você pode analisar os itens preliminarmente para verificar catálogo e estoques, e em seguida enviar o pedido ao Hórus na íntegra.';
     } else if (!isHorusConferred) {
-      // 2. Pedido já no Hórus, mas aguardando conferência (status diferente de LFT/FAT)
-      canSendHorus = false;
-      canAnalyse = false;
-      canSubmit = false;
-      workflowAlert = {
-        type: 'warning',
-        title: `Aguardando Conferência Física no ERP Hórus (Status: ${horusStatus || 'DIG'})`,
-        message: 'O pedido já está no Hórus, mas ainda não foi liberado pelo depósito. O botão "Processar na Bookinfo" só será habilitado após o pedido atingir o status LFT (Liberado Faturamento) ou FAT (Faturado).'
-      };
+      workflowStepTitle = `Etapa 2: Aguardando Conferência Física no Depósito (Hórus: ${horusStatus || 'DIG'})`;
+      workflowStepDescription = `O pedido #${horusPedidoVenda} está em processo de separação física. O botão "Processar na Bookinfo" será liberado automaticamente após a conferência e liberação (LFT/FAT) no ERP.`;
     } else {
-      // 3. Pedido no Hórus com status LFT ou FAT (Conferido!)
-      canAnalyse = true;
       canSubmit = hasAnalysedItems;
-      workflowAlert = {
-        type: 'success',
-        title: `Pedido Conferido no Hórus (${horusStatus})!`,
-        message: 'A conferência física no depósito foi finalizada com sucesso. Agora você pode analisar os itens conferidos e enviar a resposta definitiva para a Bookinfo.'
-      };
+      workflowStepTitle = `Etapa 3: Pedido Conferido no Hórus (${horusStatus})!`;
+      workflowStepDescription = hasAnalysedItems
+        ? 'Conferência física finalizada e confrontada com sucesso. Agora você pode processar e sincronizar as situações finais na Bookinfo!'
+        : 'O pedido foi conferido no Hórus! Clique em "Confrontar Conferência Hórus" para carregar as quantidades efetivamente atendidas.';
     }
   } else {
-    // FLUXO PRÉ-CONFERÊNCIA (TRADICIONAL):
-    // 1. Analisa catálogo/estoque -> 2. Processa Bookinfo -> 3. Envia ao Hórus
-    canAnalyse = !horusPedidoVenda;
-    canSubmit  = hasAnalysedItems && !horusPedidoVenda;
-    canSendHorus = hasAnalysedItems && !horusPedidoVenda;
+    // Modo PRÉ-CONFERÊNCIA (TRADICIONAL):
+    if (!hasAnalysedItems) {
+      workflowStepTitle = 'Etapa 1: Análise de Catálogo & Estoque Hórus';
+      workflowStepDescription = 'Clique no botão "Analisar Itens do Pedido" para consultar a disponibilidade no ERP Hórus e classificar cada item.';
+    } else {
+      canSubmit = !horusPedidoVenda && !isCompletedOnBookinfo;
+      canSendHorus = !horusPedidoVenda && hasAnalysedItems;
+      workflowStepTitle = 'Etapa 2: Validação Comercial & Processamento';
+      workflowStepDescription = 'Estoque e regras comerciais calculados. Você pode reavaliar os itens a qualquer momento, aplicar ajustes manuais se necessário e processar na Bookinfo.';
+    }
   }
 
   // Ordenação dos itens analisados
@@ -618,6 +620,9 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
     ? Math.min(100, Math.max(0, (customer.open_debts || 0) / customer.credit_limit * 100))
     : 0;
 
+  const consignmentItemsCount = Number(customer.consignment_balance_items || 0);
+  const consignmentValue = Number(customer.consignment_balance_value || 0);
+
   const horusStatusInfo = HORUS_STATUS_LABELS[horusStatus] || {
     label: horusStatus || 'Não integrado',
     desc: horusStatus ? 'Status retornado pelo ERP' : 'Aguardando envio ao Hórus',
@@ -647,6 +652,11 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                   Ref: {order.pedidoCliente}
                 </span>
               )}
+              {isCompletedOnBookinfo && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                  <CheckCircle2 className="w-3 h-3" /> Concluído na Bookinfo
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap items-center gap-2">
               <span>Canal: <strong>Bookinfo Hub</strong></span>
@@ -663,7 +673,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
             <button
               type="button"
               onClick={() => setShowNotesModal(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60 border border-amber-200 dark:border-amber-800 text-xs font-bold transition shadow-sm"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60 border border-amber-200 dark:border-amber-800 text-xs font-bold transition shadow-sm cursor-pointer"
             >
               <Info className="w-4 h-4 text-amber-600 dark:text-amber-400" />
               <span>Ver Observações</span>
@@ -671,14 +681,19 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
             </button>
           )}
 
-          {/* Botão de Financeiro */}
+          {/* Botão de Limite & Consignação */}
           <button
             type="button"
             onClick={() => setShowFinancialModal(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold transition shadow-sm"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold transition shadow-sm cursor-pointer"
           >
             <Wallet className="w-4 h-4 text-indigo-500" />
-            <span>Limite & Crédito</span>
+            <span>Limite & Consignação</span>
+            {consignmentItemsCount > 0 && (
+              <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 px-1.5 py-0.5 rounded text-[10px] font-extrabold border border-amber-300 dark:border-amber-700">
+                {consignmentItemsCount} un
+              </span>
+            )}
           </button>
 
           {/* Botão Marcar como Recebido (se pendente) */}
@@ -687,7 +702,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
               type="button"
               onClick={acknowledgeOrder}
               disabled={isAcknowledging}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-sm disabled:opacity-50"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-sm disabled:opacity-50 cursor-pointer"
             >
               <Check className="w-4 h-4" />
               <span>{isAcknowledging ? 'Confirmando...' : 'Confirmar Recebimento'}</span>
@@ -762,7 +777,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                   type="button"
                   onClick={refreshHorusStatus}
                   disabled={isRefreshingStatus}
-                  className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
+                  className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition cursor-pointer"
                   title="Atualizar status do Hórus agora"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingStatus ? 'animate-spin' : ''}`} />
@@ -823,86 +838,117 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
 
       </div>
 
-      {/* ── 3. Banner de Workflow e Barra de Ações Operacionais ── */}
-      {workflowAlert && (
-        <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm ${
-          workflowAlert.type === 'success'
-            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950 dark:bg-emerald-950/20 dark:border-emerald-800/60 dark:text-emerald-200'
-            : workflowAlert.type === 'warning'
-            ? 'bg-amber-50/70 border-amber-200 text-amber-950 dark:bg-amber-950/20 dark:border-amber-800/60 dark:text-amber-200'
-            : 'bg-indigo-50/70 border-indigo-200 text-indigo-950 dark:bg-indigo-950/20 dark:border-indigo-800/60 dark:text-indigo-200'
-        }`}>
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 shrink-0">
-              {workflowAlert.type === 'success' ? (
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              ) : workflowAlert.type === 'warning' ? (
-                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-              ) : (
-                <Info className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-              )}
-            </div>
-            <div>
-              <h4 className="font-bold text-sm tracking-tight">{workflowAlert.title}</h4>
-              <p className="text-xs opacity-90 mt-0.5 leading-relaxed">{workflowAlert.message}</p>
-            </div>
+      {/* ── 3. Barra de Workflow & Ações Operacionais (SEMPRE VISÍVEL) ── */}
+      <div className={`p-4 sm:p-5 rounded-2xl border flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-sm transition-all ${
+        isCompletedOnBookinfo
+          ? 'bg-emerald-50/70 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800/60'
+          : isPostConference && isHorusConferred
+          ? 'bg-emerald-50/60 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800/50'
+          : isPostConference && horusPedidoVenda
+          ? 'bg-amber-50/70 border-amber-200 dark:bg-amber-950/20 dark:border-amber-800/60'
+          : 'bg-slate-50/80 border-slate-200 dark:bg-slate-900/80 dark:border-slate-800'
+      }`}>
+        {/* Status Textual & Indicador */}
+        <div className="flex items-start gap-3.5">
+          <div className="mt-0.5 shrink-0">
+            {isCompletedOnBookinfo ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            ) : isPostConference && isHorusConferred ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            ) : isPostConference && horusPedidoVenda ? (
+              <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+            ) : (
+              <Info className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            )}
           </div>
+          <div>
+            <h4 className="font-bold text-sm tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+              {workflowStepTitle}
+            </h4>
+            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed max-w-3xl">
+              {workflowStepDescription}
+            </p>
+          </div>
+        </div>
 
-          {/* Botões do Fluxo de Trabalho (Mobile First) */}
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {/* Botão: Enviar Pedido ao Hórus (Pós-Conferência) */}
-            {isPostConference && !horusPedidoVenda && (
-              <button
-                type="button"
-                onClick={sendOrderToHorus}
-                disabled={isSendingHorus}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 active:scale-95 text-white text-xs font-bold transition shadow-md disabled:opacity-50"
-              >
-                <Send className="w-4 h-4" />
-                <span>{isSendingHorus ? 'Enviando ao Hórus...' : '1. Enviar Pedido ao Hórus'}</span>
-              </button>
-            )}
+        {/* Botões Operacionais (Mobile First) */}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
 
-            {/* Botão: Atualizar Status do Hórus se aguardando */}
-            {isPostConference && horusPedidoVenda && !isHorusConferred && (
-              <button
-                type="button"
-                onClick={refreshHorusStatus}
-                disabled={isRefreshingStatus}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white text-xs font-bold transition shadow-sm disabled:opacity-50"
-              >
-                <RefreshCw className={`w-4 h-4 ${isRefreshingStatus ? 'animate-spin' : ''}`} />
-                <span>{isRefreshingStatus ? 'Checando ERP...' : 'Verificar Conferência no Hórus'}</span>
-              </button>
-            )}
-
-            {/* Botão: Analisar Itens da Conferência (Pós-Conferência liberado LFT/FAT) */}
-            {isPostConference && horusPedidoVenda && isHorusConferred && (
-              <button
-                type="button"
-                onClick={analysePostConference}
-                disabled={isAnalysingPost}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold transition shadow-md disabled:opacity-50"
-              >
+          {/* BOTÃO 1: ANALISAR ITENS (1ª vez) OU REAVALIAR ITENS (se já analisado) */}
+          {!isCompletedOnBookinfo && (
+            <button
+              type="button"
+              onClick={analyseItems}
+              disabled={isAnalysing || (isPostConference && !!horusPedidoVenda)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition shadow-sm active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                !hasAnalysedItems
+                  ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                  : 'bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800'
+              }`}
+              title={
+                isPostConference && !!horusPedidoVenda
+                  ? 'O pedido já está no Hórus. Use o botão "Confrontar Conferência Hórus".'
+                  : hasAnalysedItems
+                  ? 'Reconsultar estoque atualizado no Hórus e reavaliar itens'
+                  : 'Consultar estoque e catálogo no ERP Hórus'
+              }
+            >
+              {hasAnalysedItems ? (
+                <RotateCcw className={`w-4 h-4 ${isAnalysing ? 'animate-spin' : ''}`} />
+              ) : (
                 <Play className="w-4 h-4" />
-                <span>{isAnalysingPost ? 'Confrontando...' : '2. Confrontar Conferência Hórus'}</span>
-              </button>
-            )}
+              )}
+              <span>
+                {isAnalysing
+                  ? 'Consultando Hórus...'
+                  : hasAnalysedItems
+                  ? 'Reavaliar Itens'
+                  : '1. Analisar Itens do Pedido'}
+              </span>
+            </button>
+          )}
 
-            {/* Botão: Analisar Catálogo (Pré-Conferência) */}
-            {!isPostConference && !horusPedidoVenda && (
-              <button
-                type="button"
-                onClick={analyseItems}
-                disabled={isAnalysing}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold transition shadow-md disabled:opacity-50"
-              >
-                <Play className="w-4 h-4" />
-                <span>{isAnalysing ? 'Analisando Catálogo...' : '1. Analisar Catálogo & Estoque'}</span>
-              </button>
-            )}
+          {/* BOTÃO 2: ENVIAR AO HÓRUS (PÓS-CONFERÊNCIA) */}
+          {isPostConference && !horusPedidoVenda && !isCompletedOnBookinfo && (
+            <button
+              type="button"
+              onClick={sendOrderToHorus}
+              disabled={isSendingHorus}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 active:scale-95 text-white text-xs font-bold transition shadow-md disabled:opacity-50 cursor-pointer"
+            >
+              <Send className="w-4 h-4" />
+              <span>{isSendingHorus ? 'Enviando ao Hórus...' : 'Enviar Pedido ao Hórus'}</span>
+            </button>
+          )}
 
-            {/* Botão: Processar na Bookinfo */}
+          {/* BOTÃO 3: VERIFICAR STATUS DO HÓRUS (quando em separação física) */}
+          {isPostConference && horusPedidoVenda && !isHorusConferred && !isCompletedOnBookinfo && (
+            <button
+              type="button"
+              onClick={refreshHorusStatus}
+              disabled={isRefreshingStatus}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white text-xs font-bold transition shadow-sm disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshingStatus ? 'animate-spin' : ''}`} />
+              <span>{isRefreshingStatus ? 'Checando...' : 'Verificar Conferência no Hórus'}</span>
+            </button>
+          )}
+
+          {/* BOTÃO 4: CONFRONTAR CONFERÊNCIA HÓRUS (quando LFT/FAT) */}
+          {isPostConference && horusPedidoVenda && isHorusConferred && !isCompletedOnBookinfo && (
+            <button
+              type="button"
+              onClick={analysePostConference}
+              disabled={isAnalysingPost}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold transition shadow-md disabled:opacity-50 cursor-pointer"
+            >
+              <Play className="w-4 h-4" />
+              <span>{isAnalysingPost ? 'Confrontando...' : '2. Confrontar Conferência Hórus'}</span>
+            </button>
+          )}
+
+          {/* BOTÃO 5: PROCESSAR NA BOOKINFO */}
+          {!isCompletedOnBookinfo ? (
             <button
               type="button"
               onClick={submitEvaluation}
@@ -915,17 +961,28 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
               title={
                 !canSubmit
                   ? isPostConference
-                    ? 'Bloqueado: Requer que o pedido esteja conferido no Hórus (status LFT ou FAT) e itens analisados.'
-                    : 'Bloqueado: Requer que a análise de catálogo tenha sido realizada.'
-                  : 'Enviar situação de cada item para a Bookinfo'
+                    ? 'Bloqueado: Requer que o pedido seja conferido no Hórus (LFT ou FAT) e confrontado.'
+                    : 'Bloqueado: Requer que a análise de catálogo tenha sido realizada primeiro.'
+                  : 'Enviar avaliação e resposta definitiva para a Bookinfo'
               }
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>{isSubmitting ? 'Processando...' : isPostConference ? '3. Processar na Bookinfo' : '2. Processar na Bookinfo'}</span>
+              <span>
+                {isSubmitting
+                  ? 'Processando...'
+                  : isPostConference
+                  ? '3. Processar na Bookinfo'
+                  : '2. Processar na Bookinfo'}
+              </span>
             </button>
-          </div>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-xs font-bold">
+              <CheckCircle2 className="w-4 h-4" /> Processado na Bookinfo
+            </span>
+          )}
+
         </div>
-      )}
+      </div>
 
       {/* ── 4. Painel Principal de Itens e Conferência (Full Width 100%) ── */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden flex flex-col">
@@ -1121,16 +1178,10 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                 </div>
                 <div className="max-w-md">
                   <h3 className="text-base font-bold text-slate-900 dark:text-white mb-1">
-                    {isPostConference ? 'Análise Pós-Conferência Aguardando' : 'Análise Horus Pendente'}
+                    Análise Horus Pendente
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                    {isPostConference
-                      ? !horusPedidoVenda
-                        ? 'Envie primeiro o pedido ao ERP Hórus utilizando o botão superior para iniciar a separação física.'
-                        : !isHorusConferred
-                        ? `O pedido #${horusPedidoVenda} está em separação no Hórus (Status: ${horusStatus}). A análise será liberada quando for conferido (LFT/FAT).`
-                        : 'O pedido foi conferido no Hórus! Clique em "2. Confrontar Conferência Hórus" no banner acima.'
-                      : 'Clique em "1. Analisar Catálogo & Estoque" para validar os saldos no ERP.'}
+                    Clique em <strong>&quot;1. Analisar Itens do Pedido&quot;</strong> na barra superior para consultar estoque, preços e políticas comerciais diretamente no ERP Hórus.
                   </p>
                 </div>
               </div>
@@ -1226,17 +1277,23 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                           )}
                         </div>
 
-                        {/* 3. Ajuste Manual Sem Cortes Laterais */}
+                        {/* 3. Ajuste Manual Sem Cortes Laterais (Bloqueado se Concluído) */}
                         <div className="w-full sm:w-auto min-w-[190px] pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800 flex flex-col gap-1">
-                          <span className="text-[9px] text-slate-400 uppercase font-bold block">Ajuste Manual</span>
+                          <span className="text-[9px] text-slate-400 uppercase font-bold block">
+                            {isCompletedOnBookinfo ? 'Situação Final' : 'Ajuste Manual'}
+                          </span>
                           <div className="relative w-full">
                             <select
                               value={ev.partner_situation || ''}
-                              disabled={updatingItem === ev.id}
+                              disabled={updatingItem === ev.id || isCompletedOnBookinfo}
                               onChange={(e) => {
                                 if (ev.id) updateSituation(ev.id, ev.isbn13 || ev.ean_isbn, e.target.value);
                               }}
-                              className="w-full px-3 py-2 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700/80 border border-slate-300 dark:border-slate-600 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500 transition cursor-pointer appearance-none shadow-sm pr-8"
+                              className={`w-full px-3 py-2 border rounded-xl text-xs font-bold transition shadow-sm pr-8 ${
+                                isCompletedOnBookinfo
+                                  ? 'bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800/60 dark:text-slate-400 dark:border-slate-700 cursor-not-allowed opacity-80'
+                                  : 'bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700/80 border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 cursor-pointer outline-none focus:ring-2 focus:ring-indigo-500 appearance-none'
+                              }`}
                             >
                               <option value="reservado_total">Atender Total</option>
                               <option value="atendimento_parcial_sem_reserva">Atend. Parcial</option>
@@ -1247,9 +1304,11 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                               <option value="sem_cadastro_erp">Sem Cadastro no ERP</option>
                               <option value="item_rejeitado">Rejeitar Item</option>
                             </select>
-                            <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400">
-                              <span className="text-[10px]">▼</span>
-                            </div>
+                            {!isCompletedOnBookinfo && (
+                              <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400">
+                                <span className="text-[10px]">▼</span>
+                              </div>
+                            )}
                           </div>
                           {updatingItem === ev.id && (
                             <span className="text-[10px] text-indigo-500 font-bold animate-pulse">Salvando...</span>
@@ -1416,7 +1475,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
               </h3>
               <button
                 onClick={() => setShowNotesModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1450,7 +1509,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
               <button
                 type="button"
                 onClick={() => setShowNotesModal(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition cursor-pointer"
               >
                 Fechar
               </button>
@@ -1459,18 +1518,18 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
         </div>
       )}
 
-      {/* ── 6. Modal de Resumo Financeiro e Limite de Crédito ── */}
+      {/* ── 6. Modal de Resumo Financeiro, Limite de Crédito & Saldo Consignado ── */}
       {showFinancialModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <h3 className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-2">
                 <Wallet className="w-5 h-5 text-indigo-500" />
-                Resumo Financeiro do Cliente
+                Resumo de Crédito & Consignação
               </h3>
               <button
                 onClick={() => setShowFinancialModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1479,7 +1538,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
             <div className="space-y-3">
               <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
                 <span className="text-xs text-slate-500 font-bold flex items-center gap-1.5">
-                  <CreditCard className="w-4 h-4 text-slate-400" /> Limite Total
+                  <CreditCard className="w-4 h-4 text-slate-400" /> Limite de Crédito Total
                 </span>
                 <strong className="text-sm text-slate-900 dark:text-white font-black">
                   {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(customer.credit_limit || 0)}
@@ -1497,20 +1556,53 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
 
               <div className="flex justify-between items-center bg-emerald-50/50 dark:bg-emerald-950/20 p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/40">
                 <span className="text-xs text-emerald-600 font-bold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4" /> Saldo Disponível
+                  <CheckCircle2 className="w-4 h-4" /> Saldo Disponível de Crédito
                 </span>
                 <strong className="text-sm text-emerald-700 dark:text-emerald-400 font-black">
                   {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((customer.credit_limit || 0) - (customer.open_debts || 0))}
                 </strong>
               </div>
 
-              <div className="flex justify-between items-center bg-amber-50/50 dark:bg-amber-950/20 p-3 rounded-xl border border-amber-200 dark:border-amber-900/40">
-                <span className="text-xs text-amber-600 font-bold flex items-center gap-1.5">
-                  <Package className="w-4 h-4" /> Status Consignação
-                </span>
-                <strong className="text-sm text-amber-700 dark:text-amber-400 font-black">
-                  {customer.consignment_status === 'ACTIVE' ? 'Ativo' : 'Inativo'}
-                </strong>
+              {/* Card de Consignação */}
+              <div className="bg-amber-50/60 dark:bg-amber-950/20 p-3.5 rounded-xl border border-amber-200 dark:border-amber-900/40 space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-amber-800 dark:text-amber-300 font-bold flex items-center gap-1.5">
+                    <Package className="w-4 h-4 text-amber-600" /> Saldo Consignado Atual
+                  </span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                    customer.consignment_status === 'ACTIVE'
+                      ? 'bg-amber-200/80 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200'
+                      : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-400'
+                  }`}>
+                    {customer.consignment_status === 'ACTIVE' ? 'Ativo' : 'Inativo'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-amber-200/60 dark:border-amber-900/40 text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Quantidade</span>
+                    <strong className="text-sm font-black text-amber-900 dark:text-amber-200">
+                      {consignmentItemsCount} un
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Valor Consignado</span>
+                    <strong className="text-sm font-black text-amber-900 dark:text-amber-200">
+                      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(consignmentValue)}
+                    </strong>
+                  </div>
+                </div>
+                {customer.id && (
+                  <div className="pt-1">
+                    <Link
+                      href={`/customers/${customer.id}/consignment`}
+                      target="_blank"
+                      className="text-[11px] font-bold text-amber-700 dark:text-amber-300 hover:underline flex items-center gap-1"
+                    >
+                      <span>Ver contratos de consignação do cliente</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </Link>
+                  </div>
+                )}
               </div>
 
               {/* Barra de Uso do Limite */}
@@ -1542,7 +1634,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
               <button
                 type="button"
                 onClick={() => setShowFinancialModal(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition cursor-pointer"
               >
                 Fechar
               </button>

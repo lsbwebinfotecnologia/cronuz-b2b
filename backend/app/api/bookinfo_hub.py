@@ -235,6 +235,62 @@ def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int
     db.commit()
     return new_order
 
+
+async def _get_customer_financial_summary(db: Session, company_id: int, customer: Any, settings: Optional[Any]) -> dict:
+    if not customer:
+        return {}
+    consign_items = 0
+    consign_val = 0.0
+    try:
+        from app.integrators.horus_clients import HorusClients
+        company = db.query(Company).filter(Company.id == company_id).first()
+        id_guid = getattr(customer, "id_guid", None) or (getattr(settings, "horus_default_b2b_guid", None) if settings else "")
+        if id_guid and company and company.document and customer.document:
+            h_client = HorusClients(db, company_id)
+            res_consign = await h_client.get_consignment_summary(
+                cnpj_destino=company.document,
+                cnpj_cliente=customer.document,
+                id_guid=id_guid,
+                limit=50
+            )
+            await h_client.close()
+            if isinstance(res_consign, list):
+                for ctr in res_consign:
+                    if isinstance(ctr, dict) and not ctr.get("Falha"):
+                        consign_items += int(ctr.get("SALDO_ITENS", 0) or 0)
+                        val_str = str(ctr.get("VLR_TOTAL_LIQUIDO", 0) or 0).replace(",", ".")
+                        try:
+                            consign_val += float(val_str)
+                        except Exception:
+                            pass
+            elif isinstance(res_consign, dict) and not res_consign.get("Falha"):
+                consign_items = int(res_consign.get("SALDO_ITENS", 0) or 0)
+                val_str = str(res_consign.get("VLR_TOTAL_LIQUIDO", 0) or 0).replace(",", ".")
+                try:
+                    consign_val = float(val_str)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[_get_customer_financial_summary] Erro ao consultar saldo consignado: {e}")
+
+    credit_limit = float(getattr(customer, "credit_limit", 0.0) or 0.0)
+    open_debts = float(getattr(customer, "open_debts", 0.0) or 0.0)
+
+    return {
+        "id": getattr(customer, "id", None),
+        "name": getattr(customer, "name", None) or getattr(customer, "corporate_name", None),
+        "document": getattr(customer, "document", None),
+        "credit_limit": credit_limit,
+        "open_debts": open_debts,
+        "available_credit": max(0.0, credit_limit - open_debts),
+        "consignment_status": getattr(customer, "consignment_status", "INACTIVE"),
+        "consignment_balance_items": consign_items,
+        "consignment_balance_value": round(consign_val, 2),
+        "commercial_notes": getattr(customer, "commercial_notes", None) or getattr(customer, "notes_message", None),
+        "last_settlement_date": getattr(customer, "last_settlement_date", None).isoformat() if getattr(customer, "last_settlement_date", None) else None
+    }
+
+
 @router.get("/orders/{order_id}")
 async def get_order_detail(
     order_id: str,
@@ -334,14 +390,11 @@ async def get_order_detail(
                     "analysed_items": analysed_items_list,
                 }
                 
+                cmp_settings = db.query(CompanySettings).filter(
+                    CompanySettings.company_id == (local_order.company_id if local_order else current_user.company_id)
+                ).first()
                 if customer:
-                    customer_data = {
-                        "name": customer.name or customer.corporate_name,
-                        "document": customer.document,
-                        "credit_limit": customer.credit_limit,
-                        "open_debts": customer.open_debts,
-                        "consignment_status": customer.consignment_status
-                    }
+                    customer_data = await _get_customer_financial_summary(db, current_user.company_id, customer, cmp_settings)
                 
                 if company:
                     company_data = {
@@ -361,6 +414,7 @@ async def get_order_detail(
                 ]
             else:
                 # If not locally imported yet, let's at least try to find the customer by CNPJ
+                cmp_settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
                 cnpj_str = bookinfo_data.get("cnpjComprador", "")
                 if cnpj_str:
                     clean_cnpj = "".join(filter(str.isdigit, str(cnpj_str)))
@@ -370,13 +424,7 @@ async def get_order_detail(
                     ).first()
                     
                     if customer:
-                        customer_data = {
-                            "name": customer.name or customer.corporate_name,
-                            "document": customer.document,
-                            "credit_limit": customer.credit_limit,
-                            "open_debts": customer.open_debts,
-                            "consignment_status": customer.consignment_status
-                        }
+                        customer_data = await _get_customer_financial_summary(db, current_user.company_id, customer, cmp_settings)
                         
                 company = db.query(Company).filter(Company.id == current_user.company_id).first()
                 if company:
@@ -618,6 +666,13 @@ async def _get_horus_customer_context(db: Session, company_id: int, cnpj: str, s
             if customer:
                 customer.id_guid = fetched_guid
                 customer.id_doc = fetched_doc
+                from app.core.utils import parse_horus_price
+                if "LIMITE" in h_data:
+                    customer.credit_limit = parse_horus_price(h_data.get("LIMITE", "0"))
+                if "TOTAL_DEBITOS" in h_data:
+                    customer.open_debts = parse_horus_price(h_data.get("TOTAL_DEBITOS", "0"))
+                if "B2B_ACEITA_PED_CONSIG" in h_data:
+                    customer.consignment_status = "ACTIVE" if h_data.get("B2B_ACEITA_PED_CONSIG") == "S" else "INACTIVE"
                 db.commit()
                 return customer.document or cnpj_clean, customer.id_guid
             else:
@@ -963,23 +1018,39 @@ async def analyse_order_items(
     if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
 
-    # Segurança: se já foi enviado ao Horus ERP, bloqueia
     local_order = db.query(Order).filter(
         Order.company_id == current_user.company_id,
         Order.external_id == order_id,
         Order.origin == "bookinfo"
     ).first()
 
-    if local_order and local_order.horus_pedido_venda:
+    # Se ainda não estiver espelhado no BD local, busca na Bookinfo e espelha dinamicamente
+    if not local_order:
+        async with get_bookinfo_client(current_user.company_id, db) as client:
+            resp = await client.get(f"/pedido/{order_id}")
+            if resp.status_code != 200:
+                raise HTTPException(status_code=404, detail="Pedido não localizado na Bookinfo.")
+            bk_data = resp.json()
+            
+            cnpj_str = bk_data.get("cnpjComprador", "")
+            clean_cnpj = "".join(filter(str.isdigit, str(cnpj_str)))
+            customer = db.query(Customer).filter(
+                Customer.document == clean_cnpj,
+                Customer.company_id == current_user.company_id
+            ).first()
+            if not customer:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cliente {bk_data.get('nomeComprador')} (CNPJ: {clean_cnpj}) não encontrado na base Cronuz. Cadastre-o primeiro."
+                )
+
+            local_order = __upsert_bookinfo_order_local(db, current_user.company_id, customer.id, bk_data)
+
+    # Trava: se o pedido já foi concluído na Bookinfo, bloqueia qualquer reanálise
+    if local_order.validated_items_partner or local_order.status in ["CONCLUIDO", "FATURADO", "CANCELADO", "PROCESSADO"]:
         raise HTTPException(
             status_code=400,
-            detail="Pedido já integrado ao Horus ERP. Análise bloqueada."
-        )
-
-    if not local_order:
-        raise HTTPException(
-            status_code=404,
-            detail="Pedido não encontrado localmente. Receba o pedido primeiro."
+            detail="Pedido já concluído na Bookinfo. Nenhuma alteração ou reanálise é permitida."
         )
 
     settings = db.query(CompanySettings).filter(
@@ -987,6 +1058,22 @@ async def analyse_order_items(
     ).first()
     if not settings or not settings.horus_url:
         raise HTTPException(status_code=400, detail="ERP Horus não configurado.")
+
+    is_after_conference = settings.bookinfo_analysis_timing == "AFTER_CONFERENCE"
+
+    # Se for PÓS-CONFERÊNCIA e já estiver no Horus ERP:
+    if is_after_conference and local_order.horus_pedido_venda:
+        raise HTTPException(
+            status_code=400,
+            detail=f"O pedido já foi enviado ao Hórus (#{local_order.horus_pedido_venda}). Para confrontar os itens após a conferência física, utilize o botão 'Confrontar Conferência Hórus'."
+        )
+
+    # Se for PRÉ-CONFERÊNCIA e já estiver no Horus ERP:
+    if not is_after_conference and local_order.horus_pedido_venda:
+        raise HTTPException(
+            status_code=400,
+            detail="Pedido já integrado ao Horus ERP. Análise bloqueada."
+        )
 
     # 1. Busca itens na Bookinfo
     async with get_bookinfo_client(current_user.company_id, db) as client:
@@ -1234,7 +1321,14 @@ async def update_item_situation(
     if not local_order:
         raise HTTPException(status_code=404, detail="Pedido não encontrado.")
 
-    if local_order.horus_pedido_venda:
+    # Se já concluído na Bookinfo, bloqueia qualquer alteração
+    if local_order.validated_items_partner or local_order.status in ["CONCLUIDO", "FATURADO", "CANCELADO", "PROCESSADO"]:
+        raise HTTPException(status_code=400, detail="Este pedido já foi finalizado e processado na Bookinfo. Alterações manuais estão bloqueadas.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    is_after_conference = settings and settings.bookinfo_analysis_timing == "AFTER_CONFERENCE"
+
+    if not is_after_conference and local_order.horus_pedido_venda:
         raise HTTPException(status_code=400, detail="Pedido já integrado ao Horus ERP. Alterações bloqueadas.")
 
     item = db.query(OrderItem).filter(
