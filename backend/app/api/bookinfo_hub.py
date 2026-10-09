@@ -336,8 +336,12 @@ async def get_order_detail(
                         "brand": it.brand,
                         "qty_requested": it.quantity_requested,
                         "quantity_requested": it.quantity_requested,
+                        "quantity": it.quantity,
+                        "quantity_fulfilled": it.quantity_fulfilled,
                         "available_qty": int(it.available_qty or 0),
                         "price_gross": float(it.price_gross or 0),
+                        "unit_price": float(it.unit_price or 0),
+                        "total_price": float(it.total_price or 0),
                         "discount_allowed": float(it.discount_allowed or 0),
                         "partner_discount": float(it.partner_discount or 0),
                         "partner_situation": it.partner_situation,
@@ -983,7 +987,48 @@ async def evaluate_submit(
 
             if local_order:
                 local_order.validated_items_partner = True
-                local_order.status = "EVALUATED"
+                local_order.status = "PROCESSADO"
+
+                # Atualiza os itens locais com as quantidades efetivas e situações aprovadas
+                total_order_amount = 0.0
+                for it_data in payload.items:
+                    it_dict = it_data if isinstance(it_data, dict) else (it_data.dict() if hasattr(it_data, "dict") else dict(it_data))
+                    isbn = str(it_dict.get("isbn13") or "")
+                    if not isbn:
+                        continue
+                    
+                    qty_efetiva = int(it_dict.get("quantidadeEfetiva") or 0)
+                    sit = str(it_dict.get("status") or "").lower()
+                    disc_efetivo = float(it_dict.get("descontoEfetivo") or 0.0)
+                    preco_capa = float(it_dict.get("precoCapa") or 0.0)
+
+                    # Se a situação for de corte, quantidade efetiva é 0
+                    if sit in ["sem_estoque", "esgotado", "fora_catalogo", "item_nao_comercializado", "item_rejeitado", "sem_cadastro_erp"]:
+                        qty_efetiva = 0
+
+                    db_item = db.query(OrderItem).filter(
+                        OrderItem.order_id == local_order.id,
+                        OrderItem.ean_isbn == isbn
+                    ).first()
+
+                    if db_item:
+                        db_item.quantity = qty_efetiva
+                        db_item.quantity_fulfilled = qty_efetiva
+                        db_item.partner_situation = sit
+                        if preco_capa > 0:
+                            db_item.price_gross = preco_capa
+                            unit_net = round(preco_capa * (1.0 - (disc_efetivo / 100.0)), 2)
+                            db_item.unit_price = unit_net
+                            db_item.total_price = round(unit_net * qty_efetiva, 2)
+                        elif db_item.unit_price > 0:
+                            db_item.total_price = round(db_item.unit_price * qty_efetiva, 2)
+                        
+                        total_order_amount += (db_item.total_price or 0.0)
+
+                if total_order_amount > 0:
+                    local_order.subtotal = total_order_amount
+                    local_order.total = total_order_amount
+
                 db.commit()
 
             return {"error": False, "message": "Avaliação sincronizada com sucesso!"}

@@ -381,9 +381,11 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
       const token = getToken();
       const payload = analysedItems.map(ev => ({
         isbn13: ev.isbn13 || ev.ean_isbn,
-        quantidadeEfetiva: ['esgotado','fora_catalogo','item_nao_comercializado','item_rejeitado'].includes(ev.partner_situation)
+        quantidadeEfetiva: ['esgotado','fora_catalogo','item_nao_comercializado','item_rejeitado','sem_estoque','sem_cadastro_erp'].includes(ev.partner_situation)
           ? 0
-          : Math.min(ev.qty_requested || ev.quantity_requested || 0, ev.available_qty || 0) || (ev.qty_requested || ev.quantity_requested || 0),
+          : ev.partner_situation === 'atendimento_parcial_sem_reserva'
+          ? Math.min(Number(ev.qty_requested || ev.quantity_requested || 0), Number(ev.available_qty || 0))
+          : Number(ev.qty_requested || ev.quantity_requested || 0),
         status: (ev.partner_situation || 'sem_estoque').toUpperCase(),
         descontoEfetivo: ev.partner_discount || 0,
         precoCapa: parseFloat(ev.price_gross || 0)
@@ -531,8 +533,14 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   let workflowStepDescription = '';
 
   if (isCompletedOnBookinfo) {
-    workflowStepTitle = 'Pedido Concluído e Sincronizado na Bookinfo';
-    workflowStepDescription = 'As situações dos itens e quantidades atendidas foram consolidadas com a plataforma Bookinfo. Este pedido está em modo somente leitura.';
+    if (!horusPedidoVenda) {
+      canSendHorus = true;
+      workflowStepTitle = 'Pedido Processado na Bookinfo — Pronto para Envio ao Hórus';
+      workflowStepDescription = 'As situações e quantidades foram consolidadas na Bookinfo. Agora você pode enviar o pedido ao Hórus com os dados processados para iniciar o faturamento no ERP.';
+    } else {
+      workflowStepTitle = 'Pedido Concluído e Integrado ao ERP';
+      workflowStepDescription = `Pedido integrado ao Hórus (#${horusPedidoVenda}) e processado na Bookinfo com sucesso.`;
+    }
   } else if (isPostConference) {
     // Modo PÓS-CONFERÊNCIA:
     if (!horusPedidoVenda) {
@@ -558,7 +566,6 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
       workflowStepDescription = 'Clique no botão "Analisar Itens do Pedido" para consultar a disponibilidade no ERP Hórus e classificar cada item.';
     } else {
       canSubmit = !horusPedidoVenda && !isCompletedOnBookinfo;
-      canSendHorus = !horusPedidoVenda && hasAnalysedItems;
       workflowStepTitle = 'Etapa 2: Validação Comercial & Processamento';
       workflowStepDescription = 'Estoque e regras comerciais calculados. Você pode reavaliar os itens a qualquer momento, aplicar ajustes manuais se necessário e processar na Bookinfo.';
     }
@@ -909,8 +916,8 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
             </button>
           )}
 
-          {/* BOTÃO 2: ENVIAR AO HÓRUS (PÓS-CONFERÊNCIA) */}
-          {isPostConference && !horusPedidoVenda && !isCompletedOnBookinfo && (
+          {/* BOTÃO 2: ENVIAR AO HÓRUS (PÓS-CONFERÊNCIA OU PÓS-PROCESSAMENTO PRÉ-CONFERÊNCIA) */}
+          {!horusPedidoVenda && ((isPostConference && !isCompletedOnBookinfo) || isCompletedOnBookinfo) && (
             <button
               type="button"
               onClick={sendOrderToHorus}
@@ -1196,6 +1203,16 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                   const partnerDiscount = Number(ev.partner_discount || 0);
                   const discountAllowed = Number(ev.discount_allowed || 0);
                   const discountExceeded = partnerDiscount > discountAllowed;
+                  const isCutSituation = ['esgotado', 'fora_catalogo', 'item_nao_comercializado', 'item_rejeitado', 'sem_estoque', 'sem_cadastro_erp'].includes(ev.partner_situation);
+                  const qtyAttended = isCutSituation
+                    ? 0
+                    : ev.quantity_fulfilled !== undefined && ev.quantity_fulfilled !== null
+                    ? Number(ev.quantity_fulfilled)
+                    : ev.quantity !== undefined && ev.quantity !== null
+                    ? Number(ev.quantity)
+                    : ev.partner_situation === 'atendimento_parcial_sem_reserva'
+                    ? Math.min(qtyRequested, qtyAvailable)
+                    : qtyRequested;
                   const borderLeftClass = SITUATION_BORDER[ev.partner_situation] || 'border-l-4 border-l-slate-200 dark:border-l-slate-800';
 
                   return (
@@ -1259,6 +1276,17 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                               {consignedBalance}
                             </span>
                           </div>
+                          {isCompletedOnBookinfo && (
+                            <>
+                              <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
+                              <div className="text-center" title="Quantidade aprovada no processamento e enviada ao Hórus">
+                                <span className="text-[9px] text-emerald-600 dark:text-emerald-400 uppercase font-bold block">Atendida</span>
+                                <span className={`text-sm font-black ${qtyAttended > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-600'}`}>
+                                  {qtyAttended}
+                                </span>
+                              </div>
+                            </>
+                          )}
                         </div>
 
                         {/* Descontos */}

@@ -96,12 +96,31 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
 
         # Envia os itens
         items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+        items_sent = 0
+        cut_situations = ["sem_estoque", "esgotado", "fora_catalogo", "item_nao_comercializado", "item_rejeitado", "sem_cadastro_erp"]
+
         for it in items:
+            # Pula itens cortados ou sem quantidade a atender
+            if not it.quantity or it.quantity <= 0:
+                continue
+
+            if it.partner_situation and it.partner_situation.lower() in cut_situations:
+                continue
+
             isbn_or_sku = it.ean_isbn or it.sku
             if not isbn_or_sku and it.product_id:
                 prod = db.query(Product).filter(Product.id == it.product_id).first()
                 if prod:
                     isbn_or_sku = prod.ean_gtin or prod.sku
+
+            if not isbn_or_sku:
+                continue
+
+            item_price = it.unit_price
+            if (not item_price or item_price <= 0) and it.price_gross:
+                gross = float(it.price_gross)
+                disc = float(it.partner_discount or 0.0)
+                item_price = round(gross * (1.0 - (disc / 100.0)), 2)
 
             await horus_client.send_order_item(
                 id_doc=customer.document,
@@ -110,8 +129,17 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
                 cod_pedido_origem=cod_origem,
                 isbn=isbn_or_sku,
                 qty=it.quantity,
-                price=it.unit_price
+                price=item_price or 0.0
             )
+            items_sent += 1
+
+        if items_sent == 0:
+            return {
+                "success": False,
+                "is_horus": True,
+                "reason": "no_active_items",
+                "detail": "Nenhum item com quantidade aprovada para envio ao ERP Hórus."
+            }
 
         # Atualiza status do pedido no Horus
         try:
@@ -126,8 +154,9 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
 
         old_status = order.status
         order.horus_pedido_venda = str(horus_ped_venda).strip()
-        order.status = "SENT_TO_HORUS"
-        log_horus = OrderLog(order_id=order.id, old_status=old_status, new_status="SENT_TO_HORUS", note=f"Integrado ao Hórus: #{horus_ped_venda}")
+        new_status = "PROCESSADO" if order.origin == "bookinfo" else "SENT_TO_HORUS"
+        order.status = new_status
+        log_horus = OrderLog(order_id=order.id, old_status=old_status, new_status=new_status, note=f"Integrado ao Hórus: #{horus_ped_venda} ({items_sent} itens enviados)")
         db.add(log_horus)
         db.commit()
 
