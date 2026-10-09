@@ -136,10 +136,15 @@ export default function BookinfoOrdersPage() {
   };
 
   const filteredOrders = orders.filter(order => {
-    const matchesSearch = 
-      order.pedidoCliente?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      order.nomeComprador?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.cnpjComprador?.includes(searchTerm);
+    const query = searchTerm.toLowerCase().trim();
+    const matchesSearch = !query || 
+      order.pedidoCliente?.toLowerCase().includes(query) || 
+      order.nomeComprador?.toLowerCase().includes(query) || 
+      order.cnpjComprador?.includes(query) ||
+      String(order.id || '').includes(query) ||
+      String(order.horus_pedido_venda || '').toLowerCase().includes(query) ||
+      String(order.numeroPedidoERP || '').toLowerCase().includes(query) ||
+      String(order.local_status || '').toLowerCase().includes(query);
       
     // Server-side handles status now, but we keep this for legacy ALL fallback if needed
     const matchesStatus = statusFilter === 'ALL' || order.status === statusFilter;
@@ -169,7 +174,7 @@ export default function BookinfoOrdersPage() {
 
       {/* Quick Dashboard */}
       {!loading && !error && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm flex items-center gap-4">
             <div className="w-12 h-12 rounded-full bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
               <ShoppingBag className="w-6 h-6" />
@@ -177,6 +182,18 @@ export default function BookinfoOrdersPage() {
             <div>
               <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Total na Tela</p>
               <h3 className="text-2xl font-bold text-slate-900 dark:text-white">{filteredOrders.length}</h3>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm flex items-center gap-4">
+            <div className="w-12 h-12 rounded-full bg-violet-50 dark:bg-violet-500/10 flex items-center justify-center text-violet-600 dark:text-violet-400">
+              <Layers className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Com Pedido Hórus</p>
+              <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
+                {filteredOrders.filter(o => o.horus_pedido_venda || (o.numeroPedidoERP && o.numeroPedidoERP !== 'Pendente')).length}
+              </h3>
             </div>
           </div>
           
@@ -318,7 +335,15 @@ export default function BookinfoOrdersPage() {
                             )}
                             
                             <span className="text-slate-300 dark:text-slate-600">|</span>
-                            <span className="text-indigo-600 dark:text-indigo-400">ERP <span className="font-bold">#{order.numeroPedidoERP || order.nroPedido || 'Pendente'}</span></span>
+                            {order.horus_pedido_venda || (order.numeroPedidoERP && order.numeroPedidoERP !== 'Pendente') ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-bold text-[11px] bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30">
+                                    Hórus #{order.horus_pedido_venda || order.numeroPedidoERP}
+                                </span>
+                            ) : (
+                                <span className="text-slate-400 dark:text-slate-500 text-xs">
+                                    Hórus <span className="italic font-normal">Pendente</span>
+                                </span>
+                            )}
                             {order.pedidoCliente && (
                                 <>
                                     <span className="text-slate-300 dark:text-slate-600">|</span>
@@ -339,13 +364,13 @@ export default function BookinfoOrdersPage() {
                         </div>
                       </td>
 
-                      {/* COL 3: Status da Integração */}
+                      {/* COL 3: Status da Integração & Situação Local */}
                       <td className="px-6 py-4">
-                        <div className="flex flex-col gap-2 items-start">
+                        <div className="flex flex-col gap-1.5 items-start">
                             {/* Badges Bookinfo */}
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-1.5">
                                 {order.badge ? (
-                                  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-${order.badge.slug}-100 text-${order.badge.slug}-700 dark:bg-${order.badge.slug}-500/10 dark:text-${order.badge.slug}-400 ring-1 ring-inset ring-${order.badge.slug}-500/20`}>
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-${order.badge.slug}-100 text-${order.badge.slug}-700 dark:bg-${order.badge.slug}-500/10 dark:text-${order.badge.slug}-400 ring-1 ring-inset ring-${order.badge.slug}-500/20`}>
                                     {order.badge.label}
                                   </span>
                                 ) : (
@@ -361,15 +386,62 @@ export default function BookinfoOrdersPage() {
                                      </span>
                                 )}
                             </div>
+
+                            {/* Situação Local / Hórus */}
+                            {order.horus_pedido_venda || (order.numeroPedidoERP && order.numeroPedidoERP !== 'Pendente') ? (
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-500/10 px-2 py-0.5 rounded border border-violet-200 dark:border-violet-500/20">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-violet-600"></span>
+                                    Hórus #{order.horus_pedido_venda || order.numeroPedidoERP}
+                                  </span>
+                                  {order.local_status && (
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                                      order.local_status === 'ANALISADO'
+                                        ? 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-500/10 dark:text-purple-400 dark:border-purple-500/20'
+                                        : order.local_status === 'PROCESSADO'
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
+                                        : order.local_status === 'SENT_TO_HORUS'
+                                        ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20'
+                                        : order.local_status === 'INVOICED'
+                                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/40 dark:text-emerald-400'
+                                        : order.local_status === 'CONCLUIDO'
+                                        ? 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                                        : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400'
+                                    }`}>
+                                      {order.local_status === 'ANALISADO'
+                                        ? 'Analisado no Horus'
+                                        : order.local_status === 'PROCESSADO'
+                                        ? 'Processado Local'
+                                        : order.local_status === 'SENT_TO_HORUS'
+                                        ? 'Integrado Horus'
+                                        : order.local_status === 'INVOICED'
+                                        ? 'Faturado'
+                                        : order.local_status === 'CONCLUIDO'
+                                        ? 'Concluído'
+                                        : order.local_status}
+                                    </span>
+                                  )}
+                                </div>
+                            ) : order.validated_items_erp || order.local_status === 'ANALISADO' ? (
+                                <div className="flex items-center gap-1.5 text-purple-700 dark:text-purple-400 text-xs font-medium bg-purple-50 dark:bg-purple-500/10 px-2 py-0.5 rounded border border-purple-200 dark:border-purple-500/20">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                                  Itens Analisados no Hórus (Sem Pedido ERP)
+                                </div>
+                            ) : order.local_status ? (
+                                <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400 text-[11px] font-medium bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                                  Situação Local: {order.local_status}
+                                </div>
+                            ) : null}
                             
                             {/* Customer Sync Status */}
                             {order.enable ? (
-                              <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 text-xs font-medium bg-emerald-50 dark:bg-emerald-500/10 px-2 py-1 rounded-md border border-emerald-100 dark:border-emerald-500/20">
+                              <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 text-xs font-medium bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-100 dark:border-emerald-500/20">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                                 Cliente Vinculado (Horus)
                               </div>
                             ) : (
-                              <div className="flex items-center gap-1.5 text-rose-500 dark:text-rose-400 text-xs font-medium bg-rose-50 dark:bg-rose-500/10 px-2 py-1 rounded-md border border-rose-100 dark:border-rose-500/20">
+                              <div className="flex items-center gap-1.5 text-rose-500 dark:text-rose-400 text-xs font-medium bg-rose-50 dark:bg-rose-500/10 px-2 py-0.5 rounded border border-rose-100 dark:border-rose-500/20">
                                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
                                 Cliente Pendente
                               </div>

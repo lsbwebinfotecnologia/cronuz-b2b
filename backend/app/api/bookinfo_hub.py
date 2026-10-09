@@ -115,11 +115,14 @@ async def get_orders(
             
         orders = data.get("itens", [])
         
-        # Collect CNPJs
+        # Collect CNPJs and external IDs
         cnpjs_in_orders = set()
+        order_external_ids = []
         for order in orders:
             if order.get("cnpjComprador"):
                 cnpjs_in_orders.add("".join(filter(str.isdigit, str(order.get("cnpjComprador")))))
+            if order.get("id"):
+                order_external_ids.append(str(order.get("id")))
                 
         # Batch fetch real Customer profiles (to satisfy ord_order foreign key)
         mapped_customers = {}
@@ -130,8 +133,19 @@ async def get_orders(
             ).all()
             mapped_customers = {c.document: c.id for c in db_customers if c.document}
             
-        # Validate CNPJs
+        # Batch fetch local orders
+        mapped_local_orders = {}
+        if order_external_ids:
+            db_local_orders = db.query(Order).filter(
+                Order.company_id == current_user.company_id,
+                Order.origin == "bookinfo",
+                Order.external_id.in_(order_external_ids)
+            ).all()
+            mapped_local_orders = {str(o.external_id): o for o in db_local_orders}
+
+        # Validate CNPJs and enrich orders with Horus & local status
         for order in orders:
+            order_bk_id = str(order.get("id") or "")
             cnpj = order.get("cnpjComprador")
             if cnpj:
                 cnpj_clean = "".join(filter(str.isdigit, str(cnpj)))
@@ -158,18 +172,59 @@ async def get_orders(
             else:
                 order["badge"] = {"slug": "slate", "label": s.replace("_", " ").title()}
                 
-            # If order is already processed in Bookinfo and customer exists, ensure it's mirrored locally
-            if order["enable"] and s in ["RECEBIDO", "PROCESSADO", "FATURADO", "CONCLUIDO"]:
+            # Local order matching & enrichment
+            local_order = mapped_local_orders.get(order_bk_id)
+
+            # If order is already processed/received and customer exists, ensure it's mirrored locally
+            if not local_order and order["enable"] and s in ["RECEBIDO", "PROCESSADO", "FATURADO", "CONCLUIDO"]:
                 try:
-                    __upsert_bookinfo_order_local(db, current_user.company_id, order["idCustomer"], order)
+                    local_order = __upsert_bookinfo_order_local(db, current_user.company_id, order["idCustomer"], order)
+                    if local_order:
+                        mapped_local_orders[order_bk_id] = local_order
                 except Exception as e:
-                    print(f"Warning: failed to auto-sync processed order {order['id']}: {e}")
+                    print(f"Warning: failed to auto-sync processed order {order.get('id')}: {e}")
                 
+            if local_order:
+                horus_num = (local_order.horus_pedido_venda or "").strip()
+                if not horus_num:
+                    bk_erp = str(order.get("numeroPedidoERP") or order.get("nroPedido") or "").strip()
+                    if bk_erp and bk_erp.lower() != "pendente":
+                        horus_num = bk_erp
+                        local_order.horus_pedido_venda = horus_num
+                        db.commit()
+
+                # Se tem pedido no Hórus, marca como validado no ERP
+                if horus_num and not local_order.validated_items_erp:
+                    local_order.validated_items_erp = True
+                    db.commit()
+
+                order["horus_pedido_venda"] = horus_num or None
+                order["numeroPedidoERP"] = horus_num or order.get("numeroPedidoERP") or order.get("nroPedido") or None
+                order["local_order_id"] = local_order.id
+                order["local_status"] = local_order.status
+                order["validated_items_erp"] = local_order.validated_items_erp
+                order["validated_items_partner"] = local_order.validated_items_partner
+                order["customer_order_ref"] = local_order.customer_order_ref or order.get("pedidoCliente")
+                order["invoice_number"] = local_order.invoice_number
+                order["bookinfo_nfe_sent"] = local_order.bookinfo_nfe_sent
+            else:
+                bk_erp = str(order.get("numeroPedidoERP") or order.get("nroPedido") or "").strip()
+                final_erp = bk_erp if bk_erp and bk_erp.lower() != "pendente" else None
+                order["horus_pedido_venda"] = final_erp
+                order["numeroPedidoERP"] = final_erp
+                order["local_order_id"] = None
+                order["local_status"] = None
+                order["validated_items_erp"] = False
+                order["validated_items_partner"] = False
+                order["customer_order_ref"] = order.get("pedidoCliente")
+                order["invoice_number"] = None
+                order["bookinfo_nfe_sent"] = False
+
         data["itens"] = orders
         return data
 
 def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int, bookinfo_order: dict) -> Order:
-    order_id = bookinfo_order["id"]
+    order_id = str(bookinfo_order["id"])
     existing_order = db.query(Order).filter(
         Order.company_id == company_id,
         Order.external_id == order_id,
@@ -177,7 +232,9 @@ def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int
     ).first()
     
     status_mapped = bookinfo_order.get("status", "RECEBIDO")
-    nro_erp = bookinfo_order.get("numeroPedidoERP") or bookinfo_order.get("nroPedido") or ""
+    nro_erp = str(bookinfo_order.get("numeroPedidoERP") or bookinfo_order.get("nroPedido") or "").strip()
+    if nro_erp.lower() == "pendente":
+        nro_erp = ""
     ref_cliente = str(
         bookinfo_order.get("pedidoCliente") or 
         bookinfo_order.get("numero") or 
@@ -188,7 +245,10 @@ def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int
     
     if existing_order:
         updated = False
-        if existing_order.status != status_mapped:
+        # Não rebaixa status internos como ANALISADO ou SENT_TO_HORUS se a Bookinfo ainda está RECEBIDO/NOVO
+        if existing_order.status in ["ANALISADO", "SENT_TO_HORUS"] and status_mapped in ["RECEBIDO", "AGUARDANDO_PROCESSAMENTO", "NOVO"]:
+            pass
+        elif existing_order.status != status_mapped:
             existing_order.status = status_mapped
             updated = True
         if nro_erp and existing_order.horus_pedido_venda != nro_erp:
