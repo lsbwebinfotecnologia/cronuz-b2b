@@ -94,7 +94,8 @@ export default function BookinfoOrdersPage() {
       const data = await res.json();
       
       if (!res.ok) {
-        throw new Error(data.detail || 'Erro ao sincronizar cliente');
+        const errorMsg = typeof data.detail === 'string' ? data.detail : (data.message || 'Erro ao sincronizar cliente');
+        throw new Error(errorMsg);
       }
       
       toast.success(data.message || 'Cliente sincronizado!');

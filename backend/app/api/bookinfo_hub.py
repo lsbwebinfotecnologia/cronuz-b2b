@@ -569,65 +569,116 @@ async def sync_customer_from_horus(
     if not cnpj_clean:
          raise HTTPException(status_code=400, detail="CNPJ inválido")
 
-    # Verifica se já existe
+    # Verifica se já existe o cliente CRM e User cadastrados
     existing_user = db.query(User).filter(
         User.company_id == current_user.company_id,
         User.document == cnpj_clean,
         User.type == UserRole.CUSTOMER
     ).first()
     
-    if existing_user:
+    existing_customer = db.query(Customer).filter(
+        Customer.company_id == current_user.company_id,
+        Customer.document == cnpj_clean
+    ).first()
+    
+    if existing_user and existing_customer and existing_customer.id_guid:
          return {"error": False, "message": "Cliente já está sincronizado no painel B2B!"}
          
     try:
         h_client = HorusClients(db, current_user.company_id)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Erro ao inicializar conexão com Horus: {str(e)}")
+        
     try:
         from app.models.company import Company
         company = db.query(Company).filter(Company.id == current_user.company_id).first()
         cnpj_destino = company.document if company else (settings.horus_branch or "1")
         res = await h_client.get_client(cnpj_destino=cnpj_destino, cnpj_cliente=cnpj_clean)
     except Exception as e:
-        raise HTTPException(status_code=504, detail=f"Erro de comunicação/timeout com a API do Horus: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Horus: {str(e)}")
+    finally:
+        await h_client.close()
     
-    if res.get("error"):
-         raise HTTPException(status_code=404, detail=res.get("msg", "Cliente não encontrado no Horus."))
+    if not res or res.get("error"):
+         horus_msg = res.get("msg") if res else "Nenhum retorno recebido do ERP Horus."
+         raise HTTPException(status_code=400, detail=f"Horus: {horus_msg}")
          
     # Sucesso, extract
     h_data = res.get("data", {})
     name = h_data.get("NOME_FANTASIA") or h_data.get("RAZAO_SOCIAL") or h_data.get("DESCRICAO") or payload.fallback_name or f"Cliente {cnpj_clean}"
     razao = h_data.get("RAZAO_SOCIAL") or name
-    email = h_data.get("EMAIL", f"{cnpj_clean}@placeholder.com")
+    raw_email = (h_data.get("EMAIL") or "").replace("\xa0", " ").strip()
     
-    # Criar User (Autenticação / B2B Login)
-    new_user = User(
-        company_id=current_user.company_id,
-        type=UserRole.CUSTOMER,
-        name=name,
-        document=cnpj_clean,
-        email=email,
-        password_hash=get_password_hash(cnpj_clean), # Senha padrão B2B é o CNPJ
-        active=True
-    )
-    db.add(new_user)
+    # Tratamento de e-mail para usr_user:
+    # 1. Pega o primeiro e-mail válido caso venham múltiplos separados por vírgula ou ponto e vírgula
+    import re
+    emails_found = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', raw_email)
+    primary_email = emails_found[0].lower() if emails_found else f"{cnpj_clean}@placeholder.com"
+    
+    # 2. Se esse e-mail já estiver em uso por OUTRO documento dentro da mesma empresa, gera um e-mail único com o CNPJ
+    email_in_use = db.query(User).filter(
+        User.company_id == current_user.company_id,
+        User.type == UserRole.CUSTOMER,
+        User.email == primary_email,
+        User.document != cnpj_clean
+    ).first()
+    
+    user_login_email = f"{cnpj_clean}@placeholder.com" if email_in_use else primary_email
+
+    # Criar ou Atualizar User (Autenticação / B2B Login)
+    if not existing_user:
+        existing_user = User(
+            company_id=current_user.company_id,
+            type=UserRole.CUSTOMER,
+            name=name,
+            document=cnpj_clean,
+            email=user_login_email,
+            password_hash=get_password_hash(cnpj_clean), # Senha padrão B2B é o CNPJ
+            active=True
+        )
+        db.add(existing_user)
+    else:
+        existing_user.name = name
+        existing_user.active = True
+        
     db.commit()
-    db.refresh(new_user)
+    db.refresh(existing_user)
     
-    # Criar Perfil CRM
-    new_customer = Customer(
-        company_id=current_user.company_id,
-        name=name,
-        corporate_name=razao,
-        document=cnpj_clean,
-        email=email,
-        id_doc=h_data.get("ID_CLIENTE") or "",
-        id_guid=h_data.get("ID_GUID") or ""
-    )
-    db.add(new_customer)
+    # Criar ou Atualizar Perfil CRM
+    from app.core.utils import parse_horus_price
+    credit_limit = parse_horus_price(h_data.get("LIMITE", "0")) if "LIMITE" in h_data else 0.0
+    open_debts = parse_horus_price(h_data.get("TOTAL_DEBITOS", "0")) if "TOTAL_DEBITOS" in h_data else 0.0
+    consign_status = "ACTIVE" if h_data.get("B2B_ACEITA_PED_CONSIG") == "S" else "INACTIVE"
+    
+    if not existing_customer:
+        existing_customer = Customer(
+            company_id=current_user.company_id,
+            name=name,
+            corporate_name=razao,
+            document=cnpj_clean,
+            email=raw_email or primary_email,
+            billing_emails=raw_email if len(emails_found) > 1 else None,
+            id_doc=h_data.get("ID_CLIENTE") or cnpj_clean,
+            id_guid=h_data.get("ID_GUID") or "",
+            credit_limit=credit_limit,
+            open_debts=open_debts,
+            consignment_status=consign_status
+        )
+        db.add(existing_customer)
+    else:
+        existing_customer.name = name
+        existing_customer.corporate_name = razao
+        if raw_email:
+            existing_customer.email = raw_email
+        existing_customer.id_doc = h_data.get("ID_CLIENTE") or existing_customer.id_doc or cnpj_clean
+        existing_customer.id_guid = h_data.get("ID_GUID") or existing_customer.id_guid or ""
+        existing_customer.credit_limit = credit_limit
+        existing_customer.open_debts = open_debts
+        existing_customer.consignment_status = consign_status
+
     db.commit()
     
-    return {"error": False, "message": f"Cliente '{name}' sincronizado com sucesso!"}
+    return {"error": False, "message": f"Cliente '{name}' sincronizado com sucesso do Horus!"}
 
 
 async def _get_horus_customer_context(db: Session, company_id: int, cnpj: str, settings: CompanySettings) -> tuple[str, str]:
@@ -656,9 +707,13 @@ async def _get_horus_customer_context(db: Session, company_id: int, cnpj: str, s
         from app.integrators.horus_clients import HorusClients
         from app.models.company import Company
         h_client = HorusClients(db, company_id)
-        company = db.query(Company).filter(Company.id == company_id).first()
-        cnpj_destino = company.document if company else (settings.horus_branch or "1")
-        res = await h_client.get_client(cnpj_destino=cnpj_destino, cnpj_cliente=cnpj_clean)
+        try:
+            company = db.query(Company).filter(Company.id == company_id).first()
+            cnpj_destino = company.document if company else (settings.horus_branch or "1")
+            res = await h_client.get_client(cnpj_destino=cnpj_destino, cnpj_cliente=cnpj_clean)
+        finally:
+            await h_client.close()
+
         if not res.get("error") and res.get("data"):
             h_data = res.get("data", {})
             fetched_guid = h_data.get("ID_GUID") or ""
@@ -679,7 +734,18 @@ async def _get_horus_customer_context(db: Session, company_id: int, cnpj: str, s
             else:
                 name = h_data.get("NOME_FANTASIA") or h_data.get("RAZAO_SOCIAL") or h_data.get("DESCRICAO") or f"Cliente {cnpj_clean}"
                 razao = h_data.get("RAZAO_SOCIAL") or name
-                email = h_data.get("EMAIL", f"{cnpj_clean}@placeholder.com")
+                raw_email = (h_data.get("EMAIL") or "").replace("\xa0", " ").strip()
+                import re
+                emails_found = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', raw_email)
+                primary_email = emails_found[0].lower() if emails_found else f"{cnpj_clean}@placeholder.com"
+                
+                email_in_use = db.query(User).filter(
+                    User.company_id == company_id,
+                    User.type == UserRole.CUSTOMER,
+                    User.email == primary_email,
+                    User.document != cnpj_clean
+                ).first()
+                user_login_email = f"{cnpj_clean}@placeholder.com" if email_in_use else primary_email
                 
                 new_user = db.query(User).filter(
                     User.company_id == company_id,
@@ -692,7 +758,7 @@ async def _get_horus_customer_context(db: Session, company_id: int, cnpj: str, s
                         type=UserRole.CUSTOMER,
                         name=name,
                         document=cnpj_clean,
-                        email=email,
+                        email=user_login_email,
                         password_hash=get_password_hash(cnpj_clean),
                         active=True
                     )
@@ -700,14 +766,23 @@ async def _get_horus_customer_context(db: Session, company_id: int, cnpj: str, s
                     db.commit()
                     db.refresh(new_user)
                 
+                from app.core.utils import parse_horus_price
+                credit_limit = parse_horus_price(h_data.get("LIMITE", "0")) if "LIMITE" in h_data else 0.0
+                open_debts = parse_horus_price(h_data.get("TOTAL_DEBITOS", "0")) if "TOTAL_DEBITOS" in h_data else 0.0
+                consign_status = "ACTIVE" if h_data.get("B2B_ACEITA_PED_CONSIG") == "S" else "INACTIVE"
+
                 customer = Customer(
                     company_id=company_id,
                     name=name,
                     corporate_name=razao,
                     document=cnpj_clean,
-                    email=email,
+                    email=raw_email or primary_email,
+                    billing_emails=raw_email if len(emails_found) > 1 else None,
                     id_doc=fetched_doc,
-                    id_guid=fetched_guid
+                    id_guid=fetched_guid,
+                    credit_limit=credit_limit,
+                    open_debts=open_debts,
+                    consignment_status=consign_status
                 )
                 db.add(customer)
                 db.commit()
