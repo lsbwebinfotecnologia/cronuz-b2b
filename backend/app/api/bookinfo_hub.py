@@ -1167,13 +1167,6 @@ async def analyse_order_items(
 
             local_order = __upsert_bookinfo_order_local(db, current_user.company_id, customer.id, bk_data)
 
-    # Trava: se o pedido já foi concluído na Bookinfo, bloqueia qualquer reanálise
-    if local_order.validated_items_partner or local_order.status in ["CONCLUIDO", "FATURADO", "CANCELADO", "PROCESSADO"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Pedido já concluído na Bookinfo. Nenhuma alteração ou reanálise é permitida."
-        )
-
     settings = db.query(CompanySettings).filter(
         CompanySettings.company_id == current_user.company_id
     ).first()
@@ -1182,19 +1175,33 @@ async def analyse_order_items(
 
     is_after_conference = settings.bookinfo_analysis_timing == "AFTER_CONFERENCE"
 
-    # Se for PÓS-CONFERÊNCIA e já estiver no Horus ERP:
-    if is_after_conference and local_order.horus_pedido_venda:
+    # Pedidos com status final absoluto
+    if local_order.status in ["FATURADO", "CANCELADO", "FINALIZADO"]:
         raise HTTPException(
             status_code=400,
-            detail=f"O pedido já foi enviado ao Hórus (#{local_order.horus_pedido_venda}). Para confrontar os itens após a conferência física, utilize o botão 'Confrontar Conferência Hórus'."
+            detail=f"Pedido em estado final ({local_order.status}). Nenhuma alteração ou reanálise é permitida."
         )
 
-    # Se for PRÉ-CONFERÊNCIA e já estiver no Horus ERP:
-    if not is_after_conference and local_order.horus_pedido_venda:
-        raise HTTPException(
-            status_code=400,
-            detail="Pedido já integrado ao Horus ERP. Análise bloqueada."
-        )
+    # Se for PÓS-CONFERÊNCIA:
+    if is_after_conference:
+        if local_order.horus_pedido_venda:
+            raise HTTPException(
+                status_code=400,
+                detail=f"O pedido já foi enviado ao Hórus (#{local_order.horus_pedido_venda}). Para confrontar os itens após a conferência física, utilize o botão 'Confrontar Conferência Hórus'."
+            )
+        if local_order.validated_items_partner:
+            raise HTTPException(
+                status_code=400,
+                detail="Pedido já concluído na Bookinfo. Nenhuma alteração é permitida."
+            )
+    else:
+        # Se for PRÉ-CONFERÊNCIA:
+        # Só bloqueia se já foi integrado ao Hórus ERP
+        if local_order.horus_pedido_venda:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Pedido já integrado ao Horus ERP (#{local_order.horus_pedido_venda}). Análise bloqueada."
+            )
 
     # 1. Busca itens na Bookinfo
     async with get_bookinfo_client(current_user.company_id, db) as client:
