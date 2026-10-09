@@ -142,6 +142,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const [isSendingHorus,      setIsSendingHorus]      = useState(false);
   const [isRefreshingStatus,  setIsRefreshingStatus]  = useState(false);
   const [updatingItem,        setUpdatingItem]        = useState<number | null>(null);
+  const [isRevalidated,       setIsRevalidated]       = useState(false);
 
   const parseBookinfoDate = (dateStr: string | null | undefined): Date | null => {
     if (!dateStr) return null;
@@ -306,6 +307,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
       const now = new Date().toISOString();
       setLastAnalysedAt(now);
       setActiveTab('HORUS');
+      setIsRevalidated(true);
 
       toast.success(`Análise concluída com sucesso! ${data.analysed} item(ns) consultados no Hórus.`);
       await fetchOrderDetails(true);
@@ -399,6 +401,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erro ao enviar avaliação à Bookinfo');
       toast.success('Avaliação processada na Bookinfo com sucesso!');
+      setIsRevalidated(false);
       await fetchOrderDetails(true);
     } catch (err: any) {
       toast.error(err.message);
@@ -521,10 +524,15 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const isHorusConferred   = horusStatus === 'LFT' || horusStatus === 'FAT';
   const hasAnalysedItems   = analysedItems.length > 0;
 
+  // No fluxo de pré-conferência, se o usuário revalidou os itens e ainda não enviou ao Hórus,
+  // permitimos reprocessar na Bookinfo com as novas quantidades/situações!
+  const isReanalysisPendingSubmit = !isPostConference && !horusPedidoVenda && (isRevalidated || (orderInternal.validated_items_partner === false && hasAnalysedItems));
+
   // Pedidos concluídos / finalizados na Bookinfo (somente leitura)
-  const isCompletedOnBookinfo = [
-    'PROCESSADO', 'FATURADO', 'CONCLUIDO', 'CANCELADO', 'FINALIZADO', 'ENTREGUE'
-  ].includes(orderStatus) || !!orderInternal.validated_items_partner;
+  const isCompletedOnBookinfo = !isReanalysisPendingSubmit && (
+    ['FATURADO', 'CONCLUIDO', 'CANCELADO', 'FINALIZADO', 'ENTREGUE'].includes(orderStatus) ||
+    (orderStatus === 'PROCESSADO' && !!orderInternal.validated_items_partner)
+  );
 
   // Lógica de habilitação dos botões
   let canSubmit = false;
@@ -565,9 +573,13 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
       workflowStepTitle = 'Etapa 1: Análise de Catálogo & Estoque Hórus';
       workflowStepDescription = 'Clique no botão "Analisar Itens do Pedido" para consultar a disponibilidade no ERP Hórus e classificar cada item.';
     } else {
-      canSubmit = !horusPedidoVenda && !isCompletedOnBookinfo;
-      workflowStepTitle = 'Etapa 2: Validação Comercial & Processamento';
-      workflowStepDescription = 'Estoque e regras comerciais calculados. Você pode reavaliar os itens a qualquer momento, aplicar ajustes manuais se necessário e processar na Bookinfo.';
+      canSubmit = !horusPedidoVenda;
+      workflowStepTitle = isReanalysisPendingSubmit
+        ? 'Etapa 2: Itens Reavaliados — Pronto para Reprocessar na Bookinfo'
+        : 'Etapa 2: Validação Comercial & Processamento';
+      workflowStepDescription = isReanalysisPendingSubmit
+        ? 'Estoques e regras comerciais foram reavaliados no Hórus. Revise os itens, faça ajustes manuais se desejar e clique em "Processar na Bookinfo" para atualizar a plataforma.'
+        : 'Estoque e regras comerciais calculados. Você pode reavaliar os itens a qualquer momento, aplicar ajustes manuais se necessário e processar na Bookinfo.';
     }
   }
 

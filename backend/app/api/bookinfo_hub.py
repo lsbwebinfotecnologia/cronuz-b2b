@@ -1408,6 +1408,13 @@ async def analyse_order_items(
     local_order.validated_items_erp = True
     local_order.updated_at = now
 
+    # Se for Pré-Conferência e ainda não tiver sido enviado ao Hórus:
+    # A reavaliação reabre o pedido para permitir reprocessamento na Bookinfo com os novos dados
+    if not is_after_conference and not local_order.horus_pedido_venda:
+        local_order.validated_items_partner = False
+        if local_order.status == "PROCESSADO":
+            local_order.status = "ANALISADO"
+
     # Log de análise
     log_entry = OrderLog(
         order_id   = local_order.id,
@@ -1459,15 +1466,19 @@ async def update_item_situation(
     if not local_order:
         raise HTTPException(status_code=404, detail="Pedido não encontrado.")
 
-    # Se já concluído na Bookinfo, bloqueia qualquer alteração
-    if local_order.validated_items_partner or local_order.status in ["CONCLUIDO", "FATURADO", "CANCELADO", "PROCESSADO"]:
-        raise HTTPException(status_code=400, detail="Este pedido já foi finalizado e processado na Bookinfo. Alterações manuais estão bloqueadas.")
-
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
     is_after_conference = settings and settings.bookinfo_analysis_timing == "AFTER_CONFERENCE"
 
-    if not is_after_conference and local_order.horus_pedido_venda:
-        raise HTTPException(status_code=400, detail="Pedido já integrado ao Horus ERP. Alterações bloqueadas.")
+    # Se já faturado ou cancelado, bloqueia
+    if local_order.status in ["FATURADO", "CANCELADO", "FINALIZADO"]:
+        raise HTTPException(status_code=400, detail="Este pedido já foi finalizado. Alterações manuais estão bloqueadas.")
+
+    if is_after_conference:
+        if local_order.horus_pedido_venda or local_order.validated_items_partner:
+            raise HTTPException(status_code=400, detail="Este pedido já foi finalizado e processado na Bookinfo. Alterações manuais estão bloqueadas.")
+    else:
+        if local_order.horus_pedido_venda:
+            raise HTTPException(status_code=400, detail="Pedido já integrado ao Horus ERP. Alterações bloqueadas.")
 
     item = db.query(OrderItem).filter(
         OrderItem.id == item_id,
