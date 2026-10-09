@@ -90,7 +90,7 @@ async def get_background_logs(
 @router.get("/orders")
 async def get_orders(
     pagina: int = 0,
-    tamanho: int = 25,
+    tamanho: int = 50,
     status: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -103,7 +103,7 @@ async def get_orders(
         
     async with get_bookinfo_client(current_user.company_id, db) as client:
         params = {"pagina": pagina, "tamanho": tamanho}
-        if status:
+        if status and status.upper() != "ALL":
             params["status"] = status
             
         try:

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { getToken } from '@/lib/auth';
-import { Layers, Search,  Eye, Calendar, Filter, ArchiveX, CloudDownload, Loader2, DollarSign, Users, ShoppingBag } from 'lucide-react';
+import { Layers, Search, Eye, Calendar, Filter, ArchiveX, CloudDownload, Loader2, DollarSign, Users, ShoppingBag, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 
@@ -43,20 +43,19 @@ export default function BookinfoOrdersPage() {
   };
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('AGUARDANDO_PROCESSAMENTO');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalElements, setTotalElements] = useState(0);
 
-  useEffect(() => {
-    fetchOrders();
-  }, []);
-
-  const fetchOrders = async () => {
+  const fetchOrders = async (targetPage = page, targetPageSize = pageSize, targetStatus = statusFilter) => {
     setLoading(true);
     setError(null);
     try {
       const token = getToken();
-      let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/orders?tamanho=50`;
-      if (statusFilter !== 'ALL') {
-          url += `&status=${statusFilter}`;
+      let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/orders?pagina=${targetPage}&tamanho=${targetPageSize}`;
+      if (targetStatus && targetStatus !== 'ALL') {
+          url += `&status=${targetStatus}`;
       }
       
       const res = await fetch(url, {
@@ -69,12 +68,17 @@ export default function BookinfoOrdersPage() {
       
       const data = await res.json();
       setOrders(data.itens || []);
+      setTotalElements(typeof data.total === 'number' ? data.total : (data.itens?.length || 0));
     } catch (err: any) {
       setError(err.message || 'Erro desconhecido');
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchOrders(page, pageSize, statusFilter);
+  }, [page, pageSize, statusFilter]);
 
   const handleSyncCustomer = async (cnpj: string, fallbackName?: string) => {
     if (!cnpj) return;
@@ -152,11 +156,6 @@ export default function BookinfoOrdersPage() {
     return matchesSearch && matchesStatus;
   });
 
-  // Re-fetch when statusFilter changes
-  useEffect(() => {
-    fetchOrders();
-  }, [statusFilter]);
-
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
@@ -227,7 +226,7 @@ export default function BookinfoOrdersPage() {
             <h3 className="font-semibold text-lg">Erro na Integração</h3>
             <p className="text-sm mt-1 mb-4">{error}</p>
             <button 
-                onClick={fetchOrders}
+                onClick={() => fetchOrders()}
                 className="px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 text-sm font-medium transition"
             >
                 Tentar Novamente
@@ -253,8 +252,11 @@ export default function BookinfoOrdersPage() {
                 <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                 <select 
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="w-full pl-9 pr-8 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-sm appearance-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all dark:text-white"
+                  onChange={(e) => {
+                    setStatusFilter(e.target.value);
+                    setPage(0);
+                  }}
+                  className="w-full pl-9 pr-8 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-sm appearance-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all dark:text-white cursor-pointer"
                 >
                   <option value="ALL">Todos os Status</option>
                   <option value="NOVO">Novo</option>
@@ -471,6 +473,77 @@ export default function BookinfoOrdersPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Rodapé de Paginação */}
+          {totalElements > 0 && (
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 flex flex-col sm:flex-row items-center justify-between gap-4 select-none">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+                <span>
+                  Mostrando <span className="font-semibold text-slate-700 dark:text-slate-200">{(page * pageSize) + 1}</span> a{' '}
+                  <span className="font-semibold text-slate-700 dark:text-slate-200">{Math.min((page + 1) * pageSize, totalElements)}</span> de{' '}
+                  <span className="font-semibold text-slate-700 dark:text-slate-200">{totalElements}</span> pedidos
+                </span>
+
+                <div className="flex items-center gap-1.5 border-l border-slate-200 dark:border-slate-700 pl-3">
+                  <span>Itens por página:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value));
+                      setPage(0);
+                    }}
+                    className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded px-2 py-1 text-xs text-slate-700 dark:text-slate-200 font-medium cursor-pointer"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setPage(0)}
+                  disabled={page === 0 || loading}
+                  title="Primeira Página"
+                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  <ChevronsLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setPage(prev => Math.max(0, prev - 1))}
+                  disabled={page === 0 || loading}
+                  title="Página Anterior"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span className="hidden sm:inline">Anterior</span>
+                </button>
+
+                <span className="px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+                  Página {page + 1} de {Math.max(1, Math.ceil(totalElements / pageSize))}
+                </span>
+
+                <button
+                  onClick={() => setPage(prev => Math.min(Math.max(0, Math.ceil(totalElements / pageSize) - 1), prev + 1))}
+                  disabled={page >= Math.ceil(totalElements / pageSize) - 1 || loading}
+                  title="Próxima Página"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  <span className="hidden sm:inline">Próxima</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setPage(Math.max(0, Math.ceil(totalElements / pageSize) - 1))}
+                  disabled={page >= Math.ceil(totalElements / pageSize) - 1 || loading}
+                  title="Última Página"
+                  className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  <ChevronsRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
