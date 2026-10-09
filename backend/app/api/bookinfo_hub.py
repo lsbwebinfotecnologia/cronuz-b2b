@@ -178,6 +178,13 @@ def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int
     
     status_mapped = bookinfo_order.get("status", "RECEBIDO")
     nro_erp = bookinfo_order.get("numeroPedidoERP") or bookinfo_order.get("nroPedido") or ""
+    ref_cliente = str(
+        bookinfo_order.get("pedidoCliente") or 
+        bookinfo_order.get("numero") or 
+        bookinfo_order.get("idReference") or 
+        bookinfo_order.get("referencia") or 
+        ""
+    ).strip()
     
     if existing_order:
         updated = False
@@ -187,6 +194,13 @@ def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int
         if nro_erp and existing_order.horus_pedido_venda != nro_erp:
             existing_order.horus_pedido_venda = nro_erp
             updated = True
+        if ref_cliente:
+            if not existing_order.customer_order_ref or existing_order.customer_order_ref != ref_cliente:
+                existing_order.customer_order_ref = ref_cliente
+                updated = True
+            if not existing_order.partner_reference or existing_order.partner_reference != ref_cliente:
+                existing_order.partner_reference = ref_cliente
+                updated = True
         if updated:
             db.commit()
         return existing_order
@@ -206,6 +220,8 @@ def __upsert_bookinfo_order_local(db: Session, company_id: int, customer_id: int
         origin="bookinfo",
         horus_pedido_venda=nro_erp,
         external_id=order_id,
+        customer_order_ref=ref_cliente or None,
+        partner_reference=ref_cliente or None,
         subtotal=total_price, discount=0.0, total=total_price
     )
     db.add(new_order)
@@ -321,6 +337,18 @@ async def get_order_detail(
             timeline = []
             
             if local_order:
+                ref_cli = str(
+                    bookinfo_data.get("pedidoCliente") or 
+                    bookinfo_data.get("numero") or 
+                    bookinfo_data.get("idReference") or 
+                    bookinfo_data.get("referencia") or 
+                    ""
+                ).strip()
+                if ref_cli and (not local_order.customer_order_ref or not local_order.partner_reference):
+                    local_order.customer_order_ref = ref_cli
+                    local_order.partner_reference = ref_cli
+                    db.commit()
+
                 # Busca itens analisados (ord_order_item com partner_situation preenchido)
                 analysed_items_db = db.query(OrderItem).filter(
                     OrderItem.order_id == local_order.id,
@@ -1088,6 +1116,27 @@ async def send_bookinfo_order_to_horus(
             "horus_pedido_venda": local_order.horus_pedido_venda,
             "message": f"Pedido já integrado ao Hórus (#{local_order.horus_pedido_venda})"
         }
+
+    # Garante que a REF (pedidoCliente) esteja preenchida antes do envio ao ERP
+    if not local_order.customer_order_ref:
+        try:
+            async with get_bookinfo_client(current_user.company_id, db) as client:
+                resp = await client.get(f"/pedido/{order_id}")
+                if resp.status_code == 200:
+                    bk_data = resp.json()
+                    ref_cli = str(
+                        bk_data.get("pedidoCliente") or 
+                        bk_data.get("numero") or 
+                        bk_data.get("idReference") or 
+                        bk_data.get("referencia") or 
+                        ""
+                    ).strip()
+                    if ref_cli:
+                        local_order.customer_order_ref = ref_cli
+                        local_order.partner_reference = ref_cli
+                        db.commit()
+        except Exception as _e:
+            print(f"[send_bookinfo_order_to_horus] Aviso ao buscar REF: {_e}")
 
     # Executa o envio para o Hórus
     res = await send_order_to_horus(local_order, db)

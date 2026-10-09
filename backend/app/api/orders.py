@@ -59,14 +59,16 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
 
     horus_client = HorusOrders(db, order.company_id)
     try:
-        cod_origem = order.customer_order_ref if order.customer_order_ref else order.id
+        # Se tiver número do cliente / REF (ex: Bookinfo Ref), envia ele como cod_pedido_origem; senão, envia o id do Cronuz
+        cod_origem = str(order.customer_order_ref or order.partner_reference or order.id).strip()
+        obs_texto = f"BOOKINFO REF {cod_origem}" if order.origin == "bookinfo" else f"PDV VENDA {order.id}"
         order_res = await horus_client.send_order(
             id_doc=customer.document,
             id_guid=customer.id_guid,
             cnpj_destino=company.document,
             cod_pedido_origem=cod_origem,
             type_order=order.type_order or "V",
-            obs=f"PDV VENDA {order.id}"
+            obs=obs_texto
         )
 
         if not order_res or order_res.get("error"):
