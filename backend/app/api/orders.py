@@ -118,11 +118,15 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
             if not isbn_or_sku:
                 continue
 
-            item_price = it.unit_price
-            if (not item_price or item_price <= 0) and it.price_gross:
-                gross = float(it.price_gross)
-                disc = float(it.partner_discount or 0.0)
-                item_price = round(gross * (1.0 - (disc / 100.0)), 2)
+            # Na integração Bookinfo, não enviamos VLR_LIQUIDO (o Hórus ERP calcula preços e descontos comerciais do cliente)
+            if order.origin == "bookinfo":
+                item_price = None
+            else:
+                item_price = it.unit_price
+                if (not item_price or item_price <= 0) and it.price_gross:
+                    gross = float(it.price_gross)
+                    disc = float(it.partner_discount or 0.0)
+                    item_price = round(gross * (1.0 - (disc / 100.0)), 2)
 
             await horus_client.send_order_item(
                 id_doc=customer.document,
@@ -131,7 +135,7 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
                 cod_pedido_origem=cod_origem,
                 isbn=isbn_or_sku,
                 qty=it.quantity,
-                price=item_price or 0.0
+                price=item_price
             )
             items_sent += 1
 

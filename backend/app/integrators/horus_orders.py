@@ -80,7 +80,7 @@ class HorusOrders(HorusClient):
             "COD_PED_VENDA": response[0].get("COD_PED_VENDA") if response and isinstance(response, list) else None
         }
 
-    async def send_order_item(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int], isbn: str, qty: int, price: float) -> Any:
+    async def send_order_item(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int], isbn: str, qty: int, price: Optional[float] = None) -> Any:
         """
         Translates InsItensPedidoVenda step of sendOrderItems from HsOrders.php
         """
