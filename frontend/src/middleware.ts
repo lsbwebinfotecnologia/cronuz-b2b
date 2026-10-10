@@ -92,6 +92,7 @@ export function middleware(request: NextRequest) {
     // se formos adicionar outras rotas como /marketing/contato, podemos fazer rewrite também
     if (url.pathname === '/') {
         url.pathname = '/marketing';
+        url.searchParams.set('tenant', tenant);
         return NextResponse.rewrite(url, {
           request: { headers: requestHeaders }
         });
@@ -168,8 +169,10 @@ export function middleware(request: NextRequest) {
           ? (rawInitial.startsWith('/') ? rawInitial : `/${rawInitial}`)
           : '/';
 
+        const defaultAppHost = tenant === 'horus' ? 'https://app.horusb2b.com.br' : 'https://app.cronuzb2b.com.br';
+
         if (isLoginPage) {
-          const targetHost = marketingDomains.includes(hostname) ? 'https://app.cronuzb2b.com.br' : request.url;
+          const targetHost = marketingDomains.includes(hostname) ? defaultAppHost : request.url;
           return NextResponse.redirect(new URL(isCustomer ? '/store' : initialPage, targetHost));
         }
         
@@ -178,7 +181,7 @@ export function middleware(request: NextRequest) {
         }
         
         if (isCustomer && !url.pathname.startsWith('/store') && !url.pathname.startsWith('/login')) {
-          const targetHost = marketingDomains.includes(hostname) ? 'https://app.cronuzb2b.com.br' : request.url;
+          const targetHost = marketingDomains.includes(hostname) ? defaultAppHost : request.url;
           return NextResponse.redirect(new URL('/store', targetHost));
         }
 

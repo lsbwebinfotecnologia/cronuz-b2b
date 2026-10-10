@@ -16,9 +16,20 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+import { TenantThemeSync } from "@/components/TenantThemeSync";
+
+function getTenantFromHeaders(headersList: Headers): string {
+  const host = (headersList.get("x-forwarded-host") || headersList.get("host") || "").toLowerCase();
+  const tenantId = (headersList.get("x-tenant-id") || "").toLowerCase();
+  if (tenantId === 'horus' || host.includes('horus') || host.includes('fmz')) {
+    return 'horus';
+  }
+  return 'cronuz';
+}
+
 export async function generateMetadata(): Promise<Metadata> {
   const headersList = await headers();
-  const tenant = headersList.get("x-tenant-id") || "cronuz";
+  const tenant = getTenantFromHeaders(headersList);
 
   if (tenant === 'horus') {
     return {
@@ -42,7 +53,7 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const headersList = await headers();
-  const tenant = headersList.get("x-tenant-id") || "cronuz";
+  const tenant = getTenantFromHeaders(headersList);
 
   return (
     <html lang="pt-BR" translate="no" suppressHydrationWarning>
@@ -50,6 +61,7 @@ export default async function RootLayout({
         suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} bg-white text-slate-900 dark:bg-background dark:text-foreground antialiased max-w-[100vw] overflow-x-hidden transition-colors duration-200 ${tenant === 'horus' ? 'theme-horus' : ''}`}
       >
+        <TenantThemeSync />
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
         <FetchInterceptor />
         <Toaster 

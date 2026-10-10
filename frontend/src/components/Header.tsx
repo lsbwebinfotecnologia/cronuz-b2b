@@ -2,12 +2,31 @@
 
 import { Bell, Search, UserCircle, Menu } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
+import { getUser } from '@/lib/auth';
+import { useEffect, useState } from 'react';
 
 interface HeaderProps {
   onOpenMobileSidebar?: () => void;
 }
 
 export function Header({ onOpenMobileSidebar }: HeaderProps) {
+  const [userName, setUserName] = useState<string>('Admin');
+  const [tenantBrand, setTenantBrand] = useState<string>('Cronuz B2B');
+
+  useEffect(() => {
+    const user = getUser();
+    if (user?.name) {
+      setUserName(user.name);
+    }
+    if (user?.company_name) {
+      setTenantBrand(user.company_name);
+    } else if (typeof window !== 'undefined') {
+      const host = window.location.hostname.toLowerCase();
+      const isHorus = host.includes('horus') || host.includes('fmz') || document.body.classList.contains('theme-horus');
+      setTenantBrand(isHorus ? 'Horus B2B' : 'Cronuz B2B');
+    }
+  }, []);
+
   return (
     <header className="sticky top-0 z-40 flex h-16 w-full items-center justify-between border-b border-slate-200 bg-white/80 dark:border-slate-800 dark:bg-slate-950/80 px-4 md:px-6 backdrop-blur-xl transition-colors">
       <div className="flex items-center gap-3">
@@ -40,8 +59,8 @@ export function Header({ onOpenMobileSidebar }: HeaderProps) {
         <button className="flex items-center gap-2 rounded-full p-1 pr-2 sm:pr-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
           <UserCircle className="h-7 w-7 sm:h-8 sm:w-8 text-slate-400" />
           <div className="hidden sm:flex flex-col items-start leading-none">
-            <span className="text-xs sm:text-sm font-medium text-slate-800 dark:text-slate-200">Admin</span>
-            <span className="text-[10px] sm:text-xs text-slate-500">Cronuz S.A.</span>
+            <span className="text-xs sm:text-sm font-medium text-slate-800 dark:text-slate-200 truncate max-w-[140px]">{userName}</span>
+            <span className="text-[10px] sm:text-xs text-slate-500 truncate max-w-[140px]">{tenantBrand}</span>
           </div>
         </button>
       </div>
