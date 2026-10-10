@@ -109,15 +109,37 @@ async def test_send_order_to_horus_bookinfo_omits_price():
         instance.alt_status_pedido = AsyncMock()
         instance.send_order_item = AsyncMock(return_value={'Falha': False})
 
-        res = await send_order_to_horus(order, mock_db)
-        assert res['success'] is True
+        with patch('app.api.bookinfo_hub.get_bookinfo_client') as MockBkClient:
+            mock_client_ctx = AsyncMock()
+            mock_client = AsyncMock()
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                'observacao': 'Entregar pela manhã',
+                'obsNotaFiscal': 'Danfe com cópia de boleto',
+                'pedidoCliente': 'REF-BK-555'
+            }
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_ctx.__aenter__.return_value = mock_client
+            mock_client_ctx.__aexit__.return_value = None
+            MockBkClient.return_value = mock_client_ctx
 
-        instance.send_order_item.assert_called_once()
-        args, kwargs = instance.send_order_item.call_args
-        assert kwargs['price'] is None, 'Para pedidos da Bookinfo, o price passado deve ser None'
-        assert kwargs['isbn'] == '9788535902778'
-        assert kwargs['qty'] == 3
-        print('✓ test_send_order_to_horus_bookinfo_omits_price passou com sucesso!')
+            order.external_id = '145892'
+            res = await send_order_to_horus(order, mock_db)
+            assert res['success'] is True
+
+            instance.send_order.assert_called_once()
+            _, send_kwargs = instance.send_order.call_args
+            expected_obs = 'Entregar pela manhã | Danfe com cópia de boleto | 145892 | pedido cliente:REF-BK-555'
+            assert send_kwargs['obs'] == expected_obs, f"OBS esperada '{expected_obs}', obtida '{send_kwargs['obs']}'"
+            print('✓ OBS_PEDIDO formatada corretamente para Bookinfo!')
+
+            instance.send_order_item.assert_called_once()
+            args, kwargs = instance.send_order_item.call_args
+            assert kwargs['price'] is None, 'Para pedidos da Bookinfo, o price passado deve ser None'
+            assert kwargs['isbn'] == '9788535902778'
+            assert kwargs['qty'] == 3
+            print('✓ test_send_order_to_horus_bookinfo_omits_price passou com sucesso!')
 
 if __name__ == '__main__':
     asyncio.run(test_send_order_item_params())

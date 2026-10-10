@@ -61,7 +61,44 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
     try:
         # Se tiver número do cliente / REF (ex: Bookinfo Ref), envia ele como cod_pedido_origem; senão, envia o id do Cronuz
         cod_origem = str(order.customer_order_ref or order.partner_reference or order.id).strip()
-        obs_texto = f"BOOKINFO REF {cod_origem}" if order.origin == "bookinfo" else f"PDV VENDA {order.id}"
+
+        if order.origin == "bookinfo":
+            detail_order = ""
+            detail_invoice = ""
+            if order.external_id:
+                try:
+                    from app.api.bookinfo_hub import get_bookinfo_client
+                    async with get_bookinfo_client(order.company_id, db) as bk_client:
+                        resp = await bk_client.get(f"/pedido/{order.external_id}")
+                        if resp.status_code == 200:
+                            bk_data = resp.json()
+                            detail_order = str(bk_data.get("observacao") or "").strip()
+                            detail_invoice = str(bk_data.get("obsNotaFiscal") or "").strip()
+                            ref_cliente = str(
+                                bk_data.get("pedidoCliente") or 
+                                bk_data.get("numero") or 
+                                bk_data.get("idReference") or 
+                                bk_data.get("referencia") or 
+                                ""
+                            ).strip()
+                            if ref_cliente and not order.customer_order_ref:
+                                order.customer_order_ref = ref_cliente
+                                cod_origem = ref_cliente
+                except Exception as _e:
+                    print(f"[send_order_to_horus] Aviso ao obter detalhes adicionais Bookinfo: {_e}")
+
+            # Monta OBS_PEDIDO no padrão: detailOrder | detailInvoice | idOrderPartner | pedido cliente:idOrderClient
+            obs_parts = []
+            if detail_order:
+                obs_parts.append(detail_order)
+            if detail_invoice:
+                obs_parts.append(detail_invoice)
+            obs_parts.append(str(order.external_id or order.id))
+            obs_parts.append(f"pedido cliente:{cod_origem}")
+            obs_texto = " | ".join(obs_parts)
+        else:
+            obs_texto = f"PDV VENDA {order.id}"
+
         order_res = await horus_client.send_order(
             id_doc=customer.document,
             id_guid=customer.id_guid,
