@@ -452,10 +452,11 @@ async def get_order_detail(
                     try:
                         from app.integrators.horus_orders import HorusOrders
                         horus_client = HorusOrders(db, current_user.company_id)
+                        cnpj_dest = (company.document if company and company.document else None) or (cmp_settings.horus_branch if cmp_settings else None)
                         h_order = await horus_client.get_order(
                             id_doc=customer.document if customer else None,
                             id_guid=customer.id_guid if customer else None,
-                            cnpj_destino=company.document if company else None,
+                            cnpj_destino=cnpj_dest,
                             cod_pedido_origem=None,
                             cod_ped_venda=local_order.horus_pedido_venda,
                             ignore_customer_context=True

@@ -8,7 +8,7 @@ import {
   AlertCircle, ShoppingCart, DollarSign, Wallet, CreditCard, Package,
   Sparkles, RefreshCw, Lock, Clock, ArrowUpDown,
   Search, ArrowUp, ArrowDown, SlidersHorizontal, FileSpreadsheet,
-  Send, Check, X, ExternalLink, RotateCcw
+  Send, Check, X, ExternalLink, RotateCcw, XCircle
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -644,9 +644,11 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const consignmentValue = Number(customer.consignment_balance_value || 0);
 
   const horusStatusInfo = HORUS_STATUS_LABELS[horusStatus] || {
-    label: horusStatus || 'Não integrado',
-    desc: horusStatus ? 'Status retornado pelo ERP' : 'Aguardando envio ao Hórus',
-    style: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+    label: horusStatus || (horusPedidoVenda ? 'Aguardando Sincronização' : 'Não integrado'),
+    desc: horusStatus ? 'Status retornado pelo ERP Hórus' : (horusPedidoVenda ? 'Consultando status em tempo real no Hórus' : 'Aguardando envio ao Hórus'),
+    style: horusPedidoVenda
+      ? 'bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-700'
+      : 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
   };
 
   return (
@@ -1274,6 +1276,26 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                               Consignado: <strong>{consignedBalance} un</strong>
                             </span>
                           )}
+                          {isPostConference && hasAnalysedItems && (
+                            <span className="inline-flex items-center gap-1">
+                              {qtyAttended >= qtyRequested && qtyRequested > 0 ? (
+                                <span className="inline-flex items-center gap-1 font-bold text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-100/80 dark:bg-emerald-950/60 px-2.5 py-0.5 rounded-lg border border-emerald-300 dark:border-emerald-700 shadow-xs">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                  Conferido Integral ({qtyAttended} un)
+                                </span>
+                              ) : qtyAttended > 0 ? (
+                                <span className="inline-flex items-center gap-1 font-bold text-[11px] text-amber-800 dark:text-amber-200 bg-amber-100/90 dark:bg-amber-950/60 px-2.5 py-0.5 rounded-lg border border-amber-300 dark:border-amber-700 shadow-xs">
+                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                                  Corte no Depósito: {qtyAttended} de {qtyRequested} un ({qtyRequested - qtyAttended} cortado)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 font-bold text-[11px] text-rose-700 dark:text-rose-300 bg-rose-100/90 dark:bg-rose-950/60 px-2.5 py-0.5 rounded-lg border border-rose-300 dark:border-rose-700 shadow-xs">
+                                  <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                                  Cortado Total na Conferência (0/{qtyRequested} un)
+                                </span>
+                              )}
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -1304,12 +1326,18 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                               {consignedBalance}
                             </span>
                           </div>
-                          {isCompletedOnBookinfo && (
+                          {(isCompletedOnBookinfo || isPostConference) && (
                             <>
                               <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
-                              <div className="text-center" title="Quantidade aprovada no processamento e enviada ao Hórus">
-                                <span className="text-[9px] text-emerald-600 dark:text-emerald-400 uppercase font-bold block">Atendida</span>
-                                <span className={`text-sm font-black ${qtyAttended > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-600'}`}>
+                              <div className="text-center" title={isPostConference ? "Quantidade efetivamente separada e faturada pelo depósito no ERP Hórus" : "Quantidade aprovada no processamento e enviada ao Hórus"}>
+                                <span className={`text-[9px] uppercase font-bold block ${isPostConference ? 'text-indigo-600 dark:text-indigo-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                  {isPostConference ? 'Conferida' : 'Atendida'}
+                                </span>
+                                <span className={`text-sm font-black ${
+                                  qtyAttended > 0
+                                    ? (isPostConference && qtyAttended < qtyRequested ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400')
+                                    : 'text-rose-600 dark:text-rose-400'
+                                }`}>
                                   {qtyAttended}
                                 </span>
                               </div>

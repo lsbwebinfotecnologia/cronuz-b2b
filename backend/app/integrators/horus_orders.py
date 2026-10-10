@@ -9,10 +9,20 @@ class HorusOrders(HorusClient):
         Translates getOrder from HsOrders.php
         """
         params = {}
+        clean_cnpj_destino = re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None
+        if not clean_cnpj_destino and getattr(self, '_settings', None) and self._settings.horus_branch:
+            clean_branch = re.sub(r'\D', '', str(self._settings.horus_branch))
+            if len(clean_branch) >= 11:
+                clean_cnpj_destino = clean_branch
+
+        if clean_cnpj_destino:
+            params["CNPJ_DESTINO"] = clean_cnpj_destino
+
         if not ignore_customer_context:
-            params["ID_DOC"] = re.sub(r'\D', '', str(id_doc)) if id_doc else None
-            params["ID_GUID"] = id_guid
-            params["CNPJ_DESTINO"] = re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None
+            if id_doc:
+                params["ID_DOC"] = re.sub(r'\D', '', str(id_doc))
+            if id_guid:
+                params["ID_GUID"] = id_guid
         
         if cod_pedido_origem is not None and cod_pedido_origem != "":
             params["COD_PEDIDO_ORIGEM"] = cod_pedido_origem
