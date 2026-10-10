@@ -29,11 +29,20 @@ class HorusOrders(HorusClient):
         
         if cod_ped_venda:
             params["COD_PED_VENDA"] = cod_ped_venda
-            
+
+        if getattr(self, '_settings', None):
+            if getattr(self._settings, 'horus_company', None):
+                params["COD_EMPRESA"] = self._settings.horus_company
+            if getattr(self._settings, 'horus_branch', None):
+                branch_str = str(self._settings.horus_branch).strip()
+                clean_digits = re.sub(r'\D', '', branch_str)
+                if clean_digits and len(clean_digits) < 11:
+                    params["COD_FILIAL"] = branch_str
+
         if not getattr(self._settings, 'horus_legacy_pagination', False):
             params["LIMIT"] = limit if limit > 0 else 50
             params["OFFSET"] = 0
-            
+
         result = await self.get("Busca_PedidosVenda", params=params)
         
         # If successfully found the order, optionally fetch the invoice (nota fiscal)

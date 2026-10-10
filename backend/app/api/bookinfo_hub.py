@@ -445,6 +445,9 @@ async def get_order_detail(
 
                 customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
                 company = db.query(Company).filter(Company.id == local_order.company_id).first()
+                cmp_settings = db.query(CompanySettings).filter(
+                    CompanySettings.company_id == (local_order.company_id if local_order else current_user.company_id)
+                ).first()
 
                 horus_status = None
                 horus_invoice = False
