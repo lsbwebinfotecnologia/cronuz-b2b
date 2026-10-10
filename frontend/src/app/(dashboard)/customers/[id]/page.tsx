@@ -1141,10 +1141,16 @@ export default function CustomerDetailsPage() {
                   <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-slate-400" /></div>
                 ) : orders && orders.length > 0 ? (
                   <div className="grid gap-4">
-                    {orders.map((order: any) => (
+                    {orders.map((order: any) => {
+                      const isBookinfo = (order.origin || '').toLowerCase() === 'bookinfo' && !!order.external_id;
+                      const orderHref = isBookinfo ? `/bookinfo/orders/${order.external_id}` : `/orders/${order.id}`;
+                      return (
                       <div key={order.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex items-center justify-between dark:bg-slate-900/40 dark:border-slate-800">
                         <div>
-                          <p className="font-semibold text-slate-900 border-b border-transparent inline-flex hover:border-slate-300 cursor-pointer dark:text-white pb-0.5 mb-1" onClick={() => router.push(`/orders/${order.id}`)}>Pedido #{order.id}</p>
+                          <p className="font-semibold text-slate-900 border-b border-transparent inline-flex hover:border-slate-300 cursor-pointer dark:text-white pb-0.5 mb-1" onClick={() => router.push(orderHref)}>
+                            Pedido #{order.id}
+                            {isBookinfo && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold border border-indigo-200">BOOKINFO</span>}
+                          </p>
                           <div className="flex gap-4 text-xs text-slate-500 font-medium">
                             <span>{new Date(order.created_at).toLocaleDateString('pt-BR')}</span>
                             <span className="text-[var(--color-primary-base)] dark:text-indigo-400">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(order.total_amount || order.total || 0)}</span>
@@ -1156,7 +1162,8 @@ export default function CustomerDetailsPage() {
                           </span>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-center py-12 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50 dark:border-slate-800 dark:bg-transparent">

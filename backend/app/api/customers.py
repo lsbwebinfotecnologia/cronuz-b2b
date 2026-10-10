@@ -594,6 +594,8 @@ def get_customer_user(
         return None
         
     from app.schemas.user import User as UserPydanticSchema
+    if user.email:
+        user.email = user.email.strip().rstrip(';,').strip()
     return UserPydanticSchema.from_orm(user)
 
 @router.post("/customers/{customer_id}/users")
@@ -617,6 +619,8 @@ def create_customer_user(
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
 
+    clean_email = user_in.email.strip().rstrip(';,').strip()
+
     existing_user = db.query(User).filter(
         User.document == customer.document,
         User.company_id == customer.company_id,
@@ -624,11 +628,20 @@ def create_customer_user(
     ).first()
     
     if existing_user:
-        raise HTTPException(status_code=400, detail="Este cliente já possui credencial de acesso.")
+        existing_user.name = customer.name
+        existing_user.email = clean_email
+        existing_user.password_hash = get_password_hash(user_in.password)
+        try:
+            db.commit()
+            db.refresh(existing_user)
+            return UserPydanticSchema.from_orm(existing_user)
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(status_code=400, detail="E-mail já cadastrado por outro usuário.")
 
     db_user = User(
         name=customer.name,
-        email=user_in.email,
+        email=clean_email,
         document=customer.document,
         password_hash=get_password_hash(user_in.password),
         type=UserRole.CUSTOMER,

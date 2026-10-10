@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Package, ArrowLeft, Building2, User, FileText, Download, Truck, MessageSquare, Send, Check, CheckCheck, Terminal, X, RefreshCw, AlertCircle, QrCode } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { getToken, getUser } from "@/lib/auth";
 import { ProductImage } from "@/components/store/ProductImage";
 
@@ -89,6 +89,7 @@ const statusLabelMap: Record<string, string> = {
 
 export default function OrderDetailPage() {
     const params = useParams();
+    const router = useRouter();
     const [order, setOrder] = useState<OrderDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [replyMessage, setReplyMessage] = useState("");
@@ -121,6 +122,10 @@ export default function OrderDetailPage() {
             });
             if (response.ok) {
                 const data = await response.json();
+                if ((data.origin || '').toLowerCase() === 'bookinfo' && data.external_id) {
+                    router.replace(`/bookinfo/orders/${data.external_id}`);
+                    return;
+                }
                 setOrder(data);
                 if (data.company_id) {
                     fetchSettings(data.company_id);
