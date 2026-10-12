@@ -526,6 +526,8 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     ? baseNavigation.filter(nav => {
         if (nav.name === 'Ponto de Venda (PDV)' || nav.href === '/pdv') return userAllowedModules.includes('pdv');
         if (nav.name === 'Busca Preço' || nav.href === '/product-search') return userAllowedModules.includes('busca_preco');
+        if (nav.name === 'Encomendas' || nav.href === '/encomendas') return userAllowedModules.includes('encomendas') || userAllowedModules.includes('orders');
+        if (nav.name === 'Cafeteria' || nav.href.startsWith('/cafeteria')) return userAllowedModules.includes('cafeteria');
         if (nav.name === 'Produtos' || nav.href === '/products') return userAllowedModules.includes('products');
         if (nav.name === 'Pedidos' || nav.href === '/orders') return userAllowedModules.includes('orders');
         if (nav.name === 'Empresas' || nav.href === '/customers') return userAllowedModules.includes('customers');
@@ -538,18 +540,20 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
         if (nav.name === 'Configurações' || nav.href === '/settings') return userAllowedModules.includes('settings');
         if (nav.name === 'Dropship' || nav.href.startsWith('/orders/dropship')) return userAllowedModules.includes('dropship');
         if (nav.name === 'Horus Direct' || nav.href.startsWith('/horus-direct')) return userAllowedModules.includes('horus_sql') || userAllowedModules.includes('logistics');
+        if (nav.name === 'DBM' || nav.href.startsWith('/dbm')) return userAllowedModules.includes('dbm') || userAllowedModules.includes('horus_sql');
         if (nav.name === 'Assinaturas' || nav.href === '/subscriptions') return userAllowedModules.includes('subscriptions');
         if (nav.name === 'Notificações' || nav.href === '/notifications') return userAllowedModules.includes('notifications');
         if (nav.name === 'Autores' || nav.href === '/authors') return userAllowedModules.includes('authors') || userAllowedModules.includes('products');
+        if (nav.name === 'Portal do Autor' || nav.href.startsWith('/portal-autor')) return userAllowedModules.includes('portal_autor') || userAllowedModules.includes('authors');
         if (nav.name === 'Inventário' || nav.href === '/inventory') return userAllowedModules.includes('inventory') || userAllowedModules.includes('logistics');
         if (nav.name === 'Políticas e Preços' || nav.href === '/commercial-policies') return userAllowedModules.includes('commercial') || userAllowedModules.includes('settings');
         if (nav.name === 'Vendedores/Rep' || nav.href === '/agents') return userAllowedModules.includes('agents') || userAllowedModules.includes('customers');
         if (nav.name === 'Editorial' || nav.href.startsWith('/editorial')) return userAllowedModules.includes('editorial');
         if (nav.name === 'Escolas & Eventos' || nav.href.startsWith('/schools')) return userAllowedModules.includes('schools');
-        if (nav.name === 'Cafeteria' || nav.href.startsWith('/cafeteria')) return userAllowedModules.includes('cafeteria');
         if (nav.name === 'Consignação' || nav.href.includes('/consignment')) return userAllowedModules.includes('consignment');
         if (nav.name === 'Distribuidoras' || nav.href.includes('/distributors')) return userAllowedModules.includes('distributors');
         if (nav.name === 'Download SEFAZ' || nav.href.includes('/sefaz-download')) return userAllowedModules.includes('sefaz_download') || userAllowedModules.includes('settings');
+        if (nav.name === 'Sites Hospedados' || nav.href.startsWith('/hosted-sites')) return userAllowedModules.includes('hosted_sites') || userAllowedModules.includes('marketing');
         return true;
       })
     : baseNavigation;
