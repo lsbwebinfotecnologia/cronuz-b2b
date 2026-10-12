@@ -89,6 +89,7 @@ const masterNavigation: NavItem[] = [
     subItems: [
       { name: 'Automação Vendas', href: '/settings/bookinfo-sync' },
       { name: 'Automação Compras', href: '/bookinfo/purchases/automation' },
+      { name: 'Metadados Globais (Busca Preço)', href: '/master/bookinfo-metadata' },
     ]
   },
   { name: 'Integradores', href: '/system-integrators', icon: Layers },
@@ -280,6 +281,14 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        fetchLeadsSummary();
        window.addEventListener('lead_status_updated', fetchLeadsSummary);
        return () => window.removeEventListener('lead_status_updated', fetchLeadsSummary);
+    } else if (currentUser?.type === 'MASTER') {
+       const initialOpen: Record<string, boolean> = {};
+       masterNavigation.forEach(item => {
+           if (item.subItems && item.subItems.some(sub => pathname.startsWith(sub.href) || pathname === sub.href)) {
+               initialOpen[item.name] = true;
+           }
+       });
+       setOpenMenus(initialOpen);
     }
   }, [pathname]);
 

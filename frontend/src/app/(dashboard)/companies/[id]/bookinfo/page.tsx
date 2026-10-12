@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Database, ShieldCheck, Play, Loader2, Save, BookOpen, FileUp, Download, Check, X, CheckCircle2 } from 'lucide-react';
+import { Database, ShieldCheck, Play, Loader2, Save, BookOpen, FileUp, Download, Check, X, CheckCircle2, Key } from 'lucide-react';
+import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../context';
@@ -190,7 +191,29 @@ export default function CompanyBookinfoPage() {
          </p>
       </div>
 
-      <div className="p-6 space-y-8">
+      <div className="p-6 space-y-6">
+        {/* Banner Informativo para Master sobre Metadados Globais */}
+        <div className="p-4 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <BookOpen className="w-5 h-5 text-teal-500 dark:text-teal-400 mt-0.5 shrink-0" />
+            <div>
+              <span className="font-bold text-teal-900 dark:text-teal-200 block text-sm">
+                Procurando a Chave Global da Bookinfo para o Busca Preço?
+              </span>
+              <span className="text-slate-600 dark:text-slate-300 block text-xs mt-0.5">
+                As credenciais desta tela pertencem exclusivamente a esta empresa ({company.name}). Se você deseja configurar a <strong>Chave Global</strong> utilizada pelo Busca Preço para buscar capas e dados quando o ISBN não for localizado no catálogo local, acesse a central global:
+              </span>
+            </div>
+          </div>
+          <Link
+            href="/master/bookinfo-metadata"
+            className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-semibold text-xs transition-colors shadow-sm"
+          >
+            <Key className="w-3.5 h-3.5" />
+            Configurar Chave Global
+          </Link>
+        </div>
+
         <form onSubmit={handleSaveSettings} className="space-y-6">
            
            <div className="space-y-6 bg-slate-50/50 dark:bg-slate-900/20 p-6 rounded-2xl border border-slate-200 dark:border-slate-800/60 shadow-sm">
