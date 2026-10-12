@@ -50,6 +50,8 @@ export interface Company {
   has_inventory_module?: boolean;
   module_editorial?: boolean;
   module_schools?: boolean;
+  module_encomendas?: boolean;
+  module_cafeteria?: boolean;
   active: boolean;
 }
 

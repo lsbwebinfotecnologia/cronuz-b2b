@@ -24,6 +24,7 @@ export interface MobileModules {
   pedidos: boolean;
   catalogo: boolean;
   clientes: boolean;
+  cafeteria: boolean;
 }
 
 export const DEFAULT_MODULES: MobileModules = {
@@ -34,6 +35,7 @@ export const DEFAULT_MODULES: MobileModules = {
   pedidos: false,
   catalogo: false,
   clientes: false,
+  cafeteria: false,
 };
 
 export interface AuthResponse {

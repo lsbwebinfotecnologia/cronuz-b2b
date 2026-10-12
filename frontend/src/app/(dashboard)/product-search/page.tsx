@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
+import Link from 'next/link';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -20,11 +21,17 @@ import {
   Truck,
   RefreshCw,
   Camera,
+  Globe,
+  Plus,
+  Check,
+  ExternalLink,
+  Sparkles,
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { getImageUrl } from '@/lib/image_helper';
 import CameraBarcodeScanner from '@/components/inventory/CameraBarcodeScanner';
 import { toast } from 'sonner';
+import CustomerEncomendaDrawer, { EncomendaCartItem } from '@/components/encomendas/CustomerEncomendaDrawer';
 
 // ──────────────────────────────────────────────
 // Types
@@ -48,18 +55,25 @@ type HorusProduct = {
   COD_BARRA_ITEM?: string;
   COD_ISBN_ITEM?: string;
   NOM_EDITORA?: string;
+  DES_AUTOR?: string;
   SELO?: string;
   GENERO_NIVEL_1?: string;
   GENERO_NIVEL_2?: string;
-  VLR_CAPA?: string;
+  VLR_CAPA?: string | number;
   SALDO_DISPONIVEL?: number;
+  QTD_SALDO_DISP?: number;
   SITUACAO_ITEM?: string;
   SITUACAO_ITEM_DESC?: string;
   DESC_SINOPSE?: string;
+  DES_SINOPSE?: string;
   IMAGEM_ITEM?: string;
   TIPO?: string;
   STATUS_ITEM?: string;
   COVER_URL?: string | null;
+  source?: 'HORUS' | 'CRONUZ';
+  has_erp_registration?: boolean;
+  badge_warning?: string | null;
+  COD_ITEM_CRONUZ?: number;
 };
 
 type BranchStock = {
@@ -143,30 +157,67 @@ export default function ProductSearchPage() {
   // Camera Scanner Modal
   const [showCameraScanner, setShowCameraScanner] = useState(false);
 
+  // ── Bookinfo Metadados Lookup ────────────────
+  const [bookinfoLoading, setBookinfoLoading] = useState(false);
+  const [bookinfoBookData, setBookinfoBookData] = useState<any | null>(null);
+  const [bookinfoItems, setBookinfoItems] = useState<any[]>([]);
+  const [bookinfoSearched, setBookinfoSearched] = useState(false);
+  const [bookinfoError, setBookinfoError] = useState<string | null>(null);
+  const [bookinfoTokenMissing, setBookinfoTokenMissing] = useState(false);
+  const [bookinfoSearchType, setBookinfoSearchType] = useState<'AUTO' | 'ISBN' | 'TITULO' | 'AUTOR' | 'EDITORA' | 'SELO'>('AUTO');
+  const [bookinfoCustomQuery, setBookinfoCustomQuery] = useState('');
+
+  // ── Modal Cadastro Rápido de Livro Manual ──
+  const [showQuickCreateModal, setShowQuickCreateModal] = useState(false);
+  const [quickCreateLoading, setQuickCreateLoading] = useState(false);
+  const [quickIsbn, setQuickIsbn] = useState('');
+  const [quickTitle, setQuickTitle] = useState('');
+  const [quickPublisher, setQuickPublisher] = useState('');
+  const [quickAuthor, setQuickAuthor] = useState('');
+  const [quickPrice, setQuickPrice] = useState('');
+  const [quickSynopsis, setQuickSynopsis] = useState('');
+  const [quickCoverUrl, setQuickCoverUrl] = useState('');
+
+  // ── Modal Abrir Encomenda ────────────────────
+  const [showBackorderModal, setShowBackorderModal] = useState(false);
+  const [backorderSubmitting, setBackorderSubmitting] = useState(false);
+  const [orderCustomerDoc, setOrderCustomerDoc] = useState('');
+  const [orderCustomerName, setOrderCustomerName] = useState('');
+  const [orderCustomerPhone, setOrderCustomerPhone] = useState('');
+  const [orderCustomerEmail, setOrderCustomerEmail] = useState('');
+  const [orderQty, setOrderQty] = useState(1);
+  const [orderNotes, setOrderNotes] = useState('');
+  const [customerSearching, setCustomerSearching] = useState(false);
+  const [moduleEncomendas, setModuleEncomendas] = useState(false);
+  const [encomendaCart, setEncomendaCart] = useState<EncomendaCartItem[]>([]);
+  const [isEncomendaDrawerOpen, setIsEncomendaDrawerOpen] = useState(false);
+
+  const [mounted, setMounted] = useState(false);
+
   // Dados do seller
-  const [companyName, setCompanyName]   = useState<string>(() => {
-    try {
-      const u = getUser();
-      return u?.company_name || '';
-    } catch {
-      return '';
-    }
-  });
-  const [companyLogo, setCompanyLogo]   = useState<string | null>(() => {
-    try {
-      const u = getUser();
-      return u?.company_logo || null;
-    } catch {
-      return null;
-    }
-  });
+  const [companyName, setCompanyName] = useState<string>('');
+  const [companyLogo, setCompanyLogo] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Autofoco inicial no campo de busca
+  // Autofoco inicial no campo de busca e restauração do carrinho de encomendas
   useEffect(() => {
+    setMounted(true);
     inputRef.current?.focus();
+    try {
+      const saved = localStorage.getItem('cronuz_encomenda_cart');
+      if (saved) {
+        setEncomendaCart(JSON.parse(saved));
+      }
+    } catch {}
   }, []);
+
+  const saveEncomendaCart = (newCart: EncomendaCartItem[]) => {
+    setEncomendaCart(newCart);
+    try {
+      localStorage.setItem('cronuz_encomenda_cart', JSON.stringify(newCart));
+    } catch {}
+  };
 
   // Carrega logo e nome do seller autenticado diretamente pelo cadastro da empresa
   useEffect(() => {
@@ -175,6 +226,7 @@ export default function ProductSearchPage() {
 
     try {
       const u = getUser();
+      if (u?.type === 'MASTER') setModuleEncomendas(true);
       if (u?.company_name) setCompanyName(u.company_name);
       if (u?.company_logo) setCompanyLogo(u.company_logo);
 
@@ -187,6 +239,9 @@ export default function ProductSearchPage() {
             if (!data) return;
             if (data.name) setCompanyName(data.name);
             setCompanyLogo(data.logo || null);
+            if (data.module_encomendas !== undefined) {
+              setModuleEncomendas(Boolean(data.module_encomendas) || u?.type === 'MASTER');
+            }
           })
           .catch(() => {});
       } else {
@@ -333,6 +388,19 @@ export default function ProductSearchPage() {
     setDistData([]);
     setDistLoaded(false);
     setSearched(true);
+    setBookinfoBookData(null);
+    setBookinfoItems([]);
+    setBookinfoSearched(false);
+    setBookinfoError(null);
+    setBookinfoTokenMissing(false);
+    setBookinfoCustomQuery(term);
+    if (optValue === 'NOME') {
+      setBookinfoSearchType('TITULO');
+    } else if (optValue === 'BARRAS_ISBN') {
+      setBookinfoSearchType('ISBN');
+    } else {
+      setBookinfoSearchType('AUTO');
+    }
 
     try {
       const token = getToken();
@@ -357,7 +425,7 @@ export default function ProductSearchPage() {
       const items: HorusProduct[] = data.items || [];
 
       if (items.length === 0) {
-        toast.info('Nenhum produto encontrado para este termo.');
+        toast.info('Nenhum produto encontrado no catálogo do sistema.');
       } else {
         setProducts(items);
         await selectProduct(items[0]);
@@ -391,6 +459,290 @@ export default function ProductSearchPage() {
     toast.success(`Código lido: ${clean}`);
     executeSearch(clean, 'BARRAS_ISBN');
     setTimeout(selectSearchInput, 50);
+  };
+
+  // ── Consulta Catálogo Oficial na Bookinfo (API v1.5) ──────────────
+  const handleBookinfoLookup = async (customTerm?: string, customType?: string) => {
+    const raw = (customTerm !== undefined ? customTerm : (bookinfoCustomQuery || searchTerm)).trim();
+    const type = (customType !== undefined ? customType : bookinfoSearchType) || 'AUTO';
+
+    if (!raw) {
+      toast.warning('Informe um termo (Nome, Autor, Editora ou ISBN) para consultar na Bookinfo.');
+      return;
+    }
+
+    setBookinfoLoading(true);
+    setBookinfoSearched(true);
+    setBookinfoBookData(null);
+    setBookinfoItems([]);
+    setBookinfoError(null);
+    setBookinfoTokenMissing(false);
+
+    try {
+      const token = getToken();
+      const params = new URLSearchParams();
+      params.set('query', raw);
+      params.set('search_type', type);
+
+      const res = await fetch(`${apiUrl}/product-search/bookinfo-lookup?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.token_configured === false) {
+          setBookinfoTokenMissing(true);
+          toast.warning('Token da Bookinfo Metadados não configurado (nem no Seller nem no Master).');
+        } else if (data.found && data.items && data.items.length > 0) {
+          setBookinfoItems(data.items);
+          setBookinfoBookData(data.data || data.items[0]);
+          toast.success(`${data.items.length} obra(s) localizada(s) no catálogo da Bookinfo!`);
+        } else {
+          setBookinfoError(data.detail || 'Nenhuma obra localizada na Bookinfo para esta busca.');
+          toast.info(data.detail || 'Nenhuma obra localizada no acervo da Bookinfo.');
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setBookinfoError(err.detail || 'Erro na consulta Bookinfo.');
+        toast.error(err.detail || 'Erro ao consultar a Bookinfo.');
+      }
+    } catch {
+      setBookinfoError('Falha de conexão com a API da Bookinfo.');
+      toast.error('Falha de conexão com a Bookinfo.');
+    } finally {
+      setBookinfoLoading(false);
+    }
+  };
+
+  // Preenche modal de cadastro rápido a partir dos dados retornados da Bookinfo
+  const handleFillFromBookinfoData = (bData: any) => {
+    setQuickIsbn(bData.isbn || searchTerm);
+    setQuickTitle(bData.title || '');
+    setQuickPublisher(bData.publisher || '');
+    setQuickAuthor(bData.authors || '');
+    setQuickPrice(bData.price ? String(bData.price) : '');
+    setQuickSynopsis(bData.synopsis || '');
+    setQuickCoverUrl(bData.cover_url || '');
+    setShowQuickCreateModal(true);
+  };
+
+  // ── Cadastro Rápido de Livro Manual no Cronuz ──────────────────
+  const handleQuickCreateBook = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!quickIsbn.trim() || !quickTitle.trim()) {
+      toast.warning('ISBN e Título são obrigatórios.');
+      return;
+    }
+    setQuickCreateLoading(true);
+    try {
+      const token = getToken();
+      const payload = {
+        isbn: quickIsbn.trim(),
+        title: quickTitle.trim(),
+        publisher: quickPublisher.trim() || null,
+        author: quickAuthor.trim() || null,
+        market_cover_price: quickPrice ? parseFloat(quickPrice.replace(',', '.')) : 0.0,
+        synopsis: quickSynopsis.trim() || null,
+        cover_url: quickCoverUrl.trim() || null,
+      };
+      const res = await fetch(`${apiUrl}/product-search/quick-create-product`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        toast.success(created.message || 'Produto cadastrado no Cronuz!');
+        setShowQuickCreateModal(false);
+        setProduct(created);
+        setProducts([created]);
+        setSearched(true);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.detail || 'Erro ao cadastrar produto no Cronuz.');
+      }
+    } catch {
+      toast.error('Falha de conexão.');
+    } finally {
+      setQuickCreateLoading(false);
+    }
+  };
+
+  // ── Gestão da Encomenda Multi-título (Carrinho) ─────────────
+  const handleAddToCart = (targetProd?: HorusProduct | null, customQty: number = 1) => {
+    const p = targetProd || product;
+    if (!p) return;
+    const isbn = (p.COD_BARRA_ITEM || p.COD_ISBN_ITEM || String(p.COD_ITEM) || '').trim();
+    if (!isbn) {
+      toast.warning('Produto sem identificador ou ISBN para encomenda.');
+      return;
+    }
+    const unitPrice = parseFloat(String(p.VLR_CAPA || 0)) || 0;
+    const existingIndex = encomendaCart.findIndex(it => it.isbn === isbn);
+
+    let updated: EncomendaCartItem[];
+    if (existingIndex >= 0) {
+      updated = [...encomendaCart];
+      updated[existingIndex].quantity += customQty;
+    } else {
+      const newItem: EncomendaCartItem = {
+        isbn,
+        title: p.NOM_ITEM,
+        publisher: p.NOM_EDITORA || p.SELO || undefined,
+        author: p.DES_AUTOR || undefined,
+        cover_url: p.COVER_URL || undefined,
+        quantity: customQty,
+        unit_price: unitPrice,
+        horus_cod_item: p.COD_ITEM ? Number(p.COD_ITEM) : undefined,
+      };
+      updated = [...encomendaCart, newItem];
+    }
+    saveEncomendaCart(updated);
+    toast.success(`"${p.NOM_ITEM.substring(0, 30)}..." adicionado à Encomenda!`, {
+      action: {
+        label: 'Ver Encomenda',
+        onClick: () => setIsEncomendaDrawerOpen(true),
+      },
+    });
+  };
+
+  const handleBookinfoAddToCart = (book: any) => {
+    const isbn = (book.isbn || '').trim();
+    if (!isbn) return;
+    const unitPrice = parseFloat(String(book.price || 0)) || 0;
+    const existingIndex = encomendaCart.findIndex(it => it.isbn === isbn);
+
+    let updated: EncomendaCartItem[];
+    if (existingIndex >= 0) {
+      updated = [...encomendaCart];
+      updated[existingIndex].quantity += 1;
+    } else {
+      const newItem: EncomendaCartItem = {
+        isbn,
+        title: book.title,
+        publisher: book.publisher || book.imprint || undefined,
+        author: book.author || undefined,
+        cover_url: book.cover_url || undefined,
+        quantity: 1,
+        unit_price: unitPrice,
+      };
+      updated = [...encomendaCart, newItem];
+    }
+    saveEncomendaCart(updated);
+    toast.success(`"${book.title.substring(0, 30)}..." adicionado à Encomenda!`, {
+      action: {
+        label: 'Ver Encomenda',
+        onClick: () => setIsEncomendaDrawerOpen(true),
+      },
+    });
+  };
+
+  const handleUpdateCartQty = (isbn: string, newQty: number) => {
+    const updated = encomendaCart.map(it => it.isbn === isbn ? { ...it, quantity: newQty } : it);
+    saveEncomendaCart(updated);
+  };
+
+  const handleUpdateCartPrice = (isbn: string, newPrice: number) => {
+    const updated = encomendaCart.map(it => it.isbn === isbn ? { ...it, unit_price: newPrice } : it);
+    saveEncomendaCart(updated);
+  };
+
+  const handleRemoveFromCart = (isbn: string) => {
+    const updated = encomendaCart.filter(it => it.isbn !== isbn);
+    saveEncomendaCart(updated);
+    toast.info('Item removido da encomenda.');
+  };
+
+  const handleClearCart = () => {
+    saveEncomendaCart([]);
+  };
+
+  // ── Abertura de Encomenda Modal Legado ────────────────────────
+  const handleOpenBackorderModal = (prodToOrder?: HorusProduct) => {
+    const target = prodToOrder || product;
+    if (!target) return;
+    handleAddToCart(target, 1);
+  };
+
+  const handleCustomerSearchByDoc = async () => {
+    const rawDoc = orderCustomerDoc.replace(/\D/g, '');
+    if (rawDoc.length < 11) return;
+    setCustomerSearching(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiUrl}/customers/search?q=${rawDoc}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const found = Array.isArray(data) ? data[0] : (data.items ? data.items[0] : null);
+        if (found) {
+          setOrderCustomerName(found.name || found.trade_name || '');
+          setOrderCustomerPhone(found.phone || found.mobile_phone || '');
+          setOrderCustomerEmail(found.email || '');
+          toast.info(`Cliente existente localizado: ${found.name || found.trade_name}`);
+        }
+      }
+    } catch {}
+    finally {
+      setCustomerSearching(false);
+    }
+  };
+
+  const handleSubmitBackorder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!product) return;
+    setBackorderSubmitting(true);
+    try {
+      const token = getToken();
+      const isbnVal = product.COD_BARRA_ITEM || product.COD_ISBN_ITEM || String(product.COD_ITEM);
+      const payload = {
+        isbn: isbnVal,
+        title: product.NOM_ITEM,
+        publisher: product.NOM_EDITORA || null,
+        author: product.DES_AUTOR || null,
+        quantity: Number(orderQty) || 1,
+        cover_url: product.COVER_URL || null,
+        price_estimated: typeof product.VLR_CAPA === 'number' ? product.VLR_CAPA : (product.VLR_CAPA ? parseFloat(String(product.VLR_CAPA).replace(',', '.')) : 0.0),
+        has_erp_registration: Boolean(product.has_erp_registration),
+        horus_cod_item: product.has_erp_registration ? product.COD_ITEM : null,
+        origin: 'BUSCA_PRECO',
+        notes: orderNotes.trim() || null,
+        customer_document: orderCustomerDoc.replace(/\D/g, '') || null,
+        customer_name: orderCustomerName.trim() || null,
+        customer_phone: orderCustomerPhone.trim() || null,
+        customer_email: orderCustomerEmail.trim() || null,
+      };
+
+      const res = await fetch(`${apiUrl}/backorders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        toast.success('Encomenda aberta com sucesso para o cliente!');
+        setShowBackorderModal(false);
+        setOrderCustomerDoc('');
+        setOrderCustomerName('');
+        setOrderCustomerPhone('');
+        setOrderCustomerEmail('');
+        setOrderNotes('');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.detail || 'Erro ao registrar encomenda.');
+      }
+    } catch {
+      toast.error('Falha de conexão.');
+    } finally {
+      setBackorderSubmitting(false);
+    }
   };
 
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -466,11 +818,11 @@ export default function ProductSearchPage() {
         <div className="relative flex items-center justify-between px-5 py-4">
           {/* Esquerda: logo + nome */}
           <div className="flex items-center gap-3">
-            {companyLogo ? (
+            {mounted && companyLogo ? (
               <div className="w-11 h-11 rounded-lg overflow-hidden bg-white/20 backdrop-blur-sm shadow-md flex-shrink-0 flex items-center justify-center border border-white/30">
                 <img
                   src={getImageUrl(companyLogo)}
-                  alt={companyName}
+                  alt={companyName || 'Logo'}
                   className="w-full h-full object-contain p-1"
                   onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 />
@@ -481,8 +833,8 @@ export default function ProductSearchPage() {
               </div>
             )}
             <div>
-              {companyName && (
-                <p className="text-white/65 text-[10px] font-semibold tracking-wider uppercase leading-none mb-1">
+              {mounted && companyName && (
+                <p suppressHydrationWarning className="text-white/65 text-[10px] font-semibold tracking-wider uppercase leading-none mb-1">
                   {companyName}
                 </p>
               )}
@@ -493,17 +845,30 @@ export default function ProductSearchPage() {
             </div>
           </div>
 
-          {/* Direita: botão expandir */}
-          <button
-            onClick={() => setIsFullscreen(v => !v)}
-            className="flex items-center gap-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white px-3 py-1.5 text-xs font-medium transition-all backdrop-blur-sm border border-white/20"
-            title={isFullscreen ? 'Sair da tela cheia' : 'Expandir para tela cheia'}
-          >
-            {isFullscreen
-              ? <><Minimize2 className="w-3.5 h-3.5" /> Minimizar</>
-              : <><Maximize2 className="w-3.5 h-3.5" /> Expandir</>
-            }
-          </button>
+          {/* Direita: botão encomendas e expandir */}
+          <div className="flex items-center gap-2">
+            {moduleEncomendas && (
+              <Link
+                href="/encomendas"
+                className="flex items-center gap-1.5 rounded-lg bg-emerald-500/90 hover:bg-emerald-500 text-white px-3 py-1.5 text-xs font-bold transition-all backdrop-blur-sm border border-emerald-400/40 shadow-xs cursor-pointer"
+                title="Acessar painel de encomendas dos clientes"
+              >
+                <Package className="w-3.5 h-3.5" />
+                <span>Central de Encomendas</span>
+              </Link>
+            )}
+
+            <button
+              onClick={() => setIsFullscreen(v => !v)}
+              className="flex items-center gap-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white px-3 py-1.5 text-xs font-medium transition-all backdrop-blur-sm border border-white/20 cursor-pointer"
+              title={isFullscreen ? 'Sair da tela cheia' : 'Expandir para tela cheia'}
+            >
+              {isFullscreen
+                ? <><Minimize2 className="w-3.5 h-3.5" /> Minimizar</>
+                : <><Maximize2 className="w-3.5 h-3.5" /> Expandir</>
+              }
+            </button>
+          </div>
         </div>
       </div>
 
@@ -592,7 +957,7 @@ export default function ProductSearchPage() {
       {/* ── Resultado ──────────────────────── */}
       <div className="w-full">
         <AnimatePresence>
-          {searched && !searchLoading && (
+          {searched && !searchLoading && products.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -720,6 +1085,24 @@ export default function ProductSearchPage() {
                           )}
                         </div>
 
+                        {/* Botão de Encomenda Direta do Cliente (Posição Principal e Destaque Imediato) */}
+                        {moduleEncomendas && (
+                          <div className="pt-2">
+                            <button
+                              type="button"
+                              onClick={() => handleAddToCart(product)}
+                              className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white text-xs sm:text-sm font-bold shadow-md hover:shadow-lg transition-all cursor-pointer"
+                            >
+                              <Package className="w-4 h-4" />
+                              {encomendaCart.some(it => it.isbn === (product.COD_BARRA_ITEM || product.COD_ISBN_ITEM || String(product.COD_ITEM))) ? (
+                                <>Na Encomenda ({encomendaCart.find(it => it.isbn === (product.COD_BARRA_ITEM || product.COD_ISBN_ITEM || String(product.COD_ITEM)))?.quantity} un) • + Adicionar Outro</>
+                              ) : (
+                                <>📦 Adicionar à Encomenda do Cliente</>
+                              )}
+                            </button>
+                          </div>
+                        )}
+
                         {/* Metadados */}
                         <div className="space-y-2 text-xs pt-3 border-t border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-300">
                           {product.COD_BARRA_ITEM && (
@@ -748,6 +1131,14 @@ export default function ProductSearchPage() {
                           )}
                         </div>
 
+                        {/* Aviso de Item apenas Cronuz (Sem cadastro no Hórus) */}
+                        {product.badge_warning && (
+                          <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-semibold">
+                            <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
+                            <span>{product.badge_warning}</span>
+                          </div>
+                        )}
+
                         {/* Sinopse */}
                         {product.DESC_SINOPSE && (
                           <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -755,6 +1146,24 @@ export default function ProductSearchPage() {
                             <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed line-clamp-4">
                               {product.DESC_SINOPSE}
                             </p>
+                          </div>
+                        )}
+
+                        {/* Botão de Ação: Encomenda do Cliente (Independente do Saldo) */}
+                        {moduleEncomendas && (
+                          <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+                            <button
+                              type="button"
+                              onClick={() => handleAddToCart(product)}
+                              className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white text-xs sm:text-sm font-bold shadow-md hover:shadow-lg transition-all cursor-pointer"
+                            >
+                              <Package className="w-4 h-4" />
+                              {encomendaCart.some(it => it.isbn === (product.COD_BARRA_ITEM || product.COD_ISBN_ITEM || String(product.COD_ITEM))) ? (
+                                <>Na Encomenda ({encomendaCart.find(it => it.isbn === (product.COD_BARRA_ITEM || product.COD_ISBN_ITEM || String(product.COD_ITEM)))?.quantity} un) • + Adicionar Outro</>
+                              ) : (
+                                <>📦 Adicionar à Encomenda do Cliente</>
+                              )}
+                            </button>
                           </div>
                         )}
                       </div>
@@ -787,6 +1196,17 @@ export default function ProductSearchPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
+                        {product && moduleEncomendas && (
+                          <button
+                            type="button"
+                            onClick={() => handleAddToCart(product)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                            title="Adicionar à encomenda do cliente"
+                          >
+                            <Package className="w-3.5 h-3.5" />
+                            <span>+ Encomendar</span>
+                          </button>
+                        )}
                         {product && stockData.length > 0 && (
                           <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
                             {stockData.length} filial(is)
@@ -1025,6 +1445,7 @@ export default function ProductSearchPage() {
                             const colors: Record<string, { border: string; bg: string; badge: string; text: string }> = {
                               catavento: { border: '#16a34a', bg: 'rgba(22, 163, 74, 0.04)', badge: '#16a34a', text: '#15803d' },
                               disal:     { border: '#2563eb', bg: 'rgba(37, 99, 235, 0.04)', badge: '#2563eb', text: '#1d4ed8' },
+                              inovacao:  { border: '#ea580c', bg: 'rgba(234, 88, 12, 0.04)', badge: '#ea580c', text: '#c2410c' },
                             };
                             const conf = colors[d.slug] || { border: '#00b4b4', bg: 'rgba(0, 180, 180, 0.04)', badge: '#00b4b4', text: '#008a8a' };
                             const hasDistError = Boolean(d.error);
@@ -1095,6 +1516,224 @@ export default function ProductSearchPage() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* ── Fallback quando nenhum produto foi localizado no catálogo do sistema ── */}
+        {searched && !searchLoading && products.length === 0 && (
+          <div className="mt-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 sm:p-8 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-bold text-sm sm:text-base">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span>Obra não localizada no catálogo do sistema</span>
+                </div>
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+                  O termo pesquisado não possui cadastro no ERP Hórus nem no catálogo Cronuz.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleBookinfoLookup()}
+                  disabled={bookinfoLoading}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer"
+                >
+                  {bookinfoLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookOpen className="w-4 h-4" />}
+                  Consultar Catálogo Bookinfo
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickIsbn(searchTerm.replace(/\D/g, '') || '');
+                    setQuickTitle(selectedOption.value === 'NOME' ? searchTerm : '');
+                    setQuickPublisher('');
+                    setQuickAuthor('');
+                    setQuickPrice('');
+                    setQuickSynopsis('');
+                    setQuickCoverUrl('');
+                    setShowQuickCreateModal(true);
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  Cadastrar
+                </button>
+              </div>
+            </div>
+
+            {/* ── Barra de Consulta Personalizada na Bookinfo (Título, Autor, Editora, ISBN) ── */}
+            <div className="bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 uppercase tracking-wider">
+                  <BookOpen className="w-4 h-4 text-sky-500" />
+                  Buscar no Acervo Oficial Bookinfo (Metadados v1.5)
+                </span>
+                
+                {/* Filtro por tipo de campo */}
+                <div className="flex items-center gap-1 p-0.5 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 text-xs flex-wrap">
+                  {(['TITULO', 'AUTOR', 'EDITORA', 'SELO', 'ISBN'] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setBookinfoSearchType(st)}
+                      className={`px-2.5 py-1 rounded-md font-semibold transition-all cursor-pointer ${
+                        bookinfoSearchType === st
+                          ? 'bg-sky-600 text-white shadow-xs'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      {st === 'TITULO' ? 'Título / Nome' : st === 'AUTOR' ? 'Autor' : st === 'EDITORA' ? 'Editora' : st === 'SELO' ? 'Selo Editorial' : 'ISBN'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={bookinfoCustomQuery}
+                  onChange={(e) => setBookinfoCustomQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleBookinfoLookup(bookinfoCustomQuery, bookinfoSearchType);
+                    }
+                  }}
+                  placeholder={
+                    bookinfoSearchType === 'TITULO'
+                      ? 'Buscar na Bookinfo por título ou nome da obra...'
+                      : bookinfoSearchType === 'AUTOR'
+                      ? 'Buscar na Bookinfo por nome do autor (ex: Machado de Assis, Rowling)...'
+                      : bookinfoSearchType === 'EDITORA'
+                      ? 'Buscar na Bookinfo por editora (ex: Mythos, Rocco, Planeta)...'
+                      : bookinfoSearchType === 'SELO'
+                      ? 'Buscar na Bookinfo por selo editorial (ex: Círculo de Poemas, Rocco)...'
+                      : 'Buscar na Bookinfo por ISBN ou código de barras (10 ou 13 dígitos)...'
+                  }
+                  className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 py-2.5 px-3.5 text-xs sm:text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => handleBookinfoLookup(bookinfoCustomQuery, bookinfoSearchType)}
+                  disabled={bookinfoLoading || !bookinfoCustomQuery.trim()}
+                  className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer shrink-0"
+                >
+                  {bookinfoLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                  Buscar na Bookinfo
+                </button>
+              </div>
+            </div>
+
+            {/* Aviso se o token Bookinfo não estiver configurado */}
+            {bookinfoTokenMissing && (
+              <div className="p-4 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 text-xs text-amber-800 dark:text-amber-300">
+                <strong>Atenção:</strong> O Token da Bookinfo Metadados não foi configurado. O administrador Master pode configurá-lo no menu <strong>Hub Sync Bookinfo &rarr; Token Metadados (Global)</strong> para liberar as consultas automaticamente para todos os sellers.
+              </div>
+            )}
+
+            {/* Loading da consulta Bookinfo */}
+            {bookinfoLoading && (
+              <div className="p-8 text-center text-slate-400 space-y-2">
+                <Loader2 className="w-6 h-6 animate-spin mx-auto text-sky-500" />
+                <p className="text-xs font-semibold">Consultando acervo oficial na API Bookinfo Metadados...</p>
+              </div>
+            )}
+
+            {/* Aviso quando pesquisou e não encontrou na Bookinfo */}
+            {bookinfoSearched && !bookinfoLoading && bookinfoItems.length === 0 && !bookinfoTokenMissing && (
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 text-center text-slate-500 text-xs">
+                {bookinfoError || 'Nenhuma obra localizada no acervo da Bookinfo para os filtros informados. Você pode cadastrar manualmente pelo botão "Cadastrar" acima.'}
+              </div>
+            )}
+
+            {/* Resultados encontrados na Bookinfo (Lista / Grid) */}
+            {bookinfoItems && bookinfoItems.length > 0 && (
+              <div className="space-y-3 pt-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                  <span className="text-xs font-bold text-sky-700 dark:text-sky-300 flex items-center gap-1.5 uppercase tracking-wider">
+                    <Sparkles className="w-4 h-4 text-sky-500" />
+                    {bookinfoItems.length} obra(s) localizada(s) na Bookinfo Metadados
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    Selecione uma obra abaixo para importar os dados automaticamente
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {bookinfoItems.map((bItem, idx) => (
+                    <div
+                      key={bItem.isbn || idx}
+                      className="rounded-xl border border-sky-200 dark:border-sky-900 bg-sky-50/30 dark:bg-sky-950/20 p-4 flex flex-col justify-between gap-3 shadow-xs hover:border-sky-300 transition-all"
+                    >
+                      <div className="flex gap-3.5 items-start">
+                        {bItem.cover_url ? (
+                          <img
+                            src={bItem.cover_url}
+                            alt=""
+                            className="w-16 h-24 object-contain rounded-lg bg-white dark:bg-slate-900 shadow-xs border border-slate-200 dark:border-slate-800 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-16 h-24 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0">
+                            <BookOpen className="w-6 h-6 text-slate-400" />
+                          </div>
+                        )}
+
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100 line-clamp-2">
+                            {bItem.title}
+                          </h4>
+                          {bItem.subtitle && (
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 italic line-clamp-1">
+                              {bItem.subtitle}
+                            </p>
+                          )}
+                          <p className="text-[11px] text-slate-600 dark:text-slate-300 line-clamp-1">
+                            <strong>Autor:</strong> {bItem.authors || '—'}
+                          </p>
+                          <p className="text-[11px] text-slate-600 dark:text-slate-300 line-clamp-1">
+                            <strong>Editora:</strong> {bItem.publisher || '—'} {bItem.seal ? `(${bItem.seal})` : ''}
+                          </p>
+                          <p className="text-[11px] font-mono text-slate-500">
+                            ISBN: {bItem.isbn} {bItem.price ? `• R$ ${Number(bItem.price).toFixed(2).replace('.', ',')}` : ''}
+                          </p>
+                        </div>
+                      </div>
+
+                      {bItem.synopsis && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed bg-white/60 dark:bg-slate-900/60 p-2 rounded-lg">
+                          {bItem.synopsis}
+                        </p>
+                      )}
+
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        {moduleEncomendas && (
+                          <button
+                            type="button"
+                            onClick={() => handleBookinfoAddToCart(bItem)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 hover:bg-emerald-200 text-emerald-800 dark:text-emerald-200 text-xs font-bold transition-all cursor-pointer"
+                          >
+                            <Package className="w-3.5 h-3.5" />
+                            + Adicionar à Encomenda
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleFillFromBookinfoData(bItem)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          Importar para Catálogo
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Estado inicial vazio */}
         {!searched && (
@@ -1167,6 +1806,342 @@ export default function ProductSearchPage() {
         onClose={() => setShowCameraScanner(false)}
         onScan={handleCameraScan}
       />
+
+      {/* ── MODAL CADASTRO RÁPIDO DE LIVRO MANUAL NO CRONUZ ── */}
+      {showQuickCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Plus className="w-5 h-5 text-[#00b4b4]" />
+                Cadastrar Livro no Catálogo Cronuz
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowQuickCreateModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              O produto ficará registrado no Cronuz com destaque de &quot;Sem cadastro no Hórus&quot; até que seja cadastrado no ERP.
+            </p>
+
+            <form onSubmit={handleQuickCreateBook} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  ISBN / Código de Barras *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={quickIsbn}
+                  onChange={(e) => setQuickIsbn(e.target.value)}
+                  placeholder="Ex: 9788543112596"
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Título do Livro *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={quickTitle}
+                  onChange={(e) => setQuickTitle(e.target.value)}
+                  placeholder="Título completo da obra"
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Editora / Marca
+                  </label>
+                  <input
+                    type="text"
+                    value={quickPublisher}
+                    onChange={(e) => setQuickPublisher(e.target.value)}
+                    placeholder="Editora"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Autor
+                  </label>
+                  <input
+                    type="text"
+                    value={quickAuthor}
+                    onChange={(e) => setQuickAuthor(e.target.value)}
+                    placeholder="Nome do autor"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Preço de Capa no Mercado (R$)
+                  </label>
+                  <input
+                    type="text"
+                    value={quickPrice}
+                    onChange={(e) => setQuickPrice(e.target.value)}
+                    placeholder="0,00"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    URL da Imagem da Capa (Opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={quickCoverUrl}
+                    onChange={(e) => setQuickCoverUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowQuickCreateModal(false)}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={quickCreateLoading}
+                  className="inline-flex items-center gap-2 px-5 py-2 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm disabled:opacity-60 cursor-pointer"
+                >
+                  {quickCreateLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  Salvar no Cronuz
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL ABERTURA DE ENCOMENDA PARA CLIENTE ── */}
+      {showBackorderModal && moduleEncomendas && product && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Package className="w-5 h-5 text-emerald-600" />
+                Abrir Encomenda para Cliente
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowBackorderModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Resumo do produto encomendado */}
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center gap-3">
+              {product.COVER_URL ? (
+                <img src={product.COVER_URL} alt="" className="w-10 h-14 object-contain rounded bg-white dark:bg-slate-900 shadow-xs shrink-0" />
+              ) : (
+                <div className="w-10 h-14 rounded bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0">
+                  <BookOpen className="w-5 h-5 text-slate-400" />
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-xs text-slate-800 dark:text-slate-100 truncate">
+                  {product.NOM_ITEM}
+                </p>
+                <p className="text-[11px] text-slate-500 font-mono">
+                  ISBN: {product.COD_BARRA_ITEM || product.COD_ISBN_ITEM || product.COD_ITEM}
+                </p>
+                {product.badge_warning && (
+                  <span className="inline-block text-[10px] text-amber-600 font-semibold mt-0.5">
+                    ● Sem cadastro no ERP Hórus (Catálogo Cronuz)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <form onSubmit={handleSubmitBackorder} className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    CPF ou CNPJ do Cliente
+                  </label>
+                  <input
+                    type="text"
+                    value={orderCustomerDoc}
+                    onChange={(e) => setOrderCustomerDoc(e.target.value)}
+                    onBlur={handleCustomerSearchByDoc}
+                    placeholder="Somente dígitos"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                  />
+                  {customerSearching && (
+                    <span className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Verificando base...
+                    </span>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Quantidade Solicitada *
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    required
+                    value={orderQty}
+                    onChange={(e) => setOrderQty(parseInt(e.target.value) || 1)}
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Nome do Cliente
+                </label>
+                <input
+                  type="text"
+                  value={orderCustomerName}
+                  onChange={(e) => setOrderCustomerName(e.target.value)}
+                  placeholder="Nome do cliente solicitante"
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    WhatsApp / Celular
+                  </label>
+                  <input
+                    type="text"
+                    value={orderCustomerPhone}
+                    onChange={(e) => setOrderCustomerPhone(e.target.value)}
+                    placeholder="(DD) 99999-9999"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    E-mail (Opcional)
+                  </label>
+                  <input
+                    type="email"
+                    value={orderCustomerEmail}
+                    onChange={(e) => setOrderCustomerEmail(e.target.value)}
+                    placeholder="cliente@email.com"
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Observações Internas
+                </label>
+                <textarea
+                  rows={2}
+                  value={orderNotes}
+                  onChange={(e) => setOrderNotes(e.target.value)}
+                  placeholder="Observação para compras ou atendimento..."
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowBackorderModal(false)}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={backorderSubmitting}
+                  className="inline-flex items-center gap-2 px-5 py-2 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm disabled:opacity-60 cursor-pointer"
+                >
+                  {backorderSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  Confirmar e Abrir Encomenda
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Botão Flutuante de Encomenda do Cliente (Carrinho Multi-título) ── */}
+      {moduleEncomendas && mounted && encomendaCart.length > 0 && (
+        <aside
+          aria-label="Carrinho de Encomenda do Cliente"
+          className="fixed bottom-6 right-6 z-40"
+        >
+          <button
+            type="button"
+            onClick={() => setIsEncomendaDrawerOpen(true)}
+            className="flex items-center gap-3.5 px-5 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white shadow-2xl hover:scale-105 active:scale-95 transition-all cursor-pointer border border-white/20 ring-4 ring-emerald-500/20"
+          >
+            <div className="relative">
+              <Package className="w-5 h-5 text-white" />
+              <span className="absolute -top-2 -right-2 w-4 h-4 rounded-full bg-rose-500 text-[10px] font-black flex items-center justify-center shadow-xs">
+                {encomendaCart.length}
+              </span>
+            </div>
+            <div className="text-left">
+              <p className="text-xs font-bold leading-tight flex items-center gap-1.5">
+                <span>Encomenda do Cliente</span>
+                <span className="text-[10px] font-semibold bg-white/20 px-1.5 py-0.5 rounded-full">
+                  {encomendaCart.reduce((acc, it) => acc + it.quantity, 0)} un
+                </span>
+              </p>
+              <p className="text-[11px] text-white/90 font-medium">
+                Total: R$ {encomendaCart.reduce((acc, it) => acc + (it.unit_price * it.quantity), 0).toFixed(2).replace('.', ',')}
+              </p>
+            </div>
+            <span className="ml-1 px-2.5 py-1 rounded-xl bg-white text-emerald-800 text-xs font-bold shadow-xs">
+              Ver Encomenda →
+            </span>
+          </button>
+        </aside>
+      )}
+
+      {/* ── Gaveta Lateral (Drawer) de Encomenda do Cliente ── */}
+      {moduleEncomendas && (
+        <CustomerEncomendaDrawer
+          isOpen={isEncomendaDrawerOpen}
+          onClose={() => setIsEncomendaDrawerOpen(false)}
+          items={encomendaCart}
+          onUpdateQuantity={handleUpdateCartQty}
+          onUpdatePrice={handleUpdateCartPrice}
+          onRemoveItem={handleRemoveFromCart}
+          onClearCart={handleClearCart}
+          branches={
+            stockData && stockData.length > 0
+              ? Array.from(new Set(stockData.map(s => s.filial_nome).filter(Boolean)))
+              : ['Loja Principal (Balcão)']
+          }
+        />
+      )}
     </>
   );
 }

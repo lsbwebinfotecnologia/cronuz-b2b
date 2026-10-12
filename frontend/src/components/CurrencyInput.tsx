@@ -8,6 +8,8 @@ interface CurrencyInputProps extends Omit<React.InputHTMLAttributes<HTMLInputEle
   prefixStr?: string;
   suffixStr?: string;
   maxDecimals?: number;
+  allowEmpty?: boolean;
+  max?: number;
 }
 
 function formatBR(n: number, dec = 2): string {
@@ -23,35 +25,38 @@ export function CurrencyInput({
   prefixStr = '',
   suffixStr = '',
   maxDecimals = 2,
+  allowEmpty = false,
+  max,
   className,
   disabled,
   ...props
 }: CurrencyInputProps) {
+
   const isFocused = useRef(false);
   // Rastreia o último valor numérico vindo de fora (props).
   // Atualizado tanto pelo useEffect (valor externo real) quanto
   // pelo onChange (digitação), para evitar o ciclo de reset.
   const lastExternal = useRef<number>(value ?? 0);
 
-  const fmt = (n: number) => `${prefixStr}${formatBR(n, maxDecimals)}${suffixStr}`;
+  const fmt = (n: number) => {
+    if (allowEmpty && (n === 0 || n === undefined || n === null)) {
+      return '';
+    }
+    return `${prefixStr}${formatBR(n, maxDecimals)}${suffixStr}`;
+  };
 
   const [text, setText] = useState(() => fmt(value ?? 0));
 
   // Sincroniza quando o valor externo muda de verdade
-  // (ex: fetchDetails, save bem-sucedido).
-  // Se o valor que chegou é o que acabamos de enviar (lastExternal),
-  // não sobrescreve — evita o ciclo stale.
   useEffect(() => {
     if (!isFocused.current && value !== lastExternal.current) {
       lastExternal.current = value;
       setText(fmt(value ?? 0));
     }
-  }, [value, prefixStr, suffixStr, maxDecimals]);
+  }, [value, prefixStr, suffixStr, maxDecimals, allowEmpty]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Máscara automática estilo "caixa registradora":
-    // remove não-dígitos e divide por 10^decimais.
-    // Ex: digitar "1", "3", "5", "0", "0", "0" → "1.350,00"
+    // Remove não-dígitos e divide por 10^decimais
     const raw = e.target.value.replace(/\D/g, '');
 
     if (raw === '') {
@@ -62,7 +67,11 @@ export function CurrencyInput({
     }
 
     const divisor = Math.pow(10, maxDecimals);
-    const num = Number(raw) / divisor;
+    let num = Number(raw) / divisor;
+    if (max !== undefined && num > max) {
+      num = max;
+    }
+
     lastExternal.current = num; // previne useEffect de sobrescrever
     setText(fmt(num));
     onChangeValue(num);
@@ -78,10 +87,10 @@ export function CurrencyInput({
       onFocus={() => { isFocused.current = true; }}
       onBlur={() => {
         isFocused.current = false;
-        // Se o campo ficou vazio (usuário apagou tudo sem digitar nada),
-        // exibe "0,00" ao sair
         if (!text.trim()) {
-          setText(fmt(0));
+          if (!allowEmpty) {
+            setText(fmt(0));
+          }
           lastExternal.current = 0;
           onChangeValue(0);
         }

@@ -36,6 +36,8 @@ class CompanySettingsBase(BaseModel):
     max_backorder_qty: Optional[int] = 0
     pdv_type: Optional[str] = "NON_FISCAL"
     pdv_allow_out_of_stock: Optional[bool] = False
+    pdv_max_installments: Optional[int] = 12
+    pdv_min_installment_amount: Optional[float] = 5.00
     efi_sandbox: Optional[bool] = True
     efi_client_id: Optional[str] = None
     efi_client_secret: Optional[str] = None

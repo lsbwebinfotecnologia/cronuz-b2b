@@ -15,6 +15,7 @@ import { SefazBranchesTab } from './SefazBranchesTab';
 import { DropshipTab } from './DropshipTab';
 import { LogisticsTab } from './LogisticsTab';
 import { useCompany } from './layout';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 export default function SettingsPage() {
   const { company } = useCompany();
@@ -90,6 +91,8 @@ export default function SettingsPage() {
     allow_backorder: false,
     max_backorder_qty: 0,
     pdv_allow_out_of_stock: false,
+    pdv_max_installments: 12,
+    pdv_min_installment_amount: 5.0,
     cover_image_base_url: '',
     efi_sandbox: true,
     efi_client_id: '',
@@ -177,6 +180,8 @@ export default function SettingsPage() {
         allow_backorder: data.allow_backorder || false,
         max_backorder_qty: data.max_backorder_qty || 0,
         pdv_allow_out_of_stock: data.pdv_allow_out_of_stock || false,
+        pdv_max_installments: data.pdv_max_installments ?? 12,
+        pdv_min_installment_amount: data.pdv_min_installment_amount ?? 5.0,
         cover_image_base_url: data.cover_image_base_url || '',
         efi_sandbox: data.efi_sandbox ?? true,
         efi_client_id: data.efi_client_id || '',
@@ -835,6 +840,51 @@ export default function SettingsPage() {
                             <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500 dark:bg-slate-700 dark:border-slate-600"></div>
                           </div>
                         </label>
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 space-y-4 pt-3 mt-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <CreditCard className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Configuração de Parcelamento no Cartão de Crédito
+                          </h3>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xl">
+                          Defina o limite de parcelas disponíveis no terminal PDV e o valor mínimo permitido por parcela.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                            Número Máximo de Parcelas (Crédito)
+                          </label>
+                          <select
+                            value={settings.pdv_max_installments}
+                            onChange={e => setSettings({ ...settings, pdv_max_installments: Number(e.target.value) })}
+                            className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                          >
+                            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => (
+                              <option key={n} value={n}>
+                                {n === 1 ? '1x (Somente à vista)' : `Até ${n}x`}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                            Valor Mínimo por Parcela
+                          </label>
+                          <CurrencyInput
+                            prefixStr="R$ "
+                            value={settings.pdv_min_installment_amount || 1.0}
+                            onChangeValue={val => setSettings({ ...settings, pdv_min_installment_amount: Math.max(1.0, val) })}
+                            className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>

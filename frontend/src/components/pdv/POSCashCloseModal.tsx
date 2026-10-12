@@ -234,6 +234,16 @@ export default function POSCashCloseModal({
                       R$ {Number(summary.by_payment_method?.CREDITO || 0).toFixed(2)}
                     </p>
                   </div>
+                  {Number(summary.by_payment_method?.OUTROS || 0) > 0 && (
+                    <div className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800/40 bg-slate-50/50 dark:bg-slate-800/20">
+                      <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300 text-xs font-bold">
+                        <DollarSign className="w-3.5 h-3.5" /> Outros
+                      </div>
+                      <p className="text-sm font-extrabold text-slate-900 dark:text-slate-200 mt-1">
+                        R$ {Number(summary.by_payment_method?.OUTROS || 0).toFixed(2)}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 

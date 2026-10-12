@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, JSON, Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
@@ -58,6 +58,11 @@ class CompanySettings(Base):
     # Point of Sale (PDV) Config
     pdv_type = Column(String(50), default='NON_FISCAL', nullable=False) # 'FISCAL' or 'NON_FISCAL'
     pdv_allow_out_of_stock = Column(Boolean, default=False, nullable=False)
+    pdv_max_installments = Column(Integer, default=12, nullable=False)
+    pdv_min_installment_amount = Column(Numeric(10, 2), default=5.00, nullable=False)
+    
+    # Cafeteria
+    cafeteria_menu_token = Column(String(64), unique=True, index=True, nullable=True)
     
     # Efí (Gerencianet) Pagamentos & Assinaturas
     efi_sandbox = Column(Boolean, default=True, nullable=False)

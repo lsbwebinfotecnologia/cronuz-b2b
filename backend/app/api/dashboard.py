@@ -76,6 +76,7 @@ def get_dashboard_metrics(
     has_inventory_module = getattr(company, "has_inventory_module", False) if company else False
     module_editorial = getattr(company, "module_editorial", False) if company else False
     module_schools = getattr(company, "module_schools", False) if company else False
+    module_cafeteria = getattr(company, "module_cafeteria", False) if company else False
     horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
     horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
@@ -365,6 +366,7 @@ def get_dashboard_metrics(
         "has_inventory_module": has_inventory_module,
         "module_editorial": module_editorial,
         "module_schools": module_schools,
+        "module_cafeteria": module_cafeteria,
         "horus_sql_feature_vindi_baixa": horus_sql_feature_vindi_baixa,
         "horus_sql_feature_pedidos": horus_sql_feature_pedidos,
         "horus_sql_feature_dbm": horus_sql_feature_dbm,
@@ -485,6 +487,7 @@ def get_master_overview(
         {"key": "services", "label": "Serviços (OS)", "field": "module_services", "color": "purple"},
         {"key": "editorial", "label": "Editorial", "field": "module_editorial", "color": "pink"},
         {"key": "schools", "label": "Escolas & Eventos", "field": "module_schools", "color": "amber"},
+        {"key": "cafeteria", "label": "Cafeteria Omnichannel", "field": "module_cafeteria", "color": "amber"},
         {"key": "horus_sql", "label": "Horus SQL Direct", "field": "module_horus_sql", "color": "cyan"},
         {"key": "horus_erp", "label": "Horus ERP REST", "field": "module_horus_erp", "color": "teal"},
         {"key": "logistics", "label": "Logística WMS", "field": "module_logistica_horus", "color": "orange"},

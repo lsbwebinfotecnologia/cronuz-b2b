@@ -77,6 +77,13 @@ const TAB_CONFIG: TabConfig[] = [
     iconFocused: 'scan',
     module: 'conferencia',
   },
+  {
+    name: 'cafeteria',
+    label: 'Café',
+    icon: 'cafe-outline',
+    iconFocused: 'cafe',
+    module: 'cafeteria',
+  },
 ];
 
 // ─── Layout Principal ────────────────────────────────────────────────────────

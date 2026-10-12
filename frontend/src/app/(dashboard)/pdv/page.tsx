@@ -39,7 +39,8 @@ import {
   BookOpen,
   ArrowLeft,
   Check,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Coffee
 } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
@@ -72,8 +73,12 @@ import POSSalesHistoryModal from '@/components/pdv/POSSalesHistoryModal';
 import POSReceiptModal from '@/components/pdv/POSReceiptModal';
 import POSCashCloseModal from '@/components/pdv/POSCashCloseModal';
 import POSSalesReportModal from '@/components/pdv/POSSalesReportModal';
+import POSCafeteriaModal, { CafeteriaTab } from '@/components/pdv/POSCafeteriaModal';
+import { CurrencyInput } from '@/components/CurrencyInput';
+import { maskCPF } from '@/lib/validators';
 
 interface CartItem extends PDVCatalogItem {
+  cart_item_id?: string;
   quantity: number;
 }
 
@@ -111,7 +116,60 @@ export default function PDVPage() {
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isCashCloseModalOpen, setIsCashCloseModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isCafeteriaModalOpen, setIsCafeteriaModalOpen] = useState(false);
+  const [linkedCafeteriaTabId, setLinkedCafeteriaTabId] = useState<number | null>(null);
+  const [moduleCafeteria, setModuleCafeteria] = useState(false);
   const [completedSale, setCompletedSale] = useState<PDVPendingSaleRecord | null>(null);
+
+  const handleImportCafeteriaTab = (tab: CafeteriaTab) => {
+    setLinkedCafeteriaTabId(tab.id);
+    if (tab.customer_name) {
+      setCustomerMode('manual');
+      setCustomerName(tab.customer_name);
+      setCustomerDoc(tab.customer_document || '');
+    }
+
+    // Consolidação inteligente dos itens da comanda:
+    // Se o cliente pediu mais de uma vez o mesmo item (mesmo código, mesmos adicionais e mesmo preço), agrupamos somando a quantidade!
+    const consolidatedMap = new Map<string, CartItem>();
+
+    (tab.items || []).forEach((it, idx) => {
+      let titleWithMods = it.title;
+      if (it.modifiers_json && it.modifiers_json.length > 0) {
+        const modsNames = it.modifiers_json.map((m: any) => m.option_name).join(', ');
+        titleWithMods += ` (${modsNames})`;
+      }
+      if (it.notes) {
+        titleWithMods += ` [Obs: ${it.notes}]`;
+      }
+      const unitFinal = Number(it.unit_price) + Number(it.modifiers_price || 0);
+      const rawBarcode = it.barcode || (it.sku ? it.sku : `CAF-${it.id}`);
+
+      // Chave de agrupamento: barcode + título com modificadores + preço unitário
+      const groupKey = `${rawBarcode}__${titleWithMods}__${unitFinal.toFixed(2)}`;
+
+      if (consolidatedMap.has(groupKey)) {
+        const existing = consolidatedMap.get(groupKey)!;
+        existing.quantity += Number(it.quantity || 1);
+      } else {
+        consolidatedMap.set(groupKey, {
+          product_id: it.product_id || (100000 + idx),
+          cart_item_id: `CAF-${tab.id}-${it.id || idx}-${Math.random().toString(36).slice(2, 7)}`,
+          barcode: rawBarcode,
+          sku: it.sku || `CAF-${it.id}`,
+          title: titleWithMods,
+          publisher: 'Cafeteria',
+          price: unitFinal,
+          stock: 999,
+          quantity: Number(it.quantity || 1)
+        });
+      }
+    });
+
+    const importedItems = Array.from(consolidatedMap.values());
+    setCart(importedItems);
+    toast.success(`Comanda #${tab.tab_number} importada no Caixa PDV!`);
+  };
 
   // Sessão Ativa
   const [activeSession, setActiveSession] = useState<POSSessionData | null>(null);
@@ -158,8 +216,23 @@ export default function PDVPage() {
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'DINHEIRO' | 'PIX' | 'DEBITO' | 'CREDITO' | 'MISTO'>('DINHEIRO');
   const [cashReceived, setCashReceived] = useState<string>('');
-  const [splitDetails, setSplitDetails] = useState({ dinheiro: '', pix: '', cartao: '' });
   const [saleNotes, setSaleNotes] = useState('');
+
+  // Configurações de Parcelamento do PDV
+  const [pdvMaxInstallments, setPdvMaxInstallments] = useState<number>(12);
+  const [pdvMinInstallmentAmount, setPdvMinInstallmentAmount] = useState<number>(5.0);
+
+  // Parcelamento quando for Crédito
+  const [selectedInstallments, setSelectedInstallments] = useState<number>(1);
+
+  // Pagamentos Múltiplos / Misto
+  const [splitPayments, setSplitPayments] = useState<Array<{
+    id: string;
+    method: 'DINHEIRO' | 'PIX' | 'DEBITO' | 'CREDITO';
+    amount: string;
+    installments: number;
+    cash_received?: string;
+  }>>([]);
 
   // Mobile Drawer do Carrinho
   const [isMobileCartOpen, setIsMobileCartOpen] = useState(false);
@@ -391,10 +464,16 @@ export default function PDVPage() {
       const cachedValStock = await getPdvSetting<boolean>('validateStock');
       const cachedPinned = await getPdvSetting<boolean>('isCustomerPinned');
       const cachedCustName = await getPdvSetting<string>('customerName');
+      const cachedMaxInst = await getPdvSetting<number>('pdv_max_installments');
+      const cachedMinInst = await getPdvSetting<number>('pdv_min_installment_amount');
+      const cachedCafeteria = await getPdvSetting<boolean>('module_cafeteria');
 
       if (cachedModule !== null) setIsModuleAllowed(cachedModule);
       if (cachedValStock !== null) setValidateStock(cachedValStock);
       if (cachedPinned !== null) setIsCustomerPinned(cachedPinned);
+      if (cachedMaxInst !== null) setPdvMaxInstallments(cachedMaxInst);
+      if (cachedMinInst !== null) setPdvMinInstallmentAmount(cachedMinInst);
+      if (cachedCafeteria !== null) setModuleCafeteria(cachedCafeteria);
       if (cachedPinned && cachedCustName) {
         setCustomerName(cachedCustName);
         setCustomerMode('manual');
@@ -425,6 +504,17 @@ export default function PDVPage() {
             setValidateStock(valStock);
             await setPdvSetting('validateStock', valStock);
             await setPdvSetting('isModuleAllowed', allowed);
+
+            const hasCafeteria = !!cfg.module_cafeteria;
+            setModuleCafeteria(hasCafeteria);
+            await setPdvSetting('module_cafeteria', hasCafeteria);
+
+            const maxInst = cfg.pdv_max_installments || 12;
+            const minInst = cfg.pdv_min_installment_amount || 5.0;
+            setPdvMaxInstallments(maxInst);
+            setPdvMinInstallmentAmount(minInst);
+            await setPdvSetting('pdv_max_installments', maxInst);
+            await setPdvSetting('pdv_min_installment_amount', minInst);
           } else if (res.status === 403) {
             setIsModuleAllowed(false);
             await setPdvSetting('isModuleAllowed', false);
@@ -574,7 +664,8 @@ export default function PDVPage() {
           i.barcode === product.barcode ? { ...i, quantity: i.quantity + 1 } : i
         );
       }
-      return [...prev, { ...product, quantity: 1 }];
+      const cartItemId = `${product.barcode}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      return [...prev, { ...product, cart_item_id: cartItemId, quantity: 1 }];
     });
 
     playSuccessBeep();
@@ -736,8 +827,8 @@ export default function PDVPage() {
   }, [omnibarInput, companyId, activeSession, addToCart, performSearch, triggerFeedback]);
 
   // ─── 6. Manipulação do Carrinho ───────────────────────────────────────────
-  const updateQuantity = useCallback((barcode: string, delta: number) => {
-    const item = cart.find((i) => i.barcode === barcode);
+  const updateQuantity = useCallback((itemKey: string, delta: number) => {
+    const item = cart.find((i) => (i.cart_item_id && i.cart_item_id === itemKey) || i.barcode === itemKey);
     if (!item) return;
 
     if (delta > 0 && isStockValidationActive) {
@@ -753,7 +844,7 @@ export default function PDVPage() {
     setCart((prev) =>
       prev
         .map((i) => {
-          if (i.barcode === barcode) {
+          if ((i.cart_item_id && i.cart_item_id === itemKey) || i.barcode === itemKey) {
             const newQty = i.quantity + delta;
             return newQty > 0 ? { ...i, quantity: newQty } : null;
           }
@@ -763,32 +854,102 @@ export default function PDVPage() {
     );
   }, [cart, isStockValidationActive, triggerFeedback]);
 
-  const removeItem = useCallback((barcode: string) => {
-    setCart((prev) => prev.filter((i) => i.barcode !== barcode));
+  const removeItem = useCallback((itemKey: string) => {
+    setCart((prev) => prev.filter((i) => (i.cart_item_id ? i.cart_item_id !== itemKey : i.barcode !== itemKey)));
   }, []);
 
   const clearCart = useCallback(() => {
     setCart([]);
     setGlobalDiscount(0);
     setCashReceived('');
-    setSplitDetails({ dinheiro: '', pix: '', cartao: '' });
+    setSelectedInstallments(1);
+    setSplitPayments([]);
     setSaleNotes('');
   }, []);
 
-  // ─── 7. Cálculos de Totais ────────────────────────────────────────────────
+  // ─── 7. Cálculos de Totais & Parcelamento ────────────────────────────────────
   const subtotal = useMemo(() => cart.reduce((acc, i) => acc + i.price * i.quantity, 0), [cart]);
   const totalAmount = useMemo(() => Math.max(0, subtotal - globalDiscount), [subtotal, globalDiscount]);
   const itemsCount = useMemo(() => cart.reduce((acc, i) => acc + i.quantity, 0), [cart]);
 
-  // Troco para dinheiro
+  // Parcelas máximas permitidas para o valor total atual (respeitando valor mínimo por parcela)
+  const maxPossibleInstallments = useMemo(() => {
+    const minVal = pdvMinInstallmentAmount > 0 ? pdvMinInstallmentAmount : 5.0;
+    const maxByVal = Math.max(1, Math.floor(totalAmount / minVal));
+    return Math.min(pdvMaxInstallments || 12, maxByVal);
+  }, [totalAmount, pdvMaxInstallments, pdvMinInstallmentAmount]);
+
+  // Troco para pagamento em dinheiro simples
   const cashVal = parseFloat(cashReceived.replace(',', '.')) || 0;
   const changeAmount = paymentMethod === 'DINHEIRO' && cashVal > totalAmount ? cashVal - totalAmount : 0;
+
+  // Cálculos do modo de Pagamento Misto / Dividido
+  const splitTotal = useMemo(() => {
+    return splitPayments.reduce((acc, p) => acc + (parseFloat(p.amount.replace(',', '.')) || 0), 0);
+  }, [splitPayments]);
+
+  const splitRemaining = useMemo(() => {
+    const diff = totalAmount - splitTotal;
+    return diff > 0.005 ? Number(diff.toFixed(2)) : 0;
+  }, [totalAmount, splitTotal]);
+
+  const splitTotalChange = useMemo(() => {
+    return splitPayments.reduce((acc, p) => {
+      if (p.method === 'DINHEIRO') {
+        const amt = parseFloat(p.amount.replace(',', '.')) || 0;
+        const rec = parseFloat((p.cash_received || '').replace(',', '.')) || 0;
+        if (rec > amt) return acc + (rec - amt);
+      }
+      return acc;
+    }, 0);
+  }, [splitPayments]);
+
+  // Manipulação de linhas de pagamento misto
+  const addSplitPaymentLine = (defaultMethod?: 'DINHEIRO' | 'PIX' | 'DEBITO' | 'CREDITO') => {
+    const rem = splitRemaining;
+    setSplitPayments(prev => [
+      ...prev,
+      {
+        id: `split-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        method: defaultMethod || (prev.length === 0 ? 'CREDITO' : 'DINHEIRO'),
+        amount: rem > 0 ? rem.toFixed(2) : '',
+        installments: 1,
+        cash_received: '',
+      }
+    ]);
+  };
+
+  const updateSplitPaymentLine = (id: string, updates: Partial<{
+    method: 'DINHEIRO' | 'PIX' | 'DEBITO' | 'CREDITO';
+    amount: string;
+    installments: number;
+    cash_received: string;
+  }>) => {
+    setSplitPayments(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+  };
+
+  const removeSplitPaymentLine = (id: string) => {
+    setSplitPayments(prev => prev.filter(p => p.id !== id));
+  };
 
   // ─── 8. Finalização da Venda ──────────────────────────────────────────────
   const handleFinalizeSale = async () => {
     if (cart.length === 0) {
       toast.error('O carrinho está vazio');
       return;
+    }
+
+    // Validação de pagamento misto
+    if (paymentMethod === 'MISTO') {
+      if (splitRemaining > 0.01) {
+        toast.error(`O valor informado nos pagamentos (R$ ${splitTotal.toFixed(2)}) é inferior ao total da venda (R$ ${totalAmount.toFixed(2)}). Preencha o restante de R$ ${splitRemaining.toFixed(2)}.`);
+        return;
+      }
+      const validCount = splitPayments.filter(p => (parseFloat(p.amount.replace(',', '.')) || 0) > 0).length;
+      if (validCount === 0) {
+        toast.error('Adicione pelo menos uma forma de pagamento com valor.');
+        return;
+      }
     }
 
     const saleUuid = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `sale-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -809,9 +970,37 @@ export default function PDVPage() {
 
     let pDetails = '';
     if (paymentMethod === 'DINHEIRO') {
-      pDetails = JSON.stringify({ valor_recebido: cashVal, troco: changeAmount });
+      pDetails = JSON.stringify({ method: 'DINHEIRO', valor_recebido: cashVal, troco: changeAmount });
+    } else if (paymentMethod === 'CREDITO') {
+      const inst = Math.min(selectedInstallments, maxPossibleInstallments);
+      pDetails = JSON.stringify({
+        method: 'CREDITO',
+        installments: inst,
+        installment_amount: Number((totalAmount / inst).toFixed(2)),
+      });
     } else if (paymentMethod === 'MISTO') {
-      pDetails = JSON.stringify(splitDetails);
+      const formattedPayments = splitPayments
+        .filter(p => (parseFloat(p.amount.replace(',', '.')) || 0) > 0)
+        .map(p => {
+          const amt = parseFloat(p.amount.replace(',', '.')) || 0;
+          const inst = p.method === 'CREDITO' ? (p.installments || 1) : 1;
+          const rec = p.method === 'DINHEIRO' ? (parseFloat((p.cash_received || '').replace(',', '.')) || 0) : undefined;
+          return {
+            method: p.method,
+            amount: amt,
+            installments: inst,
+            cash_received: rec,
+            troco: rec && rec > amt ? rec - amt : 0,
+          };
+        });
+
+      pDetails = JSON.stringify({
+        method: 'MISTO',
+        payments: formattedPayments,
+        troco: splitTotalChange,
+      });
+    } else {
+      pDetails = JSON.stringify({ method: paymentMethod });
     }
 
     const saleRecord: PDVPendingSaleRecord = {
@@ -856,6 +1045,21 @@ export default function PDVPage() {
       } else {
         toast.info(`Cliente "${customerName}" mantido fixado.`);
       }
+
+      // Se a venda veio de uma comanda da cafeteria, atualiza o status dela para PAID
+      if (linkedCafeteriaTabId && companyId && navigator.onLine) {
+        try {
+          const token = getToken();
+          const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+          fetch(`${baseUrl}/companies/${companyId}/cafeteria/tabs/${linkedCafeteriaTabId}/status?status=PAID`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${token}` }
+          }).catch((e) => console.error('Erro ao atualizar status da comanda para PAID:', e));
+        } catch (err) {
+          console.error('Falha ao fechar comanda da cafeteria:', err);
+        }
+      }
+      setLinkedCafeteriaTabId(null);
 
       // Feedback sonoro e visual diferenciado entre Online e Offline
       if (navigator.onLine) {
@@ -1041,6 +1245,18 @@ export default function PDVPage() {
             <span className="hidden sm:inline">Relatórios</span>
           </button>
 
+          {/* Comandas da Cafeteria */}
+          {moduleCafeteria && (
+            <button
+              onClick={() => setIsCafeteriaModalOpen(true)}
+              className="px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition"
+              title="Puxar comanda aberta da cafeteria para fechamento de conta"
+            >
+              <Coffee className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Cafeteria</span>
+            </button>
+          )}
+
           {/* Fechar Caixa da Sessão Ativa */}
           {activeSession && (
             <button
@@ -1127,8 +1343,9 @@ export default function PDVPage() {
                 type="text"
                 placeholder="CPF (opcional)"
                 value={customerDoc}
-                onChange={(e) => setCustomerDoc(e.target.value)}
-                className="px-2 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 w-24 sm:w-28 outline-none focus:ring-1 focus:ring-indigo-500"
+                onChange={(e) => setCustomerDoc(maskCPF(e.target.value))}
+                maxLength={14}
+                className="px-2 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 w-24 sm:w-28 outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
               />
             </div>
           )}
@@ -1351,14 +1568,14 @@ export default function PDVPage() {
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-2.5">
-                  {displayedProducts.map((item) => {
+                  {displayedProducts.map((item, idx) => {
                     const itemStock = item.stock !== undefined ? Number(item.stock) : 0;
                     const isOutOfStock = isStockValidationActive && itemStock <= 0;
                     const isInCart = cart.some((c) => c.barcode === item.barcode);
 
                     return (
                       <div
-                        key={item.barcode}
+                        key={`${item.barcode || item.product_id || idx}-${idx}`}
                         onClick={() => addToCart(item)}
                         className={`p-3 rounded-xl border transition-all duration-150 flex flex-col justify-between group cursor-pointer ${
                           isOutOfStock
@@ -1473,46 +1690,49 @@ export default function PDVPage() {
                 <p className="text-[11px] text-slate-400 mt-0.5">Bipe um produto para iniciar a venda</p>
               </div>
             ) : (
-              cart.map((item) => (
-                <div
-                  key={item.barcode}
-                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 flex items-center justify-between gap-2"
-                >
-                  <div className="flex-1 min-w-0 pr-1">
-                    <span className="font-semibold text-xs text-slate-900 dark:text-white truncate block leading-snug">
-                      {item.title}
-                    </span>
-                    <span className="text-[10px] text-slate-400">
-                      R$ {item.price.toFixed(2)} un • Sub: <strong className="text-slate-700 dark:text-slate-200">R$ {(item.price * item.quantity).toFixed(2)}</strong>
-                    </span>
-                  </div>
-
-                  {/* Quantity Stepper */}
-                  <div className="flex items-center gap-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5 shrink-0">
-                    <button
-                      onClick={() => updateQuantity(item.barcode, -1)}
-                      className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-600 dark:text-slate-300"
-                    >
-                      <Minus className="w-3 h-3" />
-                    </button>
-                    <span className="font-bold text-xs w-6 text-center">{item.quantity}</span>
-                    <button
-                      onClick={() => updateQuantity(item.barcode, 1)}
-                      className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-600 dark:text-slate-300"
-                    >
-                      <Plus className="w-3 h-3" />
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={() => removeItem(item.barcode)}
-                    className="p-1 text-slate-400 hover:text-rose-500 transition shrink-0"
-                    title="Remover item"
+              cart.map((item, idx) => {
+                const itemKey = item.cart_item_id || `${item.barcode}-${idx}`;
+                return (
+                  <div
+                    key={itemKey}
+                    className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 flex items-center justify-between gap-2"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ))
+                    <div className="flex-1 min-w-0 pr-1">
+                      <span className="font-semibold text-xs text-slate-900 dark:text-white truncate block leading-snug">
+                        {item.title}
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        R$ {item.price.toFixed(2)} un • Sub: <strong className="text-slate-700 dark:text-slate-200">R$ {(item.price * item.quantity).toFixed(2)}</strong>
+                      </span>
+                    </div>
+
+                    {/* Quantity Stepper */}
+                    <div className="flex items-center gap-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5 shrink-0">
+                      <button
+                        onClick={() => updateQuantity(itemKey, -1)}
+                        className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-600 dark:text-slate-300"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <span className="font-bold text-xs w-6 text-center">{item.quantity}</span>
+                      <button
+                        onClick={() => updateQuantity(itemKey, 1)}
+                        className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-600 dark:text-slate-300"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={() => removeItem(itemKey)}
+                      className="p-1 text-slate-400 hover:text-rose-500 transition shrink-0"
+                      title="Remover item"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                );
+              })
             )}
           </div>
 
@@ -1521,15 +1741,14 @@ export default function PDVPage() {
             
             {/* Desconto */}
             <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>Desconto (R$):</span>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                value={globalDiscount || ''}
-                onChange={(e) => setGlobalDiscount(parseFloat(e.target.value) || 0)}
-                className="w-24 px-2 py-1 text-right rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold outline-none focus:ring-1 focus:ring-emerald-500"
+              <span>Desconto:</span>
+              <CurrencyInput
+                prefixStr="R$ "
+                allowEmpty={true}
+                placeholder="0,00"
+                value={globalDiscount}
+                onChangeValue={(val) => setGlobalDiscount(val)}
+                className="w-28 px-2 py-1 text-right font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold outline-none focus:ring-1 focus:ring-emerald-500"
               />
             </div>
 
@@ -1597,44 +1816,47 @@ export default function PDVPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
-              {cart.map((item) => (
-                <div
-                  key={item.barcode}
-                  className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-between"
-                >
-                  <div className="flex-1 min-w-0 pr-2">
-                    <span className="font-bold text-xs text-slate-900 dark:text-white truncate block">
-                      {item.title}
-                    </span>
-                    <span className="text-[11px] text-slate-400">
-                      R$ {item.price.toFixed(2)} un • Sub: <strong>R$ {(item.price * item.quantity).toFixed(2)}</strong>
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg p-0.5">
-                    <button
-                      onClick={() => updateQuantity(item.barcode, -1)}
-                      className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
-                    >
-                      <Minus className="w-3.5 h-3.5" />
-                    </button>
-                    <span className="font-bold text-xs w-6 text-center">{item.quantity}</span>
-                    <button
-                      onClick={() => updateQuantity(item.barcode, 1)}
-                      className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={() => removeItem(item.barcode)}
-                    className="p-1.5 text-slate-400 hover:text-rose-500 ml-2"
+              {cart.map((item, idx) => {
+                const itemKey = item.cart_item_id || `${item.barcode}-${idx}`;
+                return (
+                  <div
+                    key={itemKey}
+                    className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-between"
                   >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
+                    <div className="flex-1 min-w-0 pr-2">
+                      <span className="font-bold text-xs text-slate-900 dark:text-white truncate block">
+                        {item.title}
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        R$ {item.price.toFixed(2)} un • Sub: <strong>R$ {(item.price * item.quantity).toFixed(2)}</strong>
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg p-0.5">
+                      <button
+                        onClick={() => updateQuantity(itemKey, -1)}
+                        className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
+                      >
+                        <Minus className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="font-bold text-xs w-6 text-center">{item.quantity}</span>
+                      <button
+                        onClick={() => updateQuantity(itemKey, 1)}
+                        className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={() => removeItem(itemKey)}
+                      className="p-1.5 text-slate-400 hover:text-rose-500 ml-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
 
             <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-3">
@@ -1663,7 +1885,7 @@ export default function PDVPage() {
       {/* ── 6. MODAL DE CHECKOUT & PAGAMENTO ─────────────────────────────────── */}
       {isCheckoutOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
-          <div className="relative w-full max-w-lg rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+          <div className={`relative w-full ${paymentMethod === 'MISTO' ? 'max-w-2xl' : 'max-w-lg'} rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[92vh] transition-all`}>
             
             {/* Header */}
             <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/50">
@@ -1684,41 +1906,114 @@ export default function PDVPage() {
                 Forma de Pagamento
               </label>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                 {[
                   { key: 'DINHEIRO', label: 'Dinheiro', icon: Banknote },
                   { key: 'PIX', label: 'PIX', icon: QrCode },
                   { key: 'DEBITO', label: 'Débito', icon: CreditCard },
                   { key: 'CREDITO', label: 'Crédito', icon: CreditCard },
+                  { key: 'MISTO', label: 'Misto / Dividido', icon: Split },
                 ].map(({ key, label, icon: Icon }) => (
                   <button
                     key={key}
                     type="button"
-                    onClick={() => setPaymentMethod(key as any)}
-                    className={`p-3 rounded-2xl border text-center flex flex-col items-center justify-center gap-1.5 transition ${
+                    onClick={() => {
+                      setPaymentMethod(key as any);
+                      if (key === 'MISTO' && splitPayments.length === 0) {
+                        setSplitPayments([
+                          {
+                            id: `split-1-${Date.now()}`,
+                            method: 'CREDITO',
+                            amount: '',
+                            installments: 1,
+                            cash_received: '',
+                          },
+                          {
+                            id: `split-2-${Date.now()}`,
+                            method: 'DINHEIRO',
+                            amount: '',
+                            installments: 1,
+                            cash_received: '',
+                          },
+                        ]);
+                      }
+                    }}
+                    className={`p-2.5 sm:p-3 rounded-2xl border text-center flex flex-col items-center justify-center gap-1.5 transition ${
                       paymentMethod === key
                         ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold shadow-xs ring-2 ring-emerald-500/20'
                         : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
                     }`}
                   >
-                    <Icon className="w-5 h-5" />
+                    <Icon className="w-5 h-5 shrink-0" />
                     <span className="text-xs">{label}</span>
                   </button>
                 ))}
               </div>
 
-              {/* Dinheiro (Cálculo de Troco) */}
+              {/* ── SEÇÃO CARTÃO DE CRÉDITO (SELETOR DE PARCELAS) ── */}
+              {paymentMethod === 'CREDITO' && (
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <CreditCard className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      Opções de Parcelamento:
+                    </span>
+                    <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                      {selectedInstallments}x de R$ {(totalAmount / selectedInstallments).toFixed(2)}
+                    </span>
+                  </div>
+
+                  <select
+                    value={selectedInstallments}
+                    onChange={(e) => setSelectedInstallments(Number(e.target.value))}
+                    className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {Array.from({ length: maxPossibleInstallments }, (_, i) => i + 1).map((n) => {
+                      const installmentVal = (totalAmount / n).toFixed(2);
+                      return (
+                        <option key={n} value={n}>
+                          {n === 1
+                            ? `1x à vista — R$ ${totalAmount.toFixed(2)}`
+                            : `${n}x de R$ ${installmentVal} (sem juros)`}
+                        </option>
+                      );
+                    })}
+                  </select>
+
+                  {/* Chips rápidos de parcelas */}
+                  {maxPossibleInstallments > 1 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {Array.from({ length: Math.min(6, maxPossibleInstallments) }, (_, i) => i + 1).map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setSelectedInstallments(n)}
+                          className={`px-2.5 py-1 text-[11px] rounded-lg border font-semibold transition ${
+                            selectedInstallments === n
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100'
+                          }`}
+                        >
+                          {n}x de R$ {(totalAmount / n).toFixed(2)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── SEÇÃO DINHEIRO SIMPLES (CÁLCULO DE TROCO) ── */}
               {paymentMethod === 'DINHEIRO' && (
                 <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
                   <div className="flex justify-between items-center text-xs">
-                    <span className="font-semibold text-slate-700 dark:text-slate-300">Valor Recebido (R$):</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder={totalAmount.toFixed(2)}
-                      value={cashReceived}
-                      onChange={(e) => setCashReceived(e.target.value)}
-                      className="w-32 px-3 py-1.5 text-right font-mono font-bold text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">Valor Recebido:</span>
+                    <CurrencyInput
+                      prefixStr="R$ "
+                      allowEmpty={true}
+                      placeholder={totalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      value={parseFloat(cashReceived.replace(',', '.')) || 0}
+                      onChangeValue={(val) => setCashReceived(val > 0 ? val.toFixed(2) : '')}
+                      className="w-36 px-3 py-1.5 text-right font-mono font-bold text-sm rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
 
@@ -1755,6 +2050,181 @@ export default function PDVPage() {
                 </div>
               )}
 
+              {/* ── SEÇÃO MISTO / DIVIDIDO (MÚLTIPLAS FORMAS DE PAGAMENTO) ── */}
+              {paymentMethod === 'MISTO' && (
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-4 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <Split className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        Composição do Pagamento Misto
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Divida o valor entre crédito, dinheiro, débito ou PIX.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => addSplitPaymentLine()}
+                      className="px-2.5 py-1.5 text-xs font-semibold rounded-xl bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 flex items-center gap-1 transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Adicionar Meio
+                    </button>
+                  </div>
+
+                  {/* Linhas de pagamentos */}
+                  <div className="space-y-2.5">
+                    {splitPayments.map((p, index) => {
+                      const lineAmt = parseFloat(p.amount.replace(',', '.')) || 0;
+                      const maxLineInst = Math.min(
+                        pdvMaxInstallments || 12,
+                        Math.max(1, Math.floor(lineAmt / (pdvMinInstallmentAmount || 5.0)))
+                      );
+                      const lineCashRec = parseFloat((p.cash_received || '').replace(',', '.')) || 0;
+                      const lineChange = p.method === 'DINHEIRO' && lineCashRec > lineAmt ? lineCashRec - lineAmt : 0;
+
+                      return (
+                        <div
+                          key={p.id}
+                          className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 space-y-2"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            {/* Seletor do meio */}
+                            <select
+                              value={p.method}
+                              onChange={(e) => updateSplitPaymentLine(p.id, { method: e.target.value as any })}
+                              className="px-2.5 py-1.5 text-xs font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 outline-none focus:ring-1 focus:ring-emerald-500"
+                            >
+                              <option value="CREDITO">💳 Cartão de Crédito</option>
+                              <option value="DINHEIRO">💵 Dinheiro Físico</option>
+                              <option value="DEBITO">💳 Cartão de Débito</option>
+                              <option value="PIX">📱 PIX</option>
+                            </select>
+
+                            {/* Campo de valor da linha */}
+                            <div className="flex-1 min-w-[130px]">
+                              <CurrencyInput
+                                prefixStr="R$ "
+                                allowEmpty={true}
+                                placeholder="0,00"
+                                value={parseFloat(p.amount.replace(',', '.')) || 0}
+                                onChangeValue={(val) => updateSplitPaymentLine(p.id, { amount: val > 0 ? val.toFixed(2) : '' })}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                              />
+                            </div>
+
+                            {/* Botão de Preenchimento Rápido do Restante */}
+                            {splitRemaining > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const curVal = parseFloat(p.amount.replace(',', '.')) || 0;
+                                  const newVal = curVal + splitRemaining;
+                                  updateSplitPaymentLine(p.id, { amount: newVal.toFixed(2) });
+                                }}
+                                className="px-2 py-1 text-[11px] font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 transition shrink-0"
+                                title="Preenche esta linha com o saldo que falta para fechar a venda"
+                              >
+                                +R$ {splitRemaining.toFixed(2)}
+                              </button>
+                            )}
+
+                            {/* Botão remover linha */}
+                            {splitPayments.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeSplitPaymentLine(p.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-500 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition shrink-0"
+                                title="Remover forma de pagamento"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Se for crédito, mostra parcelas para esta linha */}
+                          {p.method === 'CREDITO' && lineAmt > 0 && (
+                            <div className="flex items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                              <span className="text-[11px] text-slate-500">Parcelas:</span>
+                              <select
+                                value={p.installments || 1}
+                                onChange={(e) => updateSplitPaymentLine(p.id, { installments: Number(e.target.value) })}
+                                className="px-2 py-1 text-[11px] font-semibold rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 outline-none"
+                              >
+                                {Array.from({ length: maxLineInst }, (_, i) => i + 1).map((n) => (
+                                  <option key={n} value={n}>
+                                    {n === 1 ? '1x à vista' : `${n}x de R$ ${(lineAmt / n).toFixed(2)}`}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          {/* Se for dinheiro, permite colocar valor em cédulas e calcula troco */}
+                          {p.method === 'DINHEIRO' && lineAmt > 0 && (
+                            <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 dark:border-slate-800 text-[11px]">
+                              <span className="text-slate-500">Cédula recebida:</span>
+                              <CurrencyInput
+                                prefixStr="R$ "
+                                allowEmpty={true}
+                                placeholder={lineAmt.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                value={parseFloat((p.cash_received || '').replace(',', '.')) || 0}
+                                onChangeValue={(val) => updateSplitPaymentLine(p.id, { cash_received: val > 0 ? val.toFixed(2) : '' })}
+                                className="w-28 px-2 py-0.5 text-right font-mono text-xs rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 outline-none focus:ring-1 focus:ring-emerald-500"
+                              />
+                              {lineChange > 0 && (
+                                <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                                  Troco: R$ {lineChange.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Resumo da conferência de valores */}
+                  <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 space-y-1.5 text-xs">
+                    <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
+                      <span>Total da Venda:</span>
+                      <span className="font-bold text-slate-900 dark:text-white">R$ {totalAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
+                      <span>Total dos Meios Informados:</span>
+                      <span className="font-bold text-slate-900 dark:text-white font-mono">
+                        R$ {splitTotal.toFixed(2)}
+                      </span>
+                    </div>
+
+                    <div className="pt-1.5 border-t border-slate-200 dark:border-slate-700 flex justify-between items-center">
+                      {splitRemaining > 0 ? (
+                        <>
+                          <span className="font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5" /> Faltam Informar:
+                          </span>
+                          <span className="text-sm font-extrabold text-rose-600 dark:text-rose-400 font-mono">
+                            R$ {splitRemaining.toFixed(2)}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Valor 100% Coberto
+                          </span>
+                          {splitTotalChange > 0 && (
+                            <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                              Troco Total: R$ {splitTotalChange.toFixed(2)}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Observações da Venda */}
               <div>
                 <label className="text-[11px] font-semibold text-slate-500 block mb-1">
@@ -1771,20 +2241,36 @@ export default function PDVPage() {
             </div>
 
             {/* Footer */}
-            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-2">
-              <button
-                onClick={() => setIsCheckoutOpen(false)}
-                className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-              >
-                Voltar
-              </button>
-              <button
-                onClick={handleFinalizeSale}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                Confirmar e Concluir Venda
-              </button>
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs text-slate-500">
+                {paymentMethod === 'MISTO' && splitRemaining > 0.01 && (
+                  <span className="text-rose-500 font-semibold flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    Preencha o restante (R$ {splitRemaining.toFixed(2)}) para concluir.
+                  </span>
+                )}
+              </div>
+
+              <div className="flex gap-2 ml-auto">
+                <button
+                  onClick={() => setIsCheckoutOpen(false)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={handleFinalizeSale}
+                  disabled={paymentMethod === 'MISTO' && splitRemaining > 0.01}
+                  className={`px-6 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-lg transition ${
+                    paymentMethod === 'MISTO' && splitRemaining > 0.01
+                      ? 'bg-slate-300 dark:bg-slate-700 text-slate-500 dark:text-slate-400 cursor-not-allowed shadow-none'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20'
+                  }`}
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Confirmar e Concluir Venda
+                </button>
+              </div>
             </div>
 
           </div>
@@ -1849,6 +2335,15 @@ export default function PDVPage() {
         onClose={() => setIsReportModalOpen(false)}
         activeSession={activeSession}
       />
+
+      {moduleCafeteria && companyId && (
+        <POSCafeteriaModal
+          isOpen={isCafeteriaModalOpen}
+          onClose={() => setIsCafeteriaModalOpen(false)}
+          companyId={companyId}
+          onImportTab={handleImportCafeteriaTab}
+        />
+      )}
 
     </div>
   );

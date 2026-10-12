@@ -68,6 +68,8 @@ class Company(Base):
     has_inventory_module = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo de Inventário
     module_editorial = Column(Boolean, default=False, nullable=False, server_default="false")      # Módulo Editorial (Pipelines e Demandas)
     module_schools = Column(Boolean, default=False, nullable=False, server_default="false")        # Módulo de Escolas, Passeios e Eventos
+    module_cafeteria = Column(Boolean, default=False, nullable=False, server_default="false")      # Módulo Cafeteria (Mesas, Comandas, Balcão e KDS)
+    module_encomendas = Column(Boolean, default=False, nullable=False, server_default="false")    # Módulo de Encomendas de Livros e Clientes (Busca Preço)
 
     
     # Mobile App Modules (per-seller, managed by MASTER)
@@ -78,6 +80,7 @@ class Company(Base):
         "pedidos": False,
         "catalogo": False,
         "clientes": False,
+        "cafeteria": False,
     })
     
     # Fiscal Configs (NFS-e Padrão Nacional)

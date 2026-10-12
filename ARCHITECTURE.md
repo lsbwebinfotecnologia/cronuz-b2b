@@ -370,6 +370,38 @@ Ao criar qualquer novo módulo ou feature (ex: `horus_financial`, `editorial`, `
 
 ---
 
+## ☕ MÓDULO CAFETERIA OMNICHANNEL & CARDÁPIO DIGITAL
+
+O módulo de Cafeteria foi projetado com arquitetura multi-tenant híbrida e escalável, atendendo tanto a estabelecimentos puramente de alimentação (cafeterias, bistrôs, confeitarias) quanto a modelos híbridos de varejo (livrarias com café, lojas conceito, coworkings).
+
+### 1. Pilares Arquiteturais
+1. **Multi-tenancy Isolado**: Ativação por empresa via flag booleana `cmp_company.module_cafeteria` e chave `"cafeteria"` em `mobile_modules`.
+2. **Catálogo Híbrido (Cronuz + Horus ERP)**: Itens alimentícios gerenciados nativamente com fotos, categorias e grupos de modificadores, podendo conviver e ser buscados conjuntamente com o catálogo ERP (Horus SQL Server).
+3. **Gestão de Mesas e Comandas (`caf_table` & `caf_tab`)**: Mesas físicas numeradas ou comandas volantes (`status`: `available`, `occupied`, `reserved`, `maintenance`).
+4. **Modificadores e Adicionais Customizáveis (`caf_modifier_*`)**: Grupos de opções com regras mínimas/máximas (ex: Leites Vegetais, Shots Extras de Espresso, Ponto do Café, Tipos de Calda).
+5. **KDS Barista / Cozinha em Tempo Real (`caf_order_item`)**: Fila de produção com estados controlados (`pending`, `preparing`, `ready`, `delivered`, `canceled`) e tempo decorrido.
+6. **Integração Nativa com o PDV Cronuz**: O operador do PDV pode vincular comandas em aberto ao carrinho de vendas, importando itens, adicionais e totalizando para emissão fiscal e checkout financeiro imediato (`pos_order_id`).
+7. **Cardápio Digital Público Mobile First**: Acesso via QR Code nas mesas (`/public/cardapio/[slug]?mesa=XX`), permitindo visualização de fotos de alta resolução, filtragem por categorias, seleção de adicionais e solicitação de atendimento/garçom.
+
+### 2. Estrutura de Banco de Dados (`caf_*`)
+
+| Tabela | Descrição | Principais Colunas |
+|--------|-----------|--------------------|
+| `caf_table` | Mesas e pontos de atendimento | `id`, `company_id`, `number`, `label`, `capacity`, `status`, `qr_code_token` |
+| `caf_modifier_group` | Grupos de modificadores (ex: Leite, Extra) | `id`, `company_id`, `name`, `min_options`, `max_options`, `is_required` |
+| `caf_modifier_option` | Opções dentro do grupo | `id`, `group_id`, `name`, `additional_price`, `is_active`, `sort_order` |
+| `caf_product_modifier` | Associação N:N Produto <-> Grupo Modificador | `id`, `product_id`, `modifier_group_id` |
+| `caf_tab` | Comandas / Contas abertas | `id`, `company_id`, `table_id`, `tab_number`, `customer_name`, `status`, `total_amount`, `pos_order_id` |
+| `caf_order_item` | Itens lançados na comanda / Fila KDS | `id`, `tab_id`, `product_id`, `quantity`, `unit_price`, `selected_modifiers_json`, `notes`, `status`, `kds_station` |
+
+### 3. Fluxo de Operação e Telas
+- **Gestão de Mesas**: Mapa de mesas com status visual em cores (Livre, Ocupada, Reservada) e abertura rápida de comanda.
+- **KDS Barista/Cozinha**: Painel de preparo para o barista atualizar o status do pedido de "Pendente" para "Em Preparo" e "Pronto".
+- **Cardápio Digital Público**: Interface web ultra-rápida, mobile first, responsiva e clean para o cliente final consultar itens e acionar a equipe.
+- **PDV Cronuz**: Modal "Comandas da Cafeteria" integrado à tela de vendas para liquidar contas no caixa com dinheiro, PIX ou cartão.
+
+---
+
 ## 🚀 DEPLOY
 
 Ver arquivos em `deploy/` para instruções de cada feature.  

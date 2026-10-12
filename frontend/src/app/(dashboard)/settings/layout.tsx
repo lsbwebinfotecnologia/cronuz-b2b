@@ -29,6 +29,8 @@ interface Company {
   modulo_autores_ativo?: boolean;
   module_editorial?: boolean;
   module_schools?: boolean;
+  module_cafeteria?: boolean;
+  module_encomendas?: boolean;
   active: boolean;
 }
 

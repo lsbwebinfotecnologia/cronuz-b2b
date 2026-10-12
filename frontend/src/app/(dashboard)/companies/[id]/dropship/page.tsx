@@ -13,6 +13,7 @@ import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../context';
 import { useParams } from 'next/navigation';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 interface DropshipConfig {
   id: number;
@@ -702,43 +703,35 @@ export default function CompanyDropshipPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                      Taxa de Frete — Venda (R$)
+                      Taxa de Frete — Venda
                     </label>
-                    <div className="relative">
-                      <span className="absolute inset-y-0 left-3 flex items-center text-xs text-slate-400 pointer-events-none">R$</span>
-                      <input
-                        id="vlr_taxa_frete"
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={formData.vlr_taxa_frete}
-                        onChange={e => setFormData(p => ({ ...p, vlr_taxa_frete: parseFloat(e.target.value) || 0 }))}
-                        className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
-                        placeholder="0.00"
-                      />
-                    </div>
+                    <CurrencyInput
+                      id="vlr_taxa_frete"
+                      prefixStr="R$ "
+                      allowEmpty={true}
+                      placeholder="0,00"
+                      value={formData.vlr_taxa_frete || 0}
+                      onChangeValue={v => setFormData(p => ({ ...p, vlr_taxa_frete: v }))}
+                      className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                    />
                     <p className="text-[10px] text-slate-400 mt-1">
                       Enviado como <span className="font-mono">VLR_FRETE</span> no pedido de Venda (6.118). Zero = não envia.
                     </p>
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">
-                      Desconto por Item — Remessa (%)
+                      Desconto por Item — Remessa
                     </label>
-                    <div className="relative">
-                      <input
-                        id="perc_desconto_remessa"
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.01}
-                        value={formData.perc_desconto_remessa}
-                        onChange={e => setFormData(p => ({ ...p, perc_desconto_remessa: parseFloat(e.target.value) || 0 }))}
-                        className="w-full pr-8 pl-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
-                        placeholder="0.00"
-                      />
-                      <span className="absolute inset-y-0 right-3 flex items-center text-xs text-slate-400 pointer-events-none">%</span>
-                    </div>
+                    <CurrencyInput
+                      id="perc_desconto_remessa"
+                      suffixStr="%"
+                      max={100}
+                      allowEmpty={true}
+                      placeholder="0,00%"
+                      value={formData.perc_desconto_remessa || 0}
+                      onChangeValue={v => setFormData(p => ({ ...p, perc_desconto_remessa: v }))}
+                      className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                    />
                     <p className="text-[10px] text-slate-400 mt-1">
                       Desconto aplicado sobre <span className="font-mono">VLR_LIQUIDO</span> de cada item na Remessa (6.923). Zero = sem desconto.
                     </p>

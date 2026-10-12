@@ -45,7 +45,10 @@ import {
   Truck,
   BookOpen,
   GraduationCap,
-  Sparkles
+  Sparkles,
+  Coffee,
+  UtensilsCrossed,
+  QrCode
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -192,6 +195,8 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [hasInventoryModule, setHasInventoryModule] = useState(false);
   const [moduleEditorial, setModuleEditorial] = useState(false);
   const [moduleSchools, setModuleSchools] = useState(false);
+  const [moduleCafeteria, setModuleCafeteria] = useState(false);
+  const [moduleEncomendas, setModuleEncomendas] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const _settingsFetchedRef = useRef(false);
@@ -215,6 +220,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        if (pathname.startsWith('/horus-direct') || pathname.startsWith('/dbm')) initialOpen['Horus Direct'] = true;
        if (pathname.startsWith('/editorial')) initialOpen['Editorial'] = true;
        if (pathname.startsWith('/schools')) initialOpen['Escolas & Eventos'] = true;
+       if (pathname.startsWith('/cafeteria')) initialOpen['Cafeteria'] = true;
        setOpenMenus(initialOpen);
        
        const fetchSettings = async () => {
@@ -250,6 +256,8 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setHasInventoryModule(data.has_inventory_module || false);
                 setModuleEditorial(data.module_editorial || false);
                 setModuleSchools(data.module_schools || false);
+                setModuleCafeteria(data.module_cafeteria || false);
+                setModuleEncomendas(data.module_encomendas || false);
                if (data.company_logo) setCompanyLogo(data.company_logo);
             }
          } catch (e) {}
@@ -460,6 +468,32 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     });
   }
 
+  if (moduleCafeteria) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Cafeteria',
+      href: '/cafeteria/tables',
+      icon: Coffee,
+      subItems: [
+        { name: 'Mesas & Comandas', href: '/cafeteria/tables', icon: UtensilsCrossed },
+        { name: 'Fila Barista (KDS)', href: '/cafeteria/kds', icon: Coffee },
+        { name: 'Itens do Cardápio', href: '/cafeteria/products', icon: ShoppingBag },
+        { name: 'Grupos & Opcionais', href: '/cafeteria/menu', icon: SlidersHorizontal },
+      ]
+    });
+  }
+
+  if (moduleEncomendas) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Encomendas',
+      href: '/encomendas',
+      icon: Package,
+    });
+  }
+
 
   if (modulePdv) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
@@ -512,6 +546,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
         if (nav.name === 'Vendedores/Rep' || nav.href === '/agents') return userAllowedModules.includes('agents') || userAllowedModules.includes('customers');
         if (nav.name === 'Editorial' || nav.href.startsWith('/editorial')) return userAllowedModules.includes('editorial');
         if (nav.name === 'Escolas & Eventos' || nav.href.startsWith('/schools')) return userAllowedModules.includes('schools');
+        if (nav.name === 'Cafeteria' || nav.href.startsWith('/cafeteria')) return userAllowedModules.includes('cafeteria');
         if (nav.name === 'Consignação' || nav.href.includes('/consignment')) return userAllowedModules.includes('consignment');
         if (nav.name === 'Distribuidoras' || nav.href.includes('/distributors')) return userAllowedModules.includes('distributors');
         if (nav.name === 'Download SEFAZ' || nav.href.includes('/sefaz-download')) return userAllowedModules.includes('sefaz_download') || userAllowedModules.includes('settings');

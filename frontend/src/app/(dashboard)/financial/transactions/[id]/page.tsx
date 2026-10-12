@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 const getCategoryHierarchyName = (cat: any, categories: any[]) => {
     let current = cat;
@@ -620,7 +621,12 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                             </div>
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Valor (R$)</label>
-                                <input type="number" step="0.01" value={instData.amount} onChange={e=>setInstData({...instData, amount: parseFloat(e.target.value)})} className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[var(--color-primary-base)]/20" />
+                                <CurrencyInput
+                                  prefixStr="R$ "
+                                  value={instData.amount || 0}
+                                  onChangeValue={val => setInstData({...instData, amount: val})}
+                                  className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-[var(--color-primary-base)]/20 font-mono font-bold"
+                                />
                             </div>
                         </div>
                         <div className="p-5 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-3 bg-slate-50 dark:bg-slate-900/50">

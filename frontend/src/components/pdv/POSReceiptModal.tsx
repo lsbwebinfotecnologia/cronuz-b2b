@@ -92,21 +92,69 @@ export default function POSReceiptModal({
               <span>TOTAL PAGO:</span>
               <span>R$ {Number(sale.total_amount).toFixed(2)}</span>
             </div>
-            <div className="flex justify-between text-slate-500 text-[11px]">
-              <span>Forma de Pagto:</span>
-              <span>{sale.payment_method}</span>
-            </div>
+            {/* Detalhamento de Forma de Pagamento / Parcelas / Misto */}
+            {(() => {
+              let parsedDetails: any = null;
+              if (sale.payment_details) {
+                try {
+                  parsedDetails = JSON.parse(sale.payment_details);
+                } catch {}
+              }
+
+              if (sale.payment_method === 'CREDITO') {
+                const inst = parsedDetails?.installments || 1;
+                return (
+                  <div className="flex justify-between text-slate-500 text-[11px]">
+                    <span>Forma de Pagto:</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">
+                      Crédito {inst > 1 ? `(${inst}x de R$ ${(sale.total_amount / inst).toFixed(2)})` : '(À vista)'}
+                    </span>
+                  </div>
+                );
+              }
+
+              if (sale.payment_method === 'MISTO' && parsedDetails?.payments?.length > 0) {
+                return (
+                  <div className="pt-1 border-t border-dashed border-slate-200 dark:border-slate-800 space-y-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                      Pagamentos Múltiplos:
+                    </span>
+                    {parsedDetails.payments.map((p: any, idx: number) => {
+                      const m = p.method === 'CREDITO' && p.installments > 1
+                        ? `Crédito (${p.installments}x)`
+                        : p.method;
+                      return (
+                        <div key={idx} className="flex justify-between text-[11px] text-slate-600 dark:text-slate-400">
+                          <span>• {m}:</span>
+                          <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
+                            R$ {Number(p.amount || 0).toFixed(2)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              }
+
+              return (
+                <div className="flex justify-between text-slate-500 text-[11px]">
+                  <span>Forma de Pagto:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">{sale.payment_method}</span>
+                </div>
+              );
+            })()}
 
             {/* Troco se houver */}
             {(() => {
               try {
                 if (sale.payment_details) {
                   const details = JSON.parse(sale.payment_details);
-                  if (details.troco && Number(details.troco) > 0) {
+                  const trocoVal = Number(details.troco || 0);
+                  if (trocoVal > 0) {
                     return (
                       <div className="flex justify-between text-emerald-600 font-bold text-xs pt-1 border-t border-dashed border-slate-200 dark:border-slate-800">
                         <span>Troco Devolvido:</span>
-                        <span>R$ {Number(details.troco).toFixed(2)}</span>
+                        <span>R$ {trocoVal.toFixed(2)}</span>
                       </div>
                     );
                   }
@@ -129,8 +177,20 @@ export default function POSReceiptModal({
 
           <button
             onClick={() => {
+              let paymentText: string = sale.payment_method;
+              try {
+                if (sale.payment_details) {
+                  const details = JSON.parse(sale.payment_details);
+                  if (sale.payment_method === 'CREDITO' && details.installments > 1) {
+                    paymentText = `Crédito em ${details.installments}x de R$ ${(sale.total_amount / details.installments).toFixed(2)}`;
+                  } else if (sale.payment_method === 'MISTO' && details.payments?.length) {
+                    paymentText = `Misto: ` + details.payments.map((p: any) => `${p.method} (R$ ${Number(p.amount).toFixed(2)})`).join(', ');
+                  }
+                }
+              } catch {}
+
               const text = encodeURIComponent(
-                `*Comprovante de Compra - Cronuz PDV*\nCupom: ${sale.sale_number}\nData: ${new Date(sale.sold_at).toLocaleString('pt-BR')}\nTotal: R$ ${Number(sale.total_amount).toFixed(2)}\nForma: ${sale.payment_method}\nItens: ${sale.items_count}\nObrigado pela preferência!`
+                `*Comprovante de Compra - Cronuz PDV*\nCupom: ${sale.sale_number}\nData: ${new Date(sale.sold_at).toLocaleString('pt-BR')}\nTotal: R$ ${Number(sale.total_amount).toFixed(2)}\nForma: ${paymentText}\nItens: ${sale.items_count}\nObrigado pela preferência!`
               );
               window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
             }}

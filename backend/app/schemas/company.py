@@ -65,6 +65,8 @@ class CompanyBase(BaseModel):
     has_inventory_module: bool = False
     module_editorial: bool = False
     module_schools: bool = False
+    module_cafeteria: bool = False
+    module_encomendas: bool = False
     active: bool = True
 
 
@@ -138,6 +140,8 @@ class CompanyUpdate(BaseModel):
     has_inventory_module: Optional[bool] = None
     module_editorial: Optional[bool] = None
     module_schools: Optional[bool] = None
+    module_cafeteria: Optional[bool] = None
+    module_encomendas: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, ClipboardList, Feather, BookOpen, GraduationCap } from 'lucide-react';
+import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, ClipboardList, Feather, BookOpen, GraduationCap, Package } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../layout';
@@ -32,6 +32,8 @@ export default function CompanyModulesPage() {
       modulo_autores_ativo: company.modulo_autores_ativo ?? false,
       module_editorial: company.module_editorial ?? false,
       module_schools: company.module_schools ?? false,
+      module_cafeteria: company.module_cafeteria ?? false,
+      module_encomendas: company.module_encomendas ?? false,
       [moduleName]: !currentValue
     };
 
@@ -363,6 +365,30 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_schools', company.module_schools ?? false)} 
                     disabled={togglingModule !== null}
                     colorClass="bg-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Módulo Encomendas */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_encomendas ? 'bg-[#00b4b4]/10 border-[#00b4b4]/20 text-[#00b4b4]' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <Package className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Módulo Encomendas</p>
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-teal-100 text-teal-800 rounded dark:bg-teal-900/30 dark:text-teal-400">Novo</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Gestão de encomendas sob demanda integrada ao Busca Preço, catálogo Cronuz, múltiplos títulos e controle de entrega/retirada para clientes.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch 
+                    active={company.module_encomendas ?? false} 
+                    onClick={() => handleToggleModule('module_encomendas', company.module_encomendas ?? false)} 
+                    disabled={togglingModule !== null}
+                    colorClass="bg-[#00b4b4]"
                   />
                 </div>
               </div>

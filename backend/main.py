@@ -38,6 +38,7 @@ from app.models import author as author_models
 from app.models import inventory as inventory_models
 from app.models import pos as pos_models
 from app.models import product_search_log as product_search_log_models
+from app.models import cafeteria as cafeteria_models
 from app.schemas import company as schemas
 from app.schemas import user as user_schemas
 from app.schemas import company_settings as settings_schemas
@@ -99,6 +100,13 @@ from app.api import school_storefront as school_storefront_api
 from app.models import school as school_models
 from app.api import master_sessions
 from app.api import dbm as dbm_api
+from app.api import cafeteria as cafeteria_api
+from app.api import bookinfo_metadata
+from app.api import backorders as backorders_api
+from app.api import encomendas as encomendas_api
+from app.models import backorder as backorder_models
+from app.models import encomenda as encomenda_models
+from app.models import global_setting as global_setting_models
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -144,6 +152,10 @@ product_search_log_models.Base.metadata.create_all(bind=engine)
 editorial_models.Base.metadata.create_all(bind=engine)
 school_models.Base.metadata.create_all(bind=engine)
 dynamic_showcase_models.Base.metadata.create_all(bind=engine)
+cafeteria_models.Base.metadata.create_all(bind=engine)
+backorder_models.Base.metadata.create_all(bind=engine)
+global_setting_models.Base.metadata.create_all(bind=engine)
+encomenda_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -259,6 +271,11 @@ app.include_router(events_api.router)
 app.include_router(school_storefront_api.router)
 app.include_router(master_sessions.router)
 app.include_router(dbm_api.router)
+app.include_router(cafeteria_api.router)
+app.include_router(cafeteria_api.public_router)
+app.include_router(bookinfo_metadata.router)
+app.include_router(backorders_api.router)
+app.include_router(encomendas_api.router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)
@@ -488,6 +505,8 @@ class ModuleUpdate(BaseModel):
     has_inventory_module: Optional[bool] = None
     module_editorial: Optional[bool] = None
     module_schools: Optional[bool] = None
+    module_cafeteria: Optional[bool] = None
+    module_encomendas: Optional[bool] = None
 
 @app.get("/users/{user_id}", response_model=user_schemas.User)
 def get_user_by_id(

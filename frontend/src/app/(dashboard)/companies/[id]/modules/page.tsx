@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Boxes, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, GraduationCap, UserCircle, Bell, DatabaseZap, Zap, AlertTriangle, CreditCard, Feather, LayoutGrid } from 'lucide-react';
+import { Loader2, Globe, Box, Boxes, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, GraduationCap, UserCircle, Bell, DatabaseZap, Zap, AlertTriangle, CreditCard, Feather, LayoutGrid, Coffee } from 'lucide-react';
 
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -17,12 +17,14 @@ interface MobileModules {
   pedidos: boolean;
   catalogo: boolean;
   clientes: boolean;
+  cafeteria: boolean;
 }
 
 const DEFAULT_MOBILE_MODULES: MobileModules = {
   app_enabled: false,
   pdv: false, conferencia: false, vendas: false,
   pedidos: false, catalogo: false, clientes: false,
+  cafeteria: false,
 };
 
 export default function CompanyModulesPage() {
@@ -186,6 +188,7 @@ export default function CompanyModulesPage() {
       has_inventory_module: company.has_inventory_module ?? false,
       module_editorial: company.module_editorial ?? false,
       module_schools: company.module_schools ?? false,
+      module_cafeteria: company.module_cafeteria ?? false,
       [moduleName]: !currentValue
     };
 
@@ -727,6 +730,30 @@ export default function CompanyModulesPage() {
                 </div>
               </div>
 
+              {/* Cafeteria Omnichannel */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_cafeteria ? 'bg-amber-500/10 border-amber-500/20 text-amber-600' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <Coffee className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Cafeteria & Bistrô Omnichannel</p>
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 rounded dark:bg-amber-900/30 dark:text-amber-400">Novo</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Gestão de salão e mesas, comandas avulsas, modificadores/opcionais, fila de barista (KDS) em tempo real e integração ao caixa PDV.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch
+                    active={company.module_cafeteria ?? false}
+                    onClick={() => handleToggleModule('module_cafeteria', company.module_cafeteria ?? false)}
+                    disabled={togglingModule !== null}
+                    colorClass="bg-amber-500"
+                  />
+                </div>
+              </div>
+
               {/* Produção Editorial */}
               <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
                 <div className="flex items-center gap-4">
@@ -802,6 +829,7 @@ export default function CompanyModulesPage() {
               { key: 'pedidos',     label: 'Consulta de Pedidos',            desc: 'Consulta e acompanhamento de pedidos em tempo real.',                icon: ListOrdered,        color: 'orange' },
               { key: 'catalogo',    label: 'Catálogo de Produtos',           desc: 'Consulta de produtos, preços e disponibilidade de estoque.',         icon: BookOpen,           color: 'indigo' },
               { key: 'clientes',    label: 'Ficha de Clientes',              desc: 'Acesso à carteira de clientes e histórico de compras.',              icon: UserCircle,         color: 'rose'   },
+              { key: 'cafeteria',   label: 'Cafeteria & Comandas',           desc: 'Atendimento de mesas, lançamento de pedidos e KDS no celular.',     icon: Coffee,             color: 'amber'  },
             ] as { key: keyof MobileModules; label: string; desc: string; icon: any; color: string }[]).map((mod, idx) => {
               const active = mobileModules[mod.key];
               const Icon = mod.icon;
@@ -812,10 +840,12 @@ export default function CompanyModulesPage() {
                 orange: 'bg-orange-500/10 border-orange-500/20 text-orange-500',
                 indigo: 'bg-indigo-500/10 border-indigo-500/20 text-indigo-500',
                 rose:   'bg-rose-500/10 border-rose-500/20 text-rose-500',
+                amber:  'bg-amber-500/10 border-amber-500/20 text-amber-600',
               };
               const switchColors: Record<string, string> = {
                 violet: 'bg-violet-500', sky: 'bg-sky-500', emerald: 'bg-emerald-500',
                 orange: 'bg-orange-500', indigo: 'bg-indigo-500', rose: 'bg-rose-500',
+                amber:  'bg-amber-500',
               };
               return (
                 <div key={mod.key} className={`p-5 flex items-center justify-between ${idx > 0 ? 'border-t border-slate-100 dark:border-slate-800' : ''} hover:bg-slate-50 dark:hover:bg-white/5 transition-colors`}>

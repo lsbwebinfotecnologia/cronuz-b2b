@@ -76,6 +76,112 @@ def _assert_pos_access(current_user: user_models.User, company_id: int, db: Sess
     return company
 
 
+def _parse_payment_breakdown(payment_method: Optional[str], payment_details_raw: Optional[str], total_amount: float):
+    """
+    Decompõe uma venda em suas formas reais de pagamento (incluindo MISTO e parcelas no crédito).
+    Retorna:
+      - breakdown_map: dict {'DINHEIRO': float, 'PIX': float, 'DEBITO': float, 'CREDITO': float, 'OUTROS': float}
+      - display_label: str (ex: 'Crédito (3x)', 'Misto (Crédito 2x: R$ 300,00 | Dinheiro: R$ 147,60)')
+      - cash_amount: float (fração em dinheiro que entra na gaveta física)
+      - installments: Optional[int] (número de parcelas caso crédito)
+    """
+    method = (payment_method or "DINHEIRO").upper().strip()
+    breakdown_map = {"DINHEIRO": 0.0, "PIX": 0.0, "DEBITO": 0.0, "CREDITO": 0.0, "OUTROS": 0.0}
+    cash_amount = 0.0
+    installments = None
+    display_label = method
+
+    details = {}
+    if payment_details_raw:
+        try:
+            if isinstance(payment_details_raw, str) and payment_details_raw.strip().startswith("{"):
+                details = json.loads(payment_details_raw)
+            elif isinstance(payment_details_raw, dict):
+                details = payment_details_raw
+        except Exception:
+            details = {}
+
+    if method == "CREDITO":
+        inst = details.get("installments") or details.get("parcelas")
+        try:
+            installments = int(inst) if inst else 1
+        except Exception:
+            installments = 1
+        breakdown_map["CREDITO"] = total_amount
+        display_label = f"Crédito ({installments}x)" if installments > 1 else "Crédito"
+
+    elif method == "DINHEIRO":
+        breakdown_map["DINHEIRO"] = total_amount
+        cash_amount = total_amount
+        display_label = "Dinheiro"
+
+    elif method in ("PIX", "DEBITO"):
+        breakdown_map[method] = total_amount
+        display_label = method.capitalize() if method == "DEBITO" else "PIX"
+
+    elif method == "MISTO":
+        payments_list = details.get("payments")
+        parts_text = []
+        parsed_sum = 0.0
+        if isinstance(payments_list, list) and len(payments_list) > 0:
+            for p in payments_list:
+                m_sub = str(p.get("method") or "OUTROS").upper().strip()
+                a_sub = float(p.get("amount") or 0.0)
+                parsed_sum += a_sub
+                inst_sub = p.get("installments")
+                try:
+                    inst_sub = int(inst_sub) if inst_sub else 1
+                except Exception:
+                    inst_sub = 1
+
+                if m_sub in breakdown_map:
+                    breakdown_map[m_sub] += a_sub
+                else:
+                    breakdown_map["OUTROS"] += a_sub
+
+                if m_sub == "DINHEIRO":
+                    cash_amount += a_sub
+                    parts_text.append(f"Dinheiro: R$ {a_sub:,.2f}")
+                elif m_sub == "CREDITO":
+                    if inst_sub > 1:
+                        parts_text.append(f"Crédito {inst_sub}x: R$ {a_sub:,.2f}")
+                    else:
+                        parts_text.append(f"Crédito: R$ {a_sub:,.2f}")
+                elif m_sub == "DEBITO":
+                    parts_text.append(f"Débito: R$ {a_sub:,.2f}")
+                elif m_sub == "PIX":
+                    parts_text.append(f"PIX: R$ {a_sub:,.2f}")
+                else:
+                    parts_text.append(f"{m_sub}: R$ {a_sub:,.2f}")
+        else:
+            din = float(details.get("dinheiro") or 0.0)
+            pix = float(details.get("pix") or 0.0)
+            car = float(details.get("cartao") or 0.0)
+            if din > 0:
+                breakdown_map["DINHEIRO"] += din
+                cash_amount += din
+                parts_text.append(f"Dinheiro: R$ {din:,.2f}")
+            if pix > 0:
+                breakdown_map["PIX"] += pix
+                parts_text.append(f"PIX: R$ {pix:,.2f}")
+            if car > 0:
+                breakdown_map["CREDITO"] += car
+                parts_text.append(f"Cartão: R$ {car:,.2f}")
+            parsed_sum = din + pix + car
+
+        if parts_text:
+            display_label = f"Misto ({' | '.join(parts_text)})"
+        else:
+            display_label = "Misto"
+            breakdown_map["OUTROS"] = total_amount
+
+    else:
+        breakdown_map["OUTROS"] = total_amount
+        display_label = method
+
+    return breakdown_map, display_label, cash_amount, installments
+
+
 @router.get("/config")
 def get_pos_config(
     company_id: int,
@@ -92,12 +198,17 @@ def get_pos_config(
     from app.models.company_settings import CompanySettings
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
     allow_out_of_stock = bool(getattr(settings, "pdv_allow_out_of_stock", False)) if settings else False
+    max_installments = int(getattr(settings, "pdv_max_installments", 12) or 12) if settings else 12
+    min_installment_amount = float(getattr(settings, "pdv_min_installment_amount", 5.0) or 5.0) if settings else 5.0
 
     return {
         "company_id": company_id,
         "module_pdv": getattr(company, "module_pdv", False),
+        "module_cafeteria": bool(getattr(company, "module_cafeteria", False)),
         "pdv_allow_out_of_stock": allow_out_of_stock,
         "validate_stock": not allow_out_of_stock,
+        "pdv_max_installments": max_installments,
+        "pdv_min_installment_amount": min_installment_amount,
     }
 
 
@@ -186,22 +297,27 @@ def get_pos_session(
     if not session:
         raise HTTPException(status_code=404, detail="Sessão não encontrada.")
 
-    # Breakdown por método de pagamento
-    breakdown = (
-        db.query(
-            POSSale.payment_method,
-            func.count(POSSale.id).label("count"),
-            func.sum(POSSale.total_amount).label("total")
-        )
-        .filter(POSSale.session_id == session_id, POSSale.status == "COMPLETED")
-        .group_by(POSSale.payment_method)
-        .all()
-    )
+    # Breakdown consolidado por método de pagamento real (rateando MISTO e parcelas)
+    sales = db.query(POSSale).filter(
+        POSSale.session_id == session_id,
+        POSSale.status == "COMPLETED"
+    ).all()
 
     by_payment = {
-        row.payment_method: {"count": row.count, "total": float(row.total or 0)}
-        for row in breakdown
+        "DINHEIRO": {"count": 0, "total": 0.0},
+        "PIX": {"count": 0, "total": 0.0},
+        "DEBITO": {"count": 0, "total": 0.0},
+        "CREDITO": {"count": 0, "total": 0.0},
+        "OUTROS": {"count": 0, "total": 0.0},
     }
+    for s in sales:
+        b_map, _, _, _ = _parse_payment_breakdown(s.payment_method, s.payment_details, float(s.total_amount or 0.0))
+        for m_key, val in b_map.items():
+            if val > 0:
+                if m_key not in by_payment:
+                    by_payment[m_key] = {"count": 0, "total": 0.0}
+                by_payment[m_key]["count"] += 1
+                by_payment[m_key]["total"] = round(by_payment[m_key]["total"] + val, 2)
 
     return {
         "session": {
@@ -259,18 +375,23 @@ def get_session_close_summary(
         "PIX": 0.0,
         "DEBITO": 0.0,
         "CREDITO": 0.0,
-        "MISTO": 0.0,
+        "OUTROS": 0.0,
     }
     total_sales_amount = 0.0
+    cash_sales = 0.0
     for s in sales:
-        m = (s.payment_method or "DINHEIRO").upper()
         amt = float(s.total_amount or 0.0)
-        by_method[m] = by_method.get(m, 0.0) + amt
         total_sales_amount += amt
+        b_map, _, c_amt, _ = _parse_payment_breakdown(s.payment_method, s.payment_details, amt)
+        cash_sales += c_amt
+        for m_key, val in b_map.items():
+            if m_key in by_method:
+                by_method[m_key] = round(by_method[m_key] + val, 2)
+            else:
+                by_method["OUTROS"] = round(by_method.get("OUTROS", 0.0) + val, 2)
 
     initial_cash = float(session.initial_cash_amount or 0.0)
-    cash_sales = by_method.get("DINHEIRO", 0.0)
-    expected_cash = initial_cash + cash_sales
+    expected_cash = round(initial_cash + cash_sales, 2)
 
     return {
         "session_id": session.id,
@@ -280,10 +401,10 @@ def get_session_close_summary(
         "opened_at": session.opened_at.isoformat() if session.opened_at else None,
         "closed_at": session.closed_at.isoformat() if session.closed_at else None,
         "initial_cash_amount": initial_cash,
-        "cash_sales_amount": cash_sales,
+        "cash_sales_amount": round(cash_sales, 2),
         "expected_cash_amount": expected_cash,
         "sales_count": len(sales),
-        "total_sales_amount": total_sales_amount,
+        "total_sales_amount": round(total_sales_amount, 2),
         "by_payment_method": by_method,
         "closed_cash_amount": float(session.closed_cash_amount) if session.closed_cash_amount is not None else None,
         "cash_difference": float(session.cash_difference) if session.cash_difference is not None else None,
@@ -309,23 +430,23 @@ def close_pos_session(
     if not session:
         raise HTTPException(status_code=404, detail="Sessão não encontrada.")
 
-    # Total em dinheiro de vendas concluídas
-    cash_sales_total = (
-        db.query(func.coalesce(func.sum(POSSale.total_amount), 0.0))
-        .filter(
-            POSSale.session_id == session_id,
-            POSSale.status == "COMPLETED",
-            POSSale.payment_method == "DINHEIRO"
-        )
-        .scalar()
-    )
+    # Total em dinheiro físico apurado nas vendas concluídas (incluindo frações em dinheiro de vendas mistas)
+    sales = db.query(POSSale).filter(
+        POSSale.session_id == session_id,
+        POSSale.status == "COMPLETED"
+    ).all()
+    cash_sales_total = 0.0
+    for s in sales:
+        _, _, c_amt, _ = _parse_payment_breakdown(s.payment_method, s.payment_details, float(s.total_amount or 0.0))
+        cash_sales_total += c_amt
+
     initial_cash = float(session.initial_cash_amount or 0.0)
-    expected_cash = initial_cash + float(cash_sales_total or 0.0)
+    expected_cash = round(initial_cash + cash_sales_total, 2)
     session.expected_cash_amount = expected_cash
 
     if payload and payload.closed_cash_amount is not None:
         session.closed_cash_amount = payload.closed_cash_amount
-        session.cash_difference = float(payload.closed_cash_amount) - expected_cash
+        session.cash_difference = round(float(payload.closed_cash_amount) - expected_cash, 2)
     if payload and payload.closing_notes is not None:
         session.closing_notes = payload.closing_notes.strip() or None
 
@@ -1379,10 +1500,9 @@ def list_pos_sales(
     }
 
     # Registros paginados
-    sales = query.order_by(desc(POSSale.sold_at)).offset(skip).limit(limit).all()
-
     sales_result = []
     for s in sales:
+        _, display_label, _, _ = _parse_payment_breakdown(s.payment_method, s.payment_details, float(s.total_amount or 0.0))
         items_data = [
             {
                 "barcode": it.barcode,
@@ -1402,6 +1522,8 @@ def list_pos_sales(
             "customer_name": s.customer_name,
             "customer_document": s.customer_document,
             "payment_method": s.payment_method,
+            "payment_display": display_label,
+            "payment_details": s.payment_details,
             "subtotal": float(s.subtotal),
             "discount": float(s.discount),
             "total_amount": float(s.total_amount),
@@ -1553,11 +1675,17 @@ def get_pos_sales_report(
         total_qty += qty
         total_revenue += t_price
 
-        pm = (sale.payment_method or "OUTROS").upper()
-        if pm not in by_payment:
-            by_payment[pm] = {"count": 0, "total": 0.0}
-        by_payment[pm]["count"] += 1
-        by_payment[pm]["total"] += t_price
+        b_map, display_label, _, _ = _parse_payment_breakdown(
+            sale.payment_method, sale.payment_details, float(sale.total_amount or 0.0)
+        )
+
+        ratio = (t_price / float(sale.total_amount)) if float(sale.total_amount or 0.0) > 0 else 1.0
+        for m_key, m_val in b_map.items():
+            if m_val > 0:
+                if m_key not in by_payment:
+                    by_payment[m_key] = {"count": 0, "total": 0.0}
+                by_payment[m_key]["count"] += 1
+                by_payment[m_key]["total"] = round(by_payment[m_key]["total"] + (m_val * ratio), 2)
 
         sess_name = session.name if session else (f"Sessão #{sale.session_id}" if sale.session_id else "Avulsa")
 
@@ -1576,7 +1704,7 @@ def get_pos_sales_report(
             "quantity": qty,
             "unit_price": u_price,
             "total_price": t_price,
-            "payment_method": pm,
+            "payment_method": display_label,
             "customer_name": sale.customer_name or "Consumidor Final",
             "customer_document": sale.customer_document or "",
         })
@@ -1805,13 +1933,13 @@ def get_pos_sales_report(
             "data": 24,
             "venda": 20,
             "sessao": 26,
-            "isbn": 28,
-            "titulo": 65,
+            "isbn": 27,
+            "titulo": 58,
             "qtd": 12,
             "vlr_unit": 20,
             "total": 20,
-            "pagto": 26,
-            "cliente": 36,
+            "pagto": 35,
+            "cliente": 35,
         }
 
         pdf.set_font("Helvetica", "B", 7)
@@ -1844,8 +1972,8 @@ def get_pos_sales_report(
 
             # Trunca títulos longos para caber na célula sem quebrar altura
             title_clean = _pdf_safe(r["title"])
-            if len(title_clean) > 38:
-                title_clean = title_clean[:35] + "..."
+            if len(title_clean) > 34:
+                title_clean = title_clean[:31] + "..."
 
             sess_clean = _pdf_safe(r["session_name"])
             if len(sess_clean) > 16:
@@ -1855,6 +1983,10 @@ def get_pos_sales_report(
             if len(cli_clean) > 22:
                 cli_clean = cli_clean[:20] + ".."
 
+            pm_clean = _pdf_safe(r["payment_method"])
+            if len(pm_clean) > 24:
+                pm_clean = pm_clean[:22] + ".."
+
             pdf.cell(col_w["data"], 5, r["sold_at"], border=1, fill=True, align="C")
             pdf.cell(col_w["venda"], 5, _pdf_safe(r["sale_number"]), border=1, fill=True, align="C")
             pdf.cell(col_w["sessao"], 5, sess_clean, border=1, fill=True, align="L")
@@ -1863,7 +1995,7 @@ def get_pos_sales_report(
             pdf.cell(col_w["qtd"], 5, str(int(r["quantity"])), border=1, fill=True, align="C")
             pdf.cell(col_w["vlr_unit"], 5, f"{r['unit_price']:,.2f}", border=1, fill=True, align="R")
             pdf.cell(col_w["total"], 5, f"{r['total_price']:,.2f}", border=1, fill=True, align="R")
-            pdf.cell(col_w["pagto"], 5, _pdf_safe(r["payment_method"]), border=1, fill=True, align="C")
+            pdf.cell(col_w["pagto"], 5, pm_clean, border=1, fill=True, align="C")
             pdf.cell(col_w["cliente"], 5, cli_clean, border=1, fill=True, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         # Linha Totalizadora no PDF

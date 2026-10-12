@@ -5,6 +5,8 @@ import { CreditCard, Wallet, Building2, Plus, X, Trash2, ArrowRightLeft, Trendin
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import Link from 'next/link';
+import { CurrencyInput } from '@/components/CurrencyInput';
+import { parseCurrency } from '@/lib/validators';
 
 export default function AccountsPage() {
     const [accounts, setAccounts] = useState<any[]>([]);
@@ -301,7 +303,14 @@ export default function AccountsPage() {
                             </div>
                             <div>
                                 <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">{editingAccount ? 'Saldo Atual (Editar gera ajuste)' : 'Saldo Atual (Opcional)'}</label>
-                                <input type="number" step="0.01" value={formData.initial_balance} onChange={e=>setFormData({...formData, initial_balance: e.target.value})} className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm" placeholder="0.00"/>
+                                <CurrencyInput
+                                  prefixStr="R$ "
+                                  allowEmpty={true}
+                                  placeholder="0,00"
+                                  value={formData.initial_balance ? parseFloat(formData.initial_balance) : 0}
+                                  onChangeValue={val => setFormData({...formData, initial_balance: val > 0 ? val.toString() : ''})}
+                                  className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm font-bold font-mono"
+                                />
                             </div>
                             
                             {editingAccount && parseFloat(formData.initial_balance) !== editingAccount.current_balance && (
@@ -389,13 +398,15 @@ export default function AccountsPage() {
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Valor (R$) <span className="text-rose-500">*</span></label>
-                                    <input type="text" value={transferData.amount} onChange={(e) => {
-                                        let value = e.target.value.replace(/\D/g, '');
-                                        if (!value) { setTransferData({...transferData, amount: ''}); return; }
-                                        const floatValue = parseInt(value, 10) / 100;
-                                        setTransferData({...transferData, amount: floatValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })});
-                                    }} className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm font-bold text-center" placeholder="0,00"/>
+                                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Valor <span className="text-rose-500">*</span></label>
+                                    <CurrencyInput
+                                      prefixStr="R$ "
+                                      allowEmpty={true}
+                                      placeholder="0,00"
+                                      value={parseCurrency(transferData.amount)}
+                                      onChangeValue={val => setTransferData({...transferData, amount: val > 0 ? val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''})}
+                                      className="w-full px-4 py-2.5 border rounded-xl dark:bg-slate-900 dark:border-slate-800 text-sm font-bold text-center font-mono"
+                                    />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Data</label>

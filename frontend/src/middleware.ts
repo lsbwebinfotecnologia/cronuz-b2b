@@ -133,6 +133,7 @@ export function middleware(request: NextRequest) {
     url.pathname.startsWith('/h/') || 
     url.pathname.startsWith('/marketing') || 
     url.pathname.startsWith('/public/') || 
+    url.pathname.startsWith('/cardapio') || 
     url.pathname.startsWith('/amigo-secreto') || 
     url.pathname.startsWith('/eventos') || 
     url.pathname.startsWith('/vitrine') || 
