@@ -78,18 +78,23 @@ def sync_horus_order_status():
         if not enabled_company_ids:
             return
 
-        # 2. Filtra apenas pedidos das empresas autorizadas, com código Hórus válido e não cancelados
+        # 2. Filtra apenas pedidos recentes (últimos 7 dias) das empresas autorizadas, com código Hórus preenchido e não cancelados
+        from datetime import timedelta, datetime, timezone
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
+
         orders = db.query(Order).options(
             joinedload(Order.customer),
             joinedload(Order.company)
         ).filter(
             Order.company_id.in_(enabled_company_ids),
+            Order.company_id != 8, # Segurança: Nunca executar varredura automática em massa no Horus da WMF Editora
             Order.origin == "bookinfo",
             Order.invoice_xml.is_(None),
             Order.status != "CANCELLED",
             Order.horus_pedido_venda.isnot(None),
-            func.trim(Order.horus_pedido_venda) != ""
-        ).limit(50).all()
+            func.trim(Order.horus_pedido_venda) != "",
+            Order.created_at >= cutoff_date
+        ).limit(20).all()
 
         if not orders:
             return
@@ -289,11 +294,9 @@ def cleanup_old_logistics_logs():
 scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
 
 def start_scheduler():
-    # Sync status from Horus every 15 minutes
-    scheduler.add_job(sync_horus_order_status, IntervalTrigger(minutes=15), id="job_sync_horus")
-    
-    # Send NFE back to Bookinfo every 15 minutes (offset by 2 minutes) 
-    scheduler.add_job(send_nfe_to_bookinfo, IntervalTrigger(minutes=17), id="job_send_nfe_bookinfo")
+    # NOTA: Rotinas automáticas de varredura de status em massa no Horus (job_sync_horus)
+    # e devolutiva cega de NF (job_send_nfe_bookinfo) foram desativadas para evitar sobrecarga
+    # e erro 502/travamento na API do ERP dos sellers (ex: WMF Editora).
     
     # NFSe Queue every 5 minutes
     scheduler.add_job(process_nfse_queue_jobs, IntervalTrigger(minutes=5), id="job_nfse_queue")
@@ -396,4 +399,4 @@ def start_scheduler():
         logger.warning(f"Falha ao registrar job de SSL para autores: {_e_job_ssl}")
 
     scheduler.start()
-    logger.info("Cronuz BG Scheduler Started - Jobs: Horus Sync, Bookinfo NFe Return, NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice, Authors SSL Sync")
+    logger.info("Cronuz BG Scheduler Started - Jobs: NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice, Authors SSL Sync")
