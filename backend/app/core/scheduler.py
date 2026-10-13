@@ -1,5 +1,6 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from app.db.session import SessionLocal
 
@@ -53,41 +54,71 @@ def sync_horus_order_status():
     db = get_db_session()
     try:
         from app.integrators.horus_orders import HorusOrders
+        from app.models.integrator import Integrator
+
+        # 1. Busca quais empresas têm a integração e sincronização automática Bookinfo ATIVAS
+        active_settings = db.query(CompanySettings).filter(
+            CompanySettings.horus_enabled == True,
+            CompanySettings.bookinfo_sync_enabled == True
+        ).all()
+
+        if not active_settings:
+            return
+
+        active_company_ids = [s.company_id for s in active_settings]
         
-        # Filtra apenas os pedidos bookinfo pendentes de faturamento, limitando o lote para performance
+        # Valida que também possui o integrador Bookinfo ativo
+        valid_integrators = db.query(Integrator).filter(
+            Integrator.platform == "BOOKINFO",
+            Integrator.active == True,
+            Integrator.company_id.in_(active_company_ids)
+        ).all()
+        enabled_company_ids = {i.company_id for i in valid_integrators}
+
+        if not enabled_company_ids:
+            return
+
+        # 2. Filtra apenas pedidos das empresas autorizadas, com código Hórus válido e não cancelados
         orders = db.query(Order).options(
             joinedload(Order.customer),
             joinedload(Order.company)
         ).filter(
+            Order.company_id.in_(enabled_company_ids),
             Order.origin == "bookinfo",
-            Order.invoice_xml.is_(None)
+            Order.invoice_xml.is_(None),
+            Order.status != "CANCELLED",
+            Order.horus_pedido_venda.isnot(None),
+            func.trim(Order.horus_pedido_venda) != ""
         ).limit(50).all()
-        
-        settings_cache = {}
+
+        if not orders:
+            return
+
+        settings_cache = {s.company_id: s for s in active_settings}
+        failed_companies = set()
 
         for order in orders:
-            if order.company_id not in settings_cache:
-                settings_cache[order.company_id] = db.query(CompanySettings).filter(
-                    CompanySettings.company_id == order.company_id
-                ).first()
-            
-            settings = settings_cache[order.company_id]
-            
+            if order.company_id in failed_companies:
+                continue
+
+            settings = settings_cache.get(order.company_id)
             if not settings or not settings.horus_enabled:
                 continue
-                
+
             customer = order.customer
             company = order.company
 
+            comp_name = company.name if company else f"#{order.company_id}"
+            logger.info(f"[Job 3] [Empresa {order.company_id} - {comp_name}] Consultando status Horus do pedido #{order.id} (ERP: {order.horus_pedido_venda})...")
+
             async def _fetch_horus_status():
                 horus_client = HorusOrders(db, order.company_id)
-                
                 horus_data = await horus_client.get_order(
                     id_doc=customer.document if customer else None,
                     id_guid=customer.id_guid if customer else None,
                     cnpj_destino=company.document if company else None,
                     cod_pedido_origem=None if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id),
-                    cod_ped_venda=order.horus_pedido_venda if order.origin == "bookinfo" else None,
+                    cod_ped_venda=str(order.horus_pedido_venda).strip() if order.origin == "bookinfo" else None,
                     ignore_customer_context=(order.origin == "bookinfo")
                 )
                 await horus_client.close()
@@ -96,7 +127,9 @@ def sync_horus_order_status():
             try:
                 raw_horus_data = run_async(_fetch_horus_status())
             except Exception as e:
-                logger.error(f"Erro ao consultar pedido {order.id} no Horus: {str(e)}")
+                # Se a API da empresa cair (502, timeout, etc.), adiciona ao failed_companies para não bombardear nos outros pedidos deste ciclo
+                logger.warning(f"[Job 3] [Empresa {order.company_id} - {comp_name}] Falha na API ao consultar pedido {order.id}: {e}. Interrompendo ciclo para esta empresa.")
+                failed_companies.add(order.company_id)
                 continue
                 
             if raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0:
@@ -115,7 +148,7 @@ def sync_horus_order_status():
                             order.invoice_number = nro_nf
                             order.invoice_key = chave_nfe
                             order.status = "INVOICED"
-                            logger.info(f"Pedido {order.id} marcado como FATURADO com NF {nro_nf}")
+                            logger.info(f"[Job 3] [Empresa {order.company_id} - {comp_name}] Pedido {order.id} marcado como FATURADO com NF {nro_nf}")
                             db.commit()
 
     except Exception as e:

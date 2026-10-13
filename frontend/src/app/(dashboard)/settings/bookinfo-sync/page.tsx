@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Database, Trash2, RefreshCw, Loader2, FileCode2, ExternalLink, Search, CheckCircle2, FileUp, Download, Check, X, Terminal, AlertCircle } from 'lucide-react';
+import { Database, Trash2, RefreshCw, Loader2, FileCode2, ExternalLink, Search, CheckCircle2, FileUp, Download, Check, X, Terminal, AlertCircle, Power, PowerOff, ShieldCheck, Filter } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 
@@ -39,6 +39,11 @@ export default function BookinfoSyncQueuePage() {
     const [showLogs, setShowLogs] = useState(false);
     const [logs, setLogs] = useState<string[]>([]);
     const [loadingLogs, setLoadingLogs] = useState(false);
+    const [logsCompanyFilter, setLogsCompanyFilter] = useState<string>('all');
+
+    // Company Settings state (para saber se o robô está ativo para o seller selecionado)
+    const [companySettings, setCompanySettings] = useState<any>(null);
+    const [togglingSync, setTogglingSync] = useState(false);
 
     // Debug Modal state
     const [isDebugModalOpen, setIsDebugModalOpen] = useState(false);
@@ -77,6 +82,7 @@ export default function BookinfoSyncQueuePage() {
         if (selectedCompanyId) {
             setPage(1);
             fetchQueue(1);
+            fetchCompanySettings(selectedCompanyId);
             // Reset preview data when changing company
             setPreviewData(null);
             setSearchBookinfoId('');
@@ -85,6 +91,7 @@ export default function BookinfoSyncQueuePage() {
         } else {
             setOrders([]);
             setTotalPages(1);
+            setCompanySettings(null);
         }
     }, [selectedCompanyId]);
 
@@ -221,12 +228,64 @@ export default function BookinfoSyncQueuePage() {
         }
     };
 
-    const fetchLogs = async () => {
+    const fetchCompanySettings = async (companyId: string) => {
+        if (!companyId) {
+            setCompanySettings(null);
+            return;
+        }
+        try {
+            const token = getToken();
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setCompanySettings(data);
+            }
+        } catch (e) {
+            console.error("Erro ao buscar configurações da empresa", e);
+        }
+    };
+
+    const handleToggleSync = async () => {
+        if (!selectedCompanyId) return;
+        const newStatus = !(companySettings?.bookinfo_sync_enabled);
+        setTogglingSync(true);
+        try {
+            const token = getToken();
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/companies/${selectedCompanyId}/sync-toggle`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ bookinfo_sync_enabled: newStatus })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setCompanySettings((prev: any) => ({ ...prev, bookinfo_sync_enabled: newStatus }));
+                toast.success(newStatus ? 'Sincronização automática ATIVADA para este seller!' : 'Sincronização automática DESATIVADA para este seller!');
+            } else {
+                toast.error('Erro ao atualizar status da sincronização.');
+            }
+        } catch (e) {
+            toast.error('Falha de rede.');
+        } finally {
+            setTogglingSync(false);
+        }
+    };
+
+    const fetchLogs = async (cid?: string) => {
         setLoadingLogs(true);
         setShowLogs(true);
         try {
             const token = getToken();
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/logs?limit=50`, {
+            const targetCompany = cid !== undefined ? cid : (logsCompanyFilter === 'selected' ? selectedCompanyId : logsCompanyFilter);
+            const query = new URLSearchParams({ limit: '150' });
+            if (targetCompany && targetCompany !== 'all') {
+                query.append('company_id', targetCompany);
+            }
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/bookinfo/logs?${query.toString()}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await res.json();
@@ -653,7 +712,7 @@ export default function BookinfoSyncQueuePage() {
                     <p className="text-slate-400 mt-1">Gerencie a fila de faturamento e importe vínculos ausentes por planilha.</p>
                 </div>
                 <button
-                    onClick={fetchLogs}
+                    onClick={() => fetchLogs()}
                     className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-200 border border-slate-700/50 rounded-lg text-sm font-semibold hover:bg-slate-700 transition shadow-sm mt-4 md:mt-0"
                 >
                     <Search className="w-4 h-4" />
@@ -676,6 +735,53 @@ export default function BookinfoSyncQueuePage() {
                             ))}
                         </select>
                     </div>
+
+                    {selectedCompanyId && (
+                        <div className="flex flex-col sm:flex-row items-start sm:items-end gap-2">
+                            <div>
+                                <label className="text-sm font-medium text-slate-400 mb-1 block">Automação de Vendas</label>
+                                <div className="flex items-center gap-2 bg-[#1a1b2d] border border-slate-700/50 rounded-lg px-3 py-1.5 h-[42px]">
+                                    {companySettings?.bookinfo_sync_enabled ? (
+                                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                            Ativa
+                                        </span>
+                                    ) : (
+                                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                            <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                                            Desativada
+                                        </span>
+                                    )}
+
+                                    <button
+                                        type="button"
+                                        onClick={handleToggleSync}
+                                        disabled={togglingSync}
+                                        className={`ml-1 px-3 py-1 rounded-md text-xs font-bold transition flex items-center gap-1.5 border shadow-sm ${
+                                            companySettings?.bookinfo_sync_enabled
+                                                ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                                                : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                        } disabled:opacity-50`}
+                                        title={companySettings?.bookinfo_sync_enabled ? 'Clique para desativar a busca automática de pedidos/NFe para este seller' : 'Clique para ativar a busca automática de pedidos/NFe para este seller'}
+                                    >
+                                        {togglingSync ? (
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        ) : companySettings?.bookinfo_sync_enabled ? (
+                                            <>
+                                                <PowerOff className="w-3.5 h-3.5" />
+                                                Desativar
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Power className="w-3.5 h-3.5" />
+                                                Ativar
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {selectedCompanyId && activeTab === 'queue' && (
                         <div>
@@ -1248,18 +1354,42 @@ export default function BookinfoSyncQueuePage() {
             {showLogs && (
                 <div className="fixed inset-0 z-[110] flex items-center justify-center bg-[#0B0C10]/80 backdrop-blur-sm p-4 animate-in fade-in duration-200 cursor-auto">
                     <div className="bg-[#1a1b2d] rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col max-h-[85vh] border border-slate-700/50">
-                        <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
-                            <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                                <Search className="w-5 h-5 text-indigo-400" />
-                                Logs da Integração (Scheduler)
-                            </h2>
-                            <button 
-                                onClick={() => setShowLogs(false)}
-                                className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400"
-                                type="button"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
+                        <div className="p-6 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/50">
+                            <div>
+                                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                                    <Search className="w-5 h-5 text-indigo-400" />
+                                    Logs de Busca & Sincronização (Scheduler)
+                                </h2>
+                                <p className="text-xs text-slate-400 mt-0.5">Execuções em background de consulta ao Horus e devolutiva à Bookinfo</p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-2">
+                                    <Filter className="w-4 h-4 text-slate-400" />
+                                    <select
+                                        className="bg-[#11121d] border border-slate-700/60 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                        value={logsCompanyFilter}
+                                        onChange={(e) => {
+                                            setLogsCompanyFilter(e.target.value);
+                                            fetchLogs(e.target.value);
+                                        }}
+                                    >
+                                        <option value="all">Todas as Empresas</option>
+                                        {selectedCompanyId && (
+                                            <option value="selected">Empresa Selecionada (#{selectedCompanyId})</option>
+                                        )}
+                                        {companies.map(c => (
+                                            <option key={c.id} value={c.id.toString()}>#{c.id} {c.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <button 
+                                    onClick={() => setShowLogs(false)}
+                                    className="p-1.5 hover:bg-slate-800 rounded-full transition-colors text-slate-400"
+                                    type="button"
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
                         </div>
                         
                         <div className="p-6 flex-1 overflow-auto bg-[#0a0b10] font-mono text-sm border-y border-slate-800">
@@ -1288,7 +1418,7 @@ export default function BookinfoSyncQueuePage() {
                         </div>
                         <div className="p-4 bg-slate-900/50 flex justify-end gap-3 rounded-b-2xl">
                             <button
-                                onClick={fetchLogs}
+                                onClick={() => fetchLogs()}
                                 className="px-6 py-2.5 bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded-xl text-sm font-semibold hover:bg-indigo-600/30 transition-colors"
                                 type="button"
                             >

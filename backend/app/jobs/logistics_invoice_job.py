@@ -346,6 +346,18 @@ async def _do_process_company_logistics_invoice(db: Session, company_id: int, li
     stats = {"processed": 0, "invoiced": 0, "errors": 0, "skipped": 0}
     now_dt = datetime.now(timezone.utc)
 
+    # Teste rápido de saúde da API antes de processar pedidos da empresa (Circuit Breaker)
+    try:
+        ping = await horus_client.test_api()
+        if isinstance(ping, dict) and ping.get("status") == "error":
+            logger.warning(f"[LogisticsInvoiceJob] API Hórus da empresa {company_id} indisponível ({ping.get('message')}). Abortando ciclo.")
+            await horus_client.close()
+            return {"processed": 0, "invoiced": 0, "errors": 1, "message": f"Hórus indisponível: {ping.get('message')}"}
+    except Exception as e_ping:
+        logger.warning(f"[LogisticsInvoiceJob] Falha no teste de conexão Hórus empresa {company_id}: {e_ping}. Abortando ciclo.")
+        await horus_client.close()
+        return {"processed": 0, "invoiced": 0, "errors": 1, "message": f"Falha de conexão: {e_ping}"}
+
     try:
         for order in orders_to_check:
             ped_num = order.cod_ped_venda
@@ -353,9 +365,11 @@ async def _do_process_company_logistics_invoice(db: Session, company_id: int, li
                 continue
             stats["processed"] += 1
 
-            # 1. Consulta status atual no Horus
+            # 1. Consulta status atual no Horus estritamente na filial configurada da empresa (evita colisão com outras filiais/pedidos históricos)
+            filiais_to_try = [cod_filial_padrao] if cod_filial_padrao else ["2", "1"]
             ord_horus = None
-            for try_filial in [cod_filial_padrao, "2", "1"]:
+            connection_broken = False
+            for try_filial in filiais_to_try:
                 params_horus = {
                     "COD_EMPRESA": cod_empresa_padrao,
                     "COD_FILIAL": try_filial,
@@ -372,13 +386,27 @@ async def _do_process_company_logistics_invoice(db: Session, company_id: int, li
                     if res_h and isinstance(res_h, list) and len(res_h) > 0:
                         first_h = res_h[0]
                         if not (first_h.get("Falha") or first_h.get("FALHA") == "S"):
+                            # Se o pedido local já tem cod_cli, valida que pertence ao mesmo cliente
+                            if order.cod_cli and str(first_h.get("COD_CLI") or "").strip() != str(order.cod_cli).strip():
+                                continue
                             ord_horus = first_h
                             break
                     elif isinstance(res_h, dict) and not (res_h.get("Falha") or res_h.get("FALHA") == "S"):
+                        if order.cod_cli and str(res_h.get("COD_CLI") or "").strip() != str(order.cod_cli).strip():
+                            continue
                         ord_horus = res_h
                         break
-                except Exception:
-                    pass
+                except Exception as e_h:
+                    # Se deu erro de conexão/502, não adianta continuar martelando os outros pedidos
+                    err_s = str(e_h).lower()
+                    if "502" in err_s or "sem conexão" in err_s or "failed" in err_s:
+                        logger.warning(f"[LogisticsInvoiceJob] Falha de conexão Hórus empresa {company_id} no pedido {ped_num}: {e_h}. Interrompendo varredura.")
+                        connection_broken = True
+                        break
+
+            if connection_broken:
+                stats["errors"] += 1
+                break
 
             if not ord_horus:
                 stats["skipped"] += 1

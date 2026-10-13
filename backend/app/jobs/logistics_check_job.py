@@ -313,6 +313,18 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
     # Importa função de envio de NFe para aproveitar a mesma consulta
     from app.jobs.logistics_invoice_job import send_single_invoice_to_wms
 
+    # Teste rápido de saúde da API Horus antes de processar conferências (Circuit Breaker)
+    try:
+        ping = await horus_client.test_api()
+        if isinstance(ping, dict) and ping.get("status") == "error":
+            logger.warning(f"[LogisticsCheckJob] API Hórus da empresa {company_id} indisponível ({ping.get('message')}). Abortando ciclo.")
+            await horus_client.close()
+            return {"processed": 0, "conferred": 0, "errors": 1, "message": f"Hórus indisponível: {ping.get('message')}"}
+    except Exception as e_ping:
+        logger.warning(f"[LogisticsCheckJob] Falha no teste de conexão Hórus empresa {company_id}: {e_ping}. Abortando ciclo.")
+        await horus_client.close()
+        return {"processed": 0, "conferred": 0, "errors": 1, "message": f"Falha de conexão: {e_ping}"}
+
     try:
         for item in movements:
             if not isinstance(item, dict):
@@ -355,9 +367,11 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
             raw_wms_id = leg.get("id") or rem.get("id") or mov.get("id") or item.get("id") or item.get("legado_pedido_id")
             wms_id_str = str(raw_wms_id).strip() if raw_wms_id else None
 
-            # Consulta status atual no Horus ERP
+            # Consulta status atual no Horus ERP estritamente na filial configurada da empresa (evita colisão com outras filiais/pedidos históricos)
+            filiais_to_try = [cod_filial_padrao] if cod_filial_padrao else ["2", "1"]
             ord_horus = None
-            for try_filial in [cod_filial_padrao, "2", "1"]:
+            connection_broken = False
+            for try_filial in filiais_to_try:
                 params_horus = {
                     "COD_EMPRESA": cod_empresa_padrao,
                     "COD_FILIAL": try_filial,
@@ -374,13 +388,25 @@ async def process_company_logistics_check(db: Session, company_id: int) -> Dict[
                     if res_h and isinstance(res_h, list) and len(res_h) > 0:
                         first_h = res_h[0]
                         if not (first_h.get("Falha") or first_h.get("FALHA") == "S"):
+                            if local_order and local_order.cod_cli and str(first_h.get("COD_CLI") or "").strip() != str(local_order.cod_cli).strip():
+                                continue
                             ord_horus = first_h
                             break
                     elif isinstance(res_h, dict) and not (res_h.get("Falha") or res_h.get("FALHA") == "S"):
+                        if local_order and local_order.cod_cli and str(res_h.get("COD_CLI") or "").strip() != str(local_order.cod_cli).strip():
+                            continue
                         ord_horus = res_h
                         break
-                except Exception:
-                    pass
+                except Exception as e_h:
+                    err_s = str(e_h).lower()
+                    if "502" in err_s or "sem conexão" in err_s or "failed" in err_s:
+                        logger.warning(f"[LogisticsCheckJob] Falha de conexão Hórus empresa {company_id} no pedido {ped_num}: {e_h}. Interrompendo varredura.")
+                        connection_broken = True
+                        break
+
+            if connection_broken:
+                stats["errors"] += 1
+                break
 
             if not ord_horus:
                 stats["errors"] += 1

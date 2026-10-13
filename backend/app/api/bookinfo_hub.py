@@ -65,27 +65,112 @@ def get_bookinfo_client(company_id: int, db: Session):
         verify=False
     )
 
+class BookinfoSyncToggleRequest(BaseModel):
+    bookinfo_sync_enabled: bool
+
+@router.put("/companies/{company_id}/sync-toggle")
+def toggle_bookinfo_sync(
+    company_id: int,
+    body: BookinfoSyncToggleRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Ativa ou desativa a sincronização automática de vendas (Bookinfo -> Horus -> Faturamento) para o seller.
+    Acesso restrito ao MASTER (ou ao próprio SELLER da empresa).
+    """
+    if current_user.type != UserRole.MASTER and current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado para alterar este seller.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings:
+        settings = CompanySettings(company_id=company_id)
+        db.add(settings)
+
+    settings.bookinfo_sync_enabled = body.bookinfo_sync_enabled
+    db.commit()
+    db.refresh(settings)
+
+    return {
+        "company_id": company_id,
+        "bookinfo_sync_enabled": settings.bookinfo_sync_enabled,
+        "message": f"Sincronização automática {'ativada' if settings.bookinfo_sync_enabled else 'desativada'} com sucesso."
+    }
+
 @router.get("/logs")
 async def get_background_logs(
-    limit: int = 100,
+    limit: int = 150,
+    company_id: Optional[int] = Query(None, description="Filtrar logs por seller/empresa"),
+    job_filter: Optional[str] = Query(None, description="Filtrar por tipo de job (ex: Job 3, Job 4, etc.)"),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type not in [UserRole.MASTER]:
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
         raise HTTPException(status_code=403, detail="Acesso restrito.")
         
+    # Se for seller, restringe forçadamente à própria empresa
+    if current_user.type == UserRole.SELLER:
+        company_id = current_user.company_id
+
     import os
-    log_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "jobs.log")
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    log_file = os.path.join(base_dir, "jobs.log")
+    backend_log = os.path.join(base_dir, "backend.log")
     
-    if not os.path.exists(log_file):
+    lines = []
+    # Lê jobs.log
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                lines.extend(f.readlines())
+        except Exception as e:
+            lines.append(f"Erro ao ler jobs.log: {str(e)}\n")
+
+    # Lê backend.log recente se existir
+    if os.path.exists(backend_log):
+        try:
+            with open(backend_log, "r", encoding="utf-8", errors="ignore") as f:
+                # pega ultimas 200 linhas de backend.log que mencionem Job ou Bookinfo ou Horus
+                b_lines = [
+                    l for l in f.readlines()[-300:]
+                    if any(term in l for term in ["[Job 3]", "[Job 4]", "Bookinfo", "Horus", "sync_horus", "send_nfe"])
+                ]
+                lines.extend(b_lines)
+        except Exception:
+            pass
+
+    if not lines:
         return {"logs": ["Nenhum log encontrado. Os jobs ainda não rodaram."]}
-        
-    try:
-        with open(log_file, "r") as f:
-            lines = f.readlines()
-            # Return last N lines
-            return {"logs": [line.strip() for line in lines[-limit:]]}
-    except Exception as e:
-        return {"logs": [f"Erro ao ler log: {str(e)}"]}
+
+    # Filtra por company_id se fornecido
+    filtered = []
+    cid_str = f"empresa {company_id}" if company_id else None
+    cid_str_alt = f"company_id={company_id}" if company_id else None
+    cid_bracket = f"[{company_id}]" if company_id else None
+
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+            
+        if company_id:
+            # Mantém se a linha referenciar o seller ou se for uma mensagem geral de ciclo
+            is_company_match = (
+                (cid_str and cid_str in line_clean) or 
+                (cid_str_alt and cid_str_alt in line_clean) or 
+                (cid_bracket and cid_bracket in line_clean) or
+                f"empresa={company_id}" in line_clean
+            )
+            if not is_company_match:
+                continue
+
+        if job_filter and job_filter.lower() not in line_clean.lower():
+            continue
+
+        filtered.append(line_clean)
+
+    # Retorna as últimas N linhas filtradas
+    result_lines = filtered[-limit:] if filtered else [f"Nenhum log registrado para os filtros selecionados (Empresa: {company_id or 'Todas'})."]
+    return {"logs": result_lines}
 
 @router.get("/orders")
 async def get_orders(
