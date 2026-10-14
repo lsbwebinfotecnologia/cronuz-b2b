@@ -273,6 +273,16 @@ CREATE INDEX IF NOT EXISTS idx_usr_user_company_id ON usr_user (company_id);
 4. **Respeito Obrigatório à Flag de Paginação do Horus (`horus_legacy_pagination`)**:
    - Qualquer consulta ao ERP Horus DEVE verificar `getattr(self._settings, 'horus_legacy_pagination', False)`. Se verdadeiro, os parâmetros `OFFSET` e `LIMIT` NÃO devem ser enviados na requisição à API Horus.
 
+### 8. Performance de Compilação do Frontend & Modularização do Backend (Fase 4)
+
+1. **Otimização de Pacotes no Next.js (`optimizePackageImports`)**:
+   - Bibliotecas com centenas de exportações (como `lucide-react`, `date-fns`, `framer-motion`, `swiper`, `xlsx`) DEVEM ser declaradas em `experimental.optimizePackageImports` no `next.config.ts`.
+   - Isso instrui o compilador a carregar apenas os ícones e utilitários estritamente utilizados, reduzindo o tempo de compilação sob demanda em até 70%.
+2. **Modularização Estrita do Backend (`main.py`)**:
+   - O arquivo `backend/main.py` DEVE ser mantido enxuto (~100-300 linhas) servindo estritamente para inicialização da instância FastAPI, CORS, middlewares de segurança, handlers de exceção, static mounts e registro de roteadores.
+   - NUNCA declare rotas de negócio diretamente no `main.py`. Toda rota pertence a um módulo em `app/api/<modulo>.py`.
+   - Rotas globais de empresas e usuários residem em `app/api/companies.py` e `app/api/users.py`.
+
 ---
 
 ## 🏗️ ARQUITETURA — Padrões obrigatórios
@@ -434,3 +444,5 @@ Após deploy executado com sucesso, mover para `deploy/processed/`.
 - SQLite (projeto usa PostgreSQL exclusivamente)
 - Traceback em responses de erro
 - ForeignKeys ambíguas sem `foreign_keys=` explícito nos relationships SQLAlchemy
+- `<input type="number">` cru para valores monetários ou percentuais de desconto (obrigatório uso de `CurrencyInput` com máscara automática em tempo real)
+

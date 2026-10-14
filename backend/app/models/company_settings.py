@@ -147,6 +147,15 @@ class CompanySettings(Base):
     # ── Horus SQL — Parâmetros de Vendas ─────────────────────────────────────
     horus_vendas_metodo     = Column(String(50), nullable=True)  # Método de venda padrão no Horus (COD_METODO)
 
+    # ── Regras Fiscais de Vendas (CFOPs) & Inteligência de BI ───────────────────
+    sales_cfops = Column(String(500), default='5101,5102,6101,6102,5114,6114,5115,6115,5403,6403,5405,6405', nullable=True)
+    consign_cfops = Column(String(500), default='5917,6917', nullable=True)
+    dev_sales_cfops = Column(String(500), default='1201,1202,2201,2202,1411,2411', nullable=True)
+    dev_consign_cfops = Column(String(500), default='1918,2918', nullable=True)
+    
+    # Habilitação do Job/Rotina de Sincronização de BI do Hórus por Seller
+    horus_bi_sync_enabled = Column(Boolean, default=False, nullable=False)
+
     # ────────────────────────────────────────────────────────────────────────────
 
     company = relationship("Company")

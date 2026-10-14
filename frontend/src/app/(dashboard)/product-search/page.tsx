@@ -84,6 +84,8 @@ type BranchStock = {
   situacao_item?: string;
   registros_retornados?: number;
   erro?: string;
+  addresses?: string[];
+  address_details?: { id: number; address: string; cod_local_estoque?: string; notes?: string }[];
 };
 
 type DistributorResult = {
@@ -310,7 +312,7 @@ export default function ProductSearchPage() {
 
     // 1. HORUS STOCK: Dispara imediatamente sem bloquear a UI
     setStockLoading(true);
-    fetch(`${apiUrl}/product-search/stock?cod_item=${p.COD_ITEM}`, {
+    fetch(`${apiUrl}/product-search/stock?cod_item=${p.COD_ITEM}${isbn ? `&isbn=${encodeURIComponent(isbn)}` : ''}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
@@ -1277,6 +1279,7 @@ export default function ProductSearchPage() {
                               <th className="py-3 px-5">Filial / Loja</th>
                               <th className="py-3 px-3 text-center">Empresa / Filial</th>
                               <th className="py-3 px-3 text-center">Situação</th>
+                              <th className="py-3 px-3 text-center">Endereço(s)</th>
                               <th className="py-3 px-5 text-right">Saldo Disponível</th>
                             </tr>
                           </thead>
@@ -1311,6 +1314,24 @@ export default function ProductSearchPage() {
                                       </span>
                                     ) : (
                                       <span className="text-slate-300 text-xs">—</span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-3 text-center">
+                                    {b.addresses && b.addresses.length > 0 ? (
+                                      <div className="flex flex-wrap items-center justify-center gap-1.5 max-w-[200px] mx-auto">
+                                        {b.addresses.map((addr, aIdx) => (
+                                          <span
+                                            key={aIdx}
+                                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/70 shadow-2xs"
+                                            title={`Endereço físico na filial ${b.filial_nome}`}
+                                          >
+                                            <MapPin className="w-2.5 h-2.5 shrink-0 opacity-70" />
+                                            {addr}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-300 dark:text-slate-600 text-xs italic font-normal">Não informado</span>
                                     )}
                                   </td>
                                   <td className="py-3 px-5 text-right">

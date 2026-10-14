@@ -14,6 +14,7 @@ Regras:
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import Any, Optional
 import logging
 
@@ -22,6 +23,7 @@ from app.core.dependencies import get_current_user
 from app.models.user import User
 from app.models.company import Company
 from app.models.seller_branch import SellerBranch
+from app.models.product_address import ProductAddress
 from app.models.company_settings import CompanySettings
 from app.models.product_search_log import ProductSearchLog
 from app.integrators.horus_product_search import HorusProductSearch
@@ -236,6 +238,7 @@ async def search_product(
 @router.get("/stock")
 async def get_stock_by_branch(
     cod_item: int = Query(..., description="Código interno do produto no Horus (COD_ITEM)"),
+    isbn: Optional[str] = Query(None, description="ISBN ou código de barras do produto"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -301,6 +304,35 @@ async def get_stock_by_branch(
         }
     finally:
         await client.close()
+
+    # Consulta endereçamentos cadastrados para o produto na empresa
+    address_filters = [ProductAddress.company_id == current_user.company_id]
+    match_conds = [ProductAddress.horus_cod_item == str(cod_item)]
+    if isbn:
+        clean_isbn = isbn.strip().replace("-", "")
+        match_conds.append(ProductAddress.isbn == clean_isbn)
+        match_conds.append(ProductAddress.isbn == isbn.strip())
+    address_filters.append(or_(*match_conds))
+
+    addresses_db = db.query(ProductAddress).filter(*address_filters).all()
+
+    # Mapeia endereços por branch_id
+    branch_map = {f"{b.cod_empresa}_{b.cod_filial}": b.id for b in branches_db}
+    addr_by_branch_id = {}
+    for a in addresses_db:
+        addr_by_branch_id.setdefault(a.branch_id, []).append({
+            "id": a.id,
+            "address": a.address,
+            "cod_local_estoque": a.cod_local_estoque,
+            "notes": a.notes
+        })
+
+    for r in results:
+        key = f"{r.get('cod_empresa')}_{r.get('cod_filial')}"
+        b_id = branch_map.get(key)
+        branch_addresses = addr_by_branch_id.get(b_id, [])
+        r["addresses"] = [a["address"] for a in branch_addresses]
+        r["address_details"] = branch_addresses
 
     # Diagnóstico de integridade das respostas das filiais
     total_branches = len(results)

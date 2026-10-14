@@ -31,7 +31,12 @@ export function HorusTab() {
     horus_stock_local: '',
     horus_hide_zero_balance: false,
     horus_use_cronuz_discount: false,
-    bookinfo_api_key: ''
+    bookinfo_api_key: '',
+    sales_cfops: '5101,5102,6101,6102,5114,6114,5115,6115,5403,6403,5405,6405',
+    consign_cfops: '5917,6917',
+    dev_sales_cfops: '1201,1202,2201,2202,1411,2411',
+    dev_consign_cfops: '1918,2918',
+    horus_bi_sync_enabled: false
   });
 
   useEffect(() => {
@@ -61,7 +66,12 @@ export function HorusTab() {
              horus_hide_zero_balance: data.horus_hide_zero_balance || false,
              horus_use_cronuz_discount: data.horus_use_cronuz_discount || false,
              allow_backorder: data.allow_backorder || false,
-             bookinfo_api_key: data.bookinfo_api_key || ''
+             bookinfo_api_key: data.bookinfo_api_key || '',
+             sales_cfops: data.sales_cfops || '5101,5102,6101,6102,5114,6114,5115,6115,5403,6403,5405,6405',
+             consign_cfops: data.consign_cfops || '5917,6917',
+             dev_sales_cfops: data.dev_sales_cfops || '1201,1202,2201,2202,1411,2411',
+             dev_consign_cfops: data.dev_consign_cfops || '1918,2918',
+             horus_bi_sync_enabled: data.horus_bi_sync_enabled || false
           }));
         }
       } catch (e) {
@@ -483,6 +493,105 @@ export function HorusTab() {
                   </div>
                 </div>
               )}
+
+              {/* Regras Fiscais CFOPs e BI - Vendas */}
+              <div className="bg-sky-50/60 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900/50 rounded-2xl p-6 shadow-sm space-y-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300">
+                        Inteligência Comercial
+                      </span>
+                      <h3 className="text-sm font-bold text-sky-900 dark:text-sky-200 uppercase tracking-wider">
+                        Classificação de CFOPs e Sincronização de BI
+                      </h3>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Configure quais CFOPs são considerados <strong>vendas reais</strong> ou <strong>remessas em consignação</strong> na leitura do histórico de vendas do Horus (BI - Vendas) e na Mesa de Análise de Pedidos. Suporta formatos separados por vírgula (ex: <code className="text-sky-700 dark:text-sky-300 font-mono">5102, 6102, 5.102</code>).
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <div className="text-right">
+                      <span className="block text-xs font-bold text-slate-700 dark:text-slate-300">Sincronização BI Ativa</span>
+                      <span className="text-[10px] text-slate-400">Habilita leitura de BI</span>
+                    </div>
+                    <button
+                      type="button"
+                      id="toggle-horus-bi-sync-enabled"
+                      onClick={() => setFormData(prev => ({ ...prev, horus_bi_sync_enabled: !prev.horus_bi_sync_enabled }))}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 ${formData.horus_bi_sync_enabled ? 'bg-sky-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${formData.horus_bi_sync_enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                  <div className="space-y-1.5 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                      <span>CFOPs de Venda Faturada</span>
+                      <span className="text-[10px] font-normal text-emerald-600 dark:text-emerald-400 font-mono">Saída Venda</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="sales_cfops"
+                      value={formData.sales_cfops}
+                      onChange={handleInputChange}
+                      placeholder="5101, 5102, 6101, 6102, 5114, 6114"
+                      className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-xs font-mono text-slate-900 focus:ring-2 focus:ring-sky-500 focus:border-transparent dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                    />
+                    <p className="text-[11px] text-slate-500">Representam faturamento definitivo para a mesa comercial.</p>
+                  </div>
+
+                  <div className="space-y-1.5 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                      <span>CFOPs de Remessa Consignada</span>
+                      <span className="text-[10px] font-normal text-indigo-600 dark:text-indigo-400 font-mono">Saída Consignação</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="consign_cfops"
+                      value={formData.consign_cfops}
+                      onChange={handleInputChange}
+                      placeholder="5917, 6917"
+                      className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-xs font-mono text-slate-900 focus:ring-2 focus:ring-sky-500 focus:border-transparent dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                    />
+                    <p className="text-[11px] text-slate-500">Envio de mercadoria em consignação (não conta como faturamento faturado).</p>
+                  </div>
+
+                  <div className="space-y-1.5 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                      <span>CFOPs Devolução de Venda</span>
+                      <span className="text-[10px] font-normal text-rose-600 dark:text-rose-400 font-mono">Entrada Devolução</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="dev_sales_cfops"
+                      value={formData.dev_sales_cfops}
+                      onChange={handleInputChange}
+                      placeholder="1201, 1202, 2201, 2202, 1411, 2411"
+                      className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-xs font-mono text-slate-900 focus:ring-2 focus:ring-sky-500 focus:border-transparent dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                    />
+                    <p className="text-[11px] text-slate-500">Subtrai o giro líquido real do cliente no período.</p>
+                  </div>
+
+                  <div className="space-y-1.5 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                      <span>CFOPs Devolução Consignação</span>
+                      <span className="text-[10px] font-normal text-amber-600 dark:text-amber-400 font-mono">Entrada Devolução</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="dev_consign_cfops"
+                      value={formData.dev_consign_cfops}
+                      onChange={handleInputChange}
+                      placeholder="1918, 2918"
+                      className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-xs font-mono text-slate-900 focus:ring-2 focus:ring-sky-500 focus:border-transparent dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                    />
+                    <p className="text-[11px] text-slate-500">Baixa no saldo de livros em poder do cliente.</p>
+                  </div>
+                </div>
+              </div>
 
              <div className="flex justify-end gap-3 pt-4 mb-4">
                <button

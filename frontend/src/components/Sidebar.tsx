@@ -48,7 +48,8 @@ import {
   Sparkles,
   Coffee,
   UtensilsCrossed,
-  QrCode
+  QrCode,
+  MapPin
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -118,7 +119,15 @@ const sellerNavigation: NavItem[] = [
       { name: 'Ordens de Serviço', href: '/services/orders', icon: ClipboardList }
     ]
   },
-  { name: 'Pedidos', href: '/orders', icon: ShoppingBag },
+  { 
+    name: 'Pedidos', 
+    href: '/orders', 
+    icon: ShoppingBag,
+    subItems: [
+      { name: 'Central de Pedidos', href: '/orders' },
+      { name: 'Mesa de Análise & Entrada', href: '/orders/intake' },
+    ]
+  },
   { name: 'Propostas', href: '/proposals', icon: FileText },
   { 
     name: 'Empresas', 
@@ -222,6 +231,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        if (pathname.startsWith('/editorial')) initialOpen['Editorial'] = true;
        if (pathname.startsWith('/schools')) initialOpen['Escolas & Eventos'] = true;
        if (pathname.startsWith('/cafeteria')) initialOpen['Cafeteria'] = true;
+       if (pathname.startsWith('/product-search') || pathname.startsWith('/addressing')) initialOpen['Busca Preço'] = true;
        setOpenMenus(initialOpen);
        
        const fetchSettings = async () => {
@@ -404,6 +414,10 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
       name: 'Busca Preço',
       href: '/product-search',
       icon: ScanBarcode,
+      subItems: [
+        { name: 'Busca de Preços', href: '/product-search', icon: ScanBarcode },
+        { name: 'Endereçamento', href: '/addressing', icon: MapPin },
+      ]
     });
   }
 
@@ -534,7 +548,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const dynamicNavigation = (user?.type === 'SELLER' && Array.isArray(userAllowedModules) && userAllowedModules.length > 0)
     ? baseNavigation.filter(nav => {
         if (nav.name === 'Ponto de Venda (PDV)' || nav.href === '/pdv') return userAllowedModules.includes('pdv');
-        if (nav.name === 'Busca Preço' || nav.href === '/product-search') return userAllowedModules.includes('busca_preco');
+        if (nav.name === 'Busca Preço' || nav.href === '/product-search' || nav.name === 'Endereçamento' || nav.href === '/addressing') return userAllowedModules.includes('busca_preco') || userAllowedModules.includes('enderecamento');
         if (nav.name === 'Encomendas' || nav.href === '/encomendas') return userAllowedModules.includes('encomendas') || userAllowedModules.includes('orders');
         if (nav.name === 'Cafeteria' || nav.href.startsWith('/cafeteria')) return userAllowedModules.includes('cafeteria');
         if (nav.name === 'Produtos' || nav.href === '/products') return userAllowedModules.includes('products');

@@ -63,7 +63,12 @@ export default function BookinfoOrdersPage() {
       });
       
       if (!res.ok) {
-        throw new Error('Falha ao buscar pedidos da Bookinfo');
+        let errorMsg = 'Falha ao buscar pedidos da Bookinfo';
+        try {
+          const errData = await res.json();
+          if (errData.detail) errorMsg = errData.detail;
+        } catch (_) {}
+        throw new Error(errorMsg);
       }
       
       const data = await res.json();
@@ -224,13 +229,23 @@ export default function BookinfoOrdersPage() {
         <div className="bg-rose-50 border border-rose-200 text-rose-600 rounded-xl p-6 flex flex-col items-center justify-center text-center">
             <ArchiveX className="w-10 h-10 mb-2 opacity-50" />
             <h3 className="font-semibold text-lg">Erro na Integração</h3>
-            <p className="text-sm mt-1 mb-4">{error}</p>
-            <button 
-                onClick={() => fetchOrders()}
-                className="px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 text-sm font-medium transition"
-            >
-                Tentar Novamente
-            </button>
+            <p className="text-sm mt-1 mb-4 max-w-xl">{error}</p>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button 
+                  onClick={() => fetchOrders()}
+                  className="px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 text-sm font-medium transition"
+              >
+                  Tentar Novamente
+              </button>
+              {error.toLowerCase().includes('token') && (
+                <Link
+                  href="/settings/bookinfo"
+                  className="px-4 py-2 bg-white border border-rose-300 text-rose-700 rounded-lg hover:bg-rose-100 text-sm font-medium transition"
+                >
+                  Ir para Configurações Bookinfo
+                </Link>
+              )}
+            </div>
         </div>
       ) : (
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col h-[calc(100vh-220px)]">

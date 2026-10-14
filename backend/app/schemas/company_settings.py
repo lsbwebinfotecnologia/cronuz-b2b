@@ -104,6 +104,13 @@ class CompanySettingsBase(BaseModel):
     # Horus Sales Parameters
     horus_vendas_metodo: Optional[str] = None
 
+    # Regras Fiscais de Vendas (CFOPs) & Inteligência de BI
+    sales_cfops: Optional[str] = "5101,5102,6101,6102,5114,6114,5115,6115,5403,6403,5405,6405"
+    consign_cfops: Optional[str] = "5917,6917"
+    dev_sales_cfops: Optional[str] = "1201,1202,2201,2202,1411,2411"
+    dev_consign_cfops: Optional[str] = "1918,2918"
+    horus_bi_sync_enabled: Optional[bool] = False
+
 
 class CompanySettingsUpdate(CompanySettingsBase):
     pass

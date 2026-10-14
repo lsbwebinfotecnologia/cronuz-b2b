@@ -26,7 +26,9 @@ import {
   X,
   FileText,
   Check,
-  AlertTriangle
+  AlertTriangle,
+  Truck,
+  Users
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 
@@ -109,6 +111,7 @@ export default function DbmCompaniesSearchPage() {
 
   // Estados de Importação Inteligente de Planilha Excel
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importMode, setImportMode] = useState<'cliente' | 'fornecedor'>('cliente');
   const [importStep, setImportStep] = useState<'upload' | 'preview' | 'processing' | 'done'>('upload');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [parsingLoading, setParsingLoading] = useState(false);
@@ -412,6 +415,7 @@ export default function DbmCompaniesSearchPage() {
   // ── Handlers de Importação Inteligente de Planilha ─────────────────────────
   const handleOpenImportModal = () => {
     setIsImportModalOpen(true);
+    setImportMode('cliente');
     setImportStep('upload');
     setSelectedFile(null);
     setParseError(null);
@@ -530,6 +534,7 @@ export default function DbmCompaniesSearchPage() {
             body: JSON.stringify({
               company_id: companyId || undefined,
               seller_company_id: companyId || undefined,
+              import_mode: importMode,
               items: chunk
             })
           }
@@ -1220,7 +1225,7 @@ export default function DbmCompaniesSearchPage() {
                       Importação Inteligente de Empresas
                     </h2>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                      Sincronização com Horus ERP via Código de Cliente
+                      Sincronização com Horus ERP (Cliente ou Fornecedor)
                     </p>
                   </div>
                 </div>
@@ -1239,13 +1244,91 @@ export default function DbmCompaniesSearchPage() {
                 {/* ── PASSO 1: UPLOAD ────────────────────────────────────────── */}
                 {importStep === 'upload' && (
                   <div className="space-y-4">
+                    {/* Seleção do Modo de Importação: Cliente ou Fornecedor */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-2">
+                        Como deseja realizar a busca e o vínculo no Horus ERP?
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {/* Opção Cliente */}
+                        <div
+                          onClick={() => setImportMode('cliente')}
+                          className={`cursor-pointer rounded-xl border p-3.5 transition-all flex flex-col justify-between ${
+                            importMode === 'cliente'
+                              ? 'border-indigo-600 bg-indigo-50/60 dark:border-indigo-500 dark:bg-indigo-950/30 ring-2 ring-indigo-500/20'
+                              : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/50 dark:hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <div className={`p-1.5 rounded-lg ${
+                                importMode === 'cliente'
+                                  ? 'bg-indigo-600 text-white dark:bg-indigo-500'
+                                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                              }`}>
+                                <Users className="h-4 w-4" />
+                              </div>
+                              <span className="text-xs font-bold text-slate-900 dark:text-white">
+                                Buscar por Cliente
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                              COD_CLI
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                            Consulta na tabela <strong>CLIENTES</strong> do Horus ERP e localiza fornecedor correspondente na filial configurada da API.
+                          </p>
+                        </div>
+
+                        {/* Opção Fornecedor */}
+                        <div
+                          onClick={() => setImportMode('fornecedor')}
+                          className={`cursor-pointer rounded-xl border p-3.5 transition-all flex flex-col justify-between ${
+                            importMode === 'fornecedor'
+                              ? 'border-emerald-600 bg-emerald-50/60 dark:border-emerald-500 dark:bg-emerald-950/30 ring-2 ring-emerald-500/20'
+                              : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/50 dark:hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <div className={`p-1.5 rounded-lg ${
+                                importMode === 'fornecedor'
+                                  ? 'bg-emerald-600 text-white dark:bg-emerald-500'
+                                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                              }`}>
+                                <Truck className="h-4 w-4" />
+                              </div>
+                              <span className="text-xs font-bold text-slate-900 dark:text-white">
+                                Buscar por Fornecedor
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+                              Filial ERP
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                            Consulta na tabela <strong>FORNECEDORES</strong> filtrando pela <strong>Filial configurada</strong> e amarra cliente se houver.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3.5 text-xs text-indigo-950 dark:border-indigo-900/40 dark:bg-indigo-950/20 dark:text-indigo-300 space-y-1.5">
                       <div className="flex items-center gap-2 font-bold text-indigo-700 dark:text-indigo-400">
                         <Database className="h-4 w-4" />
-                        Como funciona o enriquecimento automático:
+                        {importMode === 'fornecedor' ? 'Modo Fornecedor (Filial ERP):' : 'Modo Cliente:'}
                       </div>
                       <p className="text-[11px] leading-relaxed">
-                        A partir da coluna <strong>codigo_horus</strong>, o sistema consulta a base do Horus (Razão Social, CNPJ, Cidade, UF e amarração de fornecedor na filial da API). As colunas da planilha (<strong>apelido, grupo, segmento, obs da empresa, royalties e account</strong>) são preservadas integralmente.
+                        {importMode === 'fornecedor' ? (
+                          <>
+                            O código informado na coluna <strong>codigo_horus</strong> será consultado na tabela <strong>FORNECEDORES</strong> para a filial cadastrada na sua API. As demais colunas (<strong>apelido, grupo, segmento, obs da empresa, royalties e account</strong>) são preservadas.
+                          </>
+                        ) : (
+                          <>
+                            A partir da coluna <strong>codigo_horus</strong>, o sistema consulta a base do Horus (Razão Social, CNPJ, Cidade, UF e amarração de fornecedor na filial da API). As colunas da planilha (<strong>apelido, grupo, segmento, obs da empresa, royalties e account</strong>) são preservadas integralmente.
+                          </>
+                        )}
                       </p>
                     </div>
 
@@ -1363,14 +1446,35 @@ export default function DbmCompaniesSearchPage() {
                     <div>
                       <div className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
                         <span>Amostra das Primeiras Linhas:</span>
-                        <span className="text-[10px] text-slate-400">Exibindo {previewRows.length} de {parsedRows.length}</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                            importMode === 'fornecedor'
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                              : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
+                          }`}>
+                            {importMode === 'fornecedor' ? (
+                              <>
+                                <Truck className="h-3 w-3" />
+                                Modo: Fornecedor (Filial ERP)
+                              </>
+                            ) : (
+                              <>
+                                <Users className="h-3 w-3" />
+                                Modo: Cliente (COD_CLI)
+                              </>
+                            )}
+                          </span>
+                          <span className="text-[10px] text-slate-400">Exibindo {previewRows.length} de {parsedRows.length}</span>
+                        </div>
                       </div>
                       <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
                         <table className="w-full text-left text-xs">
                           <thead className="bg-slate-50 dark:bg-slate-800/50 text-[11px] uppercase text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
                             <tr>
                               <th className="px-3 py-2">Linha</th>
-                              <th className="px-3 py-2">Cód. Horus</th>
+                              <th className="px-3 py-2">
+                                {importMode === 'fornecedor' ? 'Cód. Fornecedor' : 'Cód. Cliente'}
+                              </th>
                               <th className="px-3 py-2">Fantasia (Apelido)</th>
                               <th className="px-3 py-2">Grupo</th>
                               <th className="px-3 py-2">Segmento</th>

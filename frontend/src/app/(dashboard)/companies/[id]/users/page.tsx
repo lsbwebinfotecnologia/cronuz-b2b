@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, ShieldAlert, Loader2, Settings, X, Save, CheckSquare, Square, ExternalLink } from 'lucide-react';
+import { Users, ShieldAlert, Loader2, Settings, X, Save, CheckSquare, Square, ExternalLink, Search } from 'lucide-react';
 import Link from 'next/link';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -29,6 +29,7 @@ const INITIAL_PAGE_OPTIONS = [
   { value: '/cafeteria/kds', label: 'Cafeteria (KDS Barista / Cozinha)' },
   { value: '/cafeteria/menu', label: 'Cafeteria (Cardápio Digital)' },
   { value: '/orders', label: 'Gestão de Pedidos' },
+  { value: '/proposals', label: 'Propostas Comerciais' },
   { value: '/products', label: 'Catálogo de Produtos' },
   { value: '/customers', label: 'Empresas & Clientes' },
   { value: '/services', label: 'Serviços' },
@@ -58,13 +59,13 @@ const MODULE_PERMISSIONS_LIST = [
   { id: 'cafeteria', label: 'Cafeteria & Restaurante', description: 'Mesas, comandas, KDS barista/cozinha e cardápio digital' },
   { id: 'products', label: 'Produtos & Catálogo', description: 'Listagem, marcas e categorias' },
   { id: 'orders', label: 'Pedidos & Vendas', description: 'Visualização e gestão de pedidos' },
+  { id: 'proposals', label: 'Propostas Comerciais', description: 'Geração e acompanhamento de orçamentos' },
   { id: 'customers', label: 'Empresas & Clientes', description: 'Cadastro e gestão de carteiras de clientes' },
   { id: 'services', label: 'Serviços', description: 'Catálogo de serviços e ordens de serviço' },
   { id: 'financial', label: 'Financeiro', description: 'Lançamentos, boletos, contas e extratos' },
   { id: 'logistics', label: 'Logística Hórus / WMS', description: 'Conferência de expedição e filiais' },
   { id: 'bookinfo', label: 'Bookinfo Hub', description: 'Automação de pedidos de venda e compra' },
   { id: 'promotions', label: 'Marketing & Promoções', description: 'Vitrines, banners e cupons de desconto' },
-  { id: 'proposals', label: 'Propostas Comerciais', description: 'Geração e acompanhamento de orçamentos' },
   { id: 'dropship', label: 'Dropship (Erdos)', description: 'Pedidos Erdos, tabelas de preço e estoque' },
   { id: 'horus_sql', label: 'Horus Direct (SQL)', description: 'Pedidos diretos no SQL do Horus e financeiro Vindi' },
   { id: 'dbm', label: 'DBM (Catálogo & Metadados)', description: 'Consulta de catálogo nacional, metadados DBM e enriquecimento' },
@@ -102,6 +103,7 @@ export default function CompanyUsersPage() {
   const [editInitialPage, setEditInitialPage] = useState('DEFAULT');
   const [editAllowedModules, setEditAllowedModules] = useState<string[]>([]);
   const [grantFullAccess, setGrantFullAccess] = useState(true);
+  const [moduleSearch, setModuleSearch] = useState('');
 
   useEffect(() => {
     fetchUsers();
@@ -131,6 +133,7 @@ export default function CompanyUsersPage() {
   const handleOpenEditModal = (user: User) => {
     setEditingUser(user);
     setEditInitialPage(user.initial_page || 'DEFAULT');
+    setModuleSearch('');
     const modules = user.allowed_modules;
     if (!modules || !Array.isArray(modules) || modules.length === 0) {
       setGrantFullAccess(true);
@@ -372,9 +375,10 @@ export default function CompanyUsersPage() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 md:p-8 max-w-2xl w-full shadow-2xl overflow-y-auto max-h-[90vh] space-y-6"
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-2xl w-full shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"
             >
-              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4">
+              {/* Header Fixo */}
+              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 p-6 pb-4 shrink-0">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <Settings className="w-5 h-5 text-teal-600" />
@@ -391,84 +395,122 @@ export default function CompanyUsersPage() {
                 </button>
               </div>
 
-              {/* 1. Direcionamento da Tela Inicial */}
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-                  1. Tela Inicial ao Logar (Direcionamento Padrão)
-                </label>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Ao autenticar no sistema, o usuário será levado imediatamente para esta rota.
-                </p>
-                <select
-                  value={editInitialPage}
-                  onChange={(e) => setEditInitialPage(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
-                >
-                  {INITIAL_PAGE_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 2. Escopo de Módulos Liberados */}
-              <div className="space-y-3 pt-4 border-t border-slate-200 dark:border-slate-800">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-                      2. Escopo de Módulos Permitidos
-                    </label>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Restrinja os menus e rotas visíveis para este usuário individualmente.
-                    </p>
-                  </div>
+              {/* Corpo Rolável */}
+              <div className="p-6 overflow-y-auto space-y-6 flex-1">
+                {/* 1. Direcionamento da Tela Inicial */}
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                    1. Tela Inicial ao Logar (Direcionamento Padrão)
+                  </label>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Ao autenticar no sistema, o usuário será levado imediatamente para esta rota.
+                  </p>
+                  <select
+                    value={editInitialPage}
+                    onChange={(e) => setEditInitialPage(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  >
+                    {INITIAL_PAGE_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
                 </div>
 
-                <label className="flex items-center gap-3 p-3 rounded-xl border border-teal-200 dark:border-teal-800/40 bg-teal-50/50 dark:bg-teal-950/20 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={grantFullAccess}
-                    onChange={(e) => {
-                      setGrantFullAccess(e.target.checked);
-                      if (e.target.checked) setEditAllowedModules([]);
-                    }}
-                    className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
-                  />
-                  <div>
-                    <span className="text-sm font-bold text-teal-900 dark:text-teal-200 block">Acesso Total (Sem Restrições)</span>
-                    <span className="text-xs text-teal-700 dark:text-teal-400 block">O usuário enxergará todos os módulos ativos contratados pelo Seller.</span>
+                {/* 2. Escopo de Módulos Liberados */}
+                <div className="space-y-3 pt-4 border-t border-slate-200 dark:border-slate-800">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                        2. Escopo de Módulos Permitidos
+                      </label>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Restrinja os menus e rotas visíveis para este usuário individualmente.
+                      </p>
+                    </div>
+                    {!grantFullAccess && (
+                      <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800/40 w-fit">
+                        {editAllowedModules.length} selecionado(s)
+                      </span>
+                    )}
                   </div>
-                </label>
 
-                {!grantFullAccess && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2 animate-in fade-in">
-                    {MODULE_PERMISSIONS_LIST.map(mod => {
-                      const isChecked = editAllowedModules.includes(mod.id);
-                      return (
-                        <div
-                          key={mod.id}
-                          onClick={() => toggleModulePermission(mod.id)}
-                          className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
-                            isChecked
-                              ? 'border-teal-500 bg-teal-50/60 dark:bg-teal-900/30 text-teal-900 dark:text-white'
-                              : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400'
-                          }`}
-                        >
-                          <div className="mt-0.5 shrink-0">
-                            {isChecked ? <CheckSquare className="w-4 h-4 text-teal-600 dark:text-teal-400" /> : <Square className="w-4 h-4 text-slate-400" />}
-                          </div>
-                          <div>
-                            <span className="text-xs font-bold block">{mod.label}</span>
-                            <span className="text-[11px] opacity-75 block leading-tight">{mod.description}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                  <label className="flex items-center gap-3 p-3 rounded-xl border border-teal-200 dark:border-teal-800/40 bg-teal-50/50 dark:bg-teal-950/20 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={grantFullAccess}
+                      onChange={(e) => {
+                        setGrantFullAccess(e.target.checked);
+                        if (e.target.checked) setEditAllowedModules([]);
+                      }}
+                      className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
+                    />
+                    <div>
+                      <span className="text-sm font-bold text-teal-900 dark:text-teal-200 block">Acesso Total (Sem Restrições)</span>
+                      <span className="text-xs text-teal-700 dark:text-teal-400 block">O usuário enxergará todos os módulos ativos contratados pelo Seller.</span>
+                    </div>
+                  </label>
+
+                  {!grantFullAccess && (
+                    <div className="space-y-3 pt-1">
+                      {/* Busca Rápida de Módulo */}
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="Filtrar módulos... (ex: Propostas, PDV, Estoque)"
+                          value={moduleSearch}
+                          onChange={(e) => setModuleSearch(e.target.value)}
+                          className="w-full pl-9 pr-8 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                        {moduleSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setModuleSearch('')}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 animate-in fade-in">
+                        {MODULE_PERMISSIONS_LIST
+                          .filter(mod =>
+                            !moduleSearch ||
+                            mod.label.toLowerCase().includes(moduleSearch.toLowerCase()) ||
+                            mod.description.toLowerCase().includes(moduleSearch.toLowerCase()) ||
+                            mod.id.toLowerCase().includes(moduleSearch.toLowerCase())
+                          )
+                          .map(mod => {
+                            const isChecked = editAllowedModules.includes(mod.id);
+                            return (
+                              <div
+                                key={mod.id}
+                                onClick={() => toggleModulePermission(mod.id)}
+                                className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                                  isChecked
+                                    ? 'border-teal-500 bg-teal-50/60 dark:bg-teal-900/30 text-teal-900 dark:text-white ring-1 ring-teal-500/30'
+                                    : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400'
+                                }`}
+                              >
+                                <div className="mt-0.5 shrink-0">
+                                  {isChecked ? <CheckSquare className="w-4 h-4 text-teal-600 dark:text-teal-400" /> : <Square className="w-4 h-4 text-slate-400" />}
+                                </div>
+                                <div>
+                                  <span className="text-xs font-bold block">{mod.label}</span>
+                                  <span className="text-[11px] opacity-75 block leading-tight">{mod.description}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Ações */}
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200 dark:border-slate-800">
+              {/* Rodapé Fixo */}
+              <div className="flex items-center justify-end gap-3 p-4 px-6 border-t border-slate-200 dark:border-slate-800 shrink-0 bg-slate-50/80 dark:bg-slate-800/40">
                 <button
                   type="button"
                   onClick={() => setEditingUser(null)}

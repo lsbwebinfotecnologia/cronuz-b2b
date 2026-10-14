@@ -186,4 +186,26 @@ git push origin --delete feature/nome-da-funcionalidade
 4. **Tabelas e Listagens**:
    - Todas as tabelas de dados no dashboard ou loja devem ser contidas em elementos com `overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800` para evitar estouros de tela em celulares.
 
+---
+
+## 💰 7. Padrão Obrigatório de Máscara Automática para Valores e Moedas (Frontend)
+
+> [!IMPORTANT]
+> **Todo e qualquer campo de entrada (input) que envolva valores financeiros (R$, preço unitário, custo, frete, subtotal, total) ou percentuais (desconto %, comissão %, etc.) DEVE OBRIGATORIAMENTE possuir máscara automática em tempo real no padrão brasileiro (BRL / pt-BR).**
+> Esta diretriz é mandatória para todo novo módulo, tela, modal ou componente criado no Cronuz B2B.
+
+### Diretrizes Mandatórias:
+1. **PROIBIDO o uso de `<input type="number">` cru para valores financeiros e percentuais**:
+   - Inputs numéricos crus geram problemas com separadores decimais (vírgula vs ponto), setas (`spinners`) indesejadas na interface, falhas de precisão e péssima experiência de digitação móvel.
+2. **Componente Padrão Oficial (`CurrencyInput`)**:
+   - Todo campo financeiro ou percentual deve utilizar o componente padronizado [`CurrencyInput`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/frontend/src/components/CurrencyInput.tsx) (`@/components/CurrencyInput`).
+3. **Valores Monetários em Reais (R$)**:
+   - Configurar sempre com prefixo monetário: `prefixStr="R$ "` (ex: `R$ 1.250,50`).
+   - Digitação contínua estilo ATM (onde cada dígito entra como centavo).
+4. **Percentuais de Desconto ou Margem (%)**:
+   - Configurar sempre com sufixo percentual: `suffixStr="%"` e trava de limite `max={100}` (ex: `10,00%`).
+5. **Alternância entre R$ e % em Descontos**:
+   - Em locais onde for permitido conceder desconto tanto em valor nominal (R$) quanto em percentual (%), deve-se disponibilizar um alternador visual simples (`R$` / `%`), aplicando a máscara correspondente de acordo com o modo ativo.
+
+
 

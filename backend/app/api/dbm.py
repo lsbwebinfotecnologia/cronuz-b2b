@@ -85,8 +85,8 @@ def _map_columns(headers: List[str]) -> dict:
         if not norm:
             continue
         
-        # codigo_horus
-        if any(k in norm for k in ['codigohorus', 'codhorus', 'codcli', 'codigocliente', 'clientehorus', 'horus', 'codclient']) or norm in ['codigo', 'cod']:
+        # codigo_horus (suporta cod_cli, cod_horus ou cod_fornecedor)
+        if any(k in norm for k in ['codigohorus', 'codhorus', 'codcli', 'codigocliente', 'clientehorus', 'horus', 'codclient', 'codforn', 'codfornecedor', 'codigofornecedor', 'fornecedorhorus', 'fornecedor']) or norm in ['codigo', 'cod']:
             if 'codigo_horus' not in col_map:
                 col_map['codigo_horus'] = idx
         # apelido / fantasia
@@ -133,6 +133,7 @@ class DbmImportItemPayload(BaseModel):
 class DbmImportBatchPayload(BaseModel):
     company_id: Optional[int] = None
     seller_company_id: Optional[int] = None
+    import_mode: Optional[str] = "cliente"  # "cliente" | "fornecedor"
     items: List[DbmImportItemPayload]
 
 class DbmCompanySavePayload(BaseModel):
@@ -724,7 +725,7 @@ async def parse_dbm_companies_sheet(
     if "codigo_horus" not in col_map:
         raise HTTPException(
             status_code=400, 
-            detail="Não foi possível identificar a coluna com o Código do Horus. Verifique se o cabeçalho contém 'codigo_horus', 'cod_horus' ou 'cod_cli'."
+            detail="Não foi possível identificar a coluna com o Código do Horus. Verifique se o cabeçalho contém 'codigo_horus', 'cod_horus', 'cod_cli' ou 'cod_fornecedor'."
         )
 
     parsed_items = []
@@ -827,171 +828,333 @@ def process_dbm_companies_import_batch(
 
     cod_filial = int(api_filial) if (api_filial and api_filial.isdigit()) else (int(sql_client.cod_filial) if str(sql_client.cod_filial).isdigit() else 2)
 
+    import_mode = (payload.import_mode or "cliente").strip().lower()
+    is_fornecedor_mode = (import_mode == "fornecedor")
+
     results = []
     
     for item in payload.items:
-        cod_cli = item.codigo_horus
+        cod_horus = item.codigo_horus
         row_idx = item.row_index
 
         try:
-            # 1. Consulta no Horus CLIENTES
-            sql_cli = """
-                SELECT TOP 1 
-                    c.COD_CLI, c.NOM_CLI, c.NOM_REDUZIDO, c.CNPJ, c.CPF,
-                    u.SIGLA_UF, cep.LOC_CIDADE
-                FROM CLIENTES c WITH (NOLOCK)
-                LEFT JOIN ENDERECOS_CLIENTE ec WITH (NOLOCK) ON ec.COD_CLI = c.COD_CLI
-                LEFT JOIN TABELA_UF u WITH (NOLOCK) ON u.COD_UF = ec.COD_UF
-                LEFT JOIN TABELA_CEP_IBGE cep WITH (NOLOCK) ON cep.COD_IBGE = ec.COD_IBGE
-                WHERE c.COD_CLI = %s
-                ORDER BY CASE WHEN ec.STA_DEFAULT = 'S' THEN 0 ELSE 1 END, ec.COD_END ASC
-            """
-            rows = sql_client.query(sql_cli, (cod_cli,), max_rows=1)
-            
-            if not rows or len(rows) == 0:
+            if is_fornecedor_mode:
+                # ── MODO FORNECEDOR: Consulta na tabela FORNECEDORES (Filial configurada) ──
+                sql_forn = f"""
+                    SELECT TOP 1 
+                        f.COD_FORNECEDOR, 
+                        f.NOM_FORNECEDOR, 
+                        f.NOM_FANTASIA, 
+                        f.CNPF_CNPJ, 
+                        f.CPF,
+                        u.SIGLA_UF, 
+                        cep.LOC_CIDADE
+                    FROM FORNECEDORES f WITH (NOLOCK)
+                    LEFT JOIN TABELA_UF u WITH (NOLOCK) ON u.COD_UF = f.UF
+                    LEFT JOIN TABELA_CEP_IBGE cep WITH (NOLOCK) ON cep.COD_IBGE = f.COD_IBGE
+                    WHERE f.COD_FORNECEDOR = %s AND f.COD_FILIAL = {cod_filial}
+                """
+                rows = sql_client.query(sql_forn, (cod_horus,), max_rows=1)
+                
+                if not rows or len(rows) == 0:
+                    results.append({
+                        "row_index": row_idx,
+                        "codigo_horus": cod_horus,
+                        "apelido": item.apelido or f"Fornecedor #{cod_horus}",
+                        "status": "WARNING",
+                        "action": "SKIPPED",
+                        "message": f"Fornecedor #{cod_horus} não localizado na tabela FORNECEDORES (Filial {cod_filial}) do Horus ERP."
+                    })
+                    continue
+
+                r_forn = rows[0]
+                nom_forn = str(r_forn.get("NOM_FORNECEDOR") or "").strip()
+                nom_fantasia = str(r_forn.get("NOM_FANTASIA") or "").strip()
+                raw_doc = str(r_forn.get("CNPF_CNPJ") or r_forn.get("CPF") or "").strip()
+                clean_doc = _sanitize_doc(raw_doc)
+                city_horus = str(r_forn.get("LOC_CIDADE") or "").strip() or None
+                uf_horus = str(r_forn.get("SIGLA_UF") or "").strip().upper() or None
+
+                # Fallback se não tiver CNPJ nem CPF no Horus
+                if not clean_doc:
+                    clean_doc = f"FORN{cod_horus:08d}"
+
+                # Consulta cruzada em CLIENTES no Horus para descobrir COD_CLI caso exista
+                horus_cod_cli = None
+                is_cliente = False
+                try:
+                    sql_cli_link = """
+                        SELECT TOP 1 c.COD_CLI
+                        FROM CLIENTES c WITH (NOLOCK)
+                        WHERE (
+                            REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(c.CNPJ, ''), '.', ''), '/', ''), '-', ''), ' ', '') = %s
+                            OR REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(c.CPF, ''), '.', ''), '/', ''), '-', ''), ' ', '') = %s
+                            OR c.NOM_CLI = %s
+                            OR c.NOM_REDUZIDO = %s
+                        )
+                    """
+                    rows_cli_link = sql_client.query(
+                        sql_cli_link, 
+                        (clean_doc, clean_doc, nom_forn, nom_fantasia or nom_forn), 
+                        max_rows=1
+                    )
+                    if rows_cli_link and len(rows_cli_link) > 0:
+                        raw_cli = rows_cli_link[0].get("COD_CLI")
+                        if str(raw_cli).isdigit():
+                            horus_cod_cli = int(raw_cli)
+                            is_cliente = True
+                except Exception as ecl:
+                    log.warning(f"[DBM Batch Import] Erro ao buscar vínculo CLIENTES para fornecedor #{cod_horus}: {ecl}")
+
+                # Mesclagem de dados (Planilha tem prioridade para campos descritivos)
+                apelido = (item.apelido or "").strip()
+                if not apelido:
+                    apelido = nom_fantasia or nom_forn or f"Fornecedor {cod_horus}"
+
+                razao_social = nom_forn or apelido
+                grupo = (item.grupo or "").strip() or None
+                segmento = (item.segmento or "").strip() or "Editoras"
+                obs = (item.obs_empresa or "").strip() or None
+                fechamento_roy = (item.fechamento_roy or "").strip() or None
+                account = (item.account or "").strip() or None
+
+                # Localização / Atualização / Criação no crm_customer DO SELLER
+                existing_cust = db.query(Customer).filter(
+                    Customer.company_id == seller_id,
+                    or_(
+                        Customer.horus_cod_fornecedor == cod_horus,
+                        func.regexp_replace(Customer.document, r"\D", "", "g") == clean_doc,
+                        Customer.document == clean_doc
+                    )
+                ).first()
+
+                action = "UPDATED" if existing_cust else "CREATED"
+
+                if existing_cust:
+                    existing_cust.name = apelido
+                    if nom_forn:
+                        existing_cust.corporate_name = nom_forn
+                    if clean_doc:
+                        existing_cust.document = clean_doc
+                    if city_horus:
+                        existing_cust.city = city_horus
+                    if uf_horus:
+                        existing_cust.state = uf_horus
+                    if grupo:
+                        existing_cust.group_name = grupo
+                    if segmento:
+                        existing_cust.segment = segmento
+                    if obs:
+                        existing_cust.notes_message = obs
+                    if account:
+                        existing_cust.customer_account = account
+                    if fechamento_roy:
+                        existing_cust.royalties_data = fechamento_roy
+
+                    existing_cust.is_fornecedor = True
+                    existing_cust.horus_cod_fornecedor = cod_horus
+                    if is_cliente and horus_cod_cli:
+                        existing_cust.is_cliente = True
+                        existing_cust.horus_cod_cli = horus_cod_cli
+
+                    target_cust = existing_cust
+                else:
+                    new_cust = Customer(
+                        company_id=seller_id,
+                        document=clean_doc,
+                        name=apelido,
+                        corporate_name=razao_social,
+                        city=city_horus,
+                        state=uf_horus,
+                        group_name=grupo,
+                        segment=segmento,
+                        notes_message=obs,
+                        customer_account=account,
+                        royalties_data=fechamento_roy,
+                        is_cliente=is_cliente,
+                        is_fornecedor=True,
+                        horus_cod_cli=horus_cod_cli,
+                        horus_cod_fornecedor=cod_horus,
+                        customer_type="PJ" if len(clean_doc) > 11 else "PF",
+                    )
+                    db.add(new_cust)
+                    db.flush()
+                    target_cust = new_cust
+
+                db.commit()
+
                 results.append({
                     "row_index": row_idx,
-                    "codigo_horus": cod_cli,
-                    "apelido": item.apelido or f"Horus #{cod_cli}",
-                    "status": "WARNING",
-                    "action": "SKIPPED",
-                    "message": f"Cliente #{cod_cli} não localizado na tabela CLIENTES do Horus ERP."
+                    "codigo_horus": cod_horus,
+                    "apelido": apelido,
+                    "razao_social": razao_social,
+                    "document": clean_doc,
+                    "company_id": target_cust.id,
+                    "action": action,
+                    "status": "SUCCESS",
+                    "message": f"Fornecedor '{apelido}' ({action.lower()}) vinculado ao Horus Fornecedor #{cod_horus} (Filial {cod_filial})"
                 })
-                continue
 
-            r_cli = rows[0]
-            nom_cli = str(r_cli.get("NOM_CLI") or "").strip()
-            nom_reduzido = str(r_cli.get("NOM_REDUZIDO") or "").strip()
-            raw_doc = str(r_cli.get("CNPJ") or r_cli.get("CPF") or "").strip()
-            clean_doc = _sanitize_doc(raw_doc)
-            city_horus = str(r_cli.get("LOC_CIDADE") or "").strip() or None
-            uf_horus = str(r_cli.get("SIGLA_UF") or "").strip().upper() or None
-
-            # Fallback se não tiver CNPJ nem CPF no Horus
-            if not clean_doc:
-                clean_doc = f"HORUS{cod_cli:08d}"
-
-            # 2. Consulta no Horus FORNECEDORES na filial da API
-            horus_cod_fornecedor = None
-            is_fornecedor = False
-            try:
-                sql_forn = f"""
-                    SELECT TOP 1 f.COD_FORNECEDOR
-                    FROM FORNECEDORES f WITH (NOLOCK)
-                    WHERE f.COD_FILIAL = {cod_filial}
-                      AND (
-                        REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(f.CNPF_CNPJ, ''), '.', ''), '/', ''), '-', ''), ' ', '') = %s
-                        OR REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(f.CPF, ''), '.', ''), '/', ''), '-', ''), ' ', '') = %s
-                        OR f.NOM_FORNECEDOR = %s
-                        OR f.NOM_FANTASIA = %s
-                      )
-                """
-                rows_forn = sql_client.query(sql_forn, (clean_doc, clean_doc, nom_cli, nom_reduzido or nom_cli), max_rows=1)
-                if rows_forn and len(rows_forn) > 0:
-                    raw_forn = rows_forn[0].get("COD_FORNECEDOR")
-                    if str(raw_forn).isdigit():
-                        horus_cod_fornecedor = int(raw_forn)
-                        is_fornecedor = True
-            except Exception as ef:
-                log.warning(f"[DBM Batch Import] Erro ao buscar fornecedor #{cod_cli}: {ef}")
-
-            # 3. Mesclagem inteligente de dados
-            # A planilha tem PRIORIDADE para: apelido, grupo, segmento, obs, royalties, account
-            apelido = (item.apelido or "").strip()
-            if not apelido:
-                apelido = nom_reduzido or nom_cli or f"Cliente {cod_cli}"
-
-            razao_social = nom_cli or apelido
-            grupo = (item.grupo or "").strip() or None
-            segmento = (item.segmento or "").strip() or "Editoras"
-            obs = (item.obs_empresa or "").strip() or None
-            fechamento_roy = (item.fechamento_roy or "").strip() or None
-            account = (item.account or "").strip() or None
-
-            # 4. Localização / Atualização / Criação no crm_customer DO SELLER
-            existing_cust = db.query(Customer).filter(
-                Customer.company_id == seller_id,
-                or_(
-                    Customer.horus_cod_cli == cod_cli,
-                    func.regexp_replace(Customer.document, r"\D", "", "g") == clean_doc,
-                    Customer.document == clean_doc
-                )
-            ).first()
-
-            action = "UPDATED" if existing_cust else "CREATED"
-
-            if existing_cust:
-                existing_cust.name = apelido
-                if nom_cli:
-                    existing_cust.corporate_name = nom_cli
-                if clean_doc:
-                    existing_cust.document = clean_doc
-                if city_horus:
-                    existing_cust.city = city_horus
-                if uf_horus:
-                    existing_cust.state = uf_horus
-                if grupo:
-                    existing_cust.group_name = grupo
-                if segmento:
-                    existing_cust.segment = segmento
-                if obs:
-                    existing_cust.notes_message = obs
-                if account:
-                    existing_cust.customer_account = account
-                if fechamento_roy:
-                    existing_cust.royalties_data = fechamento_roy
-
-                existing_cust.is_cliente = True
-                existing_cust.horus_cod_cli = cod_cli
-                if is_fornecedor and horus_cod_fornecedor:
-                    existing_cust.is_fornecedor = True
-                    existing_cust.horus_cod_fornecedor = horus_cod_fornecedor
-
-                target_cust = existing_cust
             else:
-                new_cust = Customer(
-                    company_id=seller_id,
-                    document=clean_doc,
-                    name=apelido,
-                    corporate_name=razao_social,
-                    city=city_horus,
-                    state=uf_horus,
-                    group_name=grupo,
-                    segment=segmento,
-                    notes_message=obs,
-                    customer_account=account,
-                    royalties_data=fechamento_roy,
-                    is_cliente=True,
-                    is_fornecedor=is_fornecedor,
-                    horus_cod_cli=cod_cli,
-                    horus_cod_fornecedor=horus_cod_fornecedor,
-                    customer_type="PJ" if len(clean_doc) > 11 else "PF",
-                )
-                db.add(new_cust)
-                db.flush()
-                target_cust = new_cust
+                # ── MODO CLIENTE: Consulta na tabela CLIENTES ────────
+                # 1. Consulta no Horus CLIENTES
+                sql_cli = """
+                    SELECT TOP 1 
+                        c.COD_CLI, c.NOM_CLI, c.NOM_REDUZIDO, c.CNPJ, c.CPF,
+                        u.SIGLA_UF, cep.LOC_CIDADE
+                    FROM CLIENTES c WITH (NOLOCK)
+                    LEFT JOIN ENDERECOS_CLIENTE ec WITH (NOLOCK) ON ec.COD_CLI = c.COD_CLI
+                    LEFT JOIN TABELA_UF u WITH (NOLOCK) ON u.COD_UF = ec.COD_UF
+                    LEFT JOIN TABELA_CEP_IBGE cep WITH (NOLOCK) ON cep.COD_IBGE = ec.COD_IBGE
+                    WHERE c.COD_CLI = %s
+                    ORDER BY CASE WHEN ec.STA_DEFAULT = 'S' THEN 0 ELSE 1 END, ec.COD_END ASC
+                """
+                rows = sql_client.query(sql_cli, (cod_horus,), max_rows=1)
+                
+                if not rows or len(rows) == 0:
+                    results.append({
+                        "row_index": row_idx,
+                        "codigo_horus": cod_horus,
+                        "apelido": item.apelido or f"Horus #{cod_horus}",
+                        "status": "WARNING",
+                        "action": "SKIPPED",
+                        "message": f"Cliente #{cod_horus} não localizado na tabela CLIENTES do Horus ERP."
+                    })
+                    continue
 
-            db.commit()
+                r_cli = rows[0]
+                nom_cli = str(r_cli.get("NOM_CLI") or "").strip()
+                nom_reduzido = str(r_cli.get("NOM_REDUZIDO") or "").strip()
+                raw_doc = str(r_cli.get("CNPJ") or r_cli.get("CPF") or "").strip()
+                clean_doc = _sanitize_doc(raw_doc)
+                city_horus = str(r_cli.get("LOC_CIDADE") or "").strip() or None
+                uf_horus = str(r_cli.get("SIGLA_UF") or "").strip().upper() or None
 
-            results.append({
-                "row_index": row_idx,
-                "codigo_horus": cod_cli,
-                "apelido": apelido,
-                "razao_social": razao_social,
-                "document": clean_doc,
-                "company_id": target_cust.id,
-                "action": action,
-                "status": "SUCCESS",
-                "message": f"Empresa '{apelido}' ({action.lower()}) vinculada ao Horus #{cod_cli}"
-            })
+                # Fallback se não tiver CNPJ nem CPF no Horus
+                if not clean_doc:
+                    clean_doc = f"HORUS{cod_horus:08d}"
+
+                # 2. Consulta no Horus FORNECEDORES na filial da API
+                horus_cod_fornecedor = None
+                is_fornecedor = False
+                try:
+                    sql_forn = f"""
+                        SELECT TOP 1 f.COD_FORNECEDOR
+                        FROM FORNECEDORES f WITH (NOLOCK)
+                        WHERE f.COD_FILIAL = {cod_filial}
+                          AND (
+                            REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(f.CNPF_CNPJ, ''), '.', ''), '/', ''), '-', ''), ' ', '') = %s
+                            OR REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(f.CPF, ''), '.', ''), '/', ''), '-', ''), ' ', '') = %s
+                            OR f.NOM_FORNECEDOR = %s
+                            OR f.NOM_FANTASIA = %s
+                          )
+                    """
+                    rows_forn = sql_client.query(sql_forn, (clean_doc, clean_doc, nom_cli, nom_reduzido or nom_cli), max_rows=1)
+                    if rows_forn and len(rows_forn) > 0:
+                        raw_forn = rows_forn[0].get("COD_FORNECEDOR")
+                        if str(raw_forn).isdigit():
+                            horus_cod_fornecedor = int(raw_forn)
+                            is_fornecedor = True
+                except Exception as ef:
+                    log.warning(f"[DBM Batch Import] Erro ao buscar fornecedor #{cod_horus}: {ef}")
+
+                # 3. Mesclagem inteligente de dados
+                # A planilha tem PRIORIDADE para: apelido, grupo, segmento, obs, royalties, account
+                apelido = (item.apelido or "").strip()
+                if not apelido:
+                    apelido = nom_reduzido or nom_cli or f"Cliente {cod_horus}"
+
+                razao_social = nom_cli or apelido
+                grupo = (item.grupo or "").strip() or None
+                segmento = (item.segmento or "").strip() or "Editoras"
+                obs = (item.obs_empresa or "").strip() or None
+                fechamento_roy = (item.fechamento_roy or "").strip() or None
+                account = (item.account or "").strip() or None
+
+                # 4. Localização / Atualização / Criação no crm_customer DO SELLER
+                existing_cust = db.query(Customer).filter(
+                    Customer.company_id == seller_id,
+                    or_(
+                        Customer.horus_cod_cli == cod_horus,
+                        func.regexp_replace(Customer.document, r"\D", "", "g") == clean_doc,
+                        Customer.document == clean_doc
+                    )
+                ).first()
+
+                action = "UPDATED" if existing_cust else "CREATED"
+
+                if existing_cust:
+                    existing_cust.name = apelido
+                    if nom_cli:
+                        existing_cust.corporate_name = nom_cli
+                    if clean_doc:
+                        existing_cust.document = clean_doc
+                    if city_horus:
+                        existing_cust.city = city_horus
+                    if uf_horus:
+                        existing_cust.state = uf_horus
+                    if grupo:
+                        existing_cust.group_name = grupo
+                    if segmento:
+                        existing_cust.segment = segmento
+                    if obs:
+                        existing_cust.notes_message = obs
+                    if account:
+                        existing_cust.customer_account = account
+                    if fechamento_roy:
+                        existing_cust.royalties_data = fechamento_roy
+
+                    existing_cust.is_cliente = True
+                    existing_cust.horus_cod_cli = cod_horus
+                    if is_fornecedor and horus_cod_fornecedor:
+                        existing_cust.is_fornecedor = True
+                        existing_cust.horus_cod_fornecedor = horus_cod_fornecedor
+
+                    target_cust = existing_cust
+                else:
+                    new_cust = Customer(
+                        company_id=seller_id,
+                        document=clean_doc,
+                        name=apelido,
+                        corporate_name=razao_social,
+                        city=city_horus,
+                        state=uf_horus,
+                        group_name=grupo,
+                        segment=segmento,
+                        notes_message=obs,
+                        customer_account=account,
+                        royalties_data=fechamento_roy,
+                        is_cliente=True,
+                        is_fornecedor=is_fornecedor,
+                        horus_cod_cli=cod_horus,
+                        horus_cod_fornecedor=horus_cod_fornecedor,
+                        customer_type="PJ" if len(clean_doc) > 11 else "PF",
+                    )
+                    db.add(new_cust)
+                    db.flush()
+                    target_cust = new_cust
+
+                db.commit()
+
+                results.append({
+                    "row_index": row_idx,
+                    "codigo_horus": cod_horus,
+                    "apelido": apelido,
+                    "razao_social": razao_social,
+                    "document": clean_doc,
+                    "company_id": target_cust.id,
+                    "action": action,
+                    "status": "SUCCESS",
+                    "message": f"Empresa '{apelido}' ({action.lower()}) vinculada ao Horus Cliente #{cod_horus}"
+                })
 
         except Exception as e:
             db.rollback()
-            log.error(f"[DBM Batch Import] Erro no item linha {row_idx} (Horus #{cod_cli}): {e}")
+            log.error(f"[DBM Batch Import] Erro no item linha {row_idx} (Horus #{cod_horus}): {e}")
             results.append({
                 "row_index": row_idx,
-                "codigo_horus": cod_cli,
-                "apelido": item.apelido or f"Horus #{cod_cli}",
+                "codigo_horus": cod_horus,
+                "apelido": item.apelido or f"Horus #{cod_horus}",
                 "status": "ERROR",
                 "action": "FAILED",
                 "message": f"Erro interno ao processar linha {row_idx}: {str(e)}"
@@ -1000,6 +1163,7 @@ def process_dbm_companies_import_batch(
     return {
         "success": True,
         "seller_company_id": seller_id,
+        "import_mode": import_mode,
         "total_processed": len(results),
         "results": results
     }

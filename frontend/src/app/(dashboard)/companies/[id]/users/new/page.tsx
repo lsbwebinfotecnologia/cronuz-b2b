@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Save, ArrowLeft, Loader2, Mail, User, ShieldCheck, Lock, Settings, CheckSquare, Square } from 'lucide-react';
+import { Save, ArrowLeft, Loader2, Mail, User, ShieldCheck, Lock, Settings, CheckSquare, Square, Search } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useParams } from 'next/navigation';
 import { getToken } from '@/lib/auth';
@@ -17,6 +17,7 @@ const INITIAL_PAGE_OPTIONS = [
   { value: '/cafeteria/kds', label: 'Cafeteria (KDS Barista / Cozinha)' },
   { value: '/cafeteria/menu', label: 'Cafeteria (Cardápio Digital)' },
   { value: '/orders', label: 'Gestão de Pedidos' },
+  { value: '/proposals', label: 'Propostas Comerciais' },
   { value: '/products', label: 'Catálogo de Produtos' },
   { value: '/customers', label: 'Empresas & Clientes' },
   { value: '/services', label: 'Serviços' },
@@ -46,13 +47,13 @@ const MODULE_PERMISSIONS_LIST = [
   { id: 'cafeteria', label: 'Cafeteria & Restaurante', description: 'Mesas, comandas, KDS barista/cozinha e cardápio digital' },
   { id: 'products', label: 'Produtos & Catálogo', description: 'Listagem, marcas e categorias' },
   { id: 'orders', label: 'Pedidos & Vendas', description: 'Visualização e gestão de pedidos' },
+  { id: 'proposals', label: 'Propostas Comerciais', description: 'Geração e acompanhamento de orçamentos' },
   { id: 'customers', label: 'Empresas & Clientes', description: 'Cadastro e gestão de carteiras de clientes' },
   { id: 'services', label: 'Serviços', description: 'Catálogo de serviços e ordens de serviço' },
   { id: 'financial', label: 'Financeiro', description: 'Lançamentos, boletos, contas e extratos' },
   { id: 'logistics', label: 'Logística Hórus / WMS', description: 'Conferência de expedição e filiais' },
   { id: 'bookinfo', label: 'Bookinfo Hub', description: 'Automação de pedidos de venda e compra' },
   { id: 'promotions', label: 'Marketing & Promoções', description: 'Vitrines, banners e cupons de desconto' },
-  { id: 'proposals', label: 'Propostas Comerciais', description: 'Geração e acompanhamento de orçamentos' },
   { id: 'dropship', label: 'Dropship (Erdos)', description: 'Pedidos Erdos, tabelas de preço e estoque' },
   { id: 'horus_sql', label: 'Horus Direct (SQL)', description: 'Pedidos diretos no SQL do Horus e financeiro Vindi' },
   { id: 'dbm', label: 'DBM (Catálogo & Metadados)', description: 'Consulta de catálogo nacional, metadados DBM e enriquecimento' },
@@ -87,6 +88,7 @@ export default function NewSellerPage() {
   const [initialPage, setInitialPage] = useState('DEFAULT');
   const [grantFullAccess, setGrantFullAccess] = useState(true);
   const [allowedModules, setAllowedModules] = useState<string[]>([]);
+  const [moduleSearch, setModuleSearch] = useState('');
 
   const toggleModulePermission = (modId: string) => {
     if (allowedModules.includes(modId)) {
@@ -252,9 +254,21 @@ export default function NewSellerPage() {
 
             {/* 2. Escopo de Módulos */}
             <div className="space-y-3">
-              <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-                2. Escopo de Módulos Permitidos
-              </label>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                    2. Escopo de Módulos Permitidos
+                  </label>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Restrinja os menus e rotas visíveis para este usuário individualmente.
+                  </p>
+                </div>
+                {!grantFullAccess && (
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800/40 w-fit">
+                    {allowedModules.length} selecionado(s)
+                  </span>
+                )}
+              </div>
 
               <label className="flex items-center gap-3 p-3 rounded-xl border border-teal-200 dark:border-teal-800/40 bg-teal-50/50 dark:bg-teal-950/20 cursor-pointer">
                 <input
@@ -273,29 +287,59 @@ export default function NewSellerPage() {
               </label>
 
               {!grantFullAccess && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
-                  {MODULE_PERMISSIONS_LIST.map(mod => {
-                    const isChecked = allowedModules.includes(mod.id);
-                    return (
-                      <div
-                        key={mod.id}
-                        onClick={() => toggleModulePermission(mod.id)}
-                        className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
-                          isChecked
-                            ? 'border-teal-500 bg-teal-50/60 dark:bg-teal-900/30 text-teal-900 dark:text-white'
-                            : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400'
-                        }`}
+                <div className="space-y-3 pt-1">
+                  {/* Busca Rápida de Módulo */}
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Filtrar módulos... (ex: Propostas, Pedidos, PDV)"
+                      value={moduleSearch}
+                      onChange={(e) => setModuleSearch(e.target.value)}
+                      className="w-full pl-9 pr-8 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                    {moduleSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setModuleSearch('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
                       >
-                        <div className="mt-0.5 shrink-0">
-                          {isChecked ? <CheckSquare className="w-4 h-4 text-teal-600 dark:text-teal-400" /> : <Square className="w-4 h-4 text-slate-400" />}
-                        </div>
-                        <div>
-                          <span className="text-xs font-bold block">{mod.label}</span>
-                          <span className="text-[11px] opacity-75 block leading-tight">{mod.description}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {MODULE_PERMISSIONS_LIST
+                      .filter(mod =>
+                        !moduleSearch ||
+                        mod.label.toLowerCase().includes(moduleSearch.toLowerCase()) ||
+                        mod.description.toLowerCase().includes(moduleSearch.toLowerCase()) ||
+                        mod.id.toLowerCase().includes(moduleSearch.toLowerCase())
+                      )
+                      .map(mod => {
+                        const isChecked = allowedModules.includes(mod.id);
+                        return (
+                          <div
+                            key={mod.id}
+                            onClick={() => toggleModulePermission(mod.id)}
+                            className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                              isChecked
+                                ? 'border-teal-500 bg-teal-50/60 dark:bg-teal-900/30 text-teal-900 dark:text-white ring-1 ring-teal-500/30'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400'
+                            }`}
+                          >
+                            <div className="mt-0.5 shrink-0">
+                              {isChecked ? <CheckSquare className="w-4 h-4 text-teal-600 dark:text-teal-400" /> : <Square className="w-4 h-4 text-slate-400" />}
+                            </div>
+                            <div>
+                              <span className="text-xs font-bold block">{mod.label}</span>
+                              <span className="text-[11px] opacity-75 block leading-tight">{mod.description}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
               )}
             </div>

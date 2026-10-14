@@ -195,6 +195,15 @@ async def get_orders(
             response = await client.get("/pedido", params=params)
             response.raise_for_status()
             data = response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Token da Bookinfo expirado ou inválido. Acesse Configurações > Bookinfo para atualizar o token de integração."
+                )
+            raise HTTPException(status_code=502, detail=f"Erro ao consultar Bookinfo ({e.response.status_code}): {e.response.text}")
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Erro ao consultar Bookinfo: {str(e)}")
             

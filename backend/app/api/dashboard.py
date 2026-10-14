@@ -77,6 +77,7 @@ def get_dashboard_metrics(
     module_editorial = getattr(company, "module_editorial", False) if company else False
     module_schools = getattr(company, "module_schools", False) if company else False
     module_cafeteria = getattr(company, "module_cafeteria", False) if company else False
+    module_encomendas = getattr(company, "module_encomendas", False) if company else False
     horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
     horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
@@ -367,6 +368,7 @@ def get_dashboard_metrics(
         "module_editorial": module_editorial,
         "module_schools": module_schools,
         "module_cafeteria": module_cafeteria,
+        "module_encomendas": module_encomendas,
         "horus_sql_feature_vindi_baixa": horus_sql_feature_vindi_baixa,
         "horus_sql_feature_pedidos": horus_sql_feature_pedidos,
         "horus_sql_feature_dbm": horus_sql_feature_dbm,
@@ -494,6 +496,7 @@ def get_master_overview(
         {"key": "authors", "label": "Portal do Autor", "field": "modulo_autores_ativo", "color": "violet"},
         {"key": "dropship", "label": "Dropshipping", "field": "module_dropship", "color": "rose"},
         {"key": "inventory", "label": "Inventário", "field": "has_inventory_module", "color": "lime"},
+        {"key": "encomendas", "label": "Encomendas de Clientes", "field": "module_encomendas", "color": "teal"},
         {"key": "pdv", "label": "PDV Omnichannel", "field": "module_pdv", "color": "emerald"},
         {"key": "subscriptions", "label": "Assinaturas", "field": "module_subscriptions", "color": "purple"},
         {"key": "marketing", "label": "Vitrines / Marketing", "field": "module_marketing", "color": "fuchsia"},

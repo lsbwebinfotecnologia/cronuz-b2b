@@ -5,10 +5,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { getToken, getUser } from '@/lib/auth';
 import { 
   FileText, Search, ArrowLeft, Loader2, Minus, Plus, Trash2, ShoppingCart, 
-  User, Building2, Inbox, Info, Save, Layers, HelpCircle, Calendar, PlusCircle
+  User, Building2, Inbox, Info, Save, Layers, HelpCircle, Calendar, PlusCircle, Percent
 } from 'lucide-react';
 import Link from 'next/link';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 interface Customer {
   id: number;
@@ -53,6 +54,8 @@ interface ProposalItem {
   quantity: number;
   unit_price: number;
   discount: number;
+  discount_type?: 'VAL' | 'PERCENT';
+  discount_percent?: number;
   custom_description?: string;
 }
 
@@ -102,6 +105,8 @@ export default function NewOrEditProposalPage() {
   // Cart / Items
   const [cart, setCart] = useState<ProposalItem[]>([]);
   const [globalDiscount, setGlobalDiscount] = useState(0);
+  const [globalDiscountType, setGlobalDiscountType] = useState<'VAL' | 'PERCENT'>('VAL');
+  const [globalDiscountPercent, setGlobalDiscountPercent] = useState(0);
   const [shippingCost, setShippingCost] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState('PIX');
   const [paymentCondition, setPaymentCondition] = useState('A Vista');
@@ -355,7 +360,10 @@ export default function NewOrEditProposalPage() {
 
   // Real-time subtotals
   const subtotal = cart.reduce((acc, item) => acc + ((item.unit_price * item.quantity) - item.discount), 0);
-  const total = Math.max(0, subtotal - globalDiscount + shippingCost);
+  const calculatedGlobalDiscount = globalDiscountType === 'PERCENT'
+    ? Math.min(subtotal, Number(((subtotal * globalDiscountPercent) / 100).toFixed(2)))
+    : Math.min(subtotal, globalDiscount);
+  const total = Math.max(0, subtotal - calculatedGlobalDiscount + shippingCost);
 
   // Form Submit
   const handleSave = async (e: React.FormEvent) => {
@@ -451,7 +459,7 @@ export default function NewOrEditProposalPage() {
         manual_document: relationType === 'MANUAL' ? manualDocument : null,
         manual_email: relationType === 'MANUAL' ? manualEmail : null,
         manual_phone: relationType === 'MANUAL' ? manualPhone : null,
-        discount: globalDiscount,
+        discount: calculatedGlobalDiscount,
         shipping_cost: shippingCost,
         payment_method: paymentMethod,
         payment_condition: paymentCondition,
@@ -919,9 +927,9 @@ export default function NewOrEditProposalPage() {
                   <thead>
                     <tr className="bg-slate-50 dark:bg-slate-950 text-slate-500 font-semibold border-b border-slate-100 dark:border-slate-800">
                       <th className="px-4 py-2">Item</th>
-                      <th className="px-4 py-2 text-right">Unitário (R$)</th>
+                      <th className="px-4 py-2 text-right">Unitário</th>
                       <th className="px-4 py-2 text-center w-24">Qtd</th>
-                      <th className="px-4 py-2 text-right">Desc. Item (R$)</th>
+                      <th className="px-4 py-2 text-right">Desc. Item</th>
                       <th className="px-4 py-2 text-right">Total</th>
                       <th className="px-4 py-2 text-center">Ações</th>
                     </tr>
@@ -948,20 +956,33 @@ export default function NewOrEditProposalPage() {
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
+                            <CurrencyInput
+                              prefixStr="R$ "
                               value={item.unit_price}
-                              onChange={e => updateCartItem(idx, 'unit_price', parseFloat(e.target.value) || 0)}
-                              className="w-20 text-right bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-[var(--color-primary-base)]"
+                              onChangeValue={val => {
+                                updateCartItem(idx, 'unit_price', val);
+                                if (item.discount_type === 'PERCENT' && item.discount_percent) {
+                                  const gross = val * item.quantity;
+                                  const disc = Math.min(gross, Number(((gross * item.discount_percent) / 100).toFixed(2)));
+                                  updateCartItem(idx, 'discount', disc);
+                                }
+                              }}
+                              className="w-24 text-right bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded px-2 py-1 text-sm font-semibold focus:ring-1 focus:ring-[var(--color-primary-base)] outline-none"
                             />
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-center gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => updateCartItem(idx, 'quantity', Math.max(1, item.quantity - 1))}
+                                onClick={() => {
+                                  const newQty = Math.max(1, item.quantity - 1);
+                                  updateCartItem(idx, 'quantity', newQty);
+                                  if (item.discount_type === 'PERCENT' && item.discount_percent) {
+                                    const gross = item.unit_price * newQty;
+                                    const disc = Math.min(gross, Number(((gross * item.discount_percent) / 100).toFixed(2)));
+                                    updateCartItem(idx, 'discount', disc);
+                                  }
+                                }}
                                 className="p-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-500"
                               >
                                 <Minus className="w-3 h-3" />
@@ -970,12 +991,28 @@ export default function NewOrEditProposalPage() {
                                 type="number"
                                 min="1"
                                 value={item.quantity}
-                                onChange={e => updateCartItem(idx, 'quantity', Math.max(1, parseInt(e.target.value) || 1))}
+                                onChange={e => {
+                                  const newQty = Math.max(1, parseInt(e.target.value) || 1);
+                                  updateCartItem(idx, 'quantity', newQty);
+                                  if (item.discount_type === 'PERCENT' && item.discount_percent) {
+                                    const gross = item.unit_price * newQty;
+                                    const disc = Math.min(gross, Number(((gross * item.discount_percent) / 100).toFixed(2)));
+                                    updateCartItem(idx, 'discount', disc);
+                                  }
+                                }}
                                 className="w-12 text-center bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded px-1 py-0.5 text-sm focus:ring-1 focus:ring-[var(--color-primary-base)] font-bold outline-none"
                               />
                               <button
                                 type="button"
-                                onClick={() => updateCartItem(idx, 'quantity', item.quantity + 1)}
+                                onClick={() => {
+                                  const newQty = item.quantity + 1;
+                                  updateCartItem(idx, 'quantity', newQty);
+                                  if (item.discount_type === 'PERCENT' && item.discount_percent) {
+                                    const gross = item.unit_price * newQty;
+                                    const disc = Math.min(gross, Number(((gross * item.discount_percent) / 100).toFixed(2)));
+                                    updateCartItem(idx, 'discount', disc);
+                                  }
+                                }}
                                 className="p-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-500"
                               >
                                 <Plus className="w-3 h-3" />
@@ -983,14 +1020,66 @@ export default function NewOrEditProposalPage() {
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.discount}
-                              onChange={e => updateCartItem(idx, 'discount', Math.min(item.unit_price * item.quantity, parseFloat(e.target.value) || 0))}
-                              className="w-16 text-right bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-[var(--color-primary-base)] text-rose-500"
-                            />
+                            <div className="flex items-center justify-end gap-1.5">
+                              <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-800 p-0.5 bg-slate-100 dark:bg-slate-900 text-[10px] font-bold shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const gross = item.unit_price * item.quantity;
+                                    const pct = gross > 0 ? Math.min(100, (item.discount / gross) * 100) : 0;
+                                    setCart(prev => prev.map((it, i) => i === idx ? { ...it, discount_type: 'VAL', discount_percent: pct } : it));
+                                  }}
+                                  className={`px-1.5 py-0.5 rounded transition-colors ${
+                                    (item.discount_type || 'VAL') === 'VAL'
+                                      ? 'bg-white dark:bg-slate-800 text-[var(--color-primary-base)] shadow-xs'
+                                      : 'text-slate-400 hover:text-slate-600'
+                                  }`}
+                                >
+                                  R$
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const gross = item.unit_price * item.quantity;
+                                    const pct = gross > 0 ? Math.min(100, Number(((item.discount / gross) * 100).toFixed(2))) : 0;
+                                    setCart(prev => prev.map((it, i) => i === idx ? { ...it, discount_type: 'PERCENT', discount_percent: pct } : it));
+                                  }}
+                                  className={`px-1.5 py-0.5 rounded transition-colors ${
+                                    item.discount_type === 'PERCENT'
+                                      ? 'bg-white dark:bg-slate-800 text-[var(--color-primary-base)] shadow-xs'
+                                      : 'text-slate-400 hover:text-slate-600'
+                                  }`}
+                                >
+                                  %
+                                </button>
+                              </div>
+
+                              {item.discount_type === 'PERCENT' ? (
+                                <CurrencyInput
+                                  suffixStr="%"
+                                  max={100}
+                                  value={item.discount_percent ?? (item.unit_price * item.quantity > 0 ? Number(((item.discount / (item.unit_price * item.quantity)) * 100).toFixed(2)) : 0)}
+                                  onChangeValue={pct => {
+                                    const gross = item.unit_price * item.quantity;
+                                    const disc = Math.min(gross, Number(((gross * pct) / 100).toFixed(2)));
+                                    setCart(prev => prev.map((it, i) => i === idx ? { ...it, discount_percent: pct, discount: disc } : it));
+                                  }}
+                                  className="w-20 text-right bg-slate-50 dark:bg-slate-950 border border-rose-200 dark:border-rose-900/50 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-rose-500 text-rose-500 font-bold outline-none"
+                                />
+                              ) : (
+                                <CurrencyInput
+                                  prefixStr="R$ "
+                                  max={item.unit_price * item.quantity}
+                                  value={item.discount}
+                                  onChangeValue={val => {
+                                    const gross = item.unit_price * item.quantity;
+                                    const pct = gross > 0 ? (val / gross) * 100 : 0;
+                                    setCart(prev => prev.map((it, i) => i === idx ? { ...it, discount: val, discount_percent: pct } : it));
+                                  }}
+                                  className="w-24 text-right bg-slate-50 dark:bg-slate-950 border border-rose-200 dark:border-rose-900/50 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-rose-500 text-rose-500 font-bold outline-none"
+                                />
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-3 text-right font-bold text-slate-800 dark:text-slate-200">
                             R$ {itemTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
@@ -1083,28 +1172,78 @@ export default function NewOrEditProposalPage() {
 
               <div>
                 <div className="flex justify-between items-center text-slate-600 dark:text-slate-400 mb-1">
-                  <span>Desconto Global (R$)</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={globalDiscount}
-                    onChange={e => setGlobalDiscount(Math.min(subtotal, parseFloat(e.target.value) || 0))}
-                    className="w-24 text-right bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-2 py-1 text-sm focus:ring-1 focus:ring-[var(--color-primary-base)] text-rose-500 font-bold"
-                  />
+                  <div className="flex items-center gap-1.5">
+                    <span>Desconto Global</span>
+                    <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-800 p-0.5 bg-slate-100 dark:bg-slate-900 text-[10px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const pct = subtotal > 0 ? Math.min(100, (globalDiscount / subtotal) * 100) : 0;
+                          setGlobalDiscountType('VAL');
+                          setGlobalDiscountPercent(pct);
+                        }}
+                        className={`px-1.5 py-0.5 rounded transition-colors ${
+                          globalDiscountType === 'VAL'
+                            ? 'bg-white dark:bg-slate-800 text-[var(--color-primary-base)] shadow-xs'
+                            : 'text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        R$
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const pct = subtotal > 0 ? Math.min(100, Number(((globalDiscount / subtotal) * 100).toFixed(2))) : 0;
+                          setGlobalDiscountType('PERCENT');
+                          setGlobalDiscountPercent(pct);
+                        }}
+                        className={`px-1.5 py-0.5 rounded transition-colors ${
+                          globalDiscountType === 'PERCENT'
+                            ? 'bg-white dark:bg-slate-800 text-[var(--color-primary-base)] shadow-xs'
+                            : 'text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        %
+                      </button>
+                    </div>
+                  </div>
+
+                  {globalDiscountType === 'PERCENT' ? (
+                    <CurrencyInput
+                      suffixStr="%"
+                      max={100}
+                      value={globalDiscountPercent}
+                      onChangeValue={pct => {
+                        setGlobalDiscountPercent(pct);
+                        const disc = Math.min(subtotal, Number(((subtotal * pct) / 100).toFixed(2)));
+                        setGlobalDiscount(disc);
+                      }}
+                      className="w-24 text-right bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-2 py-1 text-sm focus:ring-1 focus:ring-[var(--color-primary-base)] text-rose-500 font-bold outline-none"
+                    />
+                  ) : (
+                    <CurrencyInput
+                      prefixStr="R$ "
+                      max={subtotal}
+                      value={globalDiscount}
+                      onChangeValue={val => {
+                        setGlobalDiscount(val);
+                        const pct = subtotal > 0 ? (val / subtotal) * 100 : 0;
+                        setGlobalDiscountPercent(pct);
+                      }}
+                      className="w-28 text-right bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-2 py-1 text-sm focus:ring-1 focus:ring-[var(--color-primary-base)] text-rose-500 font-bold outline-none"
+                    />
+                  )}
                 </div>
               </div>
 
               <div>
                 <div className="flex justify-between items-center text-slate-600 dark:text-slate-400 mb-1">
-                  <span>Valor do Frete (R$)</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
+                  <span>Valor do Frete</span>
+                  <CurrencyInput
+                    prefixStr="R$ "
                     value={shippingCost}
-                    onChange={e => setShippingCost(parseFloat(e.target.value) || 0)}
-                    className="w-24 text-right bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-2 py-1 text-sm focus:ring-1 focus:ring-[var(--color-primary-base)] font-semibold"
+                    onChangeValue={setShippingCost}
+                    className="w-28 text-right bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-2 py-1 text-sm focus:ring-1 focus:ring-[var(--color-primary-base)] font-semibold outline-none"
                   />
                 </div>
               </div>
