@@ -28,7 +28,9 @@ class HorusOrders(HorusClient):
         if cod_pedido_origem is not None and cod_pedido_origem != "":
             params["COD_PEDIDO_ORIGEM"] = cod_pedido_origem
         
-        if cod_ped_venda:
+        # COD_PED_VENDA não deve ser enviado para integrações B2B (Horus rejeita: 'COD_PED_VENDA - Não deve ser informado para integrações B2B!')
+        # Ele só é enviado em consultas ERP diretas (ignore_customer_context=True), e no B2B é usado apenas para filtrar o item na lista retornada.
+        if not is_b2b and cod_ped_venda:
             params["COD_PED_VENDA"] = cod_ped_venda
 
         # Importante: para chamadas B2B (com CNPJ_DESTINO/ID_DOC/ID_GUID), o Horus REJEITA explicitamente
