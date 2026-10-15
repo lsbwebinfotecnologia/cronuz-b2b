@@ -1015,7 +1015,10 @@ def list_dropship_orders(
 
     query = (
         db.query(DropshipOrder)
-        .options(joinedload(DropshipOrder.erdos_credential))
+        .options(
+            joinedload(DropshipOrder.erdos_credential),
+            joinedload(DropshipOrder.manifest),
+        )
         .filter(DropshipOrder.company_id == company_id)
     )
     if status:

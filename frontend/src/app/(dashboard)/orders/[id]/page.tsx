@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Package, ArrowLeft, Building2, User, FileText, Download, Truck, MessageSquare, Send, Check, CheckCheck, Terminal, X, RefreshCw, AlertCircle, QrCode } from "lucide-react";
+import { Package, ArrowLeft, Building2, User, FileText, Download, Truck, MessageSquare, Send, Check, CheckCheck, Terminal, X, RefreshCw, AlertCircle, QrCode, Copy, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -102,6 +102,8 @@ export default function OrderDetailPage() {
     const [horusSyncing, setHorusSyncing] = useState(false);
     const [isSendingToHorus, setIsSendingToHorus] = useState(false);
     const [interEnabled, setInterEnabled] = useState(false);
+    const [debugTab, setDebugTab] = useState<'overview' | 'raw' | 'params'>('overview');
+    const [copiedJson, setCopiedJson] = useState(false);
 
     const fetchSettings = async (companyId: number) => {
         try {
@@ -293,6 +295,7 @@ export default function OrderDetailPage() {
 
     const handleSyncHorus = async () => {
         setHorusSyncing(true);
+        const loadingToast = toast.loading("Sincronizando com o Hórus ERP...");
         try {
             const token = getToken();
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -302,14 +305,14 @@ export default function OrderDetailPage() {
             });
             const data = await res.json();
             if (res.ok) {
-                alert("Sincronizado com sucesso!");
+                toast.success(data.message || "Pedido sincronizado com sucesso com o Hórus!", { id: loadingToast });
                 setIsDebugModalOpen(false);
                 fetchOrder(); // reload
             } else {
-                alert("Erro ao sincronizar: " + (data.detail || "Erro desconhecido"));
+                toast.error("Erro ao sincronizar: " + (data.detail || "Erro desconhecido"), { id: loadingToast });
             }
         } catch (e) {
-            alert("Falha de conexão com o servidor ao sincronizar.");
+            toast.error("Falha de conexão com o servidor ao sincronizar.", { id: loadingToast });
         } finally {
             setHorusSyncing(false);
         }
@@ -374,14 +377,47 @@ export default function OrderDetailPage() {
                     </Link>
                     <div>
                          <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
-                            Pedido Interno: #{order.id}
-                            <button onClick={handleOpenDebugModal} className="text-slate-200 dark:text-slate-800 hover:text-indigo-500 transition-colors p-1" title="Debug Horus">
+                            <span 
+                                onDoubleClick={handleOpenDebugModal}
+                                className="cursor-pointer select-none"
+                                title="Dê dois cliques para forçar consulta detalhada ao Hórus ERP"
+                            >
+                                Pedido Interno: #{order.id}
+                            </span>
+                            <button 
+                                onClick={handleOpenDebugModal} 
+                                className="text-slate-300 dark:text-slate-700 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800" 
+                                title="Consultar situação no Hórus ERP (Debug & Sincronização)"
+                            >
                                 <Terminal className="w-4 h-4" />
                             </button>
                         </h1>
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-6 mt-1">
-                            {order.horus_pedido_venda && (
-                                <p className="text-slate-500 font-mono text-sm">Integração Horus: {order.horus_pedido_venda}</p>
+                            {order.horus_pedido_venda ? (
+                                <div 
+                                    onDoubleClick={handleOpenDebugModal}
+                                    className="group flex items-center gap-1.5 text-slate-500 font-mono text-sm cursor-pointer select-none"
+                                    title="Dê dois cliques para forçar consulta ao Hórus ERP"
+                                >
+                                    <span>Integração Horus: <strong className="text-slate-700 dark:text-slate-200 font-semibold">{order.horus_pedido_venda}</strong></span>
+                                    <button 
+                                        onClick={handleOpenDebugModal}
+                                        className="opacity-70 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 p-0.5 rounded transition-all"
+                                        title="Consultar situação no Hórus ERP"
+                                    >
+                                        <RefreshCw className="w-3.5 h-3.5" />
+                                    </button>
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={handleOpenDebugModal}
+                                    onDoubleClick={handleOpenDebugModal}
+                                    className="text-xs font-mono text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer flex items-center gap-1"
+                                    title="Dê dois cliques para forçar consulta ao Hórus ERP"
+                                >
+                                    <span>Hórus: Não integrado</span>
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                </button>
                             )}
                             {order.external_id && (
                                 <p className="text-slate-500 font-mono text-sm">
@@ -395,7 +431,11 @@ export default function OrderDetailPage() {
                     </div>
                 </div>
                 <div className="flex items-center gap-3">
-                    <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-semibold uppercase tracking-wide ${statusColorMap[order.status] || "bg-slate-100 text-slate-800"}`}>
+                    <span 
+                        onDoubleClick={handleOpenDebugModal}
+                        className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-semibold uppercase tracking-wide cursor-pointer select-none transition-transform hover:scale-105 active:scale-95 ${statusColorMap[order.status] || "bg-slate-100 text-slate-800"}`}
+                        title="Dê dois cliques para forçar consulta ao Hórus ERP"
+                    >
                         {statusLabelMap[order.status] || order.status}
                     </span>
 
@@ -445,10 +485,25 @@ export default function OrderDetailPage() {
 
             {/* Timeline UI */}
             {order.status === "CANCELLED" ? (
-                <div className="mb-4 bg-red-50 dark:bg-red-900/10 rounded-2xl p-6 border border-red-200 dark:border-red-900/30 flex items-center justify-center">
+                <div 
+                    onDoubleClick={handleOpenDebugModal}
+                    className="mb-4 bg-red-50 dark:bg-red-900/10 rounded-2xl p-6 border border-red-200 dark:border-red-900/30 flex flex-col sm:flex-row items-center justify-between gap-4 select-none cursor-pointer"
+                    title="Dê dois cliques para forçar consulta ao Hórus ERP"
+                >
                     <h2 className="text-xl font-bold text-red-600 dark:text-red-400 flex items-center gap-2">
-                         Pedido Cancelado no B2B / ERP
+                        <AlertCircle className="w-5 h-5" />
+                        Pedido Cancelado no B2B / ERP
                     </h2>
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenDebugModal();
+                        }}
+                        className="text-xs bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-300 font-medium px-3.5 py-1.5 rounded-xl transition-colors flex items-center gap-1.5"
+                    >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Consultar Situação no Hórus
+                    </button>
                 </div>
             ) : (
                 <div className="mb-4 bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm overflow-x-auto">
@@ -726,39 +781,229 @@ export default function OrderDetailPage() {
 
         </div>
             
-            {/* Debug Modal */}
+            {/* Debug Modal / Consulta Hórus ERP */}
             {isDebugModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800">
-                        <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
-                            <h2 className="text-lg font-bold flex items-center gap-2 text-slate-900 dark:text-white">
-                                <Terminal className="w-5 h-5 text-indigo-500" />
-                                Debug Integração Horus ERP
-                            </h2>
-                            <button onClick={() => setIsDebugModalOpen(false)} className="text-slate-500 hover:text-slate-800 dark:hover:text-white">
-                                <X className="w-5 h-5" />
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800">
+                        {/* Header */}
+                        <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+                            <div>
+                                <h2 className="text-lg font-bold flex items-center gap-2 text-slate-900 dark:text-white">
+                                    <Terminal className="w-5 h-5 text-indigo-500" />
+                                    Situação do Pedido no Hórus ERP
+                                </h2>
+                                <p className="text-xs text-slate-500 mt-0.5">
+                                    Pedido Cronuz #{order.id} {order.horus_pedido_venda ? `| ERP: #${order.horus_pedido_venda}` : ''}
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={handleOpenDebugModal}
+                                    disabled={horusPreviewLoading}
+                                    className="p-2 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                    title="Recarregar consulta ao Hórus"
+                                >
+                                    <RefreshCw className={`w-4 h-4 ${horusPreviewLoading ? 'animate-spin text-indigo-500' : ''}`} />
+                                </button>
+                                <button onClick={() => setIsDebugModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-xl">
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Navigation Tabs */}
+                        <div className="flex border-b border-slate-200 dark:border-slate-800 bg-slate-100/60 dark:bg-slate-800/40 px-4 pt-2 gap-2 text-xs font-semibold">
+                            <button
+                                onClick={() => setDebugTab('overview')}
+                                className={`px-3 py-2 rounded-t-xl transition-all border-b-2 ${debugTab === 'overview' ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                            >
+                                Diagnóstico & NF
+                            </button>
+                            <button
+                                onClick={() => setDebugTab('raw')}
+                                className={`px-3 py-2 rounded-t-xl transition-all border-b-2 ${debugTab === 'raw' ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                            >
+                                Payload Bruto (JSON)
+                            </button>
+                            <button
+                                onClick={() => setDebugTab('params')}
+                                className={`px-3 py-2 rounded-t-xl transition-all border-b-2 ${debugTab === 'params' ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                            >
+                                Parâmetros Enviados
                             </button>
                         </div>
-                        <div className="p-6 overflow-y-auto flex-1 font-mono text-sm bg-slate-950 text-green-400">
+
+                        {/* Body */}
+                        <div className="p-4 sm:p-6 overflow-y-auto flex-1">
                             {horusPreviewLoading ? (
-                                <div className="flex items-center justify-center h-40">
-                                    <RefreshCw className="w-8 h-8 animate-spin text-slate-500" />
+                                <div className="flex flex-col items-center justify-center py-16 gap-3">
+                                    <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
+                                    <p className="text-sm font-medium text-slate-600 dark:text-slate-400">Consultando API do Hórus ERP em tempo real...</p>
+                                </div>
+                            ) : horusPreviewData?.error ? (
+                                <div className="p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm flex items-start gap-3">
+                                    <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                                    <div>
+                                        <p className="font-bold">Erro ao consultar Hórus:</p>
+                                        <p className="mt-1 font-mono text-xs">{horusPreviewData.error}</p>
+                                    </div>
+                                </div>
+                            ) : debugTab === 'overview' ? (
+                                <div className="space-y-4">
+                                    {/* Divergence alert banner */}
+                                    {horusPreviewData?.status_horus_raw === 'FAT' && order.status !== 'INVOICED' && (
+                                        <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 text-sm flex items-start gap-3">
+                                            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                                            <div>
+                                                <p className="font-bold">Divergência detectada!</p>
+                                                <p className="text-xs mt-0.5">
+                                                    No Cronuz o pedido consta como <strong>{statusLabelMap[order.status] || order.status}</strong>, mas no Hórus ERP ele já está <strong>FATURADO (FAT)</strong>{horusPreviewData?.nota_fiscal?.NRO_NOTA_FISCAL ? ` com NF ${horusPreviewData.nota_fiscal.NRO_NOTA_FISCAL}` : ''}.
+                                                </p>
+                                                <p className="text-xs mt-1 text-amber-800 dark:text-amber-300">
+                                                    Clique em <strong>"Sincronizar e Atualizar Pedido Agora"</strong> abaixo para corrigir o status e baixar a Nota Fiscal.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Grid de Métricas */}
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                                        <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40">
+                                            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Status no Hórus</p>
+                                            <div className="mt-1.5 flex items-center gap-1.5">
+                                                <span className={`px-2 py-0.5 rounded-lg text-xs font-bold ${
+                                                    horusPreviewData?.status_horus_raw === 'FAT'
+                                                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                                        : horusPreviewData?.status_horus_raw === 'CAN'
+                                                        ? 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                                                        : 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                                                }`}>
+                                                    {horusPreviewData?.status_horus_raw || 'N/A'}
+                                                </span>
+                                                <span className="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">
+                                                    {horusPreviewData?.status_horus_label || 'Sem retorno'}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40">
+                                            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Cód. Pedido ERP</p>
+                                            <p className="text-base font-bold text-slate-900 dark:text-white mt-1">
+                                                {horusPreviewData?.horus_pedido_venda ? `#${horusPreviewData.horus_pedido_venda}` : 'Não vinculado'}
+                                            </p>
+                                        </div>
+
+                                        <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40">
+                                            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Nota Fiscal</p>
+                                            <p className="text-sm font-bold text-slate-900 dark:text-white mt-1">
+                                                {horusPreviewData?.nota_fiscal?.NRO_NOTA_FISCAL ? `NF ${horusPreviewData.nota_fiscal.NRO_NOTA_FISCAL}` : 'Não emitida'}
+                                            </p>
+                                            {horusPreviewData?.nota_fiscal?.DAT_EMISSAO_NF && (
+                                                <p className="text-[10px] text-slate-400 mt-0.5">{horusPreviewData.nota_fiscal.DAT_EMISSAO_NF}</p>
+                                            )}
+                                        </div>
+
+                                        <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40">
+                                            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Itens Atendidos</p>
+                                            <p className="text-base font-bold text-slate-900 dark:text-white mt-1">
+                                                {horusPreviewData?.order_details?.QTD_ITENS_ATENDIDOS ?? 0} <span className="text-xs font-normal text-slate-500">de {horusPreviewData?.order_details?.QTD_ITENS_TOTAL ?? 0} itens</span>
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* Nota Fiscal Card detalhado se existir */}
+                                    {horusPreviewData?.nota_fiscal && (
+                                        <div className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/50 dark:bg-emerald-950/20">
+                                            <h3 className="text-xs font-bold text-emerald-900 dark:text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+                                                <FileText className="w-4 h-4" />
+                                                Dados da Nota Fiscal Emitida
+                                            </h3>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mt-3 text-xs">
+                                                <div>
+                                                    <span className="text-slate-500">Número da NF:</span>
+                                                    <p className="font-bold text-slate-800 dark:text-slate-200">{horusPreviewData.nota_fiscal.NRO_NOTA_FISCAL}</p>
+                                                </div>
+                                                <div>
+                                                    <span className="text-slate-500">Série:</span>
+                                                    <p className="font-bold text-slate-800 dark:text-slate-200">{horusPreviewData.nota_fiscal.SERIE_FISCAL || '1'}</p>
+                                                </div>
+                                                <div>
+                                                    <span className="text-slate-500">Valor Líquido:</span>
+                                                    <p className="font-bold text-slate-800 dark:text-slate-200">R$ {horusPreviewData.nota_fiscal.VLR_LIQUIDO_NF || '0,00'}</p>
+                                                </div>
+                                                <div className="sm:col-span-2 md:col-span-3">
+                                                    <span className="text-slate-500">Chave de Acesso NFe:</span>
+                                                    <p className="font-mono text-[11px] text-slate-700 dark:text-slate-300 break-all select-all">{horusPreviewData.nota_fiscal.CHAVE_ACESSO_NFE || 'N/A'}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Detalhes do Pedido Hórus */}
+                                    {horusPreviewData?.order_details && (
+                                        <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs space-y-2">
+                                            <h3 className="font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider text-[11px]">Resumo do Pedido no ERP</h3>
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                                <div><span className="text-slate-500">Cliente ERP:</span> <p className="font-medium text-slate-700 dark:text-slate-300 truncate">{horusPreviewData.order_details.NOM_CLI || 'N/A'}</p></div>
+                                                <div><span className="text-slate-500">CNPJ/CPF:</span> <p className="font-medium text-slate-700 dark:text-slate-300">{horusPreviewData.order_details.CNPJ || horusPreviewData.order_details.CPF || 'N/A'}</p></div>
+                                                <div><span className="text-slate-500">Total Líquido:</span> <p className="font-medium text-slate-700 dark:text-slate-300">R$ {horusPreviewData.order_details.VLR_TOTAL_LIQUIDO || '0,00'}</p></div>
+                                                <div><span className="text-slate-500">Data Pedido:</span> <p className="font-medium text-slate-700 dark:text-slate-300">{horusPreviewData.order_details.DAT_PEDIDO ? new Date(horusPreviewData.order_details.DAT_PEDIDO).toLocaleString('pt-BR') : 'N/A'}</p></div>
+                                                <div><span className="text-slate-500">Última Atualização:</span> <p className="font-medium text-slate-700 dark:text-slate-300">{horusPreviewData.order_details.DAT_ULT_ATL ? new Date(horusPreviewData.order_details.DAT_ULT_ATL).toLocaleString('pt-BR') : 'N/A'}</p></div>
+                                                <div><span className="text-slate-500">Forma Pgto:</span> <p className="font-medium text-slate-700 dark:text-slate-300">{horusPreviewData.order_details.COD_FORMA || 'N/A'}</p></div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : debugTab === 'raw' ? (
+                                <div className="relative">
+                                    <button
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(JSON.stringify(horusPreviewData, null, 2));
+                                            setCopiedJson(true);
+                                            setTimeout(() => setCopiedJson(false), 2000);
+                                        }}
+                                        className="absolute right-3 top-3 bg-slate-800 hover:bg-slate-700 text-white text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 z-10 transition-colors"
+                                    >
+                                        <Copy className="w-3.5 h-3.5" />
+                                        {copiedJson ? 'Copiado!' : 'Copiar JSON'}
+                                    </button>
+                                    <pre className="p-4 rounded-xl bg-slate-950 text-emerald-400 font-mono text-xs overflow-x-auto max-h-[450px]">
+                                        {JSON.stringify(horusPreviewData, null, 2)}
+                                    </pre>
                                 </div>
                             ) : (
-                                <pre className="whitespace-pre-wrap break-all">
-                                    {JSON.stringify(horusPreviewData, null, 2)}
-                                </pre>
+                                <div className="space-y-3">
+                                    <p className="text-xs text-slate-500">Estes foram os parâmetros enviados para a chamada <code className="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">Busca_PedidosVenda</code> e <code className="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">Busca_notafiscal</code>:</p>
+                                    <pre className="p-4 rounded-xl bg-slate-950 text-indigo-300 font-mono text-xs overflow-x-auto">
+                                        {JSON.stringify(horusPreviewData?.params_enviados || {}, null, 2)}
+                                    </pre>
+                                </div>
                             )}
                         </div>
-                        <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex justify-end">
-                            <button 
-                                onClick={handleSyncHorus}
-                                disabled={horusSyncing}
-                                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors disabled:opacity-50"
-                            >
-                                {horusSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                                Sincronizar Forçadamente
-                            </button>
+
+                        {/* Footer */}
+                        <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex flex-col sm:flex-row justify-between items-center gap-3">
+                            <p className="text-[11px] text-slate-500">
+                                Dica: Dê dois cliques em "Integração Horus", no título ou no status para abrir este painel a qualquer momento.
+                            </p>
+                            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                                <button
+                                    onClick={handleOpenDebugModal}
+                                    disabled={horusPreviewLoading}
+                                    className="px-3 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1.5"
+                                >
+                                    <RefreshCw className={`w-3.5 h-3.5 ${horusPreviewLoading ? 'animate-spin' : ''}`} />
+                                    Consultar Novamente
+                                </button>
+                                <button
+                                    onClick={handleSyncHorus}
+                                    disabled={horusSyncing || horusPreviewLoading}
+                                    className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm shadow-indigo-500/20 disabled:opacity-50"
+                                >
+                                    <RefreshCw className={`w-3.5 h-3.5 ${horusSyncing ? 'animate-spin' : ''}`} />
+                                    Sincronizar e Atualizar Pedido Agora
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -15,10 +15,11 @@ class HorusOrders(HorusClient):
             if len(clean_branch) >= 11:
                 clean_cnpj_destino = clean_branch
 
-        if clean_cnpj_destino:
-            params["CNPJ_DESTINO"] = clean_cnpj_destino
+        is_b2b = not ignore_customer_context and bool(clean_cnpj_destino or id_doc or id_guid)
 
         if not ignore_customer_context:
+            if clean_cnpj_destino:
+                params["CNPJ_DESTINO"] = clean_cnpj_destino
             if id_doc:
                 params["ID_DOC"] = re.sub(r'\D', '', str(id_doc))
             if id_guid:
@@ -30,7 +31,10 @@ class HorusOrders(HorusClient):
         if cod_ped_venda:
             params["COD_PED_VENDA"] = cod_ped_venda
 
-        if getattr(self, '_settings', None):
+        # Importante: para chamadas B2B (com CNPJ_DESTINO/ID_DOC/ID_GUID), o Horus REJEITA explicitamente
+        # se COD_EMPRESA ou COD_FILIAL forem informados ("COD_EMPRESA - Não deve ser informado para integrações B2B!").
+        # Portanto, COD_EMPRESA e COD_FILIAL só devem ser enviados em consultas ERP diretas (ex: quando ignore_customer_context=True).
+        if not is_b2b and getattr(self, '_settings', None):
             if getattr(self._settings, 'horus_company', None):
                 params["COD_EMPRESA"] = self._settings.horus_company
             if getattr(self._settings, 'horus_branch', None):
@@ -47,15 +51,92 @@ class HorusOrders(HorusClient):
         
         # If successfully found the order, optionally fetch the invoice (nota fiscal)
         if result and isinstance(result, list) and len(result) > 0 and not result[0].get("Falha"):
-            order_data = result[0]
-            nf_params = params.copy()
+            order_data = None
+            clean_doc = re.sub(r'\D', '', str(id_doc)) if id_doc else None
+
+            # 1. Match por cod_ped_venda exato se informado
+            if cod_ped_venda:
+                for item in result:
+                    if str(item.get("COD_PED_VENDA")) == str(cod_ped_venda):
+                        order_data = item
+                        break
+
+            # 2. Match por documento do cliente (CNPJ ou CPF) para evitar registros antigos de outros clientes
+            if not order_data and clean_doc:
+                for item in result:
+                    item_cnpj = re.sub(r'\D', '', str(item.get("CNPJ") or ''))
+                    item_cpf = re.sub(r'\D', '', str(item.get("CPF") or ''))
+                    if item_cnpj == clean_doc or item_cpf == clean_doc:
+                        order_data = item
+                        break
+
+            # 3. Fallback: ordenar pelo pedido mais recente (maior COD_PED_VENDA)
+            if not order_data:
+                try:
+                    sorted_list = sorted(
+                        result,
+                        key=lambda x: int(x.get("COD_PED_VENDA") or 0),
+                        reverse=True
+                    )
+                    order_data = sorted_list[0]
+                except Exception:
+                    order_data = result[0]
+
+            # Buscar nota fiscal
+            nf_params = {}
+            if is_b2b:
+                if clean_cnpj_destino:
+                    nf_params["CNPJ_DESTINO"] = clean_cnpj_destino
+                if id_doc:
+                    nf_params["ID_DOC"] = re.sub(r'\D', '', str(id_doc))
+                if id_guid:
+                    nf_params["ID_GUID"] = id_guid
+                if cod_pedido_origem is not None and cod_pedido_origem != "":
+                    nf_params["COD_PEDIDO_ORIGEM"] = cod_pedido_origem
+            else:
+                if order_data.get("COD_PED_VENDA"):
+                    nf_params["COD_PED_VENDA"] = order_data.get("COD_PED_VENDA")
+                if getattr(self, '_settings', None):
+                    if getattr(self._settings, 'horus_company', None):
+                        nf_params["COD_EMPRESA"] = self._settings.horus_company
+                    if getattr(self._settings, 'horus_branch', None):
+                        branch_str = str(self._settings.horus_branch).strip()
+                        clean_digits = re.sub(r'\D', '', branch_str)
+                        if clean_digits and len(clean_digits) < 11:
+                            nf_params["COD_FILIAL"] = branch_str
+
             nf_params["XML_BASE64"] = "S"
+            if not getattr(self._settings, 'horus_legacy_pagination', False):
+                nf_params["LIMIT"] = 50
+                nf_params["OFFSET"] = 0
+
             try:
                 invoice = await self.get("Busca_notafiscal", params=nf_params)
-                if invoice and isinstance(invoice, list) and len(invoice) > 0:
+                if invoice and isinstance(invoice, list) and len(invoice) > 0 and not invoice[0].get("Falha"):
                     order_data["NOTA_FISCAL"] = invoice[0]
                 else:
-                    order_data["NOTA_FISCAL"] = None
+                    # Fallback ERP para busca de NF se tiver COD_PED_VENDA e configurações de empresa/filial
+                    if order_data.get("COD_PED_VENDA") and getattr(self, '_settings', None) and getattr(self._settings, 'horus_company', None):
+                        fallback_nf_params = {
+                            "COD_PED_VENDA": order_data.get("COD_PED_VENDA"),
+                            "COD_EMPRESA": self._settings.horus_company,
+                            "XML_BASE64": "S"
+                        }
+                        if getattr(self._settings, 'horus_branch', None):
+                            b_str = str(self._settings.horus_branch).strip()
+                            c_dig = re.sub(r'\D', '', b_str)
+                            if c_dig and len(c_dig) < 11:
+                                fallback_nf_params["COD_FILIAL"] = b_str
+                        if not getattr(self._settings, 'horus_legacy_pagination', False):
+                            fallback_nf_params["LIMIT"] = 50
+                            fallback_nf_params["OFFSET"] = 0
+                        fb_inv = await self.get("Busca_notafiscal", params=fallback_nf_params)
+                        if fb_inv and isinstance(fb_inv, list) and len(fb_inv) > 0 and not fb_inv[0].get("Falha"):
+                            order_data["NOTA_FISCAL"] = fb_inv[0]
+                        else:
+                            order_data["NOTA_FISCAL"] = None
+                    else:
+                        order_data["NOTA_FISCAL"] = None
             except Exception:
                 order_data["NOTA_FISCAL"] = None
             return order_data

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { getToken, getUser } from '@/lib/auth';
 import { 
   FileText, Search, ArrowLeft, Loader2, Minus, Plus, Trash2, ShoppingCart, 
-  User, Building2, Inbox, Info, Save, Layers, HelpCircle, Calendar, PlusCircle, Percent
+  User, Building2, Inbox, Info, Save, Layers, HelpCircle, Calendar, PlusCircle, Percent, Wrench
 } from 'lucide-react';
 import Link from 'next/link';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
@@ -112,8 +112,8 @@ export default function NewOrEditProposalPage() {
   const [paymentCondition, setPaymentCondition] = useState('A Vista');
   const [notes, setNotes] = useState('');
 
-  // Catalog search states
-  const [itemTypeTab, setItemTypeTab] = useState<'PRODUCT' | 'SERVICE'>('PRODUCT');
+  // Catalog search states (exclusively Services for this form)
+  const [itemTypeTab, setItemTypeTab] = useState<'PRODUCT' | 'SERVICE'>('SERVICE');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
@@ -525,10 +525,10 @@ export default function NewOrEditProposalPage() {
         </Link>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
-            <FileText className="w-7 h-7 text-[var(--color-primary-base)]" />
-            {editProposalId ? 'Editar Proposta / Orçamento' : 'Criar Nova Proposta'}
+            <Wrench className="w-7 h-7 text-[var(--color-primary-base)]" />
+            {editProposalId ? 'Editar Proposta de Serviços' : 'Criar Proposta de Serviços'}
           </h1>
-          <p className="text-slate-500 text-sm mt-1">Preencha os termos comerciais e monte a proposta no carrinho reativo.</p>
+          <p className="text-slate-500 text-sm mt-1">Preencha o escopo dos serviços, prazos e condições comerciais.</p>
         </div>
       </div>
 
@@ -861,37 +861,24 @@ export default function NewOrEditProposalPage() {
             )}
           </div>
 
-          {/* Cart items */}
+          {/* Cart items - Exclusively Services */}
           <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
-            <h2 className="font-bold text-slate-800 dark:text-slate-200 text-lg flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-              <ShoppingCart className="w-5 h-5 text-[var(--color-primary-base)]" />
-              3. Itens Propostos (Produtos / Serviços)
-            </h2>
-
-            {/* Catalog search tabs */}
-            <div className="flex gap-4 items-center">
-              <button
-                type="button"
-                onClick={() => { setItemTypeTab('PRODUCT'); setSearchQuery(''); setSearchResults([]); }}
-                className={`text-sm font-bold pb-2 transition-colors border-b-2 ${itemTypeTab === 'PRODUCT' ? 'border-[var(--color-primary-base)] text-slate-900 dark:text-white' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-              >
-                Buscar Produtos
-              </button>
-              <button
-                type="button"
-                onClick={() => { setItemTypeTab('SERVICE'); setSearchQuery(''); setSearchResults([]); }}
-                className={`text-sm font-bold pb-2 transition-colors border-b-2 ${itemTypeTab === 'SERVICE' ? 'border-[var(--color-primary-base)] text-slate-900 dark:text-white' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-              >
-                Buscar Serviços
-              </button>
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+              <h2 className="font-bold text-slate-800 dark:text-slate-200 text-lg flex items-center gap-2">
+                <Wrench className="w-5 h-5 text-[var(--color-primary-base)]" />
+                3. Serviços Propostos & Escopo
+              </h2>
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
+                Apenas Serviços
+              </span>
             </div>
 
-            {/* Search Input */}
+            {/* Search Input for Services */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
                 type="text"
-                placeholder={itemTypeTab === 'PRODUCT' ? 'Buscar produto por SKU ou nome...' : 'Buscar serviço no catálogo...'}
+                placeholder="Buscar serviço no catálogo pelo nome ou descrição..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] dark:text-white"
@@ -909,10 +896,12 @@ export default function NewOrEditProposalPage() {
                     >
                       <div className="flex flex-col">
                         <span className="font-semibold text-slate-800 dark:text-slate-200">{item.name}</span>
-                        {itemTypeTab === 'PRODUCT' && <span className="text-xs text-slate-400 font-mono">SKU: {item.sku}</span>}
+                        {item.description && (
+                          <span className="text-xs text-slate-400 truncate max-w-md">{item.description}</span>
+                        )}
                       </div>
                       <span className="font-bold text-[var(--color-primary-base)]">
-                        R$ {(item.price || item.base_price || item.standard_price || item.base_value || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        R$ {(item.base_value || item.standard_price || item.price || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                       </span>
                     </button>
                   ))}
@@ -1102,8 +1091,8 @@ export default function NewOrEditProposalPage() {
             ) : (
               <div className="p-12 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-center text-slate-400 flex flex-col items-center gap-2">
                 <PlusCircle className="w-8 h-8 text-slate-300" />
-                <p className="text-sm">O carrinho da proposta está vazio.</p>
-                <p className="text-xs">Busque produtos ou serviços no painel acima para adicioná-los.</p>
+                <p className="text-sm">Nenhum serviço adicionado à proposta.</p>
+                <p className="text-xs">Busque serviços no catálogo acima para compor a proposta.</p>
               </div>
             )}
           </div>

@@ -128,7 +128,7 @@ export default function DbmDashboardPage() {
       borderColor: 'border-emerald-200 dark:border-emerald-900/40 hover:border-emerald-400',
       badgeColor: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
       actions: [
-        { id: 'vendas-1', name: 'Orçamentos & Propostas', href: '/proposals', isAvailable: true },
+        { id: 'vendas-1', name: 'Orçamentos & Propostas', href: '/proposals/desk', isAvailable: true },
         { id: 'vendas-2', name: 'Pedidos Internet', href: '/orders', isAvailable: true },
       ]
     },

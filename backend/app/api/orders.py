@@ -507,13 +507,13 @@ async def get_order_detail(
                 cod_origem = order.partner_reference if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id)
 
                 # Horus B2B não aceita COD_PED_VENDA no Busca_PedidosVenda —
-                # única forma válida é via COD_PEDIDO_ORIGEM
+                # Consulta o pedido no Horus pelo identificador de origem ou pedido de venda ERP
                 horus_data = await horus_client.get_order(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
                     cod_pedido_origem=cod_origem,
-                    cod_ped_venda=None
+                    cod_ped_venda=str(order.horus_pedido_venda).strip() if order.horus_pedido_venda else None
                 )
                 
                 if horus_data and isinstance(horus_data, list) and len(horus_data) > 0:
@@ -521,15 +521,16 @@ async def get_order_detail(
                     
                 print(f"DEBUG HORUS SYNC SELLER (order {order.id}): {horus_data}")
 
-                if not horus_data:
-                    # Se não encontrou o pedido na Horus (pode ter sido excluído lá), marca como cancelado se for B2B.
-                    # Mantém o status original se for bookinfo para não dar falso positivo imediato.
-                    new_status = "CANCELLED" if order.origin != "bookinfo" else order.status
-                elif isinstance(horus_data, dict) and horus_data.get("Falha"):
-                    new_status = order.status
-                elif horus_data and isinstance(horus_data, dict):
-                    status_api = horus_data.get("STATUS_PEDIDO_VENDA", "")
-                    
+                changed = False
+
+                if horus_data and isinstance(horus_data, dict) and not horus_data.get("Falha"):
+                    # Atualiza o COD_PED_VENDA caso tenha sido gerado ou localizado agora
+                    new_horus_id = str(horus_data.get("COD_PED_VENDA", "")).strip()
+                    if new_horus_id and (not order.horus_pedido_venda or str(order.horus_pedido_venda).strip() != new_horus_id):
+                        order.horus_pedido_venda = new_horus_id
+                        changed = True
+
+                    status_api = str(horus_data.get("STATUS_PEDIDO_VENDA", "")).strip().upper()
                     status_mapping = {
                         "LEX": "DISPATCH",
                         "IMP": "DISPATCH",
@@ -540,15 +541,30 @@ async def get_order_detail(
                         "FAT": "INVOICED",
                         "CAN": "CANCELLED"
                     }
-                    
                     new_status = status_mapping.get(status_api, order.status)
+
+                    # Atualiza Nota Fiscal se presente
+                    nf = horus_data.get("NOTA_FISCAL")
+                    if nf and isinstance(nf, dict) and not nf.get("Falha"):
+                        xml_base64 = nf.get("XML_Base64")
+                        nro_nf = nf.get("NRO_NOTA_FISCAL")
+                        chave_nfe = nf.get("CHAVE_ACESSO_NFE")
+                        if xml_base64 and order.invoice_xml != xml_base64:
+                            order.invoice_xml = xml_base64
+                            changed = True
+                        if nro_nf and order.invoice_number != str(nro_nf):
+                            order.invoice_number = str(nro_nf)
+                            changed = True
+                        if chave_nfe and order.invoice_key != str(chave_nfe):
+                            order.invoice_key = str(chave_nfe)
+                            changed = True
                 else:
+                    # Se não obteve retorno válido do Horus (timeout, erro transitório ou não encontrado),
+                    # preserva o status atual do pedido para NUNCA gerar cancelamento indevido!
                     new_status = order.status
-                    
-                changed = False
+
                 if new_status != order.status:
                     from app.models.order_log import OrderLog
-                    
                     log_entry = OrderLog(
                         order_id=order.id,
                         old_status=order.status,
@@ -558,14 +574,6 @@ async def get_order_detail(
                     order.status = new_status
                     changed = True
                     
-                if horus_data and isinstance(horus_data, dict):
-                    nf = horus_data.get("NOTA_FISCAL")
-                    if nf and isinstance(nf, dict):
-                        xml_base64 = nf.get("XML_Base64")
-                        if xml_base64 and order.invoice_xml != xml_base64:
-                            order.invoice_xml = xml_base64
-                            changed = True
-                            
                 if changed:
                     db.commit()
                     db.refresh(order)
@@ -786,9 +794,6 @@ async def get_horus_debug_preview(
     
     if not order:
         raise HTTPException(status_code=404, detail="Pedido não encontrado.")
-    
-    if search_type == "venda" and not order.horus_pedido_venda:
-        raise HTTPException(status_code=400, detail="Pedido não possui vínculo de venda com Horus (COD_PED_VENDA vazio).")
         
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
     if not settings or not settings.horus_enabled:
@@ -805,12 +810,13 @@ async def get_horus_debug_preview(
         from app.integrators.horus_orders import HorusOrders
         horus_client = HorusOrders(db, order.company_id)
         try:
+            search_origem = order.partner_reference if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id)
             raw_horus_data = await horus_client.get_order(
                 id_doc=customer.document,
                 id_guid=customer.id_guid,
                 cnpj_destino=company.document,
-                cod_pedido_origem=order.partner_reference if order.origin == "bookinfo" else order.id,
-                cod_ped_venda=None,
+                cod_pedido_origem=search_origem,
+                cod_ped_venda=str(order.horus_pedido_venda).strip() if order.horus_pedido_venda else None,
                 ignore_customer_context=False
             )
             if raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0:
@@ -818,9 +824,17 @@ async def get_horus_debug_preview(
             else:
                 horus_data = raw_horus_data
                 
-            if order.horus_pedido_venda:
-                # Optionally also fetch items if COD_PED_VENDA is available
-                horus_items_data = await horus_client.get_order_items(order.horus_pedido_venda)
+            horus_ped_venda = None
+            if horus_data and isinstance(horus_data, dict):
+                horus_ped_venda = horus_data.get("COD_PED_VENDA") or order.horus_pedido_venda
+            else:
+                horus_ped_venda = order.horus_pedido_venda
+
+            if horus_ped_venda:
+                try:
+                    horus_items_data = await horus_client.get_order_items(horus_ped_venda)
+                except Exception:
+                    horus_items_data = None
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Erro retornado ao consultar Horus API: {str(e)}")
         finally:
@@ -836,10 +850,37 @@ async def get_horus_debug_preview(
                 "ID_DOC": customer.document,
                 "ID_GUID": customer.id_guid,
                 "CNPJ_DESTINO": company.document,
-                "COD_PEDIDO_ORIGEM": order.partner_reference if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id)
+                "COD_PEDIDO_ORIGEM": order.partner_reference if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id),
+                "COD_PED_VENDA": str(order.horus_pedido_venda).strip() if order.horus_pedido_venda else None
             }
             
+    # Format status interpretation
+    status_api = ""
+    status_label = "Não localizado no Hórus / Sem retorno"
+    if horus_data and isinstance(horus_data, dict):
+        if horus_data.get("Falha"):
+            status_label = f"Falha no Hórus: {horus_data.get('Falha')} - {horus_data.get('Mensagem', '')}"
+        else:
+            status_api = str(horus_data.get("STATUS_PEDIDO_VENDA", "")).strip().upper()
+            mapping = {
+                "LEX": "Em Separação (LEX)",
+                "IMP": "Em Separação (IMP)",
+                "CON": "Em Separação / Conferência (CON)",
+                "LFT": "Lote Faturamento (LFT)",
+                "NOV": "Novo / Em Processamento (NOV)",
+                "LAP": "Liberado Aprovação (LAP)",
+                "FAT": "Faturado (FAT)",
+                "CAN": "Cancelado (CAN)"
+            }
+            status_label = mapping.get(status_api, f"Status: {status_api}")
+
     return {
+        "success": bool(horus_data and isinstance(horus_data, dict) and not horus_data.get("Falha")),
+        "status_horus_raw": status_api,
+        "status_horus_label": status_label,
+        "horus_pedido_venda": (horus_data.get("COD_PED_VENDA") if isinstance(horus_data, dict) else None) or order.horus_pedido_venda,
+        "order_current_status": order.status,
+        "nota_fiscal": horus_data.get("NOTA_FISCAL") if isinstance(horus_data, dict) else None,
         "params_enviados": request_params,
         "order_details": horus_data,
         "order_items": horus_items_data
@@ -888,7 +929,7 @@ async def manual_sync_horus(
                 id_guid=customer.id_guid,
                 cnpj_destino=company.document,
                 cod_pedido_origem=search_origem,
-                cod_ped_venda=None,
+                cod_ped_venda=str(order.horus_pedido_venda).strip() if order.horus_pedido_venda else None,
                 ignore_customer_context=False
             )
             
@@ -900,18 +941,13 @@ async def manual_sync_horus(
                 
             changed = False
             
-            if horus_data and isinstance(horus_data, dict):
+            if horus_data and isinstance(horus_data, dict) and not horus_data.get("Falha"):
                 new_horus_id = str(horus_data.get("COD_PED_VENDA", "")).strip()
                 if new_horus_id and new_horus_id != str(order.horus_pedido_venda).strip():
                     order.horus_pedido_venda = new_horus_id
                     changed = True
-                    
-            if not horus_data:
-                new_status = "CANCELLED"
-            elif isinstance(horus_data, dict) and horus_data.get("Falha"):
-                new_status = order.status
-            elif horus_data and isinstance(horus_data, dict):
-                status_api = horus_data.get("STATUS_PEDIDO_VENDA", "")
+
+                status_api = str(horus_data.get("STATUS_PEDIDO_VENDA", "")).strip().upper()
                 status_mapping = {
                     "LEX": "DISPATCH",
                     "IMP": "DISPATCH",
@@ -923,7 +959,24 @@ async def manual_sync_horus(
                     "CAN": "CANCELLED"
                 }
                 new_status = status_mapping.get(status_api, order.status)
+
+                # Atualiza dados da NF
+                nf = horus_data.get("NOTA_FISCAL")
+                if nf and isinstance(nf, dict) and not nf.get("Falha"):
+                    xml_base64 = nf.get("XML_Base64")
+                    nro_nf = nf.get("NRO_NOTA_FISCAL")
+                    chave_nfe = nf.get("CHAVE_ACESSO_NFE")
+                    if xml_base64 and order.invoice_xml != xml_base64:
+                        order.invoice_xml = xml_base64
+                        changed = True
+                    if nro_nf and order.invoice_number != str(nro_nf):
+                        order.invoice_number = str(nro_nf)
+                        changed = True
+                    if chave_nfe and order.invoice_key != str(chave_nfe):
+                        order.invoice_key = str(chave_nfe)
+                        changed = True
             else:
+                # Se não encontrou ou API falhou, não altera status arbitrariamente
                 new_status = order.status
                 
             if new_status != order.status:
@@ -933,14 +986,6 @@ async def manual_sync_horus(
                 order.status = new_status
                 changed = True
                 
-            if horus_data and isinstance(horus_data, dict):
-                nf = horus_data.get("NOTA_FISCAL")
-                if nf and isinstance(nf, dict):
-                    xml_base64 = nf.get("XML_Base64")
-                    if xml_base64 and order.invoice_xml != xml_base64:
-                        order.invoice_xml = xml_base64
-                        changed = True
-                        
             if changed:
                 db.commit()
                 db.refresh(order)

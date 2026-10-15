@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { 
-  FileText, Search, Plus, Filter, Eye, Edit3, Trash2, Calendar, CheckCircle2, AlertTriangle, Play, RefreshCw, TrendingUp, Sparkles, User, Inbox, ArrowRight, Loader2
+  FileText, Search, Plus, Filter, Eye, Edit3, Trash2, Calendar, CheckCircle2, AlertTriangle, Play, RefreshCw, TrendingUp, Sparkles, User, Inbox, ArrowRight, Loader2, Wrench
 } from 'lucide-react';
 import Link from 'next/link';
 import { getToken } from '@/lib/auth';
@@ -149,6 +149,8 @@ export default function ProposalsPage() {
       if (filterType === 'LEAD' && selectedLeadId) {
         params.append('lead_id', selectedLeadId);
       }
+      // Filtra estritamente propostas de serviços
+      params.append('item_type', 'SERVICE');
 
       const token = getToken();
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -221,20 +223,22 @@ export default function ProposalsPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
-            <FileText className="w-8 h-8 text-[var(--color-primary-base)]" />
-            Módulo de Propostas Comerciais
+            <Wrench className="w-8 h-8 text-[var(--color-primary-base)]" />
+            Gestão de Propostas de Serviços
           </h1>
           <p className="text-slate-500 text-sm mt-1">
-            Gere, negocie e converta orçamentos com clientes, leads ou contatos manuais de forma centralizada.
+            Gere, envie e negocie propostas comerciais e orçamentos de serviços com clientes e leads.
           </p>
         </div>
-        <Link
-          href="/proposals/new"
-          className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white px-5 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-sm w-full sm:w-auto justify-center"
-        >
-          <Plus className="w-5 h-5" />
-          Nova Proposta
-        </Link>
+        <div className="flex items-center gap-2.5 w-full sm:w-auto">
+          <Link
+            href="/proposals/new"
+            className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white px-5 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2 shadow-sm w-full sm:w-auto justify-center text-sm shadow-indigo-500/20 active:scale-98"
+          >
+            <Plus className="w-4 h-4" />
+            Nova Proposta
+          </Link>
+        </div>
       </div>
 
       {/* Metrics Summary Panels */}
@@ -247,7 +251,7 @@ export default function ProposalsPage() {
           </p>
           <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
             <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-            <span>Engloba propostas rascunhadas e enviadas</span>
+            <span>Engloba orçamentos de serviços em elaboração ou enviados</span>
           </div>
         </div>
 
@@ -259,7 +263,7 @@ export default function ProposalsPage() {
           </p>
           <div className="mt-4 flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 font-medium">
             <TrendingUp className="w-3.5 h-3.5 animate-pulse" />
-            <span>Faturamento aceito/gerado a partir de propostas</span>
+            <span>Faturamento contratado em serviços prestados</span>
           </div>
         </div>
 
@@ -274,7 +278,7 @@ export default function ProposalsPage() {
           </p>
           <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-            <span>Percentual de propostas aceitas/convertidas</span>
+            <span>Conversão de orçamentos de serviços em contratos</span>
           </div>
         </div>
       </div>
@@ -458,9 +462,9 @@ export default function ProposalsPage() {
                 <tr>
                   <td colSpan={7} className="py-16 text-center text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center justify-center space-y-3">
-                      <FileText className="h-12 w-12 text-slate-300 dark:text-slate-700" />
-                      <p className="font-medium text-slate-600 dark:text-slate-300">Nenhuma proposta encontrada</p>
-                      <p className="text-xs text-slate-400">Use o botão no topo direito para criar uma proposta.</p>
+                      <Wrench className="h-12 w-12 text-slate-300 dark:text-slate-700" />
+                      <p className="font-medium text-slate-600 dark:text-slate-300">Nenhuma proposta de serviço encontrada</p>
+                      <p className="text-xs text-slate-400">Use o botão "Nova Proposta" no topo para criar sua primeira proposta de serviços.</p>
                     </div>
                   </td>
                 </tr>

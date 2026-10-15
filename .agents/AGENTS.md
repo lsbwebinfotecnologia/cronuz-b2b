@@ -207,5 +207,23 @@ git push origin --delete feature/nome-da-funcionalidade
 5. **Alternância entre R$ e % em Descontos**:
    - Em locais onde for permitido conceder desconto tanto em valor nominal (R$) quanto em percentual (%), deve-se disponibilizar um alternador visual simples (`R$` / `%`), aplicando a máscara correspondente de acordo com o modo ativo.
 
+---
+
+## 🏛️ 8. Arquitetura Funcional: Pedidos DBM vs. Mesa Comercial Padrão (Intake de Pedidos)
+
+> [!NOTE]
+> **Distinção Arquitetural Estratégica**:
+> 1. **Rotina DBM (Horus Direct / Gestão de Vendas DBM)**:
+>    - Segue uma linha de raciocínio dedicada para um modelo operacional específico de cliente (operações integradas diretamente ao ecossistema Horus Direct).
+>    - Suas telas e regras de negócio contêm comportamentos customizados para essa operação específica.
+> 2. **Mesa de Análise & Intake Comercial Padrão (Liberada para todos os Sellers via Módulo)**:
+>    - Módulo padronizado da plataforma Cronuz B2B destinado a todos os sellers.
+>    - Interface densa estilo Access com abas comerciais unificadas:
+>      - **`pedido`**: Itens capturados na importação (E-mail, WhatsApp, Planilha XLSX, PDF ou Digitação Manual) analisados com estoque Horus, situação (Reservado / Parcial / Falta), quantidades solicitadas vs aprovadas e totalizadores.
+>      - **`novidades`**: Lançamentos e novidades do catálogo com estoque disponível e giro recente geral.
+>      - **`reposição`**: Obras recorrentes de alto giro do cliente com saldo para reabastecimento.
+>      - **`fundo de catálogo`**: Obras clássicas/long tail para composição de pedido mínimo e mix de vendas.
+>    - Ambas compartilham o padrão de alta performance, densidade visual ERP (Access) e facilidade de navegação por teclado (Enter, setas e atalhos), mas mantêm rotinas de backend e regras de negócio isoladas para permitir evolução independente de cada frente.
+
 
 

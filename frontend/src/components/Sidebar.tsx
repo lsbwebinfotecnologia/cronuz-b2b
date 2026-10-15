@@ -49,7 +49,8 @@ import {
   Coffee,
   UtensilsCrossed,
   QrCode,
-  MapPin
+  MapPin,
+  Wrench
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -122,13 +123,17 @@ const sellerNavigation: NavItem[] = [
   { 
     name: 'Pedidos', 
     href: '/orders', 
-    icon: ShoppingBag,
+    icon: ShoppingBag 
+  },
+  { 
+    name: 'Propostas', 
+    href: '/proposals', 
+    icon: FileText,
     subItems: [
-      { name: 'Central de Pedidos', href: '/orders' },
-      { name: 'Mesa de Análise & Entrada', href: '/orders/intake' },
+      { name: 'Serviços', href: '/proposals', icon: Wrench },
+      { name: 'Comercial', href: '/proposals/commercial', icon: ShoppingBag },
     ]
   },
-  { name: 'Propostas', href: '/proposals', icon: FileText },
   { 
     name: 'Empresas', 
     href: '/customers', 
@@ -222,6 +227,9 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                initialOpen[item.name] = true;
            }
            if (item.name === 'Empresas' && pathname.startsWith('/customers')) {
+               initialOpen[item.name] = true;
+           }
+           if (item.name === 'Propostas' && pathname.startsWith('/proposals')) {
                initialOpen[item.name] = true;
            }
        });

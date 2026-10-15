@@ -121,6 +121,7 @@ def list_proposals(
     relation_type: Optional[str] = None,
     customer_id: Optional[int] = None,
     lead_id: Optional[str] = None,
+    item_type: Optional[str] = None,
     search: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
@@ -130,6 +131,9 @@ def list_proposals(
     current_user: User = Depends(check_proposals_enabled)
 ):
     query = db.query(Proposal).filter(Proposal.company_id == current_user.company_id)
+
+    if item_type:
+        query = query.filter(Proposal.items.any(ProposalItem.item_type == item_type))
 
     if status:
         if "," in status:
@@ -160,6 +164,8 @@ def list_proposals(
     metrics_query = db.query(Proposal.status, Proposal.total).filter(
         Proposal.company_id == current_user.company_id
     )
+    if item_type:
+        metrics_query = metrics_query.filter(Proposal.items.any(ProposalItem.item_type == item_type))
     if relation_type:
         metrics_query = metrics_query.filter(Proposal.relation_type == relation_type)
     if customer_id:

@@ -123,7 +123,7 @@ def sync_horus_order_status():
                     id_guid=customer.id_guid if customer else None,
                     cnpj_destino=company.document if company else None,
                     cod_pedido_origem=None if order.origin == "bookinfo" else (order.customer_order_ref if order.customer_order_ref else order.id),
-                    cod_ped_venda=str(order.horus_pedido_venda).strip() if order.origin == "bookinfo" else None,
+                    cod_ped_venda=str(order.horus_pedido_venda).strip() if order.horus_pedido_venda else None,
                     ignore_customer_context=(order.origin == "bookinfo")
                 )
                 await horus_client.close()
@@ -137,9 +137,13 @@ def sync_horus_order_status():
                 failed_companies.add(order.company_id)
                 continue
                 
-            if raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0:
+            horus_order = None
+            if raw_horus_data and isinstance(raw_horus_data, dict) and not raw_horus_data.get("Falha"):
+                horus_order = raw_horus_data
+            elif raw_horus_data and isinstance(raw_horus_data, list) and len(raw_horus_data) > 0 and not raw_horus_data[0].get("Falha"):
                 horus_order = raw_horus_data[0]
-                
+
+            if horus_order:
                 status_venda = horus_order.get("STATUS_PEDIDO_VENDA", "")
                 if status_venda == "FAT":
                     nf = horus_order.get("NOTA_FISCAL")
