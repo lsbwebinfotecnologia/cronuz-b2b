@@ -46,6 +46,15 @@ const KNOWN_DISTRIBUTORS = [
     description: 'Disal Marketplace API. Autenticação via chave de API (xLtOpenKeyId).',
     logo: '📦',
   },
+  {
+    slug: 'inovacao',
+    name: 'Inovação Distribuidora',
+    color: '#ea580c',
+    auth_type: 'user_pass',   // username + password → SimpleSet API (cálculo de MD5 diário)
+    default_base_url: 'https://simpleset.inovacaodistribuidora.com.br',
+    description: 'Plataforma SimpleSet. Autenticação via usuário e senha (chave diária gerada automaticamente).',
+    logo: '⚡',
+  },
 ];
 
 type DistributorMeta = typeof KNOWN_DISTRIBUTORS[0];
@@ -342,10 +351,10 @@ function DistributorCard({
             <div>
               <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">E-mail / Usuário</label>
               <input
-                type="email"
+                type="text"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
-                placeholder="seu@email.com"
+                placeholder={meta.slug === 'inovacao' ? 'usuário SimpleSet' : 'seu@email.com'}
                 className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00b4b4]/50"
               />
             </div>
@@ -356,10 +365,16 @@ function DistributorCard({
               placeholder={hasConfig && config?.has_password ? '(mantém senha atual)' : 'Nova senha'}
               hint={hasConfig && config?.has_password ? 'Deixe em branco para manter a senha atual.' : undefined}
             />
-            {hasConfig && config?.token_configured && (
+            {hasConfig && config?.token_configured && meta.slug !== 'inovacao' && (
               <div className="flex items-center gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
                 <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                 Token de autenticação cacheado — será renovado automaticamente ao expirar.
+              </div>
+            )}
+            {hasConfig && meta.slug === 'inovacao' && config?.has_password && (
+              <div className="flex items-center gap-2 rounded-lg bg-orange-50 dark:bg-orange-900/20 px-3 py-2 text-xs text-orange-700 dark:text-orange-400">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                Chave diária SimpleSet calculada automaticamente a cada requisição.
               </div>
             )}
           </>

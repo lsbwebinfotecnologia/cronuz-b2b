@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { Loader2, Save, Database, Key, Activity } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from './layout';
+import { useCompany } from './context';
 
 export function HorusTab() {
   const { company, refreshCompany } = useCompany();

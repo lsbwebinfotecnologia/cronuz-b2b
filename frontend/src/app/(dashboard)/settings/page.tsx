@@ -14,7 +14,7 @@ import { BookinfoTab } from './BookinfoTab';
 import { SefazBranchesTab } from './SefazBranchesTab';
 import { DropshipTab } from './DropshipTab';
 import { LogisticsTab } from './LogisticsTab';
-import { useCompany } from './layout';
+import { useCompany } from './context';
 import { CurrencyInput } from '@/components/CurrencyInput';
 
 export default function SettingsPage() {

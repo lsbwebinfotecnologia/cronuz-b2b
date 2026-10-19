@@ -375,6 +375,7 @@ async def get_distributor_stock(
     from app.models.distributor import DistributorCredential
     from app.integrators.catavento_client import CataventoClient
     from app.integrators.disal_client import DisalClient
+    from app.integrators.inovacao_client import InovacaoClient
 
     company_id = current_user.company_id
 
@@ -452,6 +453,30 @@ async def get_distributor_stock(
             "error":  result.get("error"),
         }
 
+    async def query_inovacao(dist: DistributorCredential):
+        client = InovacaoClient(
+            base_url=dist.base_url or "",
+            username=dist.username or "",
+            password=dist.password or "",
+        )
+        try:
+            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=12.0)
+        except asyncio.TimeoutError:
+            result = {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Inovação (Timeout)."}
+        except Exception as e:
+            result = {"found": False, "saldo": 0, "error": f"Erro de comunicação com a Inovação: {e}"}
+
+        return {
+            "slug":   dist.slug,
+            "name":   dist.name,
+            "enabled": True,
+            "found":  result.get("found", False),
+            "saldo":  result.get("saldo", 0),
+            "preco":  result.get("preco"),
+            "titulo": result.get("titulo"),
+            "error":  result.get("error"),
+        }
+
     # Monta coroutines por distribuidor com tratamento individual
     tasks = []
     for dist in distributors:
@@ -459,6 +484,8 @@ async def get_distributor_stock(
             tasks.append(query_catavento(dist))
         elif dist.slug == "disal":
             tasks.append(query_disal(dist))
+        elif dist.slug == "inovacao":
+            tasks.append(query_inovacao(dist))
         else:
             # Distribuidor futuro sem integrador implementado
             async def _not_implemented(d=dist):

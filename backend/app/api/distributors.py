@@ -269,5 +269,17 @@ async def test_distributor_connection(
             return {"ok": False, "message": "Token inválido (401 Unauthorized)."}
         return {"ok": True, "message": "Conexão com a Disal estabelecida com sucesso."}
 
+    elif slug == "inovacao":
+        from app.integrators.inovacao_client import InovacaoClient
+        if not row.username or not row.password:
+            return {"ok": False, "message": "Usuário e senha são obrigatórios para a Inovação."}
+        client = InovacaoClient(
+            base_url=row.base_url or "",
+            username=row.username,
+            password=row.password,
+        )
+        test_res = await client.test_connection()
+        return test_res
+
     else:
         return {"ok": False, "message": f"Distribuidor '{slug}' sem teste de conexão implementado."}

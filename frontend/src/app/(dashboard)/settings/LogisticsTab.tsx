@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Truck, Save, Loader2, CheckCircle2, XCircle, Eye, EyeOff, Plug, ToggleLeft, ToggleRight, AlertTriangle, Info } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from './layout';
+import { useCompany } from './context';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 

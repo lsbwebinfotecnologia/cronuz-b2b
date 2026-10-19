@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
 import { Loader2, Globe, Box, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, ClipboardList, Feather, BookOpen, GraduationCap } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from '../layout';
+import { useCompany } from '../context';
 
 export default function CompanyModulesPage() {
   const params = useParams();
