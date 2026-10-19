@@ -357,7 +357,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
          { name: 'Boletos Emitidos', href: '/financial/bank-slips', icon: Receipt },
          { name: 'Bancos & Cartões', href: '/financial/accounts', icon: Building2 },
          { name: 'Categorias', href: '/financial/categories', icon: FolderTree },
-         { name: 'DRE', href: '/financial/reports', icon: BarChart3 }
+         { name: 'Relatórios & DRE', href: '/financial/reports', icon: BarChart3 }
        ]
     });
   }

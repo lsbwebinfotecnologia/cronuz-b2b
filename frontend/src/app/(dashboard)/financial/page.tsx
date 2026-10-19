@@ -762,6 +762,13 @@ export default function FinancialPage() {
                 </div>
                 
                 <div className="flex gap-2 relative z-10 w-full md:w-auto overflow-x-auto pb-2 md:pb-0 hide-scrollbar">
+                    <Link
+                        href="/financial/reports"
+                        className="px-4 md:px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold shadow-sm transition flex items-center gap-2 text-sm whitespace-nowrap"
+                        title="Relatório Sintético por Categoria, Evolução (Ano/Mês/Dia) e Rankings Curva ABC (Excel / PDF)"
+                    >
+                        <BarChart3 className="w-4 h-4"/> Relatório Sintético 360°
+                    </Link>
                     <button 
                         onClick={() => {
                             setIsReportModalOpen(true);

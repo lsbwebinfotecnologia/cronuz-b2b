@@ -2031,3 +2031,580 @@ def export_cashflow_forecast_report(
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
+
+def _normalize_entity_from_transaction(trans) -> tuple:
+    """
+    Extrai (entity_key, entity_name, entity_doc, customer_id) de uma FinancialTransaction.
+    Se houver cliente/fornecedor vinculado (crm_customer), usa o cadastro oficial.
+    Caso contrário, higieniza a descrição para agrupar favorecidos/fornecedores recorrentes.
+    """
+    import re
+    if trans and trans.customer:
+        c_name = (trans.customer.name or "Sem Nome").strip()
+        c_doc = (trans.customer.document or "").strip()
+        return (f"CUST_{trans.customer_id}", c_name, c_doc, trans.customer_id)
+
+    raw_desc = (trans.description if trans else "") or "Sem Favorecido / Geral"
+    cleaned = re.sub(r"\[AGRUPADO[^\]]*\]", "", raw_desc, flags=re.IGNORECASE).strip()
+    if cleaned.lower().startswith("lançamento agrupado:"):
+        cleaned = "Lançamentos Agrupados (Diversos)"
+    else:
+        cleaned = re.sub(r"\s*[-–/]\s*(parc(ela)?\.?\s*\d+.*|\d+\s*/\s*\d+.*)$", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"\s*\(\d+\s*/\s*\d+\)\s*$", "", cleaned).strip()
+    if not cleaned:
+        cleaned = "Sem Favorecido / Geral"
+    if len(cleaned) > 65:
+        cleaned = cleaned[:65].strip()
+    return (f"DESC_{cleaned.upper()}", cleaned, "", None)
+
+
+def _build_synthetic_overview_data(
+    company_id: int,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    group_by: str,
+    status_scope: str,
+    type_filter: Optional[str],
+    category_id: Optional[int],
+    customer_id: Optional[int],
+    entity_search: Optional[str],
+    account_id: Optional[int],
+    include_personal: bool,
+    db: Session
+) -> dict:
+    """
+    Constrói a análise sintética 360° de recebimentos e pagamentos:
+    - KPIs executivos
+    - Agrupamento temporal (ano, mês, dia)
+    - Sintético por Categoria (Pagamentos e Recebimentos) + Matriz Categoria x Período
+    - Rankings Curva ABC (Quem mais recebo / Quem mais pago)
+    """
+    all_cats = db.query(FinancialCategory).filter(FinancialCategory.company_id == company_id).all()
+    cat_map = {c.id: c for c in all_cats}
+
+    def get_cat_full_name(cid: Optional[int]) -> tuple:
+        if not cid or cid not in cat_map:
+            return ("Sem Categoria", "Sem Categoria", "")
+        curr = cat_map[cid]
+        names = []
+        dre_grp = curr.dre_group or ""
+        safe = 0
+        parent_root = curr.name
+        while curr and safe < 10:
+            names.insert(0, curr.name)
+            parent_root = curr.name
+            if not dre_grp and curr.dre_group:
+                dre_grp = curr.dre_group
+            curr = cat_map.get(curr.parent_id) if curr.parent_id else None
+            safe += 1
+        return (" > ".join(names), parent_root, dre_grp)
+
+    allowed_cat_ids = None
+    if category_id:
+        allowed_cat_ids = {category_id}
+        added = True
+        while added:
+            added = False
+            for c in all_cats:
+                if c.parent_id in allowed_cat_ids and c.id not in allowed_cat_ids:
+                    allowed_cat_ids.add(c.id)
+                    added = True
+
+    query = db.query(FinancialInstallment).options(
+        joinedload(FinancialInstallment.transaction).joinedload(FinancialTransaction.category),
+        joinedload(FinancialInstallment.transaction).joinedload(FinancialTransaction.customer),
+        joinedload(FinancialInstallment.account)
+    ).join(
+        FinancialTransaction, FinancialInstallment.transaction_id == FinancialTransaction.id
+    ).filter(
+        FinancialTransaction.company_id == company_id,
+        FinancialTransaction.transaction_status != "CANCELADO"
+    )
+
+    if status_scope == "PAID":
+        query = query.filter(FinancialInstallment.status == "PAID")
+    elif status_scope == "OPEN":
+        query = query.filter(FinancialInstallment.status.in_(["PENDING", "OVERDUE"]))
+    else:
+        query = query.filter(FinancialInstallment.status.in_(["PAID", "PENDING", "OVERDUE"]))
+
+    if not include_personal:
+        query = query.outerjoin(FinancialAccount, FinancialInstallment.account_id == FinancialAccount.id).filter(
+            (FinancialAccount.id == None) | (FinancialAccount.is_personal == False),
+            FinancialTransaction.exclude_from_reports == False,
+            FinancialInstallment.exclude_from_reports == False
+        )
+
+    if type_filter in ("RECEIVABLE", "PAYABLE"):
+        query = query.filter(FinancialTransaction.type == type_filter)
+
+    if allowed_cat_ids:
+        query = query.filter(FinancialTransaction.category_id.in_(list(allowed_cat_ids)))
+
+    if customer_id:
+        query = query.filter(FinancialTransaction.customer_id == customer_id)
+
+    if account_id:
+        query = query.filter(FinancialInstallment.account_id == account_id)
+
+    installments = query.all()
+
+    MONTH_NAMES_PT = {
+        1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+        7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
+    }
+
+    def resolve_effective_date(inst: FinancialInstallment) -> date:
+        if inst.status == "PAID" and inst.payment_date:
+            if isinstance(inst.payment_date, datetime):
+                return inst.payment_date.date()
+            return inst.payment_date
+        return inst.due_date
+
+    def resolve_effective_amount(inst: FinancialInstallment) -> float:
+        if inst.status == "PAID":
+            paid_val = float(inst.amount_paid or 0.0)
+            return paid_val if paid_val > 0 else float(inst.amount or 0.0)
+        return float(inst.amount or 0.0)
+
+    def format_period(dt: date, mode: str) -> tuple:
+        if mode == "year":
+            k = f"{dt.year:04d}"
+            lbl = f"{dt.year:04d}"
+        elif mode == "day":
+            k = dt.strftime("%Y-%m-%d")
+            lbl = dt.strftime("%d/%m/%Y")
+        else:
+            k = f"{dt.year:04d}-{dt.month:02d}"
+            lbl = f"{MONTH_NAMES_PT.get(dt.month, '')}/{dt.year}"
+        return (k, lbl)
+
+    search_term = (entity_search or "").strip().lower()
+
+    filtered_rows = []
+    for inst in installments:
+        eff_date = resolve_effective_date(inst)
+        if not eff_date:
+            continue
+        if start_date and eff_date < start_date:
+            continue
+        if end_date and eff_date > end_date:
+            continue
+
+        trans = inst.transaction
+        ent_key, ent_name, ent_doc, ent_cid = _normalize_entity_from_transaction(trans)
+        cat_full, cat_root, dre_group = get_cat_full_name(trans.category_id if trans else None)
+        desc_text = (trans.description if trans else "") or ""
+
+        if search_term:
+            haystack = f"{ent_name} {ent_doc} {desc_text} {cat_full}".lower()
+            if search_term not in haystack:
+                continue
+
+        eff_amount = resolve_effective_amount(inst)
+        t_type = trans.type if trans else "PAYABLE"
+        p_key, p_label = format_period(eff_date, group_by)
+
+        filtered_rows.append({
+            "inst_id": inst.id,
+            "type": t_type,
+            "status": inst.status,
+            "date": eff_date,
+            "date_str": eff_date.strftime("%d/%m/%Y"),
+            "period_key": p_key,
+            "period_label": p_label,
+            "amount": eff_amount,
+            "category_id": trans.category_id if trans else 0,
+            "category_name": cat_full,
+            "parent_category_name": cat_root,
+            "dre_group": dre_group,
+            "entity_key": ent_key,
+            "entity_name": ent_name,
+            "entity_doc": ent_doc,
+            "customer_id": ent_cid,
+            "account_name": inst.account.name if inst.account else "Padrão",
+            "description": desc_text
+        })
+
+    # 1. KPIs
+    total_received = 0.0
+    received_count = 0
+    total_paid = 0.0
+    paid_count = 0
+
+    timeline_dict = {}
+    cat_pay_dict = {}
+    cat_rec_dict = {}
+    rank_pay_dict = {}
+    rank_rec_dict = {}
+
+    for r in filtered_rows:
+        val = r["amount"]
+        pk = r["period_key"]
+        pl = r["period_label"]
+
+        if pk not in timeline_dict:
+            timeline_dict[pk] = {
+                "period_key": pk,
+                "period_label": pl,
+                "receivables": 0.0,
+                "receivables_count": 0,
+                "payables": 0.0,
+                "payables_count": 0
+            }
+
+        if r["type"] == "RECEIVABLE":
+            total_received += val
+            received_count += 1
+            timeline_dict[pk]["receivables"] += val
+            timeline_dict[pk]["receivables_count"] += 1
+
+            cid = r["category_id"] or 0
+            if cid not in cat_rec_dict:
+                cat_rec_dict[cid] = {
+                    "category_id": cid,
+                    "category_name": r["category_name"],
+                    "parent_name": r["parent_category_name"],
+                    "dre_group": r["dre_group"],
+                    "count": 0,
+                    "total": 0.0,
+                    "by_period": {},
+                    "entities_map": {}
+                }
+            cat_rec_dict[cid]["count"] += 1
+            cat_rec_dict[cid]["total"] += val
+            cat_rec_dict[cid]["by_period"][pk] = cat_rec_dict[cid]["by_period"].get(pk, 0.0) + val
+
+            ek = r["entity_key"]
+            if ek not in cat_rec_dict[cid]["entities_map"]:
+                cat_rec_dict[cid]["entities_map"][ek] = {"name": r["entity_name"], "total": 0.0, "count": 0}
+            cat_rec_dict[cid]["entities_map"][ek]["total"] += val
+            cat_rec_dict[cid]["entities_map"][ek]["count"] += 1
+
+            if ek not in rank_rec_dict:
+                rank_rec_dict[ek] = {
+                    "customer_id": r["customer_id"],
+                    "entity_name": r["entity_name"],
+                    "document": r["entity_doc"],
+                    "count": 0,
+                    "total": 0.0,
+                    "last_date_obj": r["date"],
+                    "last_date": r["date_str"],
+                    "categories_freq": {},
+                    "by_period": {}
+                }
+            rank_rec_dict[ek]["count"] += 1
+            rank_rec_dict[ek]["total"] += val
+            rank_rec_dict[ek]["by_period"][pk] = rank_rec_dict[ek]["by_period"].get(pk, 0.0) + val
+            if r["date"] >= rank_rec_dict[ek]["last_date_obj"]:
+                rank_rec_dict[ek]["last_date_obj"] = r["date"]
+                rank_rec_dict[ek]["last_date"] = r["date_str"]
+            cname = r["category_name"]
+            rank_rec_dict[ek]["categories_freq"][cname] = rank_rec_dict[ek]["categories_freq"].get(cname, 0.0) + val
+
+        else:
+            total_paid += val
+            paid_count += 1
+            timeline_dict[pk]["payables"] += val
+            timeline_dict[pk]["payables_count"] += 1
+
+            cid = r["category_id"] or 0
+            if cid not in cat_pay_dict:
+                cat_pay_dict[cid] = {
+                    "category_id": cid,
+                    "category_name": r["category_name"],
+                    "parent_name": r["parent_category_name"],
+                    "dre_group": r["dre_group"],
+                    "count": 0,
+                    "total": 0.0,
+                    "by_period": {},
+                    "entities_map": {}
+                }
+            cat_pay_dict[cid]["count"] += 1
+            cat_pay_dict[cid]["total"] += val
+            cat_pay_dict[cid]["by_period"][pk] = cat_pay_dict[cid]["by_period"].get(pk, 0.0) + val
+
+            ek = r["entity_key"]
+            if ek not in cat_pay_dict[cid]["entities_map"]:
+                cat_pay_dict[cid]["entities_map"][ek] = {"name": r["entity_name"], "total": 0.0, "count": 0}
+            cat_pay_dict[cid]["entities_map"][ek]["total"] += val
+            cat_pay_dict[cid]["entities_map"][ek]["count"] += 1
+
+            if ek not in rank_pay_dict:
+                rank_pay_dict[ek] = {
+                    "customer_id": r["customer_id"],
+                    "entity_name": r["entity_name"],
+                    "document": r["entity_doc"],
+                    "count": 0,
+                    "total": 0.0,
+                    "last_date_obj": r["date"],
+                    "last_date": r["date_str"],
+                    "categories_freq": {},
+                    "by_period": {}
+                }
+            rank_pay_dict[ek]["count"] += 1
+            rank_pay_dict[ek]["total"] += val
+            rank_pay_dict[ek]["by_period"][pk] = rank_pay_dict[ek]["by_period"].get(pk, 0.0) + val
+            if r["date"] >= rank_pay_dict[ek]["last_date_obj"]:
+                rank_pay_dict[ek]["last_date_obj"] = r["date"]
+                rank_pay_dict[ek]["last_date"] = r["date_str"]
+            cname = r["category_name"]
+            rank_pay_dict[ek]["categories_freq"][cname] = rank_pay_dict[ek]["categories_freq"].get(cname, 0.0) + val
+
+    # 2. Timeline ordenada
+    sorted_periods = sorted(timeline_dict.keys())
+    timeline = []
+    running_balance = 0.0
+    period_columns = []
+
+    for pk in sorted_periods:
+        item = timeline_dict[pk]
+        rec = round(item["receivables"], 2)
+        pay = round(item["payables"], 2)
+        net = round(rec - pay, 2)
+        running_balance = round(running_balance + net, 2)
+        margin = round((net / rec * 100.0), 1) if rec > 0 else 0.0
+        timeline.append({
+            "period_key": pk,
+            "period_label": item["period_label"],
+            "receivables": rec,
+            "receivables_count": item["receivables_count"],
+            "payables": pay,
+            "payables_count": item["payables_count"],
+            "net_result": net,
+            "cumulative_balance": running_balance,
+            "margin_pct": margin
+        })
+        period_columns.append({"key": pk, "label": item["period_label"]})
+
+    num_periods = max(len(timeline), 1)
+
+    # 3. Categorias (Pagamentos e Recebimentos)
+    def finalize_categories(c_dict: dict, grand_total: float) -> list:
+        res = []
+        for c in sorted(c_dict.values(), key=lambda x: x["total"], reverse=True):
+            tot = round(c["total"], 2)
+            share = round((tot / grand_total * 100.0), 2) if grand_total > 0 else 0.0
+            top_ents = sorted(c["entities_map"].values(), key=lambda x: x["total"], reverse=True)[:5]
+            for te in top_ents:
+                te["total"] = round(te["total"], 2)
+            res.append({
+                "category_id": c["category_id"],
+                "category_name": c["category_name"],
+                "parent_name": c["parent_name"],
+                "dre_group": c["dre_group"],
+                "count": c["count"],
+                "total": tot,
+                "share_pct": share,
+                "avg_per_period": round(tot / num_periods, 2),
+                "by_period": {k: round(v, 2) for k, v in c["by_period"].items()},
+                "top_entities": top_ents
+            })
+        return res
+
+    categories_payable = finalize_categories(cat_pay_dict, total_paid)
+    categories_receivable = finalize_categories(cat_rec_dict, total_received)
+
+    # 4. Rankings Curva ABC
+    def finalize_ranking(r_dict: dict, grand_total: float) -> list:
+        res = []
+        cum_pct = 0.0
+        for idx, item in enumerate(sorted(r_dict.values(), key=lambda x: x["total"], reverse=True), start=1):
+            tot = round(item["total"], 2)
+            cnt = item["count"]
+            share = round((tot / grand_total * 100.0), 2) if grand_total > 0 else 0.0
+            cum_pct = round(min(100.0, cum_pct + share), 2)
+            if cum_pct <= 80.0 or idx == 1:
+                abc = "A"
+            elif cum_pct <= 95.0:
+                abc = "B"
+            else:
+                abc = "C"
+            main_cat = max(item["categories_freq"].items(), key=lambda x: x[1])[0] if item["categories_freq"] else "Geral"
+            res.append({
+                "rank": idx,
+                "customer_id": item["customer_id"],
+                "entity_name": item["entity_name"],
+                "document": item["document"],
+                "main_category": main_cat,
+                "count": cnt,
+                "total": tot,
+                "avg_ticket": round(tot / max(cnt, 1), 2),
+                "share_pct": share,
+                "cumulative_pct": cum_pct,
+                "abc_class": abc,
+                "last_date": item["last_date"],
+                "by_period": {k: round(v, 2) for k, v in item["by_period"].items()}
+            })
+        return res
+
+    ranking_receivables = finalize_ranking(rank_rec_dict, total_received)
+    ranking_payables = finalize_ranking(rank_pay_dict, total_paid)
+
+    net_cashflow = round(total_received - total_paid, 2)
+    expense_commitment_pct = round((total_paid / total_received * 100.0), 1) if total_received > 0 else 0.0
+    cash_margin_pct = round((net_cashflow / total_received * 100.0), 1) if total_received > 0 else 0.0
+
+    return {
+        "kpis": {
+            "total_received": round(total_received, 2),
+            "received_count": received_count,
+            "avg_ticket_received": round(total_received / max(received_count, 1), 2),
+            "total_paid": round(total_paid, 2),
+            "paid_count": paid_count,
+            "avg_ticket_paid": round(total_paid / max(paid_count, 1), 2),
+            "net_cashflow": net_cashflow,
+            "expense_commitment_pct": expense_commitment_pct,
+            "cash_margin_pct": cash_margin_pct,
+            "top_payable_category": {
+                "name": categories_payable[0]["category_name"],
+                "total": categories_payable[0]["total"],
+                "pct": categories_payable[0]["share_pct"]
+            } if categories_payable else None,
+            "top_receivable_entity": {
+                "name": ranking_receivables[0]["entity_name"],
+                "total": ranking_receivables[0]["total"],
+                "pct": ranking_receivables[0]["share_pct"]
+            } if ranking_receivables else None,
+            "top_payable_entity": {
+                "name": ranking_payables[0]["entity_name"],
+                "total": ranking_payables[0]["total"],
+                "pct": ranking_payables[0]["share_pct"]
+            } if ranking_payables else None
+        },
+        "period_columns": period_columns,
+        "timeline": timeline,
+        "categories_payable": categories_payable,
+        "categories_receivable": categories_receivable,
+        "ranking_receivables": ranking_receivables,
+        "ranking_payables": ranking_payables
+    }
+
+
+@router.get("/financial/reports/synthetic-overview")
+def get_synthetic_overview_report(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    group_by: str = Query("month", pattern="^(day|month|year)$"),
+    status_scope: str = Query("PAID", pattern="^(PAID|OPEN|ALL)$"),
+    type_filter: Optional[str] = Query(None, alias="type"),
+    category_id: Optional[int] = None,
+    customer_id: Optional[int] = None,
+    entity_search: Optional[str] = None,
+    account_id: Optional[int] = None,
+    include_personal: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Retorna a visão sintética 360° (Por Categoria, Agrupamento Ano/Mês/Dia e Rankings de Recebimentos e Pagamentos)."""
+    if current_user.type not in ["MASTER", "SELLER", "FINANCIAL"]:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    return _build_synthetic_overview_data(
+        company_id=current_user.company_id,
+        start_date=start_date,
+        end_date=end_date,
+        group_by=group_by,
+        status_scope=status_scope,
+        type_filter=type_filter,
+        category_id=category_id,
+        customer_id=customer_id,
+        entity_search=entity_search,
+        account_id=account_id,
+        include_personal=include_personal,
+        db=db
+    )
+
+
+@router.get("/financial/reports/synthetic-overview/export")
+def export_synthetic_overview_report(
+    format: str = Query("excel", pattern="^(excel|pdf)$"),
+    model: str = Query("executive_360", pattern="^(executive_360|category_matrix|abc_ranking)$"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    group_by: str = Query("month", pattern="^(day|month|year)$"),
+    status_scope: str = Query("PAID", pattern="^(PAID|OPEN|ALL)$"),
+    type_filter: Optional[str] = Query(None, alias="type"),
+    category_id: Optional[int] = None,
+    customer_id: Optional[int] = None,
+    entity_search: Optional[str] = None,
+    account_id: Optional[int] = None,
+    include_personal: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Exporta o Relatório Administrativo Sintético em Excel (.xlsx) ou PDF (.pdf) em 3 modelos gerenciais."""
+    if current_user.type not in ["MASTER", "SELLER", "FINANCIAL"]:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    from app.services.financial_exports import (
+        export_synthetic_overview_excel,
+        export_synthetic_overview_pdf
+    )
+
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    company_name = company.name if company else "Cronuz B2B"
+
+    data = _build_synthetic_overview_data(
+        company_id=current_user.company_id,
+        start_date=start_date,
+        end_date=end_date,
+        group_by=group_by,
+        status_scope=status_scope,
+        type_filter=type_filter,
+        category_id=category_id,
+        customer_id=customer_id,
+        entity_search=entity_search,
+        account_id=account_id,
+        include_personal=include_personal,
+        db=db
+    )
+
+    scope_labels = {
+        "PAID": "Realizado (Baixados/Pagos)",
+        "OPEN": "Em Aberto (Pendentes/Vencidos)",
+        "ALL": "Consolidado (Realizado + Previsto)"
+    }
+    group_labels = {"day": "Diário", "month": "Mensal", "year": "Anual"}
+
+    period_parts = []
+    if start_date:
+        period_parts.append(f"De {start_date.strftime('%d/%m/%Y')}")
+    if end_date:
+        period_parts.append(f"Até {end_date.strftime('%d/%m/%Y')}")
+    p_str = " ".join(period_parts) if period_parts else "Todo o Histórico"
+    subtitle = f"{p_str} | Visão: {scope_labels.get(status_scope, status_scope)} | Agrupamento: {group_labels.get(group_by, group_by)}"
+
+    now_str = datetime.now().strftime("%Y%m%d_%H%M")
+    model_slug = {
+        "executive_360": "Relatorio_Executivo_360",
+        "category_matrix": "Matriz_Sintetica_Categorias",
+        "abc_ranking": "Ranking_Curva_ABC_Parceiros"
+    }.get(model, "Relatorio_Financeiro")
+
+    if format == "excel":
+        buffer = export_synthetic_overview_excel(
+            data=data,
+            model=model,
+            company_name=company_name,
+            subtitle=subtitle
+        )
+        filename = f"{model_slug}_{now_str}.xlsx"
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        buffer = export_synthetic_overview_pdf(
+            data=data,
+            model=model,
+            company_name=company_name,
+            subtitle=subtitle
+        )
+        filename = f"{model_slug}_{now_str}.pdf"
+        media_type = "application/pdf"
+
+    return StreamingResponse(
+        buffer,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+

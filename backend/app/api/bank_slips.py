@@ -90,9 +90,13 @@ def sync_bank_slip_status(inst_id: int, db: Session = Depends(get_db), current_u
     
     parts = inst.bank_slip_nosso_numero.split("|")
     codigo_solicitacao = parts[1]
+    nosso_numero_saved = parts[2] if len(parts) >= 3 else None
     
     try:
-        inter_status = client.get_cobranca_v3_status(codigo_solicitacao=codigo_solicitacao)
+        inter_status = client.get_cobranca_v3_status(
+            codigo_solicitacao=codigo_solicitacao,
+            nosso_numero=nosso_numero_saved
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
         
@@ -107,7 +111,7 @@ def sync_bank_slip_status(inst_id: int, db: Session = Depends(get_db), current_u
     if not situacao and cobranca_data.get("situacao"):
         situacao = cobranca_data.get("situacao")
         
-    if situacao in ["RECEBIDO", "MARCADO_RECEBIDO"]:
+    if situacao in ["RECEBIDO", "MARCADO_RECEBIDO", "PAGO"]:
         inst.status = "PAID"
         if inst.transaction.transaction_status == "PROSPECCAO":
             inst.transaction.transaction_status = "CONFIRMADO"
@@ -128,18 +132,20 @@ def sync_bank_slip_status(inst_id: int, db: Session = Depends(get_db), current_u
         valor_pago = inter_status.get("valorPago")
         if valor_pago:
             inst.amount_paid = float(valor_pago)
+        elif not inst.amount_paid:
+            inst.amount_paid = float(inst.amount)
             
-    elif situacao in ["CANCELADO", "EXPIRADO"]:
+    elif situacao in ["CANCELADO", "EXPIRADO"] and inst.status != "PAID":
         inst.status = "CANCELLED"
         
-    elif situacao == "ATRASADO":
+    elif situacao == "ATRASADO" and inst.status != "PAID":
         if inst.status != "OVERDUE":
             inst.status = "OVERDUE"
             
-    elif situacao == "A_RECEBER":
+    elif situacao == "A_RECEBER" and inst.status != "PAID":
         inst.status = "OPEN"
         
-    else:
+    elif inst.status != "PAID":
         inst.status = "OPEN"
         
     db.commit()
@@ -180,14 +186,21 @@ def sync_all_pending_bank_slips(db: Session = Depends(get_db), current_user: Use
         api_version=settings.inter_api_version
     )
     
+    # Pré-carrega o extrato bancário uma única vez para conciliar títulos já creditados
+    client.get_extrato_recebimentos_boletos()
+    
     updated_count = 0
     
     for inst in pending_slips:
         parts = inst.bank_slip_nosso_numero.split("|")
         codigo_solicitacao = parts[1]
+        nosso_numero_saved = parts[2] if len(parts) >= 3 else None
         
         try:
-            inter_status = client.get_cobranca_v3_status(codigo_solicitacao=codigo_solicitacao)
+            inter_status = client.get_cobranca_v3_status(
+                codigo_solicitacao=codigo_solicitacao,
+                nosso_numero=nosso_numero_saved
+            )
             situacao = inter_status.get("status")
             cobranca_data = inter_status.get("cobranca", {})
             boleto_data = inter_status.get("boleto", {})
@@ -200,7 +213,7 @@ def sync_all_pending_bank_slips(db: Session = Depends(get_db), current_user: Use
                 
             old_status = inst.status
             
-            if situacao in ["RECEBIDO", "MARCADO_RECEBIDO"]:
+            if situacao in ["RECEBIDO", "MARCADO_RECEBIDO", "PAGO"]:
                 inst.status = "PAID"
                 if inst.transaction.transaction_status == "PROSPECCAO":
                     inst.transaction.transaction_status = "CONFIRMADO"
@@ -220,6 +233,8 @@ def sync_all_pending_bank_slips(db: Session = Depends(get_db), current_user: Use
                 valor_pago = inter_status.get("valorPago")
                 if valor_pago:
                     inst.amount_paid = float(valor_pago)
+                elif not inst.amount_paid:
+                    inst.amount_paid = float(inst.amount)
                     
             elif situacao in ["CANCELADO", "EXPIRADO"]:
                 inst.status = "CANCELLED"
@@ -356,8 +371,11 @@ def process_inter_webhook_item(company_id: int, codigo_solicitacao: str):
             api_version=settings.inter_api_version
         )
         
+        parts = (inst.bank_slip_nosso_numero or "").split("|")
+        nosso_numero = parts[2] if len(parts) > 2 else None
+        
         # Security: Pull actual status from API directly
-        inter_status = client.get_cobranca_v3_status(codigo_solicitacao=codigo_solicitacao)
+        inter_status = client.get_cobranca_v3_status(codigo_solicitacao=codigo_solicitacao, nosso_numero=nosso_numero)
         situacao = inter_status.get("status")
         
         if situacao in ["RECEBIDO", "MARCADO_RECEBIDO"]:
@@ -378,16 +396,18 @@ def process_inter_webhook_item(company_id: int, codigo_solicitacao: str):
                 inst.payment_date = datetime.now()
                 
             valor = inter_status.get("valorPago")
-            if valor:
+            if valor is not None:
                 inst.amount_paid = float(valor)
+            elif not inst.amount_paid or float(inst.amount_paid or 0) == 0:
+                inst.amount_paid = float(inst.amount or 0)
                 
-        elif situacao in ["CANCELADO", "EXPIRADO"]:
+        elif situacao in ["CANCELADO", "EXPIRADO"] and inst.status != "PAID":
             inst.status = "CANCELLED"
             
-        elif situacao == "ATRASADO" and inst.status != "OVERDUE":
+        elif situacao == "ATRASADO" and inst.status not in ["OVERDUE", "PAID"]:
             inst.status = "OVERDUE"
             
-        elif situacao == "A_RECEBER":
+        elif situacao == "A_RECEBER" and inst.status != "PAID":
             inst.status = "OPEN"
             
         db.commit()

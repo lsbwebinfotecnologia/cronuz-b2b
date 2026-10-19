@@ -81,31 +81,38 @@ class BancoInterClient:
         headers = {
             "Content-Type": "application/x-www-form-urlencoded"
         }
-        data = {
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "grant_type": "client_credentials",
-            "scope": "boleto-cobranca.read boleto-cobranca.write"
-        }
+        scopes_to_try = [
+            "boleto-cobranca.read boleto-cobranca.write extrato.read",
+            "boleto-cobranca.read boleto-cobranca.write"
+        ]
         
-        try:
-            cert = (self.cert_path, self.key_path) if self.cert_path and self.key_path else None
-            import urllib3
-            if self.sandbox:
-                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            response = requests.post(url, headers=headers, data=data, cert=cert, verify=not self.sandbox, timeout=15)
-            response.raise_for_status()
-            
-            resp_data = response.json()
-            self.token = resp_data.get("access_token")
-            expires_in = resp_data.get("expires_in", 3600)
-            self.token_expiry = datetime.now() + timedelta(seconds=expires_in - 60)
-            return self.token
-            
-        except requests.exceptions.RequestException as e:
-            err_details = e.response.text if hasattr(e, 'response') and e.response else str(e)
-            logger.error(f"Banco Inter Token Error: {err_details}")
-            raise Exception(f"Erro de Autenticação com Banco Inter: {err_details}")
+        cert = (self.cert_path, self.key_path) if self.cert_path and self.key_path else None
+        import urllib3
+        if self.sandbox:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        last_err = None
+        for scope in scopes_to_try:
+            data = {
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "grant_type": "client_credentials",
+                "scope": scope
+            }
+            try:
+                response = requests.post(url, headers=headers, data=data, cert=cert, verify=not self.sandbox, timeout=15)
+                if response.status_code == 200:
+                    resp_data = response.json()
+                    self.token = resp_data.get("access_token")
+                    expires_in = resp_data.get("expires_in", 3600)
+                    self.token_expiry = datetime.now() + timedelta(seconds=expires_in - 60)
+                    return self.token
+                last_err = response.text
+            except requests.exceptions.RequestException as e:
+                last_err = e.response.text if hasattr(e, 'response') and e.response else str(e)
+
+        logger.error(f"Banco Inter Token Error: {last_err}")
+        raise Exception(f"Erro de Autenticação com Banco Inter: {last_err}")
 
     def emit_boleto(self, installment_data, customer_data):
         token = self.get_token()
@@ -255,7 +262,66 @@ class BancoInterClient:
                 
         return None
 
-    def get_cobranca_v3_status(self, codigo_solicitacao: str) -> dict:
+    def get_extrato_recebimentos_boletos(self, data_inicio: str = None, data_fim: str = None) -> dict:
+        """
+        Consulta o extrato bancário do Banco Inter (GET /banking/v2/extrato) e mapeia
+        todos os créditos de liquidação de boletos pelo Nosso Número.
+        Serve como fallback de alta confiabilidade caso o endpoint V3 de cobrança
+        demore a atualizar a situação para RECEBIDO (mantendo ATRASADO/A_RECEBER).
+        """
+        import re
+        if hasattr(self, "_extrato_cache") and self._extrato_cache is not None and not data_inicio and not data_fim:
+            return self._extrato_cache
+
+        token = self.get_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        if self.account_number:
+            clean_account = re.sub(r'\D', '', self.account_number)
+            headers["x-conta-corrente"] = clean_account.lstrip('0') or "1"
+
+        today = datetime.now().date()
+        dt_fim = data_fim or today.strftime("%Y-%m-%d")
+        dt_ini = data_inicio or (today - timedelta(days=60)).strftime("%Y-%m-%d")
+
+        url = f"{self.base_url}/banking/v2/extrato?dataInicio={dt_ini}&dataFim={dt_fim}"
+        cert = (self.cert_path, self.key_path) if self.cert_path and self.key_path else None
+
+        recebimentos = {}
+        try:
+            res = requests.get(url, headers=headers, cert=cert, verify=not self.sandbox, timeout=15)
+            if res.status_code == 200:
+                transacoes = res.json().get("transacoes", [])
+                for tx in transacoes:
+                    if tx.get("tipoOperacao") == "C":
+                        desc = str(tx.get("descricao") or "")
+                        # Padrão Inter: "RECEBIMENTO TITULO - 112/90879229840"
+                        match = re.search(r'RECEBIMENTO\s+TITULO.*?(\d{10,12})', desc, re.IGNORECASE)
+                        if not match and tx.get("tipoTransacao") == "BOLETO_COBRANCA":
+                            match = re.search(r'(\d{10,12})', desc)
+                        if match:
+                            nn = match.group(1).strip()
+                            try:
+                                val = float(tx.get("valor") or 0.0)
+                            except Exception:
+                                val = 0.0
+                            recebimentos[nn] = {
+                                "status": "RECEBIDO",
+                                "dataSituacao": tx.get("dataEntrada"),
+                                "dataHoraPagamento": tx.get("dataEntrada"),
+                                "valorPago": val,
+                                "descricaoExtrato": desc,
+                            }
+        except Exception as e:
+            logger.warning(f"Inter Extrato fallback warning: {e}")
+
+        if not data_inicio and not data_fim:
+            self._extrato_cache = recebimentos
+        return recebimentos
+
+    def get_cobranca_v3_status(self, codigo_solicitacao: str, nosso_numero: str = None, check_extrato_fallback: bool = True) -> dict:
         token = self.get_token()
         headers = {
             "Authorization": f"Bearer {token}",
@@ -270,15 +336,36 @@ class BancoInterClient:
         cert = (self.cert_path, self.key_path) if self.cert_path and self.key_path else None
         
         try:
-            res = requests.get(url, headers=headers, cert=cert, verify=not self.sandbox)
+            res = requests.get(url, headers=headers, cert=cert, verify=not self.sandbox, timeout=15)
             if res.status_code == 200:
                 data = res.json()
                 cobranca = data.get("cobranca", data)
+                boleto = data.get("boleto", {})
+                situacao = cobranca.get("situacao")
+                data_situacao = cobranca.get("dataSituacao")
+                valor_pago = cobranca.get("valorTotalRecebido") or cobranca.get("valorPago")
+                data_hora_pgto = cobranca.get("dataHoraPagamento") or data_situacao
+                resolved_nn = nosso_numero or boleto.get("nossoNumero") or cobranca.get("nossoNumero")
+
+                # Se a API V3 de Cobrança ainda reporta ATRASADO ou A_RECEBER,
+                # verifica no extrato bancário oficial se o título já foi liquidado/creditado.
+                if check_extrato_fallback and situacao not in ["RECEBIDO", "MARCADO_RECEBIDO", "PAGO", "CANCELADO", "EXPIRADO"] and resolved_nn:
+                    extrato_map = self.get_extrato_recebimentos_boletos()
+                    nn_clean = str(resolved_nn).strip()
+                    if nn_clean in extrato_map:
+                        hit = extrato_map[nn_clean]
+                        situacao = "RECEBIDO"
+                        data_situacao = hit.get("dataSituacao") or data_situacao
+                        data_hora_pgto = hit.get("dataHoraPagamento") or data_hora_pgto
+                        valor_pago = hit.get("valorPago") or valor_pago
+
                 return {
-                    "status": cobranca.get("situacao"),
-                    "dataSituacao": cobranca.get("dataSituacao"),
-                    "valorPago": cobranca.get("valorPago"),
-                    "dataHoraPagamento": cobranca.get("dataHoraPagamento"),
+                    "status": situacao,
+                    "dataSituacao": data_situacao,
+                    "valorPago": valor_pago,
+                    "dataHoraPagamento": data_hora_pgto,
+                    "cobranca": cobranca,
+                    "boleto": boleto,
                     "raw": data
                 }
             res.raise_for_status()
