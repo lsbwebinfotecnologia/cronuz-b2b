@@ -402,9 +402,10 @@ async def get_distributor_stock(
             token_expires=dist.token_expires,
         )
         try:
-            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=25.0)
+            # Pior caso: token rejeitado → re-auth (~9s) → consulta (até 30s). Fica abaixo dos 60s do Nginx.
+            result = await asyncio.wait_for(client.get_stock_by_isbn(isbn), timeout=55.0)
         except asyncio.TimeoutError:
-            result = {"found": False, "saldo": 0, "error": "Tempo limite esgotado ao consultar a Catavento (Timeout de 25s)."}
+            result = {"found": False, "saldo": 0, "error": "A Catavento não respondeu a tempo (lentidão no servidor deles). Tente novamente."}
         except Exception as e:
             result = {"found": False, "saldo": 0, "error": f"Erro de comunicação com a Catavento: {e}"}
 

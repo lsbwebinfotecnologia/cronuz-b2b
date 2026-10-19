@@ -169,33 +169,71 @@ class InovacaoClient:
                     "error": f"Inovação Distribuidora ({resp.status_code}): {msg or 'Erro na consulta de estoque.'}",
                 }
 
-            # HTTP 200 OK — Parse do objeto estoques
-            # Ex: {"code": 200, "message": "OK", "estoques": {"02555368000109": {"9788565358668": 85}}}
+            # HTTP 200 OK — Parse do objeto estoques (formato real validado em 19/10/2026):
+            # {"code":200,"estoques":{"<cnpj>":{"<isbn>":{"produto":"...","qtd":"10.0",
+            #   "disponivel":10,"reservado":0,"preco":"89.9","situacao":"Disponível",
+            #   "editora":"...","desconto":"40.0", ...}}}}
+            # Mantém compatibilidade com formato legado onde o valor é um número simples.
             estoques = data.get("estoques")
             total_saldo = 0
             item_found = False
+            preco: Optional[float] = None
+            titulo: Optional[str] = None
+            situacao: Optional[str] = None
+            desconto: Optional[float] = None
+
+            def _to_float(v: Any) -> Optional[float]:
+                try:
+                    return float(v) if v is not None and v != "" else None
+                except (ValueError, TypeError):
+                    return None
 
             if isinstance(estoques, dict):
-                for cnpj, items in estoques.items():
-                    if isinstance(items, dict):
-                        for k, qty in items.items():
-                            clean_k = str(k).strip()
-                            if clean_k == clean_isbn or clean_k.endswith(clean_isbn) or clean_isbn.endswith(clean_k):
-                                item_found = True
-                                try:
-                                    total_saldo += int(qty or 0)
-                                except (ValueError, TypeError):
-                                    pass
+                for _cnpj, items in estoques.items():
+                    if not isinstance(items, dict):
+                        continue
+                    for k, info in items.items():
+                        clean_k = str(k).strip()
+                        if not (clean_k == clean_isbn or clean_k.endswith(clean_isbn) or clean_isbn.endswith(clean_k)):
+                            continue
+                        item_found = True
+                        if isinstance(info, dict):
+                            disp = info.get("disponivel")
+                            if disp is None:
+                                disp = (_to_float(info.get("qtd")) or 0) - (_to_float(info.get("reserva")) or 0)
+                            total_saldo += int(_to_float(disp) or 0)
+                            preco = preco if preco is not None else _to_float(info.get("preco"))
+                            titulo = titulo or (info.get("produto") or "").strip() or None
+                            situacao = situacao or info.get("situacao")
+                            desconto = desconto if desconto is not None else _to_float(info.get("desconto"))
+                        else:
+                            total_saldo += int(_to_float(info) or 0)
+
+            # Preço simbólico (ex.: 0.01) indica cadastro sem preço real
+            if preco is not None and preco <= 0.01:
+                preco = None
 
             return {
-                "found": item_found or (total_saldo > 0),
+                "found": item_found,
                 "saldo": max(0, total_saldo),
-                "preco": None,
-                "titulo": None,
+                "preco": round(preco, 2) if preco is not None else None,
+                "titulo": titulo,
+                "situacao": situacao,
+                "desconto": desconto,
                 "raw": data,
                 "error": None,
             }
 
+        except (httpx.ConnectTimeout, httpx.ConnectError):
+            logger.warning("Sem conexão TCP com a Inovação (possível bloqueio de IP) para ISBN %s", clean_isbn)
+            return {
+                "found": False,
+                "saldo": 0,
+                "preco": None,
+                "titulo": None,
+                "raw": {},
+                "error": "Servidor da Inovação não aceitou a conexão (IP do nosso servidor possivelmente não liberado no firewall deles).",
+            }
         except httpx.TimeoutException:
             logger.warning("Timeout ao consultar estoque na Inovação Distribuidora para ISBN %s", clean_isbn)
             return {
@@ -273,6 +311,11 @@ class InovacaoClient:
                 "message": f"Resposta inesperada da Inovação ({resp.status_code}): {msg}",
             }
 
+        except (httpx.ConnectTimeout, httpx.ConnectError):
+            return {
+                "ok": False,
+                "message": "O servidor da Inovação não aceitou a conexão. Solicite à Inovação a liberação do IP 64.23.182.183 no firewall.",
+            }
         except httpx.TimeoutException:
             return {
                 "ok": False,
