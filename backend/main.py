@@ -89,6 +89,7 @@ from app.api import hosted_sites as hosted_sites_api
 from app.api import horus_sql as horus_sql_api
 from app.api import horus_financial
 from app.api import horus_orders
+from app.api import horus_cora
 from app.api import authors_admin
 from app.api import author_portal
 from app.api import inventory as inventory_api
@@ -109,6 +110,7 @@ from app.api import encomendas as encomendas_api
 from app.api import addressing as addressing_api
 from app.api import horus_bi as horus_bi_api
 from app.api import order_intake as order_intake_api
+from app.api import ebook_pearson as ebook_pearson_api
 from app.models import backorder as backorder_models
 from app.models import encomenda as encomenda_models
 from app.models import product_address as product_address_models
@@ -269,6 +271,7 @@ app.include_router(distributors_api.router, tags=["distributors"])
 app.include_router(hosted_sites_api.router)
 app.include_router(horus_sql_api.router, tags=["horus-sql"])
 app.include_router(horus_financial.router, tags=["horus-financial"])
+app.include_router(horus_cora.router, tags=["horus-cora"])
 app.include_router(horus_orders.router, tags=["horus-orders"])
 app.include_router(authors_admin.router)
 app.include_router(author_portal.router)
@@ -290,6 +293,7 @@ app.include_router(encomendas_api.router)
 app.include_router(addressing_api.router)
 app.include_router(horus_bi_api.router)
 app.include_router(order_intake_api.router)
+app.include_router(ebook_pearson_api.router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)

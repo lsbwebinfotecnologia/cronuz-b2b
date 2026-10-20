@@ -83,6 +83,32 @@ class CompanySettings(Base):
     inter_key_content = Column(String, nullable=True)
     inter_account_number = Column(String(50), nullable=True)
 
+    # ── Banco Cora (Integração Direta — mTLS) ───────────────────────────────────
+    # Certificado e chave privada ficam SOMENTE no banco (AGENTS §2). A chave privada é
+    # persistida criptografada com Fernet (HORUS_SQL_ENCRYPTION_KEY) e só é materializada
+    # em arquivo temporário durante a requisição.
+    cora_enabled = Column(Boolean, default=False, nullable=False)
+    cora_sandbox = Column(Boolean, default=True, nullable=False)
+    cora_client_id = Column(String(255), nullable=True)
+    cora_cert_content = Column(String, nullable=True)        # certificate.pem (texto)
+    cora_key_content = Column(String, nullable=True)         # private-key.key CRIPTOGRAFADA (Fernet)
+    cora_webhook_secret = Column(String(64), nullable=True)  # segredo na URL do webhook (anti-spam)
+    cora_webhook_endpoint_ids = Column(String(500), nullable=True)  # ids dos endpoints criados no Cora (csv)
+    cora_fine_rate = Column(Numeric(5, 2), nullable=True)     # multa % após vencimento
+    cora_interest_rate = Column(Numeric(5, 2), nullable=True) # juros % ao mês
+    cora_notify_email = Column(Boolean, default=False, nullable=False)  # Cora envia e-mail de cobrança ao sacado
+
+    # ── Banco Cora x Horus SQL ─────────────────────────────────────────────────
+    cora_horus_cod_formas = Column(String(100), nullable=True)            # COD_FORMA aceitos (csv). Vazio = todos
+    cora_horus_write_back = Column(Boolean, default=False, nullable=False) # grava linha digitável/PIX/PDF em LANCTOS_CRECEBERA
+    cora_horus_auto_baixa = Column(Boolean, default=False, nullable=False) # gera borderô automaticamente ao receber PAID
+    # Parâmetros de borderô exclusivos da conta Cora (independentes da Vindi: horus_banco_*)
+    cora_horus_banco_forma_pagto = Column(String(50), nullable=True)
+    cora_horus_banco_codigo = Column(String(20), nullable=True)
+    cora_horus_banco_agencia = Column(String(20), nullable=True)
+    cora_horus_banco_conta = Column(String(30), nullable=True)
+    cora_horus_banco_carteira = Column(String(20), nullable=True)
+
     # Gateways de Pagamento (Loja Virtual)
     payment_gateway_active = Column(String(50), default='EFI', nullable=False) # EFI, CIELO, REDE, VINDI
     cielo_client_id = Column(String(255), nullable=True)
@@ -136,6 +162,7 @@ class CompanySettings(Base):
     horus_sql_feature_pedidos     = Column(Boolean, nullable=False, default=False)  # Pedidos no Horus Direct
     horus_sql_feature_logistics   = Column(Boolean, nullable=False, default=False)  # Integração com WMS de logística
     horus_sql_feature_dbm         = Column(Boolean, nullable=False, default=False)  # Módulo DBM (Painel Operacional & CRM)
+    horus_sql_feature_cora_boleto = Column(Boolean, nullable=False, default=False)  # Boleto Banco Cora integrado ao Horus
 
     # ── Horus SQL — Parâmetros Bancários para Borderô Financeiro ─────────────
     horus_banco_forma_pagto = Column(String(50), nullable=True)  # Código forma de pagamento (ex: 01, DIN, CAR)

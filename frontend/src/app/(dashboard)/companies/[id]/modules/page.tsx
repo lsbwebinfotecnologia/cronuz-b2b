@@ -40,7 +40,7 @@ export default function CompanyModulesPage() {
   const [togglingMobile, setTogglingMobile] = useState<string | null>(null);
 
   // ─── Horus SQL Direct — Features State ────────────────────────────
-  interface HorusSQLFeatures { vindi_baixa: boolean; pedidos: boolean; dbm?: boolean; }
+  interface HorusSQLFeatures { vindi_baixa: boolean; pedidos: boolean; dbm?: boolean; cora_boleto?: boolean; }
   const [horusSQLData, setHorusSQLData] = useState<{
     sql_configured: boolean;
     module_horus_sql: boolean;
@@ -1044,6 +1044,34 @@ export default function CompanyModulesPage() {
                           onClick={() => handleToggleHorusSQLFeature('dbm')}
                           disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
                           colorClass="bg-indigo-600"
+                        />
+                      )
+                    }
+                  </div>
+                </div>
+
+                {/* Boleto Banco Cora integrado ao Horus */}
+                <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                  <div className="flex items-center gap-4">
+                    <div className={`p-2 rounded-xl border ${horusSQLData?.features.cora_boleto ? 'bg-pink-500/10 border-pink-500/20 text-pink-600' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                      <CreditCard className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Boleto Banco Cora</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Emissão de boleto + Pix no Banco Cora a partir dos títulos em aberto do Horus, com conciliação automática e baixa por borderô.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="shrink-0 pl-4 flex items-center gap-3">
+                    {togglingHorusFeature === 'cora_boleto'
+                      ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                      : (
+                        <Switch
+                          active={horusSQLData?.features.cora_boleto ?? false}
+                          onClick={() => handleToggleHorusSQLFeature('cora_boleto')}
+                          disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
+                          colorClass="bg-pink-600"
                         />
                       )
                     }

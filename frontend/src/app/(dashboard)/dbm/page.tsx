@@ -130,6 +130,8 @@ export default function DbmDashboardPage() {
       actions: [
         { id: 'vendas-1', name: 'Orçamentos & Propostas', href: '/proposals/desk', isAvailable: true },
         { id: 'vendas-2', name: 'Pedidos Internet', href: '/orders', isAvailable: true },
+        { id: 'vendas-3', name: 'E-book (Pearson)', href: '/dbm/ebooks/pearson', isAvailable: true, badge: 'BV' },
+        { id: 'vendas-4', name: 'E-book (Bookwire)', href: '/dbm/ebooks/bookwire', isAvailable: false, badge: 'Em breve' },
       ]
     },
     {

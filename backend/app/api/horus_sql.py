@@ -325,6 +325,7 @@ class HorusSQLFeaturesUpdate(BaseModel):
     horus_sql_feature_vindi_baixa: Optional[bool] = None
     horus_sql_feature_pedidos: Optional[bool] = None
     horus_sql_feature_dbm: Optional[bool] = None
+    horus_sql_feature_cora_boleto: Optional[bool] = None
 
 
 @router.get("/companies/{company_id}/horus-sql/features")
@@ -354,6 +355,7 @@ def get_horus_sql_features(
             "vindi_baixa": getattr(settings, "horus_sql_feature_vindi_baixa", False),
             "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
             "dbm": getattr(settings, "horus_sql_feature_dbm", False),
+            "cora_boleto": getattr(settings, "horus_sql_feature_cora_boleto", False),
         }
     }
 
@@ -394,6 +396,10 @@ def update_horus_sql_features(
         settings.horus_sql_feature_dbm = payload.horus_sql_feature_dbm
         changed = True
 
+    if payload.horus_sql_feature_cora_boleto is not None:
+        settings.horus_sql_feature_cora_boleto = payload.horus_sql_feature_cora_boleto
+        changed = True
+
     if changed:
         db.commit()
         db.refresh(settings)
@@ -404,6 +410,7 @@ def update_horus_sql_features(
             "vindi_baixa": getattr(settings, "horus_sql_feature_vindi_baixa", False),
             "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
             "dbm": getattr(settings, "horus_sql_feature_dbm", False),
+            "cora_boleto": getattr(settings, "horus_sql_feature_cora_boleto", False),
         }
     }
 

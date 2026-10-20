@@ -230,21 +230,54 @@ class HorusOrders(HorusClient):
         }
         return await self.get("AltStatus_Pedido", params=params)
 
-    async def pular_expedicao(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int]) -> Any:
+    async def pular_expedicao(
+        self,
+        cod_ped_venda: Optional[Union[str, int]] = None,
+        cod_local: Optional[Union[str, int]] = None,
+        cod_empresa: Optional[Union[str, int]] = None,
+        cod_filial: Optional[Union[str, int]] = None,
+        cod_cli: Optional[Union[str, int]] = None,
+        id_doc: Optional[str] = None,
+        id_guid: Optional[str] = None,
+        cnpj_destino: Optional[str] = None,
+        cod_pedido_origem: Optional[Union[str, int]] = None,
+        **kwargs
+    ) -> Any:
         """
         Skips the entire expedition phase for a Venda order, jumping it directly
         to LFT (Lote Faturamento — pronto para faturamento).
-
-        Used on the Dropship Venda order after AltStatus_Pedido (LAP) to avoid
-        the order appearing in the expedition queue. This mirrors the Horus method
-        Pular_expedicao which bypasses LEX/LAP and goes straight to LFT.
+        Endpoint Horus: /Horus/api/TServerB2B/Pular_expedicao
+        Parâmetros ERP obrigatórios: COD_PED_VENDA, COD_LOCAL, COD_CLI, COD_EMPRESA, COD_FILIAL
         """
-        params = {
-            "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
-            "ID_GUID": id_guid,
-            "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
-            "COD_PEDIDO_ORIGEM": cod_pedido_origem,
-        }
+        params: Dict[str, Any] = {}
+        if cod_ped_venda is not None:
+            params["COD_PED_VENDA"] = cod_ped_venda
+
+        final_local = cod_local or getattr(self._settings, 'horus_stock_local', None)
+        if final_local is not None and str(final_local).strip() != '':
+            params["COD_LOCAL"] = str(final_local).strip()
+
+        final_empresa = cod_empresa or getattr(self._settings, 'horus_company', None)
+        if final_empresa:
+            params["COD_EMPRESA"] = str(final_empresa).strip()
+
+        final_filial = cod_filial or getattr(self._settings, 'horus_branch', None)
+        if final_filial:
+            params["COD_FILIAL"] = str(final_filial).strip()
+
+        if cod_cli is not None:
+            params["COD_CLI"] = cod_cli
+
+        # Fallback B2B se chamado no formato legado
+        if id_doc and "COD_CLI" not in params:
+            params["ID_DOC"] = re.sub(r'\D', '', str(id_doc))
+        if id_guid:
+            params["ID_GUID"] = id_guid
+        if cnpj_destino:
+            params["CNPJ_DESTINO"] = re.sub(r'\D', '', str(cnpj_destino))
+        if cod_pedido_origem and "COD_PED_VENDA" not in params:
+            params["COD_PEDIDO_ORIGEM"] = cod_pedido_origem
+
         return await self.get("Pular_expedicao", params=params)
 
     async def get_order_items(self, cod_ped_venda: Union[str, int], limit: int = 0) -> Any:

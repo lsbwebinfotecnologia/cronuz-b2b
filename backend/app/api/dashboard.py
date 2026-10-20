@@ -81,6 +81,7 @@ def get_dashboard_metrics(
     horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
     horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
+    horus_sql_feature_cora_boleto = getattr(settings, "horus_sql_feature_cora_boleto", False) if settings else False
     company_logo = getattr(company, "logo", None) if company else None
 
     # Uses horus is derived from integration / module flag
@@ -372,6 +373,7 @@ def get_dashboard_metrics(
         "horus_sql_feature_vindi_baixa": horus_sql_feature_vindi_baixa,
         "horus_sql_feature_pedidos": horus_sql_feature_pedidos,
         "horus_sql_feature_dbm": horus_sql_feature_dbm,
+        "horus_sql_feature_cora_boleto": horus_sql_feature_cora_boleto,
         "company_logo": company_logo,
     }
 

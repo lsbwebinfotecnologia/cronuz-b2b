@@ -20,23 +20,35 @@ export function StoreHeader() {
   const [brands, setBrands] = useState<any[]>([]);
   const [isMounted, setIsMounted] = useState(false);
 
+  const { logo, name, companyId } = useStoreConfig();
+
   React.useEffect(() => {
     setIsMounted(true);
     const currentUser = getUser();
     setUser(currentUser);
     
-    if (currentUser?.company_id) {
-       fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/navigation?company_id=${currentUser.company_id}`)
+    const resolvedCompanyId = currentUser?.company_id || companyId;
+    if (resolvedCompanyId) {
+       fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/storefront/navigation?company_id=${resolvedCompanyId}`)
          .then(r => r.json())
          .then(data => {
-            if (data.categories) setCategories(data.categories);
-            if (data.brands) setBrands(data.brands);
+            if (Array.isArray(data.categories)) {
+               const sortedCats = [...data.categories].sort((a, b) =>
+                  String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR', { sensitivity: 'base', numeric: true })
+               );
+               setCategories(sortedCats);
+            }
+            if (Array.isArray(data.brands)) {
+               const sortedBrands = [...data.brands].sort((a, b) =>
+                  String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR', { sensitivity: 'base', numeric: true })
+               );
+               setBrands(sortedBrands);
+            }
          })
          .catch(console.error);
     }
-  }, []);
+  }, [companyId]);
 
-  const { logo, name } = useStoreConfig();
   const storeName = name || user?.company_name || 'Cronuz';
   const isCustomer = user?.type === 'CUSTOMER';
   
@@ -323,18 +335,27 @@ export function StoreHeader() {
                   </button>
 
                   {(categories.length > 0 || brands.length > 0) && (
-                     <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800">
-                        <span className="font-bold text-slate-500 text-xs uppercase px-3 block mb-2">Departamentos</span>
-                        {categories.map((cat, idx) => (
-                           <Link key={`cat-${idx}`} href={`/store/search?q=${encodeURIComponent(cat.id || cat.name)}&filter=COD_GENERO&label=${encodeURIComponent(cat.name)}`} onClick={() => setIsMobileMenuOpen(false)} className="block p-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
-                              {cat.name}
-                           </Link>
-                        ))}
-                        {brands.map((brand, idx) => (
-                           <Link key={`brand-${idx}`} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA&label=${encodeURIComponent(brand.name)}`} onClick={() => setIsMobileMenuOpen(false)} className="block p-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
-                              {brand.name}
-                           </Link>
-                        ))}
+                     <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 space-y-4">
+                        {categories.length > 0 && (
+                           <div>
+                              <span className="font-bold text-slate-400 text-[10px] uppercase tracking-wider px-3 block mb-1.5">Categorias</span>
+                              {categories.map((cat, idx) => (
+                                 <Link key={`cat-${idx}`} href={`/store/search?q=${encodeURIComponent(cat.id || cat.name)}&filter=COD_GENERO&label=${encodeURIComponent(cat.name)}`} onClick={() => setIsMobileMenuOpen(false)} className="block p-2.5 px-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
+                                    {cat.name}
+                                 </Link>
+                              ))}
+                           </div>
+                        )}
+                        {brands.length > 0 && (
+                           <div>
+                              <span className="font-bold text-slate-400 text-[10px] uppercase tracking-wider px-3 block mb-1.5">Marcas / Editoras</span>
+                              {brands.map((brand, idx) => (
+                                 <Link key={`brand-${idx}`} href={`/store/search?q=${encodeURIComponent(brand.name)}&filter=NOM_EDITORA&label=${encodeURIComponent(brand.name)}`} onClick={() => setIsMobileMenuOpen(false)} className="block p-2.5 px-3 text-sm text-slate-700 hover:text-[var(--color-primary-base)] dark:text-slate-300 transition-colors rounded-xl hover:bg-slate-50 dark:hover:bg-slate-900 border-l-2 border-transparent hover:border-[var(--color-primary-base)]">
+                                    {brand.name}
+                                 </Link>
+                              ))}
+                           </div>
+                        )}
                      </div>
                   )}
                 </nav>

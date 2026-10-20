@@ -47,11 +47,21 @@ class HorusProducts(HorusClient):
                 params["LIMIT"] = limit if (limit is not None and limit > 0) else 50
 
         # ══════════════════════════════════════════════════════════════════════
-        # CONTEXTO DE EMPRESA / FILIAL / LOCAL DE ESTOQUE (Horus ERP)
+        # ARQUITETURA HORUS ERP — PARÂMETROS SD_* vs AC_* (NÃO REMOVER)
         # ══════════════════════════════════════════════════════════════════════
-        # O Horus ERP exige SD_COD_EMPRESA e SD_COD_FILIAL no Busca_AcervoB2B
-        # para identificar a unidade operacional e calcular o SALDO_DISPONIVEL real.
-        # Sem esses parâmetros, o Horus retorna saldo zerado em todos os itens.
+        # 1. `SD_COD_EMPRESA` / `SD_COD_FILIAL` / `SD_LOCAL_ESTOQUE` (Saldo Disponível):
+        #    Define a unidade operacional para o Horus calcular o campo `SALDO_DISPONIVEL`.
+        #    DEVE ser enviado sempre que configurado na empresa, pois todos os módulos
+        #    (Storefront, Dropship, Intake, Bookinfo, PDV) dependem do saldo real do local.
+        #
+        # 2. `AC_COD_EMPRESA` / `AC_COD_FILIAL` / `AC_LOCAL_ESTOQUE` (Filtro de Acervo):
+        #    Restringe os itens retornados pelo Horus APENAS aos que possuem saldo > 0
+        #    naquela Empresa/Filial/Local.
+        #    - NÃO deve ser enviado globalmente aqui para todos os módulos internos
+        #      (Dropship, Intake, Bookinfo precisam enxergar itens zerados para apontar falta).
+        #    - É injetado via `**kwargs` EXCLUSIVAMENTE na pesquisa da Storefront
+        #      (`_fetch_from_horus_storefront` em `storefront.py` quando `search_type == "SEARCH"`
+        #      e `horus_hide_zero_balance == True`), em conjunto com os `SD_*` acima.
         if self._settings.horus_company:
             params["SD_COD_EMPRESA"] = self._settings.horus_company
         if self._settings.horus_branch:

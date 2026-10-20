@@ -206,6 +206,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [horusSqlVindiBaixa, setHorusSqlVindiBaixa] = useState(false);
   const [horusSqlPedidos, setHorusSqlPedidos] = useState(true);
   const [horusSqlDbm, setHorusSqlDbm] = useState(false);
+  const [horusSqlCoraBoleto, setHorusSqlCoraBoleto] = useState(false);
   const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
   const [hasInventoryModule, setHasInventoryModule] = useState(false);
   const [moduleEditorial, setModuleEditorial] = useState(false);
@@ -271,6 +272,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setHorusSqlVindiBaixa(data.horus_sql_feature_vindi_baixa || false);
                setHorusSqlPedidos(data.horus_sql_feature_pedidos ?? true);
                setHorusSqlDbm(data.horus_sql_feature_dbm || false);
+               setHorusSqlCoraBoleto(data.horus_sql_feature_cora_boleto || false);
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
                setHasInventoryModule(data.has_inventory_module || false);
                 setModuleEditorial(data.module_editorial || false);
@@ -439,6 +441,9 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     }
     if (horusSqlVindiBaixa || subItems.length === 0) {
       subItems.push({ name: 'Financeiro Vindi', href: '/horus-direct/financeiro-vindi', icon: CreditCard });
+    }
+    if (horusSqlCoraBoleto) {
+      subItems.push({ name: 'Boleto Cora', href: '/horus-direct/boleto-cora', icon: Receipt });
     }
     if (horusSqlDbm) {
       subItems.push({ name: 'DBM (Painel & CRM)', href: '/dbm', icon: LayoutGrid });

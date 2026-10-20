@@ -326,13 +326,38 @@ async def _fetch_from_horus_storefront(
             else: # PRODUCT
                 search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "COD_ITEM"
                 
+            # ══════════════════════════════════════════════════════════════════
+            # REGRA ARQUITETURAL — PESQUISA STOREFRONT COM OCULTAR SALDO ZERADO
+            # ══════════════════════════════════════════════════════════════════
+            # Quando `horus_hide_zero_balance=True` na empresa (ex: Editora Compor / Grupo LE),
+            # a pesquisa da Storefront (`search_type == "SEARCH"`) DEVE enviar os parâmetros
+            # de filtro de Acervo (`AC_COD_EMPRESA`, `AC_COD_FILIAL`, `AC_LOCAL_ESTOQUE`)
+            # em conjunto com os parâmetros de cálculo de saldo (`SD_*` já enviados pelo
+            # `busca_acervo_b2b`).
+            # - `SD_*`: calcula o `SALDO_DISPONIVEL` exato da empresa/filial/local.
+            # - `AC_*`: restringe o resultado da busca no Horus apenas aos itens com saldo
+            #   naquela unidade, impedindo que livros zerados ou de outras editoras do
+            #   mesmo banco compartilhado apareçam na busca da loja.
+            # ATENÇÃO: Aplicado EXCLUSIVAMENTE em `search_type == "SEARCH"` da Storefront
+            # para não afetar sincronizações internas, Dropship, Intake ou Bookinfo.
+            # ══════════════════════════════════════════════════════════════════
+            extra_ac_params = {}
+            if search_type == "SEARCH" and getattr(settings, "horus_hide_zero_balance", False):
+                if getattr(settings, "horus_company", None):
+                    extra_ac_params["AC_COD_EMPRESA"] = settings.horus_company
+                if getattr(settings, "horus_branch", None):
+                    extra_ac_params["AC_COD_FILIAL"] = settings.horus_branch
+                if getattr(settings, "horus_stock_local", None):
+                    extra_ac_params["AC_LOCAL_ESTOQUE"] = settings.horus_stock_local
+
             horus_response = await horus_client.busca_acervo_b2b(
                 id_doc=company.document,
                 id_guid=customer.id_guid,
                 term=term,
                 search_option=search_option,
                 offset=skip,
-                limit=limit
+                limit=limit,
+                **extra_ac_params
             )
         else:
             if search_type == "SEARCH":
@@ -360,6 +385,7 @@ async def _fetch_from_horus_storefront(
         
         mapped_items = []
         allow_backorder = settings.allow_backorder if settings else False
+        hide_zero_in_search = (search_type == "SEARCH" and bool(getattr(settings, "horus_hide_zero_balance", False)))
 
         # Regra de negócio: desconto Cronuz no B2B Horus
         # Ativo quando: cliente logado + modo Horus B2B + flag horus_use_cronuz_discount=True
@@ -375,6 +401,15 @@ async def _fetch_from_horus_storefront(
                 customer_discount_pct = float(customer.discount)
 
         for item in horus_items:
+            if hide_zero_in_search:
+                try:
+                    raw_saldo = item.get("SALDO_DISPONIVEL", 0)
+                    saldo_val = int(float(str(raw_saldo or 0).replace(",", ".")))
+                except (ValueError, TypeError):
+                    saldo_val = 0
+                if saldo_val <= 0:
+                    continue
+
             mapped_item = map_horus_product(
                 item, company_id, allow_backorder,
                 customer_discount_pct=customer_discount_pct,
@@ -1400,6 +1435,12 @@ async def get_navigation_tree(
     categories = []
     brands = []
     
+    import unicodedata
+    def _alpha_key(item: dict) -> str:
+        raw = str(item.get("name") or "").strip()
+        norm = unicodedata.normalize("NFKD", raw).encode("ASCII", "ignore").decode("ASCII")
+        return norm.lower()
+
     # 1. Custom Menu explicitly defined in Marketing Dashboard
     try:
         from app.models.marketing_navigation import NavigationMenuItem, NavigationMenuType
@@ -1409,8 +1450,14 @@ async def get_navigation_tree(
         ).order_by(NavigationMenuItem.position.asc()).all()
         
         if menu_items:
-            categories = [{"id": i.external_id, "name": i.label} for i in menu_items if i.item_type == NavigationMenuType.CATEGORY]
-            brands = [{"id": i.external_id, "name": i.label} for i in menu_items if i.item_type == NavigationMenuType.BRAND]
+            categories = sorted(
+                [{"id": i.external_id, "name": i.label} for i in menu_items if i.item_type == NavigationMenuType.CATEGORY],
+                key=_alpha_key
+            )
+            brands = sorted(
+                [{"id": i.external_id, "name": i.label} for i in menu_items if i.item_type == NavigationMenuType.BRAND],
+                key=_alpha_key
+            )
             return {"categories": categories, "brands": brands}
     except Exception as e:
         print("Erro ao carregar menu customizado:", e)
@@ -1460,6 +1507,9 @@ async def get_navigation_tree(
         local_brands = db.query(Brand).filter(Brand.company_id == company_id).all()
         brands = [{"id": str(b.id), "name": b.name} for b in local_brands]
         
+    categories.sort(key=_alpha_key)
+    brands.sort(key=_alpha_key)
+
     return {
         "categories": categories,
         "brands": brands

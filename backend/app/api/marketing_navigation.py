@@ -60,7 +60,16 @@ async def get_available_navigation(
         
         local_brands = db.query(Brand).filter(Brand.company_id == current_user.company_id).all()
         brands = [{"id": str(b.id), "name": b.name} for b in local_brands]
-        
+
+    import unicodedata
+    def _alpha_key(item: dict) -> str:
+        raw = str(item.get("name") or "").strip()
+        norm = unicodedata.normalize("NFKD", raw).encode("ASCII", "ignore").decode("ASCII")
+        return norm.lower()
+
+    categories.sort(key=_alpha_key)
+    brands.sort(key=_alpha_key)
+
     return {
         "categories": categories,
         "brands": brands

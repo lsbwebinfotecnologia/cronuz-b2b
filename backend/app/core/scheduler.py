@@ -388,6 +388,17 @@ def start_scheduler():
         misfire_grace_time=300,
     )
 
+    # Boleto Cora x Horus — conciliação de reserva do webhook + baixa automática (a cada 30 min)
+    from app.jobs.cora_sync_job import run_cora_sync_job
+    scheduler.add_job(
+        run_cora_sync_job,
+        IntervalTrigger(minutes=30),
+        id="job_cora_sync",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
+    )
+
     # Sincronização dinâmica e automática de SSL para Portais de Autores ativos (a cada 6 horas)
     try:
         from app.core.ssl_authors import sync_all_active_author_portals

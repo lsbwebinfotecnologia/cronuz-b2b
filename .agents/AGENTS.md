@@ -225,5 +225,21 @@ git push origin --delete feature/nome-da-funcionalidade
 >      - **`fundo de catálogo`**: Obras clássicas/long tail para composição de pedido mínimo e mix de vendas.
 >    - Ambas compartilham o padrão de alta performance, densidade visual ERP (Access) e facilidade de navegação por teclado (Enter, setas e atalhos), mas mantêm rotinas de backend e regras de negócio isoladas para permitir evolução independente de cada frente.
 
+---
 
+## 📦 9. Arquitetura de Consulta Horus ERP (`SD_*` vs `AC_*` e Pesquisa Storefront)
 
+> [!IMPORTANT]
+> **NUNCA remova ou confunda os parâmetros `SD_*` e `AC_*` nas consultas `Busca_AcervoB2B` do Horus ERP.**
+> Alterações indevidas nesses parâmetros quebram o cálculo de saldo por local ou fazem aparecer livros zerados/de outras editoras em bancos Horus compartilhados (ex: Editora Compor / Grupo LE).
+
+### Regras Arquiteturais Mandatórias:
+1. **Parâmetros `SD_*` (`SD_COD_EMPRESA`, `SD_COD_FILIAL`, `SD_LOCAL_ESTOQUE` — Cálculo de Saldo Disponível)**:
+   - Determinam de qual empresa, filial e local de estoque o Horus deve calcular o campo `SALDO_DISPONIVEL`.
+   - **DEVEM sempre ser enviados** em [`busca_acervo_b2b`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/integrators/horus_products.py) quando configurados em `cmp_settings`, pois todos os módulos (Storefront, Dropship, Intake, Bookinfo Hub, PDV) dependem do saldo real do local configurado.
+   - Os parâmetros `SD_*` sozinhos **não ocultam** itens sem saldo do retorno do Horus.
+
+2. **Parâmetros `AC_*` (`AC_COD_EMPRESA`, `AC_COD_FILIAL`, `AC_LOCAL_ESTOQUE` — Filtro de Acervo sem Saldo)**:
+   - Instruem o Horus a **restringir o acervo retornado** apenas aos itens que possuem saldo disponível naquela Empresa/Filial/Local.
+   - **NÃO devem ser enviados globalmente** para todos os módulos internos em `busca_acervo_b2b`, pois rotinas como Dropship Sync, Bookinfo Hub, Order Intake e consulta direta de produto precisam enxergar o item mesmo quando o saldo for `0` (para apontar falta ou zerar vitrine).
+   - **DEVEM ser enviados EXCLUSIVAMENTE na Pesquisa da Storefront** ([`_fetch_from_horus_storefront`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/api/storefront.py) quando `search_type == "SEARCH"` e `settings.horus_hide_zero_balance == True`), **em conjunto** com os parâmetros `SD_*`, acompanhados da trava defensiva que ignora itens com `SALDO_DISPONIVEL <= 0` na listagem da busca.
