@@ -114,24 +114,58 @@ class DisalClient:
                 }
 
             data = resp.json()
-            if not data:
+            if not data or not isinstance(data, dict):
                 return {"found": False, "saldo": 0, "error": None, "raw": {}}
 
-            # Produto não encontrado: API retorna objeto zerado
-            # Detecção: EAN vazio ou saldo 0 com campos básicos ausentes
-            ean_retornado = str(data.get("ean") or data.get("EAN") or data.get("CodigoEAN") or "").strip()
-            saldo = int(data.get("saldo") or data.get("Saldo") or data.get("estoque") or data.get("Estoque") or 0)
+            # Normaliza chaves para case-insensitive por segurança, mantendo acesso direto às oficiais
+            # Oficial Disal: {"DATA_ATUALIZACAO_ESTOQUE": "...", "ESTOQUE": 2, "DESCRICAO": "...", "EDITORA": "...", "EAN": "...", "PRECO_CAPA": 101.0, "CODIGOINTERNO": "..."}
+            ean_retornado = str(
+                data.get("EAN")
+                or data.get("ean")
+                or data.get("CodigoEAN")
+                or ""
+            ).strip()
+
+            raw_saldo = (
+                data.get("ESTOQUE")
+                if data.get("ESTOQUE") is not None
+                else (
+                    data.get("saldo")
+                    or data.get("Saldo")
+                    or data.get("estoque")
+                    or data.get("Estoque")
+                    or 0
+                )
+            )
+            saldo = int(raw_saldo or 0)
 
             if not ean_retornado or ean_retornado == "0":
                 return {"found": False, "saldo": 0, "error": None, "raw": data}
 
+            raw_preco = (
+                data.get("PRECO_CAPA")
+                if data.get("PRECO_CAPA") is not None
+                else (data.get("preco") or data.get("Preco") or data.get("PRECO") or 0)
+            )
+            preco = float(raw_preco or 0)
+
+            titulo = str(
+                data.get("DESCRICAO")
+                or data.get("descricao")
+                or data.get("titulo")
+                or data.get("Titulo")
+                or ""
+            ).strip()
+
             return {
-                "found":  True,
-                "saldo":  saldo,
-                "preco":  float(data.get("preco") or data.get("Preco") or 0),
-                "titulo": str(data.get("titulo") or data.get("Titulo") or data.get("descricao") or "").strip(),
-                "raw":    data,
-                "error":  None,
+                "found":          True,
+                "saldo":          saldo,
+                "preco":          preco,
+                "titulo":         titulo,
+                "editora":        str(data.get("EDITORA") or data.get("editora") or "").strip() or None,
+                "codigo_interno": str(data.get("CODIGOINTERNO") or "").strip() or None,
+                "raw":            data,
+                "error":          None,
             }
 
         except httpx.TimeoutException:
@@ -141,3 +175,54 @@ class DisalClient:
         except Exception as e:
             logger.error(f"[DisalClient] Erro ao consultar ISBN {isbn}: {e}")
             return {"found": False, "saldo": 0, "error": f"Erro na consulta Disal: {str(e)}", "raw": {}}
+
+    async def get_stock_changes_by_date(
+        self,
+        data_inicial: str,
+        data_final: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Consulta lista de produtos com estoque/dados alterados no período.
+        GET /api/estoque/listadata
+        Headers:
+          xLtOpenKeyId: <api_key>
+          XlDataInicial: yyyy-MM-ddTHH:mm:ss
+          XlDataFinal: yyyy-MM-ddTHH:mm:ss (opcional)
+        Rate limit: 1/seg, 5/min, 100/hora
+        """
+        if not self.api_key:
+            return {"ok": False, "items": [], "error": "Chave de API da Disal não configurada."}
+
+        url = f"{self.base_url}/api/estoque/listadata"
+        headers: Dict[str, str] = {
+            "xLtOpenKeyId": self.api_key,
+            "XlDataInicial": data_inicial,
+        }
+        if data_final:
+            headers["XlDataFinal"] = data_final
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(url, headers=headers)
+
+            if resp.status_code == 401:
+                return {"ok": False, "items": [], "error": "Chave de API da Disal inválida (401)."}
+            if resp.status_code == 400:
+                body = {}
+                try:
+                    body = resp.json()
+                except Exception:
+                    pass
+                return {"ok": False, "items": [], "error": body.get("Message") or "Parâmetros de data inválidos (400)."}
+            if resp.status_code == 429:
+                return {"ok": False, "items": [], "error": "Rate limit excedido em /api/estoque/listadata (429)."}
+            if resp.status_code != 200:
+                return {"ok": False, "items": [], "error": f"Erro HTTP {resp.status_code} na Disal."}
+
+            data = resp.json()
+            items = data if isinstance(data, list) else []
+            return {"ok": True, "items": items, "error": None}
+        except Exception as e:
+            logger.error(f"[DisalClient] Erro em listadata: {e}")
+            return {"ok": False, "items": [], "error": str(e)}
+
