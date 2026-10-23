@@ -106,6 +106,14 @@ def _mask_cep(cep: str) -> str:
         return f"{digits[:5]}-{digits[5:]}"
     return digits
 
+def _is_international_cep(cep: any) -> bool:
+    """
+    Retorna True se o CEP for composto exclusivamente por noves (ex: 99999-999 ou 99999999),
+    o que representa clientes/entregas internacionais.
+    """
+    digits = _only_digits(str(cep or ""))
+    return bool(digits and len(digits) >= 8 and set(digits) == {"9"})
+
 def _parse_float(v) -> float:
     """Converte números em formato string (incluindo formato brasileiro com vírgula '69,10') com segurança."""
     if v is None:
@@ -1631,7 +1639,14 @@ async def preflight_logistics(
         cep = _normalize_cep(cep_raw)
         cep_mascarado = _mask_cep(cep)
 
-        if not cep or len(cep) != 8:
+        if _is_international_cep(cep_raw):
+            checks.append({
+                "key": "cep_valid",
+                "label": f"CEP {cep_mascarado} (Cliente Internacional)",
+                "status": "ok",
+                "detail": "CEP 99999-999 identificado como cliente internacional — validação de ViaCEP dispensada."
+            })
+        elif not cep or len(cep) != 8:
             checks.append({
                 "key": "cep_valid",
                 "label": "CEP do cliente",
@@ -1803,6 +1818,36 @@ async def validate_cep(
     cep = _normalize_cep(cep_raw)
     cep_mascarado = _mask_cep(cep)
 
+    if _is_international_cep(cep_raw):
+        # Cliente internacional: dispensa consulta ao ViaCEP e aprova diretamente
+        from datetime import datetime, timezone
+        order = db.query(LogisticsOrder).filter(
+            LogisticsOrder.company_id == company_id,
+            LogisticsOrder.cod_ped_venda == cod_ped
+        ).first()
+        if not order:
+            order = LogisticsOrder(company_id=company_id, cod_ped_venda=cod_ped)
+            db.add(order)
+        order.cep_validated = True
+        order.cep_checked_at = datetime.now(timezone.utc)
+        order.cep_error_detail = None
+        if order.situation == "CEP_INVALID":
+            order.situation = "PENDING_SEND"
+        db.commit()
+        return {
+            "cod_ped_venda": cod_ped,
+            "cep": cep,
+            "cep_masked": cep_mascarado,
+            "valid": True,
+            "international": True,
+            "address": {
+                "logradouro": cli_data.get("END_CLI") or cli_data.get("ENDERECO") or "Internacional",
+                "bairro": cli_data.get("BAI_CLI") or cli_data.get("BAIRRO") or "",
+                "localidade": cli_data.get("CID_CLI") or cli_data.get("CIDADE") or "Exterior",
+                "uf": cli_data.get("EST_CLI") or cli_data.get("UF") or "EX"
+            }
+        }
+
     if not cep or len(cep) != 8:
         # CEP ausente ou malformado — registra e retorna erro
         from datetime import datetime, timezone
@@ -1941,45 +1986,52 @@ async def send_to_logistics(
         cep = _normalize_cep(cep_raw)
         cep_mascarado = _mask_cep(cep)
 
-        if not cep or len(cep) != 8:
-            order.situation = "CEP_INVALID"
-            order.cep_validated = False
-            order.cep_error_detail = f"CEP {cep_mascarado or cep_raw or 'ausente'} inválido no cadastro do cliente no Horus."
-            from datetime import datetime, timezone
-            order.cep_checked_at = datetime.now(timezone.utc)
-            db.commit()
-            raise HTTPException(
-                status_code=422,
-                detail=f"CEP {cep_mascarado or 'não informado'} inválido — corrija o endereço no Horus."
-            )
-
-        # ViaCEP
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as vclient:
-                vresp = await vclient.get(f"https://viacep.com.br/ws/{cep}/json/")
-                vresp.raise_for_status()
-                vcep_data = vresp.json()
-        except Exception as e:
-            vcep_data = {}
-            logger.warning(f"[Logistics.send] ViaCEP indisponível para CEP {cep}: {e}")
-
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
 
-        if vcep_data.get("erro"):
-            order.situation = "CEP_INVALID"
-            order.cep_validated = False
+        vcep_data = {}
+        if _is_international_cep(cep_raw):
+            order.cep_validated = True
             order.cep_checked_at = now
-            order.cep_error_detail = f"CEP {cep_mascarado} inválido — não encontrado no ViaCEP."
-            db.commit()
-            raise HTTPException(
-                status_code=422,
-                detail=f"⚠️ CEP {cep_mascarado} inválido — corrija o endereço no Horus e tente novamente."
-            )
+            order.cep_error_detail = None
+            if order.situation == "CEP_INVALID":
+                order.situation = "PENDING_SEND"
+        else:
+            if not cep or len(cep) != 8:
+                order.situation = "CEP_INVALID"
+                order.cep_validated = False
+                order.cep_error_detail = f"CEP {cep_mascarado or cep_raw or 'ausente'} inválido no cadastro do cliente no Horus."
+                order.cep_checked_at = now
+                db.commit()
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"CEP {cep_mascarado or 'não informado'} inválido — corrija o endereço no Horus."
+                )
 
-        order.cep_validated = True
-        order.cep_checked_at = now
-        order.cep_error_detail = None
+            # ViaCEP
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as vclient:
+                    vresp = await vclient.get(f"https://viacep.com.br/ws/{cep}/json/")
+                    vresp.raise_for_status()
+                    vcep_data = vresp.json()
+            except Exception as e:
+                vcep_data = {}
+                logger.warning(f"[Logistics.send] ViaCEP indisponível para CEP {cep}: {e}")
+
+            if vcep_data.get("erro"):
+                order.situation = "CEP_INVALID"
+                order.cep_validated = False
+                order.cep_checked_at = now
+                order.cep_error_detail = f"CEP {cep_mascarado} inválido — não encontrado no ViaCEP."
+                db.commit()
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"⚠️ CEP {cep_mascarado} inválido — corrija o endereço no Horus e tente novamente."
+                )
+
+            order.cep_validated = True
+            order.cep_checked_at = now
+            order.cep_error_detail = None
 
         # 6. Busca itens do pedido via API Horus REST
         cod_empresa = str(getattr(horus_settings, 'horus_company', '') or '1').strip()

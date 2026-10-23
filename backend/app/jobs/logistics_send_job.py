@@ -41,6 +41,14 @@ def _mask_cep(cep: str) -> str:
         return f"{digits[:5]}-{digits[5:]}"
     return digits
 
+def _is_international_cep(cep: Any) -> bool:
+    """
+    Retorna True se o CEP for composto exclusivamente por noves (ex: 99999-999 ou 99999999),
+    o que representa clientes/entregas internacionais.
+    """
+    digits = _only_digits(str(cep or ""))
+    return bool(digits and len(digits) >= 8 and set(digits) == {"9"})
+
 def _parse_float(v: Any) -> float:
     if v is None:
         return 0.0
@@ -304,39 +312,46 @@ async def process_company_logistics_send(db: Session, company_id: int) -> Dict[s
             now = datetime.now(timezone.utc)
             existing.cep_checked_at = now
 
-            if not cep or len(cep) != 8:
-                existing.situation = "CEP_INVALID"
-                existing.cep_validated = False
-                existing.cep_error_detail = f"CEP {cep_mascarado or cep_raw or 'ausente'} inválido no Horus (esperado 8 dígitos com máscara 00000-000)"
-                db.commit()
-                stats["errors"] += 1
-                continue
-
             vcep_data = {}
-            if cep in viacep_cache:
-                vcep_data = viacep_cache[cep]
+            if _is_international_cep(cep_raw):
+                # Exceção para cliente internacional (ex: 99999-999)
+                existing.cep_validated = True
+                existing.cep_error_detail = None
+                if existing.situation == "CEP_INVALID":
+                    existing.situation = "PENDING_SEND"
             else:
-                try:
-                    async with httpx.AsyncClient(timeout=5.0) as vclient:
-                        vresp = await vclient.get(f"https://viacep.com.br/ws/{cep}/json/")
-                        if vresp.status_code == 200:
-                            vcep_data = vresp.json()
-                            viacep_cache[cep] = vcep_data
-                except Exception as e_vcep:
-                    logger.warning(f"[LogisticsJob] Erro ao consultar ViaCEP para {cep}: {e_vcep}")
+                if not cep or len(cep) != 8:
+                    existing.situation = "CEP_INVALID"
+                    existing.cep_validated = False
+                    existing.cep_error_detail = f"CEP {cep_mascarado or cep_raw or 'ausente'} inválido no Horus (esperado 8 dígitos com máscara 00000-000)"
+                    db.commit()
+                    stats["errors"] += 1
+                    continue
 
-            if vcep_data.get("erro"):
-                existing.situation = "CEP_INVALID"
-                existing.cep_validated = False
-                existing.cep_error_detail = f"CEP {cep_mascarado} não localizado no ViaCEP"
-                db.commit()
-                stats["errors"] += 1
-                continue
+                if cep in viacep_cache:
+                    vcep_data = viacep_cache[cep]
+                else:
+                    try:
+                        async with httpx.AsyncClient(timeout=5.0) as vclient:
+                            vresp = await vclient.get(f"https://viacep.com.br/ws/{cep}/json/")
+                            if vresp.status_code == 200:
+                                vcep_data = vresp.json()
+                                viacep_cache[cep] = vcep_data
+                    except Exception as e_vcep:
+                        logger.warning(f"[LogisticsJob] Erro ao consultar ViaCEP para {cep}: {e_vcep}")
 
-            existing.cep_validated = True
-            existing.cep_error_detail = None
-            if existing.situation == "CEP_INVALID":
-                existing.situation = "PENDING_SEND"
+                if vcep_data.get("erro"):
+                    existing.situation = "CEP_INVALID"
+                    existing.cep_validated = False
+                    existing.cep_error_detail = f"CEP {cep_mascarado} não localizado no ViaCEP"
+                    db.commit()
+                    stats["errors"] += 1
+                    continue
+
+                existing.cep_validated = True
+                existing.cep_error_detail = None
+                if existing.situation == "CEP_INVALID":
+                    existing.situation = "PENDING_SEND"
 
             # 3. Busca itens do pedido
             params_itens = {
