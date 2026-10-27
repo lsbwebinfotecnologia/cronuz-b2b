@@ -46,6 +46,7 @@ export interface Company {
   module_notifications: boolean;
   module_busca_preco: boolean;
   module_horus_sql?: boolean;
+  module_cora?: boolean;
   modulo_autores_ativo?: boolean;
   has_inventory_module?: boolean;
   module_editorial?: boolean;

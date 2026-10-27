@@ -33,6 +33,7 @@ import CameraBarcodeScanner from '@/components/inventory/CameraBarcodeScanner';
 import SupervisorPinModal from '@/components/inventory/SupervisorPinModal';
 import { 
   saveCatalogItems, 
+  getCatalogCount,
   upsertCatalogItem,
   findCatalogItem, 
   savePendingScan, 
@@ -142,9 +143,106 @@ export default function InventoryCountPage() {
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [closingSession, setClosingSession] = useState(false);
+  const [catalogSyncState, setCatalogSyncState] = useState<{
+    syncing: boolean;
+    ready: boolean;
+    error: string | null;
+    loaded: number;
+    total: number;
+  }>({ syncing: true, ready: false, error: null, loaded: 0, total: 0 });
 
   // Referência para focar sempre no input de código de barras
   const barcodeInputRef = useRef<HTMLInputElement>(null);
+
+  async function syncCatalogFull(totalExpected: number, forceReload = false) {
+    if (!companyId || !inventoryId) return;
+    try {
+      const cachedCount = await getCatalogCount(inventoryId);
+      if (!forceReload && totalExpected > 0 && cachedCount >= totalExpected) {
+        setCatalogSyncState({
+          syncing: false,
+          ready: true,
+          error: null,
+          loaded: cachedCount,
+          total: totalExpected
+        });
+        return;
+      }
+
+      if (totalExpected === 0) {
+        setCatalogSyncState({
+          syncing: false,
+          ready: true,
+          error: null,
+          loaded: 0,
+          total: 0
+        });
+        return;
+      }
+
+      setCatalogSyncState({
+        syncing: true,
+        ready: false,
+        error: null,
+        loaded: 0,
+        total: totalExpected
+      });
+
+      const token = getToken();
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const CHUNK_SIZE = 40000;
+      let offset = 0;
+      let totalLoaded = 0;
+
+      while (true) {
+        const res = await fetch(
+          `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/catalog-cache?offset=${offset}&limit=${CHUNK_SIZE}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (!res.ok) {
+          throw new Error('Falha ao baixar bloco do catálogo.');
+        }
+        const items = await res.json();
+        if (!items || items.length === 0) break;
+
+        await saveCatalogItems(inventoryId, items);
+        totalLoaded += items.length;
+        offset += items.length;
+
+        const targetTotal = Math.max(totalLoaded, totalExpected);
+        const isStillLoading = items.length === CHUNK_SIZE && totalLoaded < totalExpected;
+
+        setCatalogSyncState({
+          syncing: isStillLoading,
+          ready: !isStillLoading,
+          error: null,
+          loaded: totalLoaded,
+          total: targetTotal
+        });
+
+        if (items.length < CHUNK_SIZE) break;
+      }
+
+      const finalCount = await getCatalogCount(inventoryId);
+      setCatalogSyncState({
+        syncing: false,
+        ready: true,
+        error: null,
+        loaded: Math.max(finalCount, totalLoaded),
+        total: Math.max(finalCount, totalLoaded, totalExpected)
+      });
+    } catch (err) {
+      console.warn('[IndexedDB] Erro ao sincronizar catálogo:', err);
+      const currentCached = await getCatalogCount(inventoryId);
+      setCatalogSyncState({
+        syncing: false,
+        ready: totalExpected > 0 && currentCached >= totalExpected,
+        error: 'Conexão oscilou durante o carregamento do catálogo. Clique em Recarregar.',
+        loaded: currentCached,
+        total: totalExpected
+      });
+    }
+  }
 
   // 1. Inicializar Catálogo Offline e Monitorar Conexão
   useEffect(() => {
@@ -162,26 +260,6 @@ export default function InventoryCountPage() {
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-
-    async function initCatalog() {
-      if (!companyId || !inventoryId) return;
-      try {
-        const token = getToken();
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/inventory/${inventoryId}/catalog-cache`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (res.ok) {
-          const items = await res.json();
-          await saveCatalogItems(inventoryId, items);
-          console.log(`[IndexedDB] ${items.length} itens armazenados no cache local.`);
-        }
-      } catch (err) {
-        console.warn('[IndexedDB] Erro ao sincronizar catálogo:', err);
-      }
-    }
-
-    initCatalog();
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -421,6 +499,34 @@ export default function InventoryCountPage() {
       itemMeta = await findCatalogItem(inventoryId, isbnRaw);
     } catch (err) {
       console.warn('[IndexedDB] Erro na busca local:', err);
+    }
+
+    // Fallback Online Instantâneo caso o item ainda esteja carregando no cache local
+    if (!itemMeta && isOnline && companyId) {
+      try {
+        const token = getToken();
+        const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const lookupRes = await fetch(
+          `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/catalog-item/${encodeURIComponent(isbnRaw)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (lookupRes.ok) {
+          const lookupData = await lookupRes.json();
+          if (lookupData.found && lookupData.item) {
+            itemMeta = {
+              inventory_id: inventoryId,
+              isbn: lookupData.item.isbn,
+              title: lookupData.item.title,
+              publisher: lookupData.item.publisher,
+              category: lookupData.item.category,
+              default_location: lookupData.item.default_location
+            };
+            upsertCatalogItem(itemMeta).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn('[Lookup Online] Falha ao consultar item no servidor:', err);
+      }
     }
 
     // 1. Item Não Cadastrado na Base
@@ -685,6 +791,7 @@ export default function InventoryCountPage() {
   }
 
   const [inventoryStatus, setInventoryStatus] = useState<string | null>(null);
+  const [totalExpectedSkus, setTotalExpectedSkus] = useState<number>(0);
 
   useEffect(() => {
     async function loadInventoryDetails() {
@@ -698,6 +805,9 @@ export default function InventoryCountPage() {
         if (res.ok) {
           const data = await res.json();
           setInventoryStatus(data.status);
+          const expected = data.total_expected_skus || 0;
+          setTotalExpectedSkus(expected);
+          syncCatalogFull(expected);
         }
       } catch (err) {
         console.warn('Erro ao carregar detalhes do inventário:', err);
@@ -818,7 +928,85 @@ export default function InventoryCountPage() {
       </div>
 
       {/* ─── Corpo da Tela ───────────────────────────────────────────────── */}
-      <div className="flex-1 p-4 sm:p-6 max-w-lg mx-auto w-full flex flex-col justify-center">
+      <div className="flex-1 p-4 sm:p-6 max-w-lg mx-auto w-full flex flex-col justify-center space-y-4">
+        {/* Card de Status e Progresso de Carregamento do Catálogo (100% de Segurança) */}
+        <div className={`rounded-2xl border p-3.5 shadow-xs transition-all ${
+          catalogSyncState.error
+            ? 'border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-950/30 text-rose-900 dark:text-rose-200'
+            : catalogSyncState.ready
+            ? 'border-emerald-300 dark:border-emerald-500/30 bg-emerald-50/80 dark:bg-emerald-950/25 text-emerald-900 dark:text-emerald-200'
+            : 'border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200'
+        }`}>
+          {catalogSyncState.syncing ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold">
+                <span className="flex items-center gap-1.5">
+                  <Loader2 className="h-4 w-4 animate-spin text-amber-600 dark:text-amber-400" />
+                  Carregando catálogo no dispositivo...
+                </span>
+                <span className="font-mono">
+                  {catalogSyncState.total > 0
+                    ? `${Math.min(100, Math.round((catalogSyncState.loaded / catalogSyncState.total) * 100))}%`
+                    : '0%'}
+                </span>
+              </div>
+              <div className="w-full h-2.5 bg-amber-200/70 dark:bg-amber-900/50 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-amber-500 dark:bg-amber-400 transition-all duration-300 rounded-full"
+                  style={{
+                    width: `${catalogSyncState.total > 0 ? Math.min(100, Math.round((catalogSyncState.loaded / catalogSyncState.total) * 100)) : 5}%`
+                  }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-[11px] opacity-85 font-medium">
+                <span>
+                  {catalogSyncState.loaded.toLocaleString('pt-BR')} de {catalogSyncState.total.toLocaleString('pt-BR')} títulos lidos
+                </span>
+                <span>Aguarde 100% para bipar</span>
+              </div>
+            </div>
+          ) : catalogSyncState.error ? (
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-bold">
+                <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                <div>
+                  <p>Incompleto ({catalogSyncState.loaded.toLocaleString('pt-BR')} / {catalogSyncState.total.toLocaleString('pt-BR')} títulos)</p>
+                  <p className="text-[10px] font-normal opacity-80">{catalogSyncState.error}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => syncCatalogFull(totalExpectedSkus, true)}
+                className="px-3 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-bold shrink-0 shadow-xs"
+              >
+                Recarregar
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-bold">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <div>
+                  <span className="block">
+                    Catálogo 100% Carregado ({catalogSyncState.loaded.toLocaleString('pt-BR')} títulos)
+                  </span>
+                  <span className="text-[10px] font-normal opacity-80 block">
+                    Base completa verificada e pronta para bipagem segura.
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => syncCatalogFull(totalExpectedSkus, true)}
+                title="Atualizar catálogo novamente"
+                className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 transition-colors"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+
         {!session ? (
           /* ─── TELA 1: Abertura de Sessão (Definição da Prateleira) ─── */
           <motion.div
@@ -847,19 +1035,25 @@ export default function InventoryCountPage() {
                   type="text"
                   autoFocus
                   required
-                  placeholder="Ex: Prateleira A-01, Rua 3..."
+                  disabled={!catalogSyncState.ready}
+                  placeholder={catalogSyncState.ready ? "Ex: Prateleira A-01, Rua 3..." : "Aguardando carregar 100% do catálogo..."}
                   value={locationInput}
                   onChange={(e) => setLocationInput(e.target.value)}
-                  className="w-full text-base font-bold uppercase tracking-wide px-4 py-3 rounded-xl border-2 border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:border-teal-500"
+                  className="w-full text-base font-bold uppercase tracking-wide px-4 py-3 rounded-xl border-2 border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:border-teal-500 disabled:opacity-50"
                 />
               </div>
 
               <button
                 type="submit"
-                disabled={checkingLocation}
+                disabled={checkingLocation || !catalogSyncState.ready}
                 className="w-full py-3.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-sm shadow-md transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                {checkingLocation ? (
+                {!catalogSyncState.ready ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Aguardando Catálogo ({catalogSyncState.total > 0 ? `${Math.min(100, Math.round((catalogSyncState.loaded / catalogSyncState.total) * 100))}%` : '...'})
+                  </>
+                ) : checkingLocation ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Verificando prateleira...
@@ -925,11 +1119,12 @@ export default function InventoryCountPage() {
                   <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 shadow-inner">
                     <button
                       type="button"
+                      disabled={!catalogSyncState.ready}
                       onClick={() => {
                         setUseCamera(false);
                         setTimeout(() => barcodeInputRef.current?.focus(), 150);
                       }}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all disabled:opacity-50 ${
                         !useCamera
                           ? 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-400 shadow-sm border border-slate-200/80 dark:border-slate-700'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -941,8 +1136,9 @@ export default function InventoryCountPage() {
 
                     <button
                       type="button"
+                      disabled={!catalogSyncState.ready}
                       onClick={() => setUseCamera(true)}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all disabled:opacity-50 ${
                         useCamera
                           ? 'bg-teal-600 text-white shadow-sm'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -957,8 +1153,9 @@ export default function InventoryCountPage() {
                   <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60">
                     <button
                       type="button"
+                      disabled={!catalogSyncState.ready}
                       onClick={() => setQuantityMode('unit')}
-                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all disabled:opacity-50 ${
                         quantityMode === 'unit'
                           ? 'bg-teal-600 text-white shadow-xs'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -969,8 +1166,9 @@ export default function InventoryCountPage() {
 
                     <button
                       type="button"
+                      disabled={!catalogSyncState.ready}
                       onClick={() => setQuantityMode('custom')}
-                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all disabled:opacity-50 ${
                         quantityMode === 'custom'
                           ? 'bg-teal-600 text-white shadow-xs'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -989,7 +1187,7 @@ export default function InventoryCountPage() {
                   )}
 
                   {/* Viewport da Câmera (quando ativado modo Câmera) */}
-                  {useCamera && (
+                  {useCamera && catalogSyncState.ready && (
                     <CameraBarcodeScanner
                       isActive={useCamera}
                       onScan={(code) => processBarcodeScan(code)}
@@ -1000,7 +1198,7 @@ export default function InventoryCountPage() {
                     />
                   )}
 
-                  {/* Input Foco Contínuo para Leitor USB/Bluetooth/Câmera */}
+                  {/* Input Foco Contínuo para Leitor USB/Bluetooth/Câmera (Só habilita quando 100% carregado) */}
                   <form onSubmit={handleBarcodeSubmit} className="space-y-2">
                     <div className="relative">
                       <ScanBarcode className="h-5 w-5 absolute left-3.5 top-3.5 text-teal-600" />
@@ -1008,14 +1206,25 @@ export default function InventoryCountPage() {
                         ref={barcodeInputRef}
                         type="text"
                         inputMode="numeric"
-                        placeholder={useCamera ? "Aponte a câmera ou digite aqui..." : "Bipe o código de barras ou ISBN..."}
+                        disabled={!catalogSyncState.ready}
+                        placeholder={
+                          !catalogSyncState.ready
+                            ? "Aguarde 100% do catálogo carregar..."
+                            : useCamera
+                            ? "Aponte a câmera ou digite aqui..."
+                            : "Bipe o código de barras ou ISBN..."
+                        }
                         value={barcodeInput}
                         onChange={(e) => setBarcodeInput(e.target.value)}
-                        className="w-full pl-11 pr-4 py-3.5 rounded-2xl border-2 border-teal-500 bg-white dark:bg-slate-900 text-base font-mono font-bold tracking-wider text-slate-900 dark:text-white shadow-md focus:outline-none focus:ring-4 focus:ring-teal-500/20"
+                        className="w-full pl-11 pr-4 py-3.5 rounded-2xl border-2 border-teal-500 bg-white dark:bg-slate-900 text-base font-mono font-bold tracking-wider text-slate-900 dark:text-white shadow-md focus:outline-none focus:ring-4 focus:ring-teal-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                       />
                     </div>
                     <p className="text-[11px] text-center text-slate-400">
-                      {useCamera ? "A câmera lê automaticamente ao enquadrar o código." : "O foco fica travado neste campo para leitores automáticos Bluetooth/USB."}
+                      {!catalogSyncState.ready
+                        ? "Bipagem bloqueada por segurança até concluir 100% da leitura da base."
+                        : useCamera
+                        ? "A câmera lê automaticamente ao enquadrar o código."
+                        : "O foco fica travado neste campo para leitores automáticos Bluetooth/USB."}
                     </p>
                   </form>
 

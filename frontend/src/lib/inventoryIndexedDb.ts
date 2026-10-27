@@ -67,25 +67,47 @@ export function openInventoryDb(): Promise<IDBDatabase> {
 
 // ─── Catálogo ─────────────────────────────────────────────────────────────
 export async function saveCatalogItems(inventoryId: number, items: any[]): Promise<void> {
+  if (!items || items.length === 0) return;
   const db = await openInventoryDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('catalog', 'readwrite');
-    const store = tx.objectStore('catalog');
+  const BATCH_SIZE = 5000;
 
-    for (const it of items) {
-      store.put({
-        inventory_id: inventoryId,
-        isbn: String(it.isbn).trim(),
-        title: it.title || 'Sem Título',
-        publisher: it.publisher || '',
-        category: it.category || '',
-        default_location: it.default_location || '',
-      });
-    }
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const chunk = items.slice(i, i + BATCH_SIZE);
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('catalog', 'readwrite');
+      const store = tx.objectStore('catalog');
 
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+      for (const it of chunk) {
+        store.put({
+          inventory_id: inventoryId,
+          isbn: String(it.isbn).trim(),
+          title: it.title || 'Sem Título',
+          publisher: it.publisher || '',
+          category: it.category || '',
+          default_location: it.default_location || '',
+        });
+      }
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+}
+
+export async function getCatalogCount(inventoryId: number): Promise<number> {
+  try {
+    const db = await openInventoryDb();
+    return await new Promise<number>((resolve, reject) => {
+      const tx = db.transaction('catalog', 'readonly');
+      const store = tx.objectStore('catalog');
+      const index = store.index('inventory_id');
+      const req = index.count(IDBKeyRange.only(inventoryId));
+      req.onsuccess = () => resolve(req.result || 0);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return 0;
+  }
 }
 
 export async function upsertCatalogItem(item: CatalogItemRecord): Promise<void> {

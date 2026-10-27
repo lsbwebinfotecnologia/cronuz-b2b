@@ -96,6 +96,19 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
             obs_parts.append(str(order.external_id or order.id))
             obs_parts.append(f"pedido cliente:{cod_origem}")
             obs_texto = " | ".join(obs_parts)
+        elif order.origin == "intake_desk":
+            obs_parts = [f"MESA PEDIDOS #{order.id}"]
+            if order.customer_order_ref:
+                obs_parts.append(f"pedido cliente:{order.customer_order_ref}")
+            if order.partner_reference:
+                obs_parts.append(f"canal:{order.partner_reference}")
+            try:
+                note_msgs = [i.message.strip() for i in (order.interactions or []) if i.user_type == "ORDER_NOTE" and i.message]
+                if note_msgs:
+                    obs_parts.append(" - ".join(note_msgs))
+            except Exception:
+                pass
+            obs_texto = " | ".join(obs_parts)
         else:
             obs_texto = f"PDV VENDA {order.id}"
 
@@ -136,7 +149,15 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
         # Envia os itens
         items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
         items_sent = 0
-        cut_situations = ["sem_estoque", "esgotado", "fora_catalogo", "item_nao_comercializado", "item_rejeitado", "sem_cadastro_erp"]
+        cut_situations = [
+            "sem_estoque",
+            "esgotado",
+            "fora_catalogo",
+            "item_nao_comercializado",
+            "item_rejeitado",
+            "sem_cadastro_erp",
+            "bloqueado_consignacao",
+        ]
 
         for it in items:
             # Pula itens cortados ou sem quantidade a atender
@@ -164,6 +185,8 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
                     gross = float(it.price_gross)
                     disc = float(it.partner_discount or 0.0)
                     item_price = round(gross * (1.0 - (disc / 100.0)), 2)
+                if item_price is not None and item_price <= 0:
+                    item_price = None
 
             await horus_client.send_order_item(
                 id_doc=customer.document,

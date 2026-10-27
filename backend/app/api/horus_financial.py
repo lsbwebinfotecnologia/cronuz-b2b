@@ -513,24 +513,91 @@ async def create_vindi_bordero(
     except HorusSQLConfigError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    cod_empresa = sql_client.cod_empresa
+    cod_filial = sql_client.cod_filial
+
     total_bordero = round(sum(float(r.valor) for r in releases_validos), 2)
+    lancto_ids = [int(r.nro_lancamento) for r in releases_validos]
 
     # 4. Executa a geração do borderô no SQL Server dentro de thread pool
-    #    [REFACTOR] Lógica centralizada em app/services/horus_bordero.py (compartilhada com o Boleto Cora):
-    #    mesma sequência INSERT BORDERO + UPDATE LANCTOS_CRECEBER/A, agora em transação atômica.
-    from app.services.horus_bordero import BorderoBankParams, BorderoRelease, create_bordero
-
-    bank_params = BorderoBankParams(
-        forma_pagto=settings.horus_banco_forma_pagto,
-        banco=settings.horus_banco_codigo,
-        agencia=settings.horus_banco_agencia,
-        conta=settings.horus_banco_conta,
-        carteira=settings.horus_banco_carteira,
-    )
-    bordero_releases = [BorderoRelease(nro_lancamento=int(r.nro_lancamento), valor=float(r.valor)) for r in releases_validos]
-
     def _execute_bordero_transaction():
-        return create_bordero(sql_client, bank_params, bordero_releases, company_id=company_id, file_prefix="cronuz")
+        conn = sql_client._get_connection()
+        today_str = datetime.now().strftime("%d-%m-%y")
+        nom_arquivo = f"cronuz{today_str}"
+
+        with conn.cursor() as cur:
+            # 4.1. Busca próximo COD_BORDERO
+            cur.execute("SELECT ISNULL(MAX(COD_BORDERO), 0) + 1 AS next_id FROM BORDERO")
+            row_id = cur.fetchone()
+            id_bordero = int(row_id["next_id"] if isinstance(row_id, dict) else row_id[0])
+
+            logger.info(
+                "[HorusBordero] Criando Bordero #%s company=%s total=R$ %.2f itens=%s",
+                id_bordero, company_id, total_bordero, len(releases_validos)
+            )
+
+            # 4.2. INSERT na tabela BORDERO
+            insert_sql = """
+                INSERT INTO BORDERO (
+                    COD_EMPRESA, COD_FILIAL, COD_FORMA, COD_BORDERO,
+                    VLR_TOT_BORDERO, STA_BORDERO, STA_APROVACAO, USU_APROVACAO,
+                    TPO_BORDERO, NOM_ARQUIVO, SEQ_NOME, SEQ_REMESSA,
+                    NOM_USU, COD_BANCO, COD_AGENCIA, COD_CONTAC, NRO_CARTEIRA,
+                    DAT_ULT_ATL, DAT_GERACAO
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, 'AP', 'S', 'dbo',
+                    'CAR', %s, '', '',
+                    'dbo', %s, %s, %s, %s,
+                    GETDATE(), GETDATE()
+                )
+            """
+            insert_params = (
+                cod_empresa,
+                cod_filial,
+                settings.horus_banco_forma_pagto.strip(),
+                id_bordero,
+                total_bordero,
+                nom_arquivo,
+                settings.horus_banco_codigo.strip(),
+                settings.horus_banco_agencia.strip(),
+                settings.horus_banco_conta.strip(),
+                settings.horus_banco_carteira.strip(),
+            )
+            cur.execute(insert_sql, insert_params)
+
+            # 4.3. UPDATE em LANCTOS_CRECEBER e LANCTOS_CRECEBERA
+            # Atualiza em batches para respeitar limite de parâmetros
+            batch_size = 500
+            for i in range(0, len(lancto_ids), batch_size):
+                b_ids = lancto_ids[i:i + batch_size]
+                placeholders = ", ".join(["%s"] * len(b_ids))
+
+                # Atualiza LANCTOS_CRECEBER
+                update_sql1 = f"""
+                    UPDATE LANCTOS_CRECEBER
+                    SET COD_BORDERO = %s
+                    WHERE COD_FILIAL = %s
+                      AND NRO_LANCTO_CRECEBER IN ({placeholders})
+                """
+                cur.execute(update_sql1, tuple([id_bordero, cod_filial] + b_ids))
+
+                # Atualiza LANCTOS_CRECEBERA (espelho)
+                try:
+                    update_sql2 = f"""
+                        UPDATE LANCTOS_CRECEBERA
+                        SET COD_BORDERO = %s
+                        WHERE COD_FILIAL = %s
+                          AND NRO_LANCTO_CRECEBER IN ({placeholders})
+                    """
+                    cur.execute(update_sql2, tuple([id_bordero, cod_filial] + b_ids))
+                except Exception as ex_a:
+                    # Se LANCTOS_CRECEBERA não existir ou falhar, loga como aviso
+                    logger.warning("[HorusBordero] Aviso ao atualizar LANCTOS_CRECEBERA: %s", ex_a)
+
+        # Commit da transação no SQL Server
+        conn.commit()
+        return id_bordero
 
     try:
         loop = asyncio.get_event_loop()

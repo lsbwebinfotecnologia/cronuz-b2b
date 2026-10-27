@@ -89,7 +89,7 @@ from app.api import hosted_sites as hosted_sites_api
 from app.api import horus_sql as horus_sql_api
 from app.api import horus_financial
 from app.api import horus_orders
-from app.api import horus_cora
+from app.api import cora as cora_api
 from app.api import authors_admin
 from app.api import author_portal
 from app.api import inventory as inventory_api
@@ -271,7 +271,7 @@ app.include_router(distributors_api.router, tags=["distributors"])
 app.include_router(hosted_sites_api.router)
 app.include_router(horus_sql_api.router, tags=["horus-sql"])
 app.include_router(horus_financial.router, tags=["horus-financial"])
-app.include_router(horus_cora.router, tags=["horus-cora"])
+app.include_router(cora_api.router, tags=["banco-cora"])
 app.include_router(horus_orders.router, tags=["horus-orders"])
 app.include_router(authors_admin.router)
 app.include_router(author_portal.router)

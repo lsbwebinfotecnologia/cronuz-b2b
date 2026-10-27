@@ -42,6 +42,7 @@ class ModuleUpdate(BaseModel):
     module_notifications: Optional[bool] = None
     module_busca_preco: Optional[bool] = None
     module_horus_sql: Optional[bool] = None
+    module_cora: Optional[bool] = None
     modulo_autores_ativo: Optional[bool] = None
     has_inventory_module: Optional[bool] = None
     module_editorial: Optional[bool] = None
@@ -227,6 +228,7 @@ def update_company_modules(
             "module_logistica_horus",
             "module_dropship",
             "module_horus_sql",
+            "module_cora",
             "modulo_autores_ativo",
             "has_inventory_module",
         ]

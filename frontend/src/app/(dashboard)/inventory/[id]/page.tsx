@@ -391,6 +391,59 @@ export default function InventoryDetailPage() {
   const [editPublisher, setEditPublisher] = useState('');
   const [submittingProductEdit, setSubmittingProductEdit] = useState(false);
 
+  // Modal de Edição / Renomeação de Prateleira
+  const [renameLocationModal, setRenameLocationModal] = useState<{
+    oldLocation: string;
+    sessionId?: number;
+    roundNumber?: number;
+    isbn?: string;
+    productTitle?: string;
+  } | null>(null);
+  const [newLocationInput, setNewLocationInput] = useState('');
+  const [renameScope, setRenameScope] = useState<'all' | 'session' | 'isbn'>('all');
+  const [submittingRenameLocation, setSubmittingRenameLocation] = useState(false);
+
+  async function handleRenameLocation(e: React.FormEvent) {
+    e.preventDefault();
+    if (!renameLocationModal || !companyId || !inventoryId) return;
+    const cleanNew = newLocationInput.trim().toUpperCase();
+    if (!cleanNew) {
+      toast.error('Informe o novo nome da prateleira.');
+      return;
+    }
+    setSubmittingRenameLocation(true);
+    try {
+      const token = getToken();
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${baseUrl}/companies/${companyId}/inventory/${inventoryId}/rename-location`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          old_location: renameLocationModal.oldLocation,
+          new_location: cleanNew,
+          session_id: renameLocationModal.sessionId,
+          isbn: renameLocationModal.isbn,
+          scope: renameScope
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Erro ao editar nome da prateleira.');
+      }
+      const data = await res.json();
+      toast.success(data.message || 'Nome da prateleira atualizado com sucesso!');
+      setRenameLocationModal(null);
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao renomear prateleira.');
+    } finally {
+      setSubmittingRenameLocation(false);
+    }
+  }
+
   function handleCopyLink(url: string) {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(url);
@@ -953,7 +1006,25 @@ export default function InventoryDetailPage() {
                   {sessions.map((sess) => (
                     <tr key={sess.id} className="hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors">
                       <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
-                        {sess.location}
+                        <div className="inline-flex items-center gap-1.5">
+                          <span>{sess.location}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRenameLocationModal({
+                                oldLocation: sess.location,
+                                sessionId: sess.id,
+                                roundNumber: sess.round_number
+                              });
+                              setNewLocationInput(sess.location);
+                              setRenameScope('all');
+                            }}
+                            className="p-1 rounded-md text-slate-400 hover:text-teal-600 hover:bg-teal-500/10 transition-colors"
+                            title="Editar nome da prateleira"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 rounded-md text-xs font-semibold ${
@@ -991,28 +1062,47 @@ export default function InventoryDetailPage() {
                         {sess.closed_at ? new Date(sess.closed_at).toLocaleString('pt-BR') : '-'}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {sess.status === 'CANCELADA' ? (
-                          <span className="text-xs text-rose-500 font-semibold italic">Cancelada</span>
-                        ) : (
+                        <div className="inline-flex items-center justify-end gap-1.5">
                           <button
                             type="button"
                             onClick={() => {
-                              setCancelModal({
-                                type: 'session',
-                                title: `Cancelar Abertura: ${sess.location}`,
-                                description: `Deseja cancelar a abertura da prateleira '${sess.location}'? As bipagens desta sessão serão desconsideradas no saldo final, porém mantidas no histórico para auditoria.`,
-                                targetId: sess.id,
-                                location: sess.location
+                              setRenameLocationModal({
+                                oldLocation: sess.location,
+                                sessionId: sess.id,
+                                roundNumber: sess.round_number
                               });
-                              setCancelPasswordInput('');
+                              setNewLocationInput(sess.location);
+                              setRenameScope('all');
                             }}
-                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 hover:text-rose-600 dark:text-slate-400 transition-colors inline-flex items-center gap-1 text-xs"
-                            title="Cancelar esta abertura e manter no histórico"
+                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-teal-50 dark:hover:bg-teal-950/30 text-slate-600 hover:text-teal-600 dark:text-slate-400 transition-colors inline-flex items-center gap-1 text-xs"
+                            title="Editar nome da prateleira"
                           >
-                            <Ban className="h-3.5 w-3.5" />
-                            <span className="hidden sm:inline">Cancelar</span>
+                            <Pencil className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Renomear</span>
                           </button>
-                        )}
+                          {sess.status === 'CANCELADA' ? (
+                            <span className="text-xs text-rose-500 font-semibold italic">Cancelada</span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCancelModal({
+                                  type: 'session',
+                                  title: `Cancelar Abertura: ${sess.location}`,
+                                  description: `Deseja cancelar a abertura da prateleira '${sess.location}'? As bipagens desta sessão serão desconsideradas no saldo final, porém mantidas no histórico para auditoria.`,
+                                  targetId: sess.id,
+                                  location: sess.location
+                                });
+                                setCancelPasswordInput('');
+                              }}
+                              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 hover:text-rose-600 dark:text-slate-400 transition-colors inline-flex items-center gap-1 text-xs"
+                              title="Cancelar esta abertura e manter no histórico"
+                            >
+                              <Ban className="h-3.5 w-3.5" />
+                              <span className="hidden sm:inline">Cancelar</span>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1222,9 +1312,24 @@ export default function InventoryDetailPage() {
                               <div className="flex flex-wrap gap-1">
                                 {s.locations_list.length > 0 ? (
                                   s.locations_list.map((loc, idx) => (
-                                    <span key={idx} className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                                      {loc}
-                                    </span>
+                                    <button
+                                      key={idx}
+                                      type="button"
+                                      onClick={() => {
+                                        setRenameLocationModal({
+                                          oldLocation: loc,
+                                          isbn: s.isbn,
+                                          productTitle: s.title
+                                        });
+                                        setNewLocationInput(loc);
+                                        setRenameScope('all');
+                                      }}
+                                      title="Clique para editar o nome da prateleira"
+                                      className="group inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 hover:bg-teal-500/10 dark:bg-slate-800 dark:hover:bg-teal-950/40 text-[11px] font-mono font-semibold text-slate-700 hover:text-teal-700 dark:text-slate-300 dark:hover:text-teal-300 border border-slate-200 hover:border-teal-500/40 dark:border-slate-700 transition-colors"
+                                    >
+                                      <span>{loc}</span>
+                                      <Pencil className="h-2.5 w-2.5 text-slate-400 group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors" />
+                                    </button>
                                   ))
                                 ) : (
                                   <span className="text-xs text-rose-500 font-semibold italic">Não Contado</span>
@@ -1363,7 +1468,25 @@ export default function InventoryDetailPage() {
                             d.has_divergence ? 'bg-amber-50/30 dark:bg-amber-950/10' : ''
                           }`}>
                             <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
-                              {d.location}
+                              <div className="inline-flex items-center gap-1.5">
+                                <span>{d.location}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRenameLocationModal({
+                                      oldLocation: d.location,
+                                      isbn: d.isbn,
+                                      productTitle: d.title
+                                    });
+                                    setNewLocationInput(d.location);
+                                    setRenameScope('all');
+                                  }}
+                                  className="p-1 rounded-md text-slate-400 hover:text-teal-600 hover:bg-teal-500/10 transition-colors"
+                                  title="Editar nome da prateleira"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                              </div>
                             </td>
                             <td className="px-4 py-3 text-slate-700 dark:text-slate-300 text-xs font-semibold">
                               {d.operator_name || '-'}
@@ -2291,6 +2414,153 @@ export default function InventoryDetailPage() {
                 >
                   {submittingPinChange ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                   Salvar PIN
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal de Edição / Renomeação de Nome da Prateleira */}
+      {renameLocationModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl max-w-md w-full p-6 space-y-5"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-teal-500/10 text-teal-600 dark:text-teal-400">
+                  <MapPin className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                    Editar Nome da Prateleira
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Atual: <strong className="font-mono text-slate-800 dark:text-slate-200">{renameLocationModal.oldLocation}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRenameLocationModal(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleRenameLocation} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Novo Nome da Prateleira / Localização:
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="Ex: JUVENIL 2, HQ 2.1, ROMANCE 8..."
+                  value={newLocationInput}
+                  onChange={(e) => setNewLocationInput(e.target.value.toUpperCase())}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm font-mono font-bold text-slate-900 dark:text-white uppercase focus:outline-none focus:ring-2 focus:ring-teal-500"
+                />
+              </div>
+
+              {(renameLocationModal.sessionId || renameLocationModal.isbn) && (
+                <div className="space-y-2 pt-1">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Onde aplicar esta alteração?
+                  </label>
+
+                  <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-colors ${
+                    renameScope === 'all'
+                      ? 'border-teal-500 bg-teal-500/5 dark:bg-teal-500/10'
+                      : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="rename_scope"
+                      checked={renameScope === 'all'}
+                      onChange={() => setRenameScope('all')}
+                      className="mt-0.5 text-teal-600 focus:ring-teal-500"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 dark:text-white block">
+                        Renomear a prateleira inteira ("{renameLocationModal.oldLocation}")
+                      </span>
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Atualiza o nome da prateleira para todos os itens e sessões vinculados a ela.
+                      </span>
+                    </div>
+                  </label>
+
+                  {renameLocationModal.sessionId && (
+                    <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-colors ${
+                      renameScope === 'session'
+                        ? 'border-teal-500 bg-teal-500/5 dark:bg-teal-500/10'
+                        : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="rename_scope"
+                        checked={renameScope === 'session'}
+                        onChange={() => setRenameScope('session')}
+                        className="mt-0.5 text-teal-600 focus:ring-teal-500"
+                      />
+                      <div>
+                        <span className="text-xs font-bold text-slate-900 dark:text-white block">
+                          Apenas esta sessão (Rodada #{renameLocationModal.roundNumber || 1})
+                        </span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Altera somente o nome desta abertura específica sem afetar outras rodadas.
+                        </span>
+                      </div>
+                    </label>
+                  )}
+
+                  {renameLocationModal.isbn && (
+                    <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-colors ${
+                      renameScope === 'isbn'
+                        ? 'border-teal-500 bg-teal-500/5 dark:bg-teal-500/10'
+                        : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="rename_scope"
+                        checked={renameScope === 'isbn'}
+                        onChange={() => setRenameScope('isbn')}
+                        className="mt-0.5 text-teal-600 focus:ring-teal-500"
+                      />
+                      <div>
+                        <span className="text-xs font-bold text-slate-900 dark:text-white block">
+                          Mover apenas este produto ({renameLocationModal.isbn})
+                        </span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Transfere apenas "{renameLocationModal.productTitle}" de "{renameLocationModal.oldLocation}" para a nova prateleira.
+                        </span>
+                      </div>
+                    </label>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRenameLocationModal(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingRenameLocation}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  {submittingRenameLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Salvar Prateleira
                 </button>
               </div>
             </form>

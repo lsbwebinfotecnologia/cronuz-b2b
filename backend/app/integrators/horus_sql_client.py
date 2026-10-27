@@ -208,37 +208,6 @@ class HorusSQLClient:
                 _CONNECTION_POOL.pop(self._conn_key, None)
             raise
 
-    def execute_transaction(self, fn):
-        """
-        Executa `fn(cursor)` dentro de uma transacao explicita no SQL Server.
-
-        A conexao do pool roda em autocommit=True; por isso a atomicidade e garantida com
-        `SET XACT_ABORT ON` + `BEGIN TRAN` / `COMMIT TRAN` e `ROLLBACK` em caso de erro.
-        O lock da conexao impede que outra thread (ex.: job ou outro endpoint) intercale
-        comandos na mesma sessao TDS durante a transacao.
-
-        Use apenas para DML autorizado pela feature (ex.: borderô de baixa, gravacao do boleto).
-        """
-        entry = self._get_connection_entry()
-        with entry["lock"]:
-            conn = entry["conn"]
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("SET XACT_ABORT ON; BEGIN TRAN;")
-                    result = fn(cur)
-                    cur.execute("COMMIT TRAN;")
-                entry["last_used"] = time.time()
-                return result
-            except Exception as e:
-                logger.error("[HorusSQLClient] Transacao revertida company=%s: %s", self.company_id, e)
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute("IF @@TRANCOUNT > 0 ROLLBACK TRAN;")
-                except Exception:
-                    with _POOL_LOCK:
-                        _CONNECTION_POOL.pop(self._conn_key, None)
-                raise
-
     def close(self):
         """Nao fecha imediatamente — retorna ao pool para reutilizacao."""
         pass

@@ -123,9 +123,11 @@ def parse_spreadsheet_to_items(file_bytes: bytes, filename: str) -> List[Dict[st
     header_idx = -1
     isbn_col_idx = -1
     qty_col_idx = -1
+    disc_col_idx = -1
 
-    isbn_aliases = {"isbn", "ean", "barras", "codigo_barras", "cod_barras", "cod_barra", "código", "codigo"}
-    qty_aliases = {"qtd", "quantidade", "qtde", "quant", "qntd", "unidades", "unidade", "un", "pedido"}
+    isbn_aliases = {"isbn", "ean", "barras", "codigo_barras", "cod_barras", "cod_barra", "código", "codigo", "isbn13"}
+    qty_aliases = {"qtd", "quantidade", "qtde", "quant", "qntd", "unidades", "unidade", "un", "pedido", "exemplares"}
+    disc_aliases = {"desconto", "desc", "descontoproposto", "perc_desc", "discount"}
 
     for idx, r in enumerate(rows[:10]): # busca nos primeiros 10 registros
         normalized_row = [re.sub(r"[^a-z0-9_]", "", str(c).lower().strip()) for c in r]
@@ -134,6 +136,8 @@ def parse_spreadsheet_to_items(file_bytes: bytes, filename: str) -> List[Dict[st
                 isbn_col_idx = c_idx
             if any(alias in col_name for alias in qty_aliases) and qty_col_idx == -1:
                 qty_col_idx = c_idx
+            if any(alias in col_name for alias in disc_aliases) and disc_col_idx == -1:
+                disc_col_idx = c_idx
 
         if isbn_col_idx != -1:
             header_idx = idx
@@ -147,6 +151,7 @@ def parse_spreadsheet_to_items(file_bytes: bytes, filename: str) -> List[Dict[st
 
     # Itera sobre os dados
     start_row = header_idx + 1 if header_idx != -1 else 0
+    disc_map: Dict[str, float] = {}
     for r in rows[start_row:]:
         if len(r) <= isbn_col_idx:
             continue
@@ -159,14 +164,33 @@ def parse_spreadsheet_to_items(file_bytes: bytes, filename: str) -> List[Dict[st
         qty = 1
         if qty_col_idx != -1 and len(r) > qty_col_idx:
             raw_qty = str(r[qty_col_idx]).strip()
-            # Extrai apenas dígitos
-            digits = re.sub(r"\D", "", raw_qty)
-            if digits:
-                qty = max(1, int(digits))
+            # Trata números como "10.0" vindos do Excel
+            try:
+                qty = max(1, int(float(raw_qty.replace(",", "."))))
+            except Exception:
+                digits = re.sub(r"\D", "", raw_qty)
+                if digits:
+                    qty = max(1, int(digits))
+
+        if disc_col_idx != -1 and len(r) > disc_col_idx:
+            raw_disc = str(r[disc_col_idx]).strip().replace("%", "").replace(",", ".")
+            try:
+                d_val = float(raw_disc)
+                if 0 < d_val <= 100:
+                    disc_map[isbn_clean] = d_val
+            except Exception:
+                pass
 
         items_map[isbn_clean] = items_map.get(isbn_clean, 0) + qty
 
-    return [{"ean": isbn, "quantity": qty} for isbn, qty in items_map.items()]
+    return [
+        {
+            "ean": isbn,
+            "quantity": qty,
+            "discount": disc_map.get(isbn, 0.0)
+        }
+        for isbn, qty in items_map.items()
+    ]
 
 
 def parse_pdf_to_items(file_bytes: bytes) -> List[Dict[str, Any]]:

@@ -462,11 +462,13 @@ async def upload_inventory_sheet(
 def get_catalog_cache(
     company_id: int,
     inventory_id: int,
+    offset: int = Query(0, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=200000),
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
     _assert_inventory_access(current_user, company_id, db)
-    items = (
+    query = (
         db.query(
             InventoryItem.isbn,
             InventoryItem.title,
@@ -475,8 +477,13 @@ def get_catalog_cache(
             InventoryItem.default_location
         )
         .filter(InventoryItem.inventory_id == inventory_id)
-        .all()
+        .order_by(InventoryItem.id)
     )
+    if offset > 0:
+        query = query.offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    items = query.all()
     return [
         {
             "isbn": it[0],
@@ -487,6 +494,41 @@ def get_catalog_cache(
         }
         for it in items
     ]
+
+
+@router.get("/{inventory_id}/catalog-item/{isbn}")
+def get_catalog_item_by_isbn(
+    company_id: int,
+    inventory_id: int,
+    isbn: str,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    clean_isbn = isbn.strip()
+    it = (
+        db.query(
+            InventoryItem.isbn,
+            InventoryItem.title,
+            InventoryItem.publisher,
+            InventoryItem.category,
+            InventoryItem.default_location
+        )
+        .filter(InventoryItem.inventory_id == inventory_id, InventoryItem.isbn == clean_isbn)
+        .first()
+    )
+    if not it:
+        return {"found": False, "item": None}
+    return {
+        "found": True,
+        "item": {
+            "isbn": it[0],
+            "title": it[1],
+            "publisher": it[2] or "",
+            "category": it[3] or "",
+            "default_location": it[4] or "",
+        }
+    }
 
 
 @router.get("/{inventory_id}/sessions/check-location", response_model=inv_schemas.LocationCheckResponse)
@@ -1000,6 +1042,152 @@ def list_inventory_sessions(
         }
         for s in sessions
     ]
+
+
+@router.put("/{inventory_id}/rename-location")
+def rename_inventory_location(
+    company_id: int,
+    inventory_id: int,
+    payload: inv_schemas.RenameLocationRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
+
+    old_loc = (payload.old_location or "").strip().upper()
+    new_loc = (payload.new_location or "").strip().upper()
+    if not new_loc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="O novo nome da prateleira não pode ser vazio.")
+    if old_loc == new_loc and not payload.session_id:
+        return {"message": f"O nome da prateleira já é '{new_loc}'."}
+
+    scope = (payload.scope or "all").strip().lower()
+
+    if scope == "session" and payload.session_id:
+        sess = (
+            db.query(InventorySession)
+            .filter(InventorySession.id == payload.session_id, InventorySession.inventory_id == inventory_id)
+            .first()
+        )
+        if not sess:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sessão de prateleira não encontrada.")
+        prev_name = sess.location
+        sess.location = new_loc
+        db.query(InventoryScan).filter(
+            InventoryScan.inventory_id == inventory_id,
+            InventoryScan.session_id == sess.id
+        ).update({InventoryScan.location: new_loc}, synchronize_session=False)
+        db.commit()
+        return {"message": f"Prateleira da sessão #{sess.id} alterada de '{prev_name}' para '{new_loc}' com sucesso!"}
+
+    if scope == "isbn" and payload.isbn:
+        clean_isbn = payload.isbn.strip()
+        src_sessions = (
+            db.query(InventorySession)
+            .filter(
+                InventorySession.inventory_id == inventory_id,
+                func.upper(InventorySession.location) == old_loc,
+                InventorySession.status != SessionStatus.CANCELADA.value
+            )
+            .all()
+        )
+        if not src_sessions:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Prateleira '{old_loc}' não encontrada.")
+
+        moved_scans = 0
+        affected_sessions = set()
+        for src_sess in src_sessions:
+            scans_to_move = (
+                db.query(InventoryScan)
+                .filter(
+                    InventoryScan.inventory_id == inventory_id,
+                    InventoryScan.session_id == src_sess.id,
+                    InventoryScan.isbn == clean_isbn
+                )
+                .all()
+            )
+            if not scans_to_move:
+                continue
+
+            target_sess = (
+                db.query(InventorySession)
+                .filter(
+                    InventorySession.inventory_id == inventory_id,
+                    func.upper(InventorySession.location) == new_loc,
+                    InventorySession.round_number == src_sess.round_number,
+                    InventorySession.status != SessionStatus.CANCELADA.value
+                )
+                .order_by(InventorySession.id.desc())
+                .first()
+            )
+            if not target_sess:
+                target_sess = InventorySession(
+                    inventory_id=inventory_id,
+                    company_id=company_id,
+                    user_id=src_sess.user_id or current_user.id,
+                    operator_name=src_sess.operator_name or current_user.name or "Gestor",
+                    location=new_loc,
+                    session_type=src_sess.session_type,
+                    round_number=src_sess.round_number,
+                    status=src_sess.status,
+                    total_scans=0,
+                    started_at=src_sess.started_at,
+                    closed_at=src_sess.closed_at
+                )
+                db.add(target_sess)
+                db.flush()
+
+            for sc in scans_to_move:
+                sc.session_id = target_sess.id
+                sc.location = new_loc
+                moved_scans += 1
+
+            affected_sessions.add(src_sess.id)
+            affected_sessions.add(target_sess.id)
+
+        db.flush()
+        for sid in affected_sessions:
+            s_obj = db.query(InventorySession).filter(InventorySession.id == sid).first()
+            if s_obj:
+                tot = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == sid).scalar()
+                s_obj.total_scans = int(tot or 0)
+
+        db.commit()
+        return {
+            "message": f"O produto {clean_isbn} foi movido da prateleira '{old_loc}' para '{new_loc}' com sucesso!"
+        }
+
+    # Escopo padrão ('all'): Renomeia a prateleira inteira em todas as sessões e bipagens do inventário
+    target_sessions = (
+        db.query(InventorySession)
+        .filter(
+            InventorySession.inventory_id == inventory_id,
+            func.upper(InventorySession.location) == old_loc
+        )
+        .all()
+    )
+    if not target_sessions:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Prateleira '{old_loc}' não encontrada neste inventário.")
+
+    session_ids = [s.id for s in target_sessions]
+    for s in target_sessions:
+        s.location = new_loc
+
+    db.query(InventoryScan).filter(
+        InventoryScan.inventory_id == inventory_id,
+        or_(
+            InventoryScan.session_id.in_(session_ids),
+            func.upper(InventoryScan.location) == old_loc
+        )
+    ).update({InventoryScan.location: new_loc}, synchronize_session=False)
+
+    db.commit()
+    return {
+        "message": f"Prateleira '{old_loc}' renomeada para '{new_loc}' em {len(session_ids)} sessão(ões) com sucesso!"
+    }
 
 
 @router.get("/{inventory_id}/discrepancies", response_model=List[inv_schemas.DiscrepancyItemResponse])
@@ -1749,9 +1937,14 @@ def get_public_inventory_info(access_token: str, db: Session = Depends(get_db)):
 
 
 @public_router.get("/{access_token}/catalog-cache")
-def get_public_catalog_cache(access_token: str, db: Session = Depends(get_db)):
+def get_public_catalog_cache(
+    access_token: str,
+    offset: int = Query(0, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=200000),
+    db: Session = Depends(get_db)
+):
     inv = _get_inventory_by_token(access_token, db)
-    items = (
+    query = (
         db.query(
             InventoryItem.isbn,
             InventoryItem.title,
@@ -1760,8 +1953,13 @@ def get_public_catalog_cache(access_token: str, db: Session = Depends(get_db)):
             InventoryItem.default_location
         )
         .filter(InventoryItem.inventory_id == inv.id)
-        .all()
+        .order_by(InventoryItem.id)
     )
+    if offset > 0:
+        query = query.offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    items = query.all()
     return [
         {
             "isbn": it[0],
@@ -1772,6 +1970,35 @@ def get_public_catalog_cache(access_token: str, db: Session = Depends(get_db)):
         }
         for it in items
     ]
+
+
+@public_router.get("/{access_token}/catalog-item/{isbn}")
+def get_public_catalog_item_by_isbn(access_token: str, isbn: str, db: Session = Depends(get_db)):
+    inv = _get_inventory_by_token(access_token, db)
+    clean_isbn = isbn.strip()
+    it = (
+        db.query(
+            InventoryItem.isbn,
+            InventoryItem.title,
+            InventoryItem.publisher,
+            InventoryItem.category,
+            InventoryItem.default_location
+        )
+        .filter(InventoryItem.inventory_id == inv.id, InventoryItem.isbn == clean_isbn)
+        .first()
+    )
+    if not it:
+        return {"found": False, "item": None}
+    return {
+        "found": True,
+        "item": {
+            "isbn": it[0],
+            "title": it[1],
+            "publisher": it[2] or "",
+            "category": it[3] or "",
+            "default_location": it[4] or "",
+        }
+    }
 
 
 @public_router.get("/{access_token}/check-location", response_model=inv_schemas.LocationCheckResponse)

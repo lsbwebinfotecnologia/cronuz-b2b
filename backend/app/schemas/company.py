@@ -61,6 +61,7 @@ class CompanyBase(BaseModel):
     module_notifications: bool = False
     module_busca_preco: bool = False
     module_horus_sql: bool = False
+    module_cora: bool = False
     modulo_autores_ativo: bool = False
     has_inventory_module: bool = False
     module_editorial: bool = False

@@ -38,6 +38,7 @@ import { toast } from 'sonner';
 import { 
   openInventoryDb, 
   saveCatalogItems, 
+  getCatalogCount,
   upsertCatalogItem,
   findCatalogItem, 
   savePendingScan, 
@@ -168,13 +169,108 @@ export default function PublicOperatorPage() {
   const [savingUnregistered, setSavingUnregistered] = useState(false);
   const unregTitleInputRef = useRef<HTMLInputElement>(null);
 
-  // Offline / Rede
+  // Offline / Rede & Progresso de Catálogo
   const [isOnline, setIsOnline] = useState(true);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [closingSession, setClosingSession] = useState(false);
+  const [catalogSyncState, setCatalogSyncState] = useState<{
+    syncing: boolean;
+    ready: boolean;
+    error: string | null;
+    loaded: number;
+    total: number;
+  }>({ syncing: true, ready: false, error: null, loaded: 0, total: 0 });
 
   const barcodeInputRef = useRef<HTMLInputElement>(null);
+
+  async function syncCatalogFull(invId: number, totalExpected: number, forceReload = false) {
+    if (!token) return;
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    try {
+      const cachedCount = await getCatalogCount(invId);
+      if (!forceReload && totalExpected > 0 && cachedCount >= totalExpected) {
+        setCatalogSyncState({
+          syncing: false,
+          ready: true,
+          error: null,
+          loaded: cachedCount,
+          total: totalExpected
+        });
+        return;
+      }
+
+      if (totalExpected === 0) {
+        setCatalogSyncState({
+          syncing: false,
+          ready: true,
+          error: null,
+          loaded: 0,
+          total: 0
+        });
+        return;
+      }
+
+      setCatalogSyncState({
+        syncing: true,
+        ready: false,
+        error: null,
+        loaded: 0,
+        total: totalExpected
+      });
+
+      const CHUNK_SIZE = 40000;
+      let offset = 0;
+      let totalLoaded = 0;
+
+      while (true) {
+        const cacheRes = await fetch(
+          `${baseUrl}/inventory/public/${token}/catalog-cache?offset=${offset}&limit=${CHUNK_SIZE}`
+        );
+        if (!cacheRes.ok) {
+          throw new Error('Falha ao baixar bloco do catálogo.');
+        }
+        const items = await cacheRes.json();
+        if (!items || items.length === 0) break;
+
+        await saveCatalogItems(invId, items);
+        totalLoaded += items.length;
+        offset += items.length;
+
+        const targetTotal = Math.max(totalLoaded, totalExpected);
+        const isStillLoading = items.length === CHUNK_SIZE && totalLoaded < totalExpected;
+
+        setCatalogSyncState({
+          syncing: isStillLoading,
+          ready: !isStillLoading,
+          error: null,
+          loaded: totalLoaded,
+          total: targetTotal
+        });
+
+        if (items.length < CHUNK_SIZE) break;
+      }
+
+      const finalCount = await getCatalogCount(invId);
+      setCatalogSyncState({
+        syncing: false,
+        ready: true,
+        error: null,
+        loaded: Math.max(finalCount, totalLoaded),
+        total: Math.max(finalCount, totalLoaded, totalExpected)
+      });
+    } catch (e: any) {
+      console.warn('[IndexedDB Public] Falha no cache em lote:', e);
+      const currentCached = await getCatalogCount(invId);
+      setCatalogSyncState({
+        syncing: false,
+        ready: totalExpected > 0 && currentCached >= totalExpected,
+        error: 'Conexão oscilou durante o carregamento do catálogo. Clique em tentar novamente.',
+        loaded: currentCached,
+        total: totalExpected
+      });
+    }
+  }
 
   // 1. Carregar Dados do Inventário via Token e recuperar nome salvo
   useEffect(() => {
@@ -199,6 +295,8 @@ export default function PublicOperatorPage() {
       setNameInput(savedName);
     }
 
+    let isMounted = true;
+
     async function loadPublicInventory() {
       if (!token) return;
       try {
@@ -209,28 +307,23 @@ export default function PublicOperatorPage() {
           throw new Error(err.detail || 'Link de inventário inválido.');
         }
         const data = await res.json();
+        if (!isMounted) return;
         setInventory(data);
-
-        try {
-          const cacheRes = await fetch(`${baseUrl}/inventory/public/${token}/catalog-cache`);
-          if (cacheRes.ok) {
-            const items = await cacheRes.json();
-            await saveCatalogItems(data.id, items);
-            console.log(`[IndexedDB Public] ${items.length} itens em cache offline.`);
-          }
-        } catch (e) {
-          console.warn('[IndexedDB Public] Falha no cache:', e);
-        }
-      } catch (err: any) {
-        toast.error(err.message || 'Erro ao carregar inventário.');
-      } finally {
         setLoadingInv(false);
+
+        syncCatalogFull(data.id, data.total_expected_skus || 0);
+      } catch (err: any) {
+        if (isMounted) {
+          toast.error(err.message || 'Erro ao carregar inventário.');
+          setLoadingInv(false);
+        }
       }
     }
 
     loadPublicInventory();
 
     return () => {
+      isMounted = false;
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
@@ -460,6 +553,31 @@ export default function PublicOperatorPage() {
       itemMeta = await findCatalogItem(inventory.id, isbnRaw);
     } catch (err) {
       console.warn('[IndexedDB] Erro local:', err);
+    }
+
+    // Fallback Online Instantâneo: se o catálogo de 300k itens ainda estiver sincronizando ou o IndexedDB mobile não tiver o item
+    if (!itemMeta && isOnline) {
+      try {
+        const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const lookupRes = await fetch(`${baseUrl}/inventory/public/${token}/catalog-item/${encodeURIComponent(isbnRaw)}`);
+        if (lookupRes.ok) {
+          const lookupData = await lookupRes.json();
+          if (lookupData.found && lookupData.item) {
+            itemMeta = {
+              inventory_id: inventory.id,
+              isbn: lookupData.item.isbn,
+              title: lookupData.item.title,
+              publisher: lookupData.item.publisher,
+              category: lookupData.item.category,
+              default_location: lookupData.item.default_location
+            };
+            // Salva no IndexedDB local para os próximos bips
+            upsertCatalogItem(itemMeta).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn('[Lookup Online] Falha ao consultar item no servidor:', err);
+      }
     }
 
     // 1. Item Não Cadastrado
@@ -821,7 +939,85 @@ export default function PublicOperatorPage() {
       </div>
 
       {/* ─── Conteúdo Principal ───────────────────────────────────────── */}
-      <div className="flex-1 p-4 max-w-md mx-auto w-full flex flex-col justify-center">
+      <div className="flex-1 p-4 max-w-md mx-auto w-full flex flex-col justify-center space-y-4">
+        {/* Card de Status e Progresso de Carregamento do Catálogo (100% de Segurança) */}
+        <div className={`rounded-2xl border p-3.5 shadow-xs transition-all ${
+          catalogSyncState.error
+            ? 'border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-950/30 text-rose-900 dark:text-rose-200'
+            : catalogSyncState.ready
+            ? 'border-emerald-300 dark:border-emerald-500/30 bg-emerald-50/80 dark:bg-emerald-950/25 text-emerald-900 dark:text-emerald-200'
+            : 'border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200'
+        }`}>
+          {catalogSyncState.syncing ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold">
+                <span className="flex items-center gap-1.5">
+                  <Loader2 className="h-4 w-4 animate-spin text-amber-600 dark:text-amber-400" />
+                  Carregando catálogo no dispositivo...
+                </span>
+                <span className="font-mono">
+                  {catalogSyncState.total > 0
+                    ? `${Math.min(100, Math.round((catalogSyncState.loaded / catalogSyncState.total) * 100))}%`
+                    : '0%'}
+                </span>
+              </div>
+              <div className="w-full h-2.5 bg-amber-200/70 dark:bg-amber-900/50 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-amber-500 dark:bg-amber-400 transition-all duration-300 rounded-full"
+                  style={{
+                    width: `${catalogSyncState.total > 0 ? Math.min(100, Math.round((catalogSyncState.loaded / catalogSyncState.total) * 100)) : 5}%`
+                  }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-[11px] opacity-85 font-medium">
+                <span>
+                  {catalogSyncState.loaded.toLocaleString('pt-BR')} de {catalogSyncState.total.toLocaleString('pt-BR')} títulos lidos
+                </span>
+                <span>Aguarde 100% para bipar</span>
+              </div>
+            </div>
+          ) : catalogSyncState.error ? (
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-bold">
+                <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                <div>
+                  <p>Incompleto ({catalogSyncState.loaded.toLocaleString('pt-BR')} / {catalogSyncState.total.toLocaleString('pt-BR')} títulos)</p>
+                  <p className="text-[10px] font-normal opacity-80">{catalogSyncState.error}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => syncCatalogFull(inventory.id, inventory.total_expected_skus || 0, true)}
+                className="px-3 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-bold shrink-0 shadow-xs"
+              >
+                Recarregar
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-bold">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <div>
+                  <span className="block">
+                    Catálogo 100% Carregado ({catalogSyncState.loaded.toLocaleString('pt-BR')} títulos)
+                  </span>
+                  <span className="text-[10px] font-normal opacity-80 block">
+                    Base completa verificada e pronta para bipagem segura.
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => syncCatalogFull(inventory.id, inventory.total_expected_skus || 0, true)}
+                title="Atualizar catálogo novamente"
+                className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 transition-colors"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* PASSO 1: Identificação do Operador */}
         {!operatorName || isEditingName ? (
           <motion.div
@@ -881,18 +1077,24 @@ export default function PublicOperatorPage() {
                 type="text"
                 autoFocus
                 required
-                placeholder="Ex: Prateleira A-01, Rua 2..."
+                disabled={!catalogSyncState.ready}
+                placeholder={catalogSyncState.ready ? "Ex: Prateleira A-01, Rua 2..." : "Aguardando carregar 100% do catálogo..."}
                 value={locationInput}
                 onChange={(e) => setLocationInput(e.target.value)}
-                className="w-full text-base font-bold uppercase tracking-wide px-4 py-3 rounded-xl border-2 border-slate-300 dark:border-slate-700 bg-transparent focus:outline-none focus:border-teal-500"
+                className="w-full text-base font-bold uppercase tracking-wide px-4 py-3 rounded-xl border-2 border-slate-300 dark:border-slate-700 bg-transparent focus:outline-none focus:border-teal-500 disabled:opacity-50"
               />
 
               <button
                 type="submit"
-                disabled={checkingLocation}
+                disabled={checkingLocation || !catalogSyncState.ready}
                 className="w-full py-3.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-sm shadow-md transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                {checkingLocation ? (
+                {!catalogSyncState.ready ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Aguardando Catálogo ({catalogSyncState.total > 0 ? `${Math.min(100, Math.round((catalogSyncState.loaded / catalogSyncState.total) * 100))}%` : '...'})
+                  </>
+                ) : checkingLocation ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Checando prateleira...
@@ -965,11 +1167,12 @@ export default function PublicOperatorPage() {
                   <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 shadow-inner">
                     <button
                       type="button"
+                      disabled={!catalogSyncState.ready}
                       onClick={() => {
                         setUseCamera(false);
                         setTimeout(() => barcodeInputRef.current?.focus(), 150);
                       }}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all disabled:opacity-50 ${
                         !useCamera
                           ? 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-400 shadow-sm border border-slate-200/80 dark:border-slate-700'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -981,8 +1184,9 @@ export default function PublicOperatorPage() {
 
                     <button
                       type="button"
+                      disabled={!catalogSyncState.ready}
                       onClick={() => setUseCamera(true)}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all disabled:opacity-50 ${
                         useCamera
                           ? 'bg-teal-600 text-white shadow-sm'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -997,8 +1201,9 @@ export default function PublicOperatorPage() {
                   <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60">
                     <button
                       type="button"
+                      disabled={!catalogSyncState.ready}
                       onClick={() => setQuantityMode('unit')}
-                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all disabled:opacity-50 ${
                         quantityMode === 'unit'
                           ? 'bg-teal-600 text-white shadow-xs'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -1009,8 +1214,9 @@ export default function PublicOperatorPage() {
 
                     <button
                       type="button"
+                      disabled={!catalogSyncState.ready}
                       onClick={() => setQuantityMode('custom')}
-                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+                      className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all disabled:opacity-50 ${
                         quantityMode === 'custom'
                           ? 'bg-teal-600 text-white shadow-xs'
                           : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
@@ -1029,7 +1235,7 @@ export default function PublicOperatorPage() {
                   )}
 
                   {/* Viewport da Câmera (quando ativado modo Câmera) */}
-                  {useCamera && (
+                  {useCamera && catalogSyncState.ready && (
                     <CameraBarcodeScanner
                       isActive={useCamera}
                       onScan={(code) => processBarcodeScan(code)}
@@ -1040,7 +1246,7 @@ export default function PublicOperatorPage() {
                     />
                   )}
 
-                  {/* Input com Foco Travado */}
+                  {/* Input com Foco Travado (Só habilita quando 100% carregado) */}
                   <form onSubmit={handleBarcodeSubmit} className="space-y-1">
                     <div className="relative">
                       <ScanBarcode className="h-5 w-5 absolute left-3.5 top-3.5 text-teal-600" />
@@ -1048,14 +1254,25 @@ export default function PublicOperatorPage() {
                         ref={barcodeInputRef}
                         type="text"
                         inputMode="numeric"
-                        placeholder={useCamera ? "Aponte a câmera ou digite aqui..." : "Bipe o código de barras ou ISBN..."}
+                        disabled={!catalogSyncState.ready}
+                        placeholder={
+                          !catalogSyncState.ready
+                            ? "Aguarde 100% do catálogo carregar..."
+                            : useCamera
+                            ? "Aponte a câmera ou digite aqui..."
+                            : "Bipe o código de barras ou ISBN..."
+                        }
                         value={barcodeInput}
                         onChange={(e) => setBarcodeInput(e.target.value)}
-                        className="w-full pl-11 pr-4 py-3.5 rounded-2xl border-2 border-teal-500 bg-white dark:bg-slate-900 text-base font-mono font-bold tracking-wider shadow-md focus:outline-none focus:ring-4 focus:ring-teal-500/20"
+                        className="w-full pl-11 pr-4 py-3.5 rounded-2xl border-2 border-teal-500 bg-white dark:bg-slate-900 text-base font-mono font-bold tracking-wider shadow-md focus:outline-none focus:ring-4 focus:ring-teal-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                       />
                     </div>
                     <p className="text-[10px] text-center text-slate-400">
-                      {useCamera ? "A câmera lê automaticamente ao enquadrar o código." : "Foco travado para leitor físico Bluetooth/USB."}
+                      {!catalogSyncState.ready
+                        ? "Bipagem bloqueada por segurança até concluir 100% da leitura da base."
+                        : useCamera
+                        ? "A câmera lê automaticamente ao enquadrar o código."
+                        : "Foco travado para leitor físico Bluetooth/USB."}
                     </p>
                   </form>
 

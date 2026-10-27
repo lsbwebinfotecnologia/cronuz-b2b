@@ -228,5 +228,9 @@ class BulkCancelEmptySessionsRequest(BaseModel):
 class SkuCancelScansRequest(BaseModel):
     pin_or_password: str
 
-
-
+class RenameLocationRequest(BaseModel):
+    old_location: str
+    new_location: str
+    session_id: Optional[int] = None
+    isbn: Optional[str] = None
+    scope: Optional[str] = "all"  # "all" (entire shelf), "session" (single session), "isbn" (single product on that shelf)

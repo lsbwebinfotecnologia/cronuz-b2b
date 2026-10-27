@@ -889,4 +889,294 @@ def get_master_search_logs(
     }
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 6. Autenticação Dedicada & Diagnóstico para Terminais Físicos (Gertec G2)
+# ──────────────────────────────────────────────────────────────────────────────
 
+from pydantic import BaseModel
+
+
+class TerminalAuthRequest(BaseModel):
+    email: str
+    password: str
+    company_id: Optional[int] = None
+
+
+@router.post("/terminal-auth")
+def authenticate_price_checker_terminal(
+    payload: TerminalAuthRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Autentica o aplicativo Windows "Cronuz Busca Preço (Gertec G2)" e gera um token
+    de longa duração (365 dias) em uma sessão isolada (`GERTEC_TERMINAL`),
+    garantindo que o login no navegador web ou PDV do seller NUNCA derrube o terminal.
+    """
+    import re
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from app.core import security
+    from app.models.user_session import UserSession
+
+    username_input = payload.email.strip()
+    filters = [User.email == username_input]
+    if "@" not in username_input:
+        username_clean = re.sub(r"\D", "", username_input)
+        if username_clean:
+            filters.append(User.document == username_clean)
+
+    query = db.query(User).filter(or_(*filters))
+    if payload.company_id:
+        query = query.filter(User.company_id == payload.company_id)
+
+    user = query.first()
+    if not user or not security.verify_password(payload.password, user.password_hash):
+        raise HTTPException(
+            status_code=401,
+            detail="E-mail/documento ou senha incorretos.",
+        )
+
+    target_company_id = payload.company_id or user.company_id
+    if not target_company_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Este usuário não possui uma empresa (Seller) vinculada. Informe o ID da Empresa.",
+        )
+
+    company = db.query(Company).filter(Company.id == target_company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+
+    jti = str(uuid.uuid4())
+    now_utc = datetime.now(timezone.utc)
+    expires_delta = timedelta(days=365)
+    expire_date = now_utc + expires_delta
+
+    # Sessão com role GERTEC_TERMINAL para NÃO ser invalidada quando o SELLER logar na web
+    new_session = UserSession(
+        user_id=user.id,
+        role="GERTEC_TERMINAL",
+        jti=jti,
+        ip_address="gertec-windows-app",
+        user_agent="CronuzGertecServer/1.0",
+        login_at=now_utc,
+        last_activity_at=now_utc,
+        expires_at=expire_date,
+        is_active=True,
+    )
+    db.add(new_session)
+    db.commit()
+
+    user_type_str = user.type.value if hasattr(user.type, "value") else str(user.type)
+    access_token = security.create_access_token(
+        data={
+            "sub": user.email,
+            "type": user_type_str,
+            "company_id": target_company_id,
+            "jti": jti,
+        },
+        expires_delta=expires_delta,
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "company_id": company.id,
+        "company_name": company.name,
+        "company_document": company.document,
+        "user_name": user.name,
+        "user_email": user.email,
+    }
+
+
+@router.get("/terminal-status")
+async def get_terminal_configuration_status(
+    test_horus: bool = Query(True, description="Executar ping real de conectividade no Horus ERP"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Realiza um diagnóstico completo das configurações necessárias para o funcionamento
+    do leitor Gertec Busca Preço G2 no Seller atual.
+    Retorna exatamente o que está OK e o que precisa ser configurado caso falte algo.
+    """
+    company_id = current_user.company_id
+    if not company_id:
+        return {
+            "ready": False,
+            "company": None,
+            "checklist": [
+                {
+                    "key": "company_bound",
+                    "label": "Vínculo de Empresa (Seller)",
+                    "ok": False,
+                    "detail": "O usuário autenticado não está vinculado a uma empresa Seller.",
+                    "action_hint": "Faça login com uma conta de Seller ou selecione a empresa correta.",
+                }
+            ],
+        }
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    branches_count = (
+        db.query(SellerBranch)
+        .filter(SellerBranch.company_id == company_id, SellerBranch.active == True)
+        .count()
+    )
+
+    checklist = []
+
+    # 1. Empresa ativa e módulo Busca Preço
+    module_active = bool(company and getattr(company, "module_busca_preco", False))
+    checklist.append({
+        "key": "module_busca_preco",
+        "label": "Módulo Busca Preço Habilitado",
+        "ok": module_active,
+        "required": False,  # Avisar se desativado, mas permitir operação
+        "detail": (
+            f"Módulo Busca Preço ativo para {company.name}."
+            if module_active
+            else "O módulo 'Busca Preço' ainda não está marcado como ativo no cadastro da empresa."
+        ),
+        "action_hint": (
+            None
+            if module_active
+            else "No Painel Master → Empresas → Módulos, ative o módulo 'Busca Preço'."
+        ),
+    })
+
+    # 2. Integração Horus Habilitada
+    horus_enabled = bool(settings and settings.horus_enabled)
+    checklist.append({
+        "key": "horus_enabled",
+        "label": "Integração Horus ERP Ativa",
+        "ok": horus_enabled,
+        "required": True,
+        "detail": (
+            "A integração com o ERP Horus está habilitada nas configurações do Seller."
+            if horus_enabled
+            else "A integração com o ERP Horus está DESATIVADA para este Seller."
+        ),
+        "action_hint": (
+            None
+            if horus_enabled
+            else "Acesse Configurações da Empresa → Aba Horus ERP e marque 'Habilitar Integração Horus'."
+        ),
+    })
+
+    # 3. Credenciais da API Horus (URL, Porta, Usuário, Senha)
+    missing_fields = []
+    if not settings or not (settings.horus_url or "").strip():
+        missing_fields.append("URL do Horus")
+    if not settings or not (settings.horus_username or "").strip():
+        missing_fields.append("Usuário da API Horus")
+    if not settings or not (settings.horus_password or "").strip():
+        missing_fields.append("Senha da API Horus")
+
+    creds_ok = len(missing_fields) == 0
+    horus_endpoint_preview = None
+    if settings and settings.horus_url:
+        port_part = f":{settings.horus_port}" if settings.horus_port and f":{settings.horus_port}" not in settings.horus_url else ""
+        horus_endpoint_preview = f"{settings.horus_url.rstrip('/')}{port_part}"
+
+    checklist.append({
+        "key": "horus_credentials",
+        "label": "Dados de Conexão da API Horus (URL / Usuário / Senha)",
+        "ok": creds_ok,
+        "required": True,
+        "detail": (
+            f"Configurado para {horus_endpoint_preview} (Usuário: {settings.horus_username})."
+            if creds_ok
+            else f"Campos pendentes de preenchimento: {', '.join(missing_fields)}."
+        ),
+        "action_hint": (
+            None
+            if creds_ok
+            else "Acesse o Painel Cronuz → Configurações da Empresa → Horus ERP e preencha URL, Porta, Usuário e Senha."
+        ),
+    })
+
+    # 4. Parâmetros de Empresa/Filial/Paginação Horus
+    has_emp_filial = bool(settings and settings.horus_company and settings.horus_branch)
+    legacy_pag = bool(settings and getattr(settings, "horus_legacy_pagination", False))
+    checklist.append({
+        "key": "horus_company_branch",
+        "label": "Parâmetros de Empresa/Filial e Paginação (OFFSET/LIMIT)",
+        "ok": True,
+        "required": False,
+        "detail": (
+            f"Empresa Horus: {settings.horus_company or 'Padrão'} | Filial: {settings.horus_branch or 'Padrão'} | "
+            f"Local Estoque: {settings.horus_stock_local or 'Geral'} | "
+            f"Paginação: {'Legada (Sem OFFSET/LIMIT)' if legacy_pag else 'Padrão (Com OFFSET/LIMIT)'} | "
+            f"Filiais cadastradas: {branches_count}"
+            if settings
+            else "Configurações complementares do Horus não localizadas."
+        ),
+        "action_hint": (
+            None
+            if has_emp_filial
+            else "Recomendado preencher Código da Empresa e Filial Horus nas Configurações da Empresa."
+        ),
+    })
+
+    # 5. Teste Real de Comunicação com o Servidor Horus
+    horus_live_ok = False
+    horus_live_detail = "Teste de conexão não executado devido a credenciais incompletas."
+    horus_live_hint = "Corrija os itens anteriores para testar a comunicação com o Horus."
+
+    if horus_enabled and creds_ok and test_horus:
+        try:
+            client = HorusProductSearch(db, company_id)
+            try:
+                # Faz uma consulta rápida de diagnóstico
+                raw = await client.busca_acervo(
+                    term="97885",
+                    search_option="BARRAS_ISBN",
+                    offset=0,
+                    limit=1,
+                )
+                # Se respondeu JSON do Horus (mesmo que "Nenhum registro encontrado"), a comunicação HTTP/Auth está 100% funcional!
+                horus_live_ok = True
+                horus_live_detail = "Comunicação em tempo real com o servidor Horus ERP validada com sucesso!"
+                horus_live_hint = None
+            except Exception as exc:
+                err_txt = str(exc)
+                # No Horus, quando retorna HTTP 200 ou erro de negócio controlado mas conectou
+                horus_live_ok = False
+                horus_live_detail = f"Falha ao comunicar com a API do Horus: {err_txt}"
+                horus_live_hint = (
+                    "Verifique se o servidor Horus do Seller está online, se a porta está liberada no firewall "
+                    "e se o usuário/senha do TServerB2B estão corretos."
+                )
+            finally:
+                await client.close()
+        except Exception as exc:
+            horus_live_ok = False
+            horus_live_detail = f"Erro ao inicializar cliente Horus: {str(exc)}"
+            horus_live_hint = "Verifique os dados da API Horus no cadastro da empresa."
+
+    checklist.append({
+        "key": "horus_live_connection",
+        "label": "Comunicação em Tempo Real com o Servidor Horus ERP",
+        "ok": horus_live_ok,
+        "required": True,
+        "detail": horus_live_detail,
+        "action_hint": horus_live_hint,
+    })
+
+    ready = all(item["ok"] for item in checklist if item.get("required", True))
+
+    return {
+        "ready": ready,
+        "company": {
+            "id": company.id if company else company_id,
+            "name": company.name if company else "Empresa",
+            "document": company.document if company else "",
+            "horus_url": horus_endpoint_preview,
+            "horus_company": settings.horus_company if settings else None,
+            "horus_branch": settings.horus_branch if settings else None,
+            "horus_stock_local": settings.horus_stock_local if settings else None,
+            "horus_legacy_pagination": legacy_pag,
+        },
+        "checklist": checklist,
+    }

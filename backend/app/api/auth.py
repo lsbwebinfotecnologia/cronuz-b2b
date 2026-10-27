@@ -101,12 +101,13 @@ def login_for_access_token(
     access_token_expires = timedelta(minutes=security.ACCESS_TOKEN_EXPIRE_MINUTES)
     expire_date = datetime.now(timezone.utc) + access_token_expires
 
-    # Invalidate previous sessions for SELLER and AGENT (only one active session allowed)
+    # Invalidate previous sessions for SELLER and AGENT (only one active session allowed, except GERTEC_TERMINAL)
     user_type_str = user.type.value if hasattr(user.type, "value") else str(user.type)
     if user_type_str in ["SELLER", "AGENT"]:
         db.query(UserSession).filter(
             UserSession.user_id == user.id,
-            UserSession.is_active == True
+            UserSession.is_active == True,
+            UserSession.role != "GERTEC_TERMINAL",
         ).update({"is_active": False})
     
     # Store new session

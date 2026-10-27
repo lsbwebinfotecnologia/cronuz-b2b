@@ -1,24 +1,23 @@
 """
-cora_client.py
---------------
+client.py
+---------
 Cliente da API do Banco Cora — modalidade **Integração Direta** (mTLS + client_credentials).
 
-Docs: https://developers.cora.com.br  (Boletos v2 / Endpoints / Client Credentials)
+Docs: https://developers.cora.com.br  (Instruções iniciais / Client Credentials / Boletos v2 / Endpoints)
 
 SEGURANÇA (AGENTS §2):
-  - Certificado e chave privada vêm do banco (cmp_settings.cora_cert_content / cora_key_content).
+  - Certificado e chave privada vêm do banco (fin_cora_account.cert_content / key_content).
   - A chave privada é armazenada criptografada (Fernet) e só é descriptografada em runtime.
   - Os arquivos exigidos pelo `requests` para mTLS são criados com `tempfile` (permissão 0600)
     e removidos no `__exit__` do context manager — stateless, nada fica em disco.
 
 PERFORMANCE:
   - Token de acesso em cache por processo (chave: client_id + ambiente), renovado 60s antes de expirar.
-  - Uma única `requests.Session` (keep-alive) por bloco `with`, permitindo emitir lotes reaproveitando
-    a mesma conexão TLS.
+  - Uma única `requests.Session` (keep-alive) por bloco `with`.
 
 Uso:
-    with CoraClient.from_settings(settings) as cora:
-        invoice = cora.create_invoice(payload, idempotency_key)
+    with CoraClient.from_account(account) as cora:
+        cora.test_connection()
 """
 import logging
 import os
@@ -86,19 +85,20 @@ class CoraClient:
 
     # ── Factory ──────────────────────────────────────────────────────────────
     @classmethod
-    def from_settings(cls, settings) -> "CoraClient":
+    def from_account(cls, account) -> "CoraClient":
+        """Cria o cliente a partir de um registro `fin_cora_account` (um por ambiente)."""
         from app.core.horus_sql_crypto import decrypt_sql_credential
 
-        if not settings or not getattr(settings, "cora_enabled", False):
-            raise CoraConfigError("Integração com o Banco Cora não está ativa para esta empresa.")
-        key_plain = decrypt_sql_credential(settings.cora_key_content) if settings.cora_key_content else ""
-        if settings.cora_key_content and not key_plain:
-            raise CoraConfigError("Falha ao descriptografar a chave privada do Cora. Reenvie a chave nas configurações.")
+        if account is None:
+            raise CoraConfigError("Credenciais do Banco Cora não cadastradas para este ambiente.")
+        key_plain = decrypt_sql_credential(account.key_content) if account.key_content else ""
+        if account.key_content and not key_plain:
+            raise CoraConfigError("Falha ao descriptografar a chave privada do Cora. Reimporte o certificado.")
         return cls(
-            client_id=settings.cora_client_id or "",
-            cert_pem=settings.cora_cert_content or "",
+            client_id=account.client_id or "",
+            cert_pem=account.cert_content or "",
             key_pem=key_plain,
-            sandbox=bool(settings.cora_sandbox),
+            sandbox=(account.environment != "PRODUCTION"),
         )
 
     # ── Context manager (arquivos temporários mTLS) ──────────────────────────

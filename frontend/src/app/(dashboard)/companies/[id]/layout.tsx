@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useParams, useRouter } from 'next/navigation';
-import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, DatabaseZap, Boxes, Settings, BookOpen, PackageCheck, Bell, Truck } from 'lucide-react';
+import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, DatabaseZap, Boxes, Settings, BookOpen, PackageCheck, Bell, Truck, Landmark } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { Company, CompanyContext } from './context';
 
@@ -50,6 +50,7 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
     { name: 'Propostas', path: `/companies/${companyId}/proposals`, icon: FileSignature },
     { name: 'Contratos', path: `/companies/${companyId}/contracts`, icon: FileSignature, isContract: true },
     { name: 'Faturas', path: `/companies/${companyId}/invoices`, icon: Receipt },
+    { name: 'Banco Cora', path: `/companies/${companyId}/cora`, icon: Landmark },
     { name: 'Integrações', path: `/companies/${companyId}/integrations`, icon: Plug },
     { name: 'Distribuidores', path: `/companies/${companyId}/distributors`, icon: Truck },
     { name: 'Configurações', path: `/companies/${companyId}/settings`, icon: Settings },
