@@ -1204,10 +1204,15 @@ def get_discrepancies(
             s.round_number,
             sc.isbn,
             SUM(sc.quantity) as qty,
-            STRING_AGG(DISTINCT COALESCE(NULLIF(s.operator_name, ''), NULLIF(sc.operator_name, ''), u.name), ', ') as operator_names
+            STRING_AGG(DISTINCT COALESCE(NULLIF(s.operator_name, ''), NULLIF(sc.operator_name, ''), u.name), ', ') as operator_names,
+            MAX(it.title) as item_title,
+            MAX(it.publisher) as item_publisher,
+            MAX(it.category) as item_category,
+            MAX(it.default_location) as item_default_location
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
         LEFT JOIN usr_user u ON s.user_id = u.id
+        LEFT JOIN inv_inventory_item it ON (it.inventory_id = sc.inventory_id AND it.isbn = sc.isbn)
         WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
         GROUP BY s.location, s.round_number, sc.isbn
     """)
@@ -1215,9 +1220,12 @@ def get_discrepancies(
     
     counts_map = {}
     operators_map = {}
+    items_meta = {}
     for r in rows:
         loc, round_num, isbn, qty = r[0], r[1], r[2], int(r[3] or 0)
         op_names_str = r[4] if len(r) > 4 and r[4] else None
+        if isbn not in items_meta and r[5]:
+            items_meta[isbn] = (r[5], r[6], r[7], r[8])
         key = (loc, isbn)
         if key not in counts_map:
             counts_map[key] = {1: 0, 2: 0}
@@ -1231,10 +1239,6 @@ def get_discrepancies(
                 if clean_name:
                     operators_map[key].add(clean_name)
         
-    items_meta = {
-        it.isbn: it for it in db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).all()
-    }
-    
     results = []
     for (loc, isbn), rounds in counts_map.items():
         c1 = rounds.get(1, 0)
@@ -1258,10 +1262,10 @@ def get_discrepancies(
         
         results.append(inv_schemas.DiscrepancyItemResponse(
             isbn=isbn,
-            title=meta.title if meta else f"Item {isbn}",
-            publisher=meta.publisher if meta else None,
-            category=meta.category if meta else None,
-            default_location=meta.default_location if meta else None,
+            title=meta[0] if meta and meta[0] else f"Item {isbn}",
+            publisher=meta[1] if meta else None,
+            category=meta[2] if meta else None,
+            default_location=meta[3] if meta else None,
             location=loc,
             count_1_qty=c1,
             count_2_qty=c2,
@@ -1292,9 +1296,14 @@ def get_sku_summary(
             SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
             SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END) as c2,
             SUM(CASE WHEN s.round_number >= 3 THEN sc.quantity ELSE 0 END) as c3,
-            MAX(CASE WHEN s.round_number >= 3 THEN 1 ELSE 0 END) as has_c3
+            MAX(CASE WHEN s.round_number >= 3 THEN 1 ELSE 0 END) as has_c3,
+            MAX(it.title) as item_title,
+            MAX(it.publisher) as item_publisher,
+            MAX(it.category) as item_category,
+            MAX(it.default_location) as item_default_location
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
+        LEFT JOIN inv_inventory_item it ON (it.inventory_id = sc.inventory_id AND it.isbn = sc.isbn)
         WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
         GROUP BY s.location, sc.isbn
     """)
@@ -1306,9 +1315,12 @@ def get_sku_summary(
     isbn_c3 = {}
     isbn_validated = {}
     isbn_has_div = {}
+    items_map = {}
     
     for r in loc_rows:
         loc, isbn, c1, c2, c3, has_c3 = r[0], r[1], int(r[2] or 0), int(r[3] or 0), int(r[4] or 0), int(r[5] or 0)
+        if isbn not in items_map and r[6]:
+            items_map[isbn] = (r[6], r[7], r[8], r[9])
         val_loc = c3 if (c3 > 0 or has_c3 == 1) else (c2 if c2 > 0 else c1)
         loc_div = (c2 > 0 and c1 != c2 and has_c3 == 0)
         
@@ -1328,21 +1340,15 @@ def get_sku_summary(
         if loc_div:
             isbn_has_div[isbn] = True
 
-    # Buscar itens da base apenas se explicitamente solicitado (ou se for catálogo menor)
     if include_uncounted:
-        items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).all()
-        items_map = {it.isbn: it for it in items}
+        all_rows = db.execute(
+            text("SELECT isbn, title, publisher, category, default_location FROM inv_inventory_item WHERE inventory_id = :inv_id"),
+            {"inv_id": inventory_id}
+        ).fetchall()
+        for row in all_rows:
+            items_map[row[0]] = (row[1], row[2], row[3], row[4])
         all_isbns = set(items_map.keys()).union(set(isbn_validated.keys()))
     else:
-        scanned_isbns = list(isbn_validated.keys())
-        if scanned_isbns:
-            items = db.query(InventoryItem).filter(
-                InventoryItem.inventory_id == inventory_id,
-                InventoryItem.isbn.in_(scanned_isbns)
-            ).all()
-            items_map = {it.isbn: it for it in items}
-        else:
-            items_map = {}
         all_isbns = set(isbn_validated.keys())
     
     results = []
@@ -1356,10 +1362,10 @@ def get_sku_summary(
         
         results.append(inv_schemas.SkuSummaryResponse(
             isbn=isbn,
-            title=it.title if it else f"Item {isbn}",
-            publisher=it.publisher if it else None,
-            category=it.category if it else None,
-            default_location=it.default_location if it else None,
+            title=it[0] if it and it[0] else f"Item {isbn}",
+            publisher=it[1] if it else None,
+            category=it[2] if it else None,
+            default_location=it[3] if it else None,
             locations_list=locs,
             total_count_1=c1,
             total_count_2=c2,
@@ -1705,6 +1711,7 @@ def adjust_sku_quantity(
 def export_inventory_excel(
     company_id: int,
     inventory_id: int,
+    include_uncounted: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
@@ -1713,11 +1720,10 @@ def export_inventory_excel(
     if not inv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventário não encontrado.")
     
-    wb = openpyxl.Workbook()
+    wb = openpyxl.Workbook(write_only=True)
     
     # Aba 1 (PRINCIPAL): Saldos Validados (Título, ISBN, Marca, Quantidade Validada)
-    ws_val = wb.active
-    ws_val.title = "Saldos Validados (Unificado)"
+    ws_val = wb.create_sheet(title="Saldos Validados (Unificado)")
     ws_val.append([
         "Título",
         "ISBN",
@@ -1725,7 +1731,7 @@ def export_inventory_excel(
         "Quantidade Validada Total"
     ])
     
-    # Query de contagens por localização e rodada
+    # Query de contagens por localização e rodada já trazendo metadados do item
     query_loc_scans = text("""
         SELECT 
             s.location,
@@ -1733,29 +1739,62 @@ def export_inventory_excel(
             SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
             SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END) as c2,
             SUM(CASE WHEN s.round_number >= 3 THEN sc.quantity ELSE 0 END) as c3,
-            MAX(CASE WHEN s.round_number >= 3 THEN 1 ELSE 0 END) as has_c3
+            MAX(CASE WHEN s.round_number >= 3 THEN 1 ELSE 0 END) as has_c3,
+            MAX(it.title) as item_title,
+            MAX(it.publisher) as item_publisher,
+            MAX(it.category) as item_category,
+            MAX(it.default_location) as item_default_location,
+            BOOL_OR(COALESCE(it.is_unregistered, FALSE)) as is_unreg
         FROM inv_inventory_scan sc
         JOIN inv_inventory_session s ON sc.session_id = s.id
+        LEFT JOIN inv_inventory_item it ON (it.inventory_id = sc.inventory_id AND it.isbn = sc.isbn)
         WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
         GROUP BY s.location, sc.isbn
     """)
     loc_rows = db.execute(query_loc_scans, {"inv_id": inventory_id}).fetchall()
     
-    # Calcula saldo validado por ISBN (3ª Contagem se houver, senão 2ª se houver, senão 1ª)
+    # Calcula saldo validado e somatórios por ISBN (3ª Contagem se houver, senão 2ª se houver, senão 1ª)
     isbn_validated_totals = {}
+    scan_rows = {}
+    scanned_items_meta = {}
     for r in loc_rows:
         isbn, c1, c2, c3, has_c3 = r[1], int(r[2] or 0), int(r[3] or 0), int(r[4] or 0), int(r[5] or 0)
         val_loc = c3 if (c3 > 0 or has_c3 == 1) else (c2 if c2 > 0 else c1)
         isbn_validated_totals[isbn] = isbn_validated_totals.get(isbn, 0) + val_loc
+        
+        prev_c1, prev_c2, prev_c3, prev_tot = scan_rows.get(isbn, (0, 0, 0, 0))
+        scan_rows[isbn] = (prev_c1 + c1, prev_c2 + c2, prev_c3 + c3, prev_tot + c1 + c2 + c3)
+        
+        if isbn not in scanned_items_meta:
+            scanned_items_meta[isbn] = (
+                isbn,
+                r[6] or f"Item {isbn}",
+                r[7] or "",
+                r[8] or "",
+                r[9] or "",
+                bool(r[10])
+            )
 
-    items = db.query(InventoryItem).filter(InventoryItem.inventory_id == inventory_id).order_by(InventoryItem.title).all()
+    if include_uncounted:
+        all_items_rows = db.execute(
+            text("""
+                SELECT isbn, title, publisher, category, default_location, is_unregistered
+                FROM inv_inventory_item
+                WHERE inventory_id = :inv_id
+                ORDER BY title
+            """),
+            {"inv_id": inventory_id}
+        ).fetchall()
+    else:
+        all_items_rows = sorted(scanned_items_meta.values(), key=lambda x: (x[1] or "").upper())
     
-    for it in items:
-        val_qty = isbn_validated_totals.get(it.isbn, 0)
-        marca = it.publisher or it.category or "N/A"
+    for it in all_items_rows:
+        it_isbn, it_title, it_pub, it_cat = it[0], it[1], it[2], it[3]
+        val_qty = isbn_validated_totals.get(it_isbn, 0)
+        marca = it_pub or it_cat or "N/A"
         ws_val.append([
-            it.title,
-            it.isbn,
+            it_title,
+            it_isbn,
             marca,
             val_qty
         ])
@@ -1838,26 +1877,13 @@ def export_inventory_excel(
         "Status Cadastral"
     ])
     
-    query_isbn = text("""
-        SELECT 
-            sc.isbn,
-            SUM(CASE WHEN s.round_number = 1 THEN sc.quantity ELSE 0 END) as c1,
-            SUM(CASE WHEN s.round_number = 2 THEN sc.quantity ELSE 0 END) as c2,
-            SUM(CASE WHEN s.round_number >= 3 THEN sc.quantity ELSE 0 END) as c3,
-            SUM(sc.quantity) as total_scanned
-        FROM inv_inventory_scan sc
-        JOIN inv_inventory_session s ON sc.session_id = s.id
-        WHERE sc.inventory_id = :inv_id AND s.status != 'CANCELADA'
-        GROUP BY sc.isbn
-    """)
-    scan_rows = {r[0]: (int(r[1] or 0), int(r[2] or 0), int(r[3] or 0), int(r[4] or 0)) for r in db.execute(query_isbn, {"inv_id": inventory_id}).fetchall()}
-    
-    for it in items:
-        c1, c2, c3, total = scan_rows.get(it.isbn, (0, 0, 0, 0))
-        val_qty = isbn_validated_totals.get(it.isbn, 0)
-        status_cad = "Item Novo (Fora da Base)" if it.is_unregistered else "Cadastrado"
+    for it in all_items_rows:
+        it_isbn, it_title, it_pub, it_cat, it_loc, it_unreg = it[0], it[1], it[2], it[3], it[4], it[5]
+        c1, c2, c3, total = scan_rows.get(it_isbn, (0, 0, 0, 0))
+        val_qty = isbn_validated_totals.get(it_isbn, 0)
+        status_cad = "Item Novo (Fora da Base)" if it_unreg else "Cadastrado"
         ws1.append([
-            it.isbn, it.title, it.publisher or "", it.category or "", it.default_location or "",
+            it_isbn, it_title, it_pub or "", it_cat or "", it_loc or "",
             c1, c2, c3, total, val_qty, status_cad
         ])
         
@@ -1907,12 +1933,17 @@ def export_inventory_excel(
         
     buffer = io.BytesIO()
     wb.save(buffer)
+    file_bytes = buffer.getvalue()
     buffer.seek(0)
     filename = f"Relatorio_Inventario_{inv.code}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     return StreamingResponse(
-        buffer,
+        io.BytesIO(file_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(file_bytes)),
+            "Access-Control-Expose-Headers": "Content-Length, Content-Disposition"
+        }
     )
 
 

@@ -119,6 +119,16 @@ export default function InventoryDetailPage() {
   const [finalizing, setFinalizing] = useState(false);
   const [showFinalizeModal, setShowFinalizeModal] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportIncludeUncounted, setExportIncludeUncounted] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [exportStageText, setExportStageText] = useState('');
+  const [exportCompletedInfo, setExportCompletedInfo] = useState<{
+    filename: string;
+    sizeKb: string;
+    blobUrl: string;
+  } | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [showShareModal, setShowShareModal] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [regeneratingToken, setRegeneratingToken] = useState(false);
@@ -663,31 +673,103 @@ export default function InventoryDetailPage() {
     }
   }
 
-  async function handleExportExcel() {
+  async function handleExportExcel(includeUncountedFlag = exportIncludeUncounted) {
     if (!companyId || !inventoryId) return;
     setExportingExcel(true);
+    setExportError(null);
+    setExportCompletedInfo(null);
+    setExportProgress(10);
+    setExportStageText('Conectando ao servidor e consolidando leituras por prateleira...');
+
+    const progressTimer = setInterval(() => {
+      setExportProgress((prev) => {
+        if (prev < 65) {
+          const next = prev + (includeUncountedFlag ? 3 : 12);
+          if (next >= 35 && next < 60) {
+            setExportStageText('Montando as 5 abas da planilha Excel (.xlsx)...');
+          }
+          return Math.min(65, next);
+        }
+        return prev;
+      });
+    }, 350);
+
     try {
       const token = getToken();
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/inventory/${inventoryId}/export-excel`,
+        `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/export-excel?include_uncounted=${includeUncountedFlag}`,
         {
           headers: { Authorization: `Bearer ${token}` }
         }
       );
 
-      if (!res.ok) throw new Error('Erro ao gerar planilha.');
+      clearInterval(progressTimer);
 
-      const blob = await res.blob();
+      if (!res.ok) {
+        let detail = 'Erro ao gerar planilha no servidor.';
+        try {
+          const errJson = await res.json();
+          if (errJson?.detail) detail = errJson.detail;
+        } catch {}
+        throw new Error(detail);
+      }
+
+      setExportProgress(70);
+      setExportStageText('Transferindo arquivo Excel para o seu computador...');
+
+      const contentLength = Number(res.headers.get('Content-Length') || 0);
+      let blob: Blob;
+
+      if (res.body && contentLength > 0) {
+        const reader = res.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let receivedLength = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            receivedLength += value.length;
+            const pct = 70 + Math.round((receivedLength / contentLength) * 28);
+            setExportProgress(Math.min(98, pct));
+            const kb = (receivedLength / 1024).toFixed(0);
+            const totalKb = (contentLength / 1024).toFixed(0);
+            setExportStageText(`Baixando arquivo Excel (${kb} KB de ${totalKb} KB)...`);
+          }
+        }
+        blob = new Blob(chunks as BlobPart[], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        });
+      } else {
+        blob = await res.blob();
+      }
+
+      const filename = `Relatorio_Inventario_${inventory?.code || inventoryId}_${includeUncountedFlag ? 'COMPLETO' : 'CONTADOS'}.xlsx`;
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Relatorio_Inventario_${inventory?.code || inventoryId}.xlsx`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      window.URL.revokeObjectURL(url);
-      toast.success('Relatório Excel baixado com sucesso!');
+
+      const sizeKb = blob.size > 1024 * 1024
+        ? `${(blob.size / (1024 * 1024)).toFixed(2)} MB`
+        : `${Math.max(1, Math.round(blob.size / 1024))} KB`;
+
+      setExportProgress(100);
+      setExportStageText('Relatório 100% gerado e baixado com segurança!');
+      setExportCompletedInfo({
+        filename,
+        sizeKb,
+        blobUrl: url
+      });
+      toast.success('Relatório Excel exportado e baixado com sucesso!');
     } catch (err: any) {
+      clearInterval(progressTimer);
+      setExportError(err.message || 'Falha ao exportar relatório.');
       toast.error(err.message || 'Falha ao exportar relatório.');
     } finally {
       setExportingExcel(false);
@@ -829,7 +911,12 @@ export default function InventoryDetailPage() {
           </button>
 
           <button
-            onClick={handleExportExcel}
+            onClick={() => {
+              setExportError(null);
+              setExportCompletedInfo(null);
+              setExportProgress(0);
+              setShowExportModal(true);
+            }}
             disabled={exportingExcel}
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-sm font-semibold shadow-sm transition-colors disabled:opacity-50"
           >
@@ -2564,6 +2651,212 @@ export default function InventoryDetailPage() {
                 </button>
               </div>
             </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal de Exportação Segura do Relatório Excel com Barra de Progresso */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl max-w-lg w-full p-6 space-y-5"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-teal-500/10 text-teal-600 dark:text-teal-400">
+                  <FileSpreadsheet className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                    Exportar Relatório Excel (.xlsx)
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Planilha consolidada com 5 abas de auditoria e saldos validados
+                  </p>
+                </div>
+              </div>
+              {!exportingExcel && (
+                <button
+                  type="button"
+                  onClick={() => setShowExportModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {/* Seletor de Escopo */}
+            <div className="space-y-2.5">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Selecione o formato de exportação:
+              </label>
+
+              <label
+                className={`flex items-start gap-3 p-3.5 rounded-xl border cursor-pointer transition-colors ${
+                  !exportIncludeUncounted
+                    ? 'border-teal-500 bg-teal-500/5 dark:bg-teal-500/10'
+                    : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                } ${exportingExcel ? 'opacity-60 pointer-events-none' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name="export_scope"
+                  checked={!exportIncludeUncounted}
+                  onChange={() => {
+                    setExportIncludeUncounted(false);
+                    setExportCompletedInfo(null);
+                    setExportError(null);
+                  }}
+                  className="mt-0.5 text-teal-600 focus:ring-teal-500"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-900 dark:text-white">
+                      Apenas Itens Contados / Bipados (Recomendado)
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-500/10 text-teal-600 dark:text-teal-400">
+                      Ultra Rápido (~1s)
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    Exporta todos os SKUs bipados nas prateleiras ({inventory.total_scanned_items.toLocaleString('pt-BR')} peças apuradas em {sessions.length} sessões) nas 5 abas do relatório.
+                  </p>
+                </div>
+              </label>
+
+              <label
+                className={`flex items-start gap-3 p-3.5 rounded-xl border cursor-pointer transition-colors ${
+                  exportIncludeUncounted
+                    ? 'border-teal-500 bg-teal-500/5 dark:bg-teal-500/10'
+                    : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                } ${exportingExcel ? 'opacity-60 pointer-events-none' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name="export_scope"
+                  checked={exportIncludeUncounted}
+                  onChange={() => {
+                    setExportIncludeUncounted(true);
+                    setExportCompletedInfo(null);
+                    setExportError(null);
+                  }}
+                  className="mt-0.5 text-teal-600 focus:ring-teal-500"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-900 dark:text-white">
+                      Incluir também Não Contados da Base ({inventory.total_expected_skus.toLocaleString('pt-BR')} SKUs)
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                      Arquivo Grande
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    Inclui na planilha todos os {inventory.total_expected_skus.toLocaleString('pt-BR')} itens da carga inicial (mesmo os que ficaram com saldo zero).
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            {/* Barra de Progresso em Tempo Real */}
+            {(exportingExcel || exportProgress > 0) && !exportError && (
+              <div className={`p-4 rounded-xl border space-y-2.5 transition-colors ${
+                exportCompletedInfo
+                  ? 'border-emerald-500/30 bg-emerald-500/10 dark:bg-emerald-950/20'
+                  : 'border-teal-500/30 bg-teal-500/5 dark:bg-slate-800/80'
+              }`}>
+                <div className="flex items-center justify-between text-xs font-bold">
+                  <span className={`flex items-center gap-2 ${
+                    exportCompletedInfo ? 'text-emerald-700 dark:text-emerald-300' : 'text-teal-700 dark:text-teal-300'
+                  }`}>
+                    {exportCompletedInfo ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    ) : (
+                      <Loader2 className="h-4 w-4 animate-spin text-teal-600 dark:text-teal-400 shrink-0" />
+                    )}
+                    {exportCompletedInfo ? 'Exportação 100% Concluída com Sucesso!' : exportStageText}
+                  </span>
+                  <span className="font-mono text-sm font-black text-teal-600 dark:text-teal-400">
+                    {exportProgress}%
+                  </span>
+                </div>
+
+                <div className="w-full h-3 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 rounded-full ${
+                      exportCompletedInfo
+                        ? 'bg-emerald-500'
+                        : 'bg-gradient-to-r from-teal-500 to-emerald-500'
+                    }`}
+                    style={{ width: `${exportProgress}%` }}
+                  />
+                </div>
+
+                {exportCompletedInfo && (
+                  <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-emerald-500/20 text-xs">
+                    <div className="text-slate-600 dark:text-slate-300">
+                      Arquivo: <strong className="font-mono text-slate-900 dark:text-white">{exportCompletedInfo.filename}</strong> ({exportCompletedInfo.sizeKb})
+                    </div>
+                    <a
+                      href={exportCompletedInfo.blobUrl}
+                      download={exportCompletedInfo.filename}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors w-fit"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Baixar Novamente
+                    </a>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Alerta de Erro caso ocorra falha */}
+            {exportError && (
+              <div className="p-3.5 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center justify-between gap-2">
+                <span>⚠️ {exportError}</span>
+                <button
+                  type="button"
+                  onClick={() => handleExportExcel(exportIncludeUncounted)}
+                  className="px-3 py-1 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 transition-colors shrink-0"
+                >
+                  Tentar Novamente
+                </button>
+              </div>
+            )}
+
+            {/* Rodapé do Modal */}
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                disabled={exportingExcel}
+                onClick={() => setShowExportModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-40"
+              >
+                {exportCompletedInfo ? 'Fechar' : 'Cancelar'}
+              </button>
+
+              <button
+                type="button"
+                disabled={exportingExcel}
+                onClick={() => handleExportExcel(exportIncludeUncounted)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-sm transition-colors disabled:opacity-50"
+              >
+                {exportingExcel ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Exportando ({exportProgress}%)...
+                  </>
+                ) : (
+                  <>
+                    <Download className="h-4 w-4" />
+                    {exportCompletedInfo ? 'Gerar Relatório Novamente' : 'Iniciar Exportação Segura'}
+                  </>
+                )}
+              </button>
+            </div>
           </motion.div>
         </div>
       )}
