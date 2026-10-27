@@ -117,6 +117,62 @@ class HorusProductSearch(HorusClient):
 
         return await self.get("Estoque", params=params)
 
+    async def busca_acervo_por_range(
+        self,
+        cod_item_ini: int,
+        cod_item_fim: int,
+        offset: int = 0,
+        limit: int = 500,
+        data_ini: Optional[str] = None,
+        data_fim: Optional[str] = None,
+    ) -> Any:
+        """
+        Consulta produtos no Horus via `Busca_Acervo` utilizando o intervalo
+        `COD_ITEM_INI` e `COD_ITEM_FIM` (e opcionalmente `DATA_INI` / `DATA_FIM`).
+        Respeita estritamente a configuração `horus_legacy_pagination` (OFFSET/LIMIT) do Seller.
+        """
+        params: Dict[str, Any] = {
+            "COD_ITEM_INI": int(cod_item_ini),
+            "COD_ITEM_FIM": int(cod_item_fim),
+        }
+        if data_ini:
+            params["DATA_INI"] = data_ini
+        if data_fim:
+            params["DATA_FIM"] = data_fim
+
+        legacy = bool(getattr(self._settings, "horus_legacy_pagination", False))
+        if not legacy:
+            params["OFFSET"] = int(offset)
+            params["LIMIT"] = int(limit)
+
+        return await self.get("Busca_Acervo", params=params)
+
+    async def busca_estoque_por_range(
+        self,
+        cod_item_ini: int,
+        cod_item_fim: int,
+        cod_empresa: str,
+        cod_filial: str,
+        offset: int = 0,
+        limit: int = 2000,
+    ) -> Any:
+        """
+        Consulta o saldo em lote de uma faixa de códigos (`COD_ITEM_INI` a `COD_ITEM_FIM`)
+        em uma filial via endpoint `Estoque`, respeitando `horus_legacy_pagination`.
+        """
+        params: Dict[str, Any] = {
+            "COD_ITEM_INI": int(cod_item_ini),
+            "COD_ITEM_FIM": int(cod_item_fim),
+            "COD_EMPRESA": str(cod_empresa).strip(),
+            "COD_FILIAL": str(cod_filial).strip(),
+        }
+        legacy = bool(getattr(self._settings, "horus_legacy_pagination", False))
+        if not legacy:
+            params["OFFSET"] = int(offset)
+            params["LIMIT"] = int(limit)
+
+        return await self.get("Estoque", params=params)
+
     async def busca_estoque_por_filiais(
         self,
         cod_item: int,

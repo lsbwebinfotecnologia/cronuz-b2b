@@ -49,6 +49,101 @@ export default function CompanyModulesPage() {
   const [loadingHorusSQL, setLoadingHorusSQL] = useState(true);
   const [togglingHorusFeature, setTogglingHorusFeature] = useState<string | null>(null);
 
+  // ─── Licença Horus PDV Desktop (.EXE) & Sync por Range ─────────────
+  const [pdvLicense, setPdvLicense] = useState<{
+    enabled: boolean;
+    range_sync_enabled: boolean;
+    expires_at: string;
+    expires_at_br?: string | null;
+    days_remaining?: number | null;
+    is_valid?: boolean;
+    status_label?: string;
+    license_key?: string | null;
+  }>({
+    enabled: false,
+    range_sync_enabled: false,
+    expires_at: '',
+  });
+  const [savingPdvLicense, setSavingPdvLicense] = useState(false);
+
+  useEffect(() => {
+    async function fetchPdvDesktopLicense() {
+      const token = getToken();
+      if (!token || !companyId) return;
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/desktop-license`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setPdvLicense({
+            enabled: !!data.enabled,
+            range_sync_enabled: !!data.range_sync_enabled,
+            expires_at: data.expires_at || '',
+            expires_at_br: data.expires_at_br,
+            days_remaining: data.days_remaining,
+            is_valid: data.is_valid,
+            status_label: data.status_label,
+            license_key: data.license_key,
+          });
+        }
+      } catch {
+        // silencioso
+      }
+    }
+    fetchPdvDesktopLicense();
+  }, [companyId]);
+
+  async function handleSavePdvDesktopLicense(override?: Partial<typeof pdvLicense>) {
+    setSavingPdvLicense(true);
+    const token = getToken();
+    const nextState = { ...pdvLicense, ...override };
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/desktop-license`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            enabled: nextState.enabled,
+            expires_at: nextState.expires_at || null,
+            range_sync_enabled: nextState.range_sync_enabled,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err?.detail || 'Erro ao atualizar licença do Horus PDV Desktop.');
+        return;
+      }
+      const data = await res.json();
+      setPdvLicense({
+        enabled: !!data.enabled,
+        range_sync_enabled: !!data.range_sync_enabled,
+        expires_at: data.expires_at || '',
+        expires_at_br: data.expires_at_br,
+        days_remaining: data.days_remaining,
+        is_valid: data.is_valid,
+        status_label: data.status_label,
+        license_key: data.license_key,
+      });
+      toast.success('Licença e chave do Horus PDV Desktop atualizadas com sucesso!');
+    } catch (e: any) {
+      toast.error(`Erro de rede: ${e?.message || e}`);
+    } finally {
+      setSavingPdvLicense(false);
+    }
+  }
+
+  function addDaysToLicenseDate(days: number) {
+    const base = pdvLicense.expires_at ? new Date(`${pdvLicense.expires_at}T12:00:00`) : new Date();
+    const now = new Date();
+    const start = base > now ? base : now;
+    start.setDate(start.getDate() + days);
+    const iso = start.toISOString().slice(0, 10);
+    setPdvLicense(prev => ({ ...prev, enabled: true, expires_at: iso }));
+  }
 
   useEffect(() => {
     async function fetchMobileModules() {
@@ -455,6 +550,126 @@ export default function CompanyModulesPage() {
                   />
                 </div>
               </div>
+
+              {/* Sub-painel Master: Licença Horus PDV Desktop (.EXE) & Sync por Range Horus */}
+              {company.module_pdv && (
+                <div className="mx-3 sm:mx-5 mb-4 p-4 rounded-2xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-extrabold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
+                        🔐 Licença Horus PDV Desktop (.EXE) &amp; Sincronização por Sequência Horus
+                      </p>
+                      <p className="text-xs text-slate-600 dark:text-slate-400">
+                        Controle a data de validade da chave do aplicativo Windows (Online/Offline) e libere a sincronização em lote por COD_ITEM_INI / COD_ITEM_FIM.
+                      </p>
+                    </div>
+                    <span
+                      className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shrink-0 ${
+                        pdvLicense.is_valid
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300'
+                          : 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300'
+                      }`}
+                    >
+                      {pdvLicense.status_label || 'Não configurada'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-bold text-slate-800 dark:text-slate-200">Liberar Uso do HorusPDV.exe</p>
+                        <p className="text-[11px] text-slate-500">Permite abrir e realizar vendas no PDV Windows até a data limite.</p>
+                      </div>
+                      <Switch
+                        active={pdvLicense.enabled}
+                        onClick={() => setPdvLicense(prev => ({ ...prev, enabled: !prev.enabled }))}
+                        disabled={savingPdvLicense}
+                        colorClass="bg-indigo-600"
+                      />
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-bold text-slate-800 dark:text-slate-200">Liberar Sync Catálogo por Range (COD_ITEM_INI/FIM)</p>
+                        <p className="text-[11px] text-slate-500">Habilita o download sequencial de produtos direto da API do Horus.</p>
+                      </div>
+                      <Switch
+                        active={pdvLicense.range_sync_enabled}
+                        onClick={() => setPdvLicense(prev => ({ ...prev, range_sync_enabled: !prev.range_sync_enabled }))}
+                        disabled={savingPdvLicense}
+                        colorClass="bg-emerald-600"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-3 pt-1">
+                    <div className="flex flex-col sm:flex-row sm:items-end gap-2 flex-1">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Data de Validade da Licença (Até quando estará ativo)
+                        </label>
+                        <input
+                          type="date"
+                          value={pdvLicense.expires_at}
+                          onChange={e => setPdvLicense(prev => ({ ...prev, expires_at: e.target.value }))}
+                          className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-slate-100"
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => addDaysToLicenseDate(30)}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
+                        >
+                          +30 Dias
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addDaysToLicenseDate(90)}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
+                        >
+                          +90 Dias
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addDaysToLicenseDate(365)}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
+                        >
+                          +1 Ano
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={savingPdvLicense}
+                      onClick={() => handleSavePdvDesktopLicense()}
+                      className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-50"
+                    >
+                      {savingPdvLicense ? 'Gerando Chave...' : '🔑 Salvar Validade & Liberar Chave no Master'}
+                    </button>
+                  </div>
+
+                  {pdvLicense.license_key && (
+                    <div className="p-2.5 rounded-xl bg-slate-900 text-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="truncate text-[11px] font-mono">
+                        <span className="text-indigo-400 font-bold mr-2">CHAVE ATIVA:</span>
+                        {pdvLicense.license_key}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(pdvLicense.license_key || '');
+                          toast.success('Chave de licença copiada!');
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shrink-0"
+                      >
+                        📋 Copiar Chave
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Subscriptions */}
               <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">

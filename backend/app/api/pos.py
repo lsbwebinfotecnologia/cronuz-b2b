@@ -209,6 +209,11 @@ def get_pos_config(
         "validate_stock": not allow_out_of_stock,
         "pdv_max_installments": max_installments,
         "pdv_min_installment_amount": min_installment_amount,
+        "horus_legacy_pagination": bool(getattr(settings, "horus_legacy_pagination", False)) if settings else False,
+        "pdv_desktop_license_enabled": bool(getattr(settings, "pdv_desktop_license_enabled", False)) if settings else False,
+        "pdv_desktop_expires_at": settings.pdv_desktop_expires_at.isoformat() if (settings and getattr(settings, "pdv_desktop_expires_at", None)) else None,
+        "pdv_desktop_license_key": getattr(settings, "pdv_desktop_license_key", None) if settings else None,
+        "pdv_horus_range_sync_enabled": bool(getattr(settings, "pdv_horus_range_sync_enabled", False)) if settings else False,
     }
 
 
@@ -2018,3 +2023,483 @@ def get_pos_sales_report(
         )
 
     raise HTTPException(status_code=400, detail="Formato inválido. Use json, excel ou pdf.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LICENCIAMENTO HORUS PDV DESKTOP (.EXE) & SINCRONIZAÇÃO POR RANGE HORUS
+# ─────────────────────────────────────────────────────────────────────────────
+import base64
+import hashlib
+import hmac
+from datetime import timezone
+from pydantic import BaseModel
+
+# Segredo criptográfico compartilhado entre o Backend e o Executável HorusPDV.exe
+# para validação offline inviolável da chave de licença (HMAC-SHA256).
+PDV_DESKTOP_LICENSE_SECRET = b"CRONUZ-HORUS-PDV-LICENSE-V1-2026-KEY-9F8A7B6C5D4E"
+
+
+class PDVDesktopLicenseUpdateRequest(BaseModel):
+    enabled: bool = True
+    expires_at: Optional[str] = None  # YYYY-MM-DD ou ISO-8601
+    range_sync_enabled: bool = True
+
+
+class HorusCatalogRangeRequest(BaseModel):
+    cod_item_ini: int
+    cod_item_fim: int
+    session_id: Optional[int] = None
+    branch_id: Optional[int] = None
+    offset: int = 0
+    limit: int = 500
+    data_ini: Optional[str] = None
+    data_fim: Optional[str] = None
+    merge_into_session: bool = True
+
+
+def _generate_pdv_desktop_license_key(
+    company_id: int,
+    company_document: str,
+    enabled: bool,
+    expires_at_iso: str,
+    range_sync_enabled: bool,
+) -> str:
+    """
+    Gera um token de licença assinado com HMAC-SHA256 no formato:
+    HPDV1.<payload_base64url>.<assinatura_hmac_24chars>
+    Impede adulteração manual de datas no config_pdv.json quando o PDV estiver offline.
+    """
+    payload_dict = {
+        "v": 1,
+        "cid": int(company_id),
+        "doc": "".join(c for c in (company_document or "") if c.isdigit()),
+        "en": 1 if enabled else 0,
+        "exp": str(expires_at_iso or "")[:10],  # YYYY-MM-DD
+        "rng": 1 if range_sync_enabled else 0,
+        "iat": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    }
+    raw_json = json.dumps(payload_dict, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    b64_payload = base64.urlsafe_b64encode(raw_json).decode("ascii").rstrip("=")
+    sig = hmac.new(PDV_DESKTOP_LICENSE_SECRET, b64_payload.encode("ascii"), hashlib.sha256).hexdigest()[:24].upper()
+    return f"HPDV1.{b64_payload}.{sig}"
+
+
+def _build_license_status_response(company: Company, settings: Optional[CompanySettings]) -> dict:
+    enabled = bool(getattr(settings, "pdv_desktop_license_enabled", False)) if settings else False
+    range_sync = bool(getattr(settings, "pdv_horus_range_sync_enabled", False)) if settings else False
+    exp_dt = getattr(settings, "pdv_desktop_expires_at", None) if settings else None
+    lic_key = getattr(settings, "pdv_desktop_license_key", None) if settings else None
+
+    now_utc = datetime.now(timezone.utc)
+    days_remaining = None
+    is_expired = True
+    exp_iso = None
+
+    if exp_dt is not None:
+        if exp_dt.tzinfo is None:
+            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+        exp_iso = exp_dt.strftime("%Y-%m-%d")
+        # Considera válido até 23:59:59 da data de expiração
+        end_of_day = exp_dt.replace(hour=23, minute=59, second=59)
+        delta = end_of_day - now_utc
+        days_remaining = max(0, delta.days + (1 if delta.seconds > 0 else 0)) if delta.total_seconds() >= 0 else delta.days
+        is_expired = delta.total_seconds() < 0
+
+    is_valid = bool(company.module_pdv and enabled and exp_dt is not None and not is_expired)
+
+    if not company.module_pdv:
+        status_label = "MÓDULO PDV DESATIVADO NO SELLER"
+    elif not enabled:
+        status_label = "LICENÇA DESKTOP BLOQUEADA PELO MASTER"
+    elif exp_dt is None:
+        status_label = "SEM DATA DE VALIDADE DEFINIDA PELO MASTER"
+    elif is_expired:
+        status_label = f"LICENÇA EXPIRADA EM {exp_dt.strftime('%d/%m/%Y')}"
+    else:
+        status_label = f"LICENÇA ATIVA ATÉ {exp_dt.strftime('%d/%m/%Y')} ({days_remaining} dia(s) restante(s))"
+
+    return {
+        "company_id": company.id,
+        "company_name": company.name,
+        "module_pdv": bool(company.module_pdv),
+        "enabled": enabled,
+        "range_sync_enabled": range_sync,
+        "expires_at": exp_iso,
+        "expires_at_br": exp_dt.strftime("%d/%m/%Y") if exp_dt else None,
+        "days_remaining": days_remaining,
+        "is_expired": is_expired,
+        "is_valid": is_valid,
+        "status_label": status_label,
+        "license_key": lic_key if is_valid else None,
+        "horus_legacy_pagination": bool(getattr(settings, "horus_legacy_pagination", False)) if settings else False,
+    }
+
+
+@router.get("/desktop-license")
+def get_pdv_desktop_license(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Consulta o status da licença do Horus PDV Desktop (.EXE) e retorna a chave
+    assinada atualizada caso a licença esteja ativa e dentro da validade.
+    """
+    raw_type = getattr(current_user, "type", None) or getattr(current_user, "role", None)
+    user_type = (getattr(raw_type, "value", None) or str(raw_type)).upper()
+    is_master = "MASTER" in user_type
+    if not is_master and getattr(current_user, "company_id", None) != company_id:
+        raise HTTPException(status_code=403, detail="Acesso restrito a esta empresa.")
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings:
+        settings = CompanySettings(company_id=company_id)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+
+    # Se estiver habilitada e tiver data de expiração mas ainda não tiver a chave gerada, gera automaticamente
+    if settings.pdv_desktop_license_enabled and settings.pdv_desktop_expires_at and not settings.pdv_desktop_license_key:
+        exp_str = settings.pdv_desktop_expires_at.strftime("%Y-%m-%d")
+        settings.pdv_desktop_license_key = _generate_pdv_desktop_license_key(
+            company_id=company.id,
+            company_document=company.document or "",
+            enabled=bool(settings.pdv_desktop_license_enabled),
+            expires_at_iso=exp_str,
+            range_sync_enabled=bool(settings.pdv_horus_range_sync_enabled),
+        )
+        db.commit()
+        db.refresh(settings)
+
+    res = _build_license_status_response(company, settings)
+    if is_master:
+        res["license_key"] = settings.pdv_desktop_license_key
+    return res
+
+
+@router.put("/desktop-license")
+def update_pdv_desktop_license(
+    company_id: int,
+    payload: PDVDesktopLicenseUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.require_master_user),
+):
+    """
+    Exclusivo Master: Ativa/bloqueia a licença do Horus PDV Desktop (.EXE),
+    define a data de validade (até quando o cliente pagou), libera ou bloqueia
+    a rotina de sincronização por Range do Horus e gera a chave criptográfica.
+    """
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings:
+        settings = CompanySettings(company_id=company_id)
+        db.add(settings)
+
+    exp_dt = None
+    exp_str = ""
+    if payload.expires_at and str(payload.expires_at).strip():
+        raw_exp = str(payload.expires_at).strip()[:10]
+        try:
+            parsed = datetime.strptime(raw_exp, "%Y-%m-%d")
+            exp_dt = parsed.replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            exp_str = raw_exp
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato de data inválido. Use AAAA-MM-DD.")
+
+    settings.pdv_desktop_license_enabled = bool(payload.enabled)
+    settings.pdv_horus_range_sync_enabled = bool(payload.range_sync_enabled)
+    settings.pdv_desktop_expires_at = exp_dt
+
+    if payload.enabled and exp_str:
+        settings.pdv_desktop_license_key = _generate_pdv_desktop_license_key(
+            company_id=company.id,
+            company_document=company.document or "",
+            enabled=True,
+            expires_at_iso=exp_str,
+            range_sync_enabled=bool(payload.range_sync_enabled),
+        )
+    else:
+        settings.pdv_desktop_license_key = None
+
+    db.commit()
+    db.refresh(settings)
+
+    res = _build_license_status_response(company, settings)
+    res["license_key"] = settings.pdv_desktop_license_key
+    return res
+
+
+@router.post("/horus-catalog-range")
+async def sync_horus_catalog_by_range(
+    company_id: int,
+    payload: HorusCatalogRangeRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Sincroniza produtos do Horus ERP por sequência de código (`COD_ITEM_INI` a `COD_ITEM_FIM`),
+    respeitando estritamente:
+    1. Validade da licença do Horus PDV Desktop e flag `pdv_horus_range_sync_enabled` liberados pelo Master.
+    2. Configuração `horus_legacy_pagination` (OFFSET/LIMIT) do Seller no Master.
+    3. Consulta em lote de saldo no endpoint `Estoque` para o mesmo range (`COD_ITEM_INI`..`COD_ITEM_FIM`).
+    """
+    company = _assert_pos_access(current_user, company_id, db)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings or not settings.horus_enabled:
+        raise HTTPException(status_code=400, detail="Integração Horus ERP não está habilitada para este Seller.")
+
+    raw_type = getattr(current_user, "type", None) or getattr(current_user, "role", None)
+    user_type = (getattr(raw_type, "value", None) or str(raw_type)).upper()
+    is_master = "MASTER" in user_type
+
+    lic_status = _build_license_status_response(company, settings)
+    if not is_master:
+        if not lic_status["is_valid"]:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Acesso bloqueado: {lic_status['status_label']}. Solicite a renovação da chave ao administrador.",
+            )
+        if not lic_status["range_sync_enabled"]:
+            raise HTTPException(
+                status_code=403,
+                detail="A rotina de Sincronização de Catálogo por Sequência Horus (COD_ITEM_INI/FIM) não está habilitada na sua licença. Solicite a liberação no painel Master.",
+            )
+
+    cod_ini = max(1, int(payload.cod_item_ini))
+    cod_fim = max(cod_ini, int(payload.cod_item_fim))
+    if (cod_fim - cod_ini) > 5000:
+        raise HTTPException(
+            status_code=400,
+            detail="O intervalo máximo permitido por requisição é de 5.000 códigos (ex: 1 a 5000). Use o passo em lotes no PDV.",
+        )
+
+    # Identifica filial da sessão (se houver) ou padrão do Seller
+    cod_empresa = str(settings.horus_company or "").strip()
+    cod_filial = str(settings.horus_branch or "").strip()
+    if payload.branch_id:
+        branch = db.query(SellerBranch).filter(
+            SellerBranch.id == payload.branch_id,
+            SellerBranch.company_id == company_id,
+        ).first()
+        if branch and branch.cod_empresa and branch.cod_filial:
+            cod_empresa = str(branch.cod_empresa).strip()
+            cod_filial = str(branch.cod_filial).strip()
+    elif payload.session_id:
+        sess = db.query(POSSession).filter(
+            POSSession.id == payload.session_id,
+            POSSession.company_id == company_id,
+        ).first()
+        if sess and sess.branch_id:
+            branch = db.query(SellerBranch).filter(
+                SellerBranch.id == sess.branch_id,
+                SellerBranch.company_id == company_id,
+            ).first()
+            if branch and branch.cod_empresa and branch.cod_filial:
+                cod_empresa = str(branch.cod_empresa).strip()
+                cod_filial = str(branch.cod_filial).strip()
+
+    try:
+        client = HorusProductSearch(db, company_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Falha ao iniciar cliente Horus: {exc}")
+
+    raw_items: List[dict] = []
+    stock_by_cod_item: dict = {}
+
+    try:
+        # 1. Consulta Busca_Acervo por COD_ITEM_INI e COD_ITEM_FIM (respeitando horus_legacy_pagination)
+        raw = await client.busca_acervo_por_range(
+            cod_item_ini=cod_ini,
+            cod_item_fim=cod_fim,
+            offset=payload.offset,
+            limit=payload.limit,
+            data_ini=payload.data_ini,
+            data_fim=payload.data_fim,
+        )
+        if isinstance(raw, list):
+            for it in raw:
+                if isinstance(it, dict) and not (it.get("Falha") or it.get("FALHA") == "S"):
+                    raw_items.append(it)
+        elif isinstance(raw, dict) and not (raw.get("Falha") or raw.get("FALHA") == "S"):
+            raw_items.append(raw)
+
+        # Fallback para Busca_AcervoB2B caso Busca_Acervo padrão retorne vazio e a empresa tenha GUID B2B
+        if not raw_items and getattr(settings, "horus_default_b2b_guid", None):
+            from app.integrators.horus_products import HorusProducts
+            b2b_client = HorusProducts(db, company_id)
+            try:
+                raw_b2b = await b2b_client.busca_acervo_b2b(
+                    id_doc=company.document,
+                    id_guid=settings.horus_default_b2b_guid,
+                    offset=payload.offset,
+                    limit=payload.limit,
+                    data_ini=payload.data_ini,
+                    data_fim=payload.data_fim,
+                    COD_ITEM_INI=cod_ini,
+                    COD_ITEM_FIM=cod_fim,
+                )
+                if isinstance(raw_b2b, list):
+                    for it in raw_b2b:
+                        if isinstance(it, dict) and not (it.get("Falha") or it.get("FALHA") == "S"):
+                            raw_items.append(it)
+                elif isinstance(raw_b2b, dict) and not (raw_b2b.get("Falha") or raw_b2b.get("FALHA") == "S"):
+                    raw_items.append(raw_b2b)
+            finally:
+                await b2b_client.close()
+
+        # 2. Se encontrou itens e temos Empresa/Filial configuradas, busca o saldo do range em lote único
+        if raw_items and cod_empresa and cod_filial:
+            try:
+                raw_stock = await asyncio.wait_for(
+                    client.busca_estoque_por_range(
+                        cod_item_ini=cod_ini,
+                        cod_item_fim=cod_fim,
+                        cod_empresa=cod_empresa,
+                        cod_filial=cod_filial,
+                        offset=0,
+                        limit=max(2000, len(raw_items) * 3),
+                    ),
+                    timeout=12.0,
+                )
+                stock_list = raw_stock if isinstance(raw_stock, list) else ([raw_stock] if isinstance(raw_stock, dict) else [])
+                for st_row in stock_list:
+                    if not isinstance(st_row, dict) or st_row.get("Falha") or st_row.get("FALHA") == "S":
+                        continue
+                    c_it = st_row.get("COD_ITEM")
+                    if c_it is not None:
+                        try:
+                            c_int = int(c_it)
+                            s_val = float(st_row.get("SALDO_DISPONIVEL") or st_row.get("QTD_SALDO") or 0.0)
+                            stock_by_cod_item[c_int] = stock_by_cod_item.get(c_int, 0.0) + s_val
+                        except (ValueError, TypeError):
+                            pass
+            except Exception as st_err:
+                logger.debug(f"Aviso ao consultar Estoque em lote ({cod_ini}..{cod_fim}): {st_err}")
+    except Exception as exc:
+        logger.error(f"Erro na sincronização Horus por range ({cod_ini}..{cod_fim}): {exc}")
+        raise HTTPException(status_code=502, detail=f"Erro ao consultar Horus ERP no intervalo {cod_ini} a {cod_fim}: {exc}")
+    finally:
+        await client.close()
+
+    formatted_items = []
+    min_cod = None
+    max_cod = None
+
+    for it in raw_items:
+        cod_item_raw = it.get("COD_ITEM")
+        cod_item_int = None
+        try:
+            cod_item_int = int(cod_item_raw)
+        except (ValueError, TypeError):
+            pass
+
+        if cod_item_int is not None:
+            if min_cod is None or cod_item_int < min_cod:
+                min_cod = cod_item_int
+            if max_cod is None or cod_item_int > max_cod:
+                max_cod = cod_item_int
+
+        cod_barra = _clean_barcode(it.get("COD_BARRA_ITEM") or it.get("BARRAS_ISBN") or it.get("COD_ISBN_ITEM") or cod_item_raw or "")
+        if not cod_barra:
+            continue
+
+        title = str(it.get("NOM_ITEM") or "Produto sem título").strip()
+        publisher = str(it.get("NOM_EDITORA") or it.get("EDITORA") or "").strip()
+        price_val = (
+            it.get("VLR_CAPA")
+            or it.get("PRECO")
+            or it.get("VLR_ITEM")
+            or it.get("PRECO_TABELA")
+            or it.get("PRECO_VENDA")
+            or it.get("VLR_PRECO")
+            or 0.0
+        )
+        price = parse_horus_price(price_val)
+        if price <= 0:
+            continue
+
+        if cod_item_int is not None and cod_item_int in stock_by_cod_item:
+            stock_val = stock_by_cod_item[cod_item_int]
+        else:
+            try:
+                stock_val = float(it.get("SALDO_DISPONIVEL") or it.get("SALDO_GERAL") or it.get("QTD_SALDO") or 0.0)
+            except (ValueError, TypeError):
+                stock_val = 0.0
+
+        sku_str = str(cod_item_int if cod_item_int is not None else (cod_item_raw or cod_barra))
+        formatted_items.append({
+            "id": sku_str,
+            "cod_item": cod_item_int,
+            "sku": sku_str,
+            "isbn": cod_barra,
+            "barcode": cod_barra,
+            "name": title,
+            "title": title,
+            "brand": publisher,
+            "publisher": publisher,
+            "price": round(price, 2),
+            "stock_quantity": int(stock_val),
+            "stock": round(stock_val, 2),
+            "horus_item_code": sku_str,
+            "source": "HORUS_RANGE_SYNC",
+        })
+
+    # Se session_id foi informado e merge_into_session=True, faz upsert incremental nos produtos da sessão
+    if payload.session_id and payload.merge_into_session and formatted_items:
+        sess = db.query(POSSession).filter(
+            POSSession.id == payload.session_id,
+            POSSession.company_id == company_id,
+        ).first()
+        if sess:
+            existing_rows = db.query(POSSessionProduct).filter(
+                POSSessionProduct.session_id == sess.id
+            ).all()
+            by_sku = {str(r.horus_item_code or r.sku or r.barcode): r for r in existing_rows}
+            new_objs = []
+            for fi in formatted_items:
+                key = str(fi["sku"])
+                if key in by_sku:
+                    row_obj = by_sku[key]
+                    row_obj.barcode = fi["barcode"]
+                    row_obj.title = fi["title"]
+                    row_obj.publisher = fi["publisher"]
+                    row_obj.price = fi["price"]
+                    row_obj.stock = fi["stock"]
+                else:
+                    new_objs.append(
+                        POSSessionProduct(
+                            session_id=sess.id,
+                            company_id=company_id,
+                            barcode=fi["barcode"],
+                            sku=fi["sku"],
+                            title=fi["title"],
+                            publisher=fi["publisher"],
+                            price=fi["price"],
+                            stock=fi["stock"],
+                            horus_item_code=fi["horus_item_code"],
+                            source="HORUS_RANGE_SYNC",
+                        )
+                    )
+            if new_objs:
+                db.bulk_save_objects(new_objs)
+            sess.products_count = len(existing_rows) + len(new_objs)
+            db.commit()
+
+    return {
+        "status": "ok",
+        "cod_item_ini": cod_ini,
+        "cod_item_fim": cod_fim,
+        "count": len(formatted_items),
+        "raw_horus_count": len(raw_items),
+        "min_cod_item": min_cod,
+        "max_cod_item": max_cod,
+        "horus_legacy_pagination": bool(getattr(settings, "horus_legacy_pagination", False)),
+        "items": formatted_items,
+    }

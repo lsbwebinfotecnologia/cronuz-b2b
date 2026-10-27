@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Relatório de Sessão PDV #77</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 24px; color: #1e293b; }
+  h1 { margin-bottom: 4px; color: #0f172a; }
+  .kpi-grid { display: flex; gap: 16px; margin: 16px 0; }
+  .kpi { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 18px; background: #f8fafc; flex: 1; }
+  .kpi .lbl { font-size: 12px; color: #64748b; text-transform: uppercase; }
+  .kpi .val { font-size: 22px; font-weight: bold; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12px; }
+  th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; }
+  th { background: #f1f5f9; }
+  @media print { .no-print { display: none; } }
+</style>
+</head>
+<body>
+  <div class="no-print" style="margin-bottom:16px;">
+    <button onclick="window.print()" style="padding:10px 20px; font-weight:bold; cursor:pointer; background:#2563eb; color:#fff; border:none; border-radius:6px;">
+      🖨️ Imprimir / Salvar em PDF
+    </button>
+  </div>
+  <h1>Relatório de Vendas e Sincronização — Horus PDV</h1>
+  <p><strong>Empresa (Seller):</strong> LIVRARIA HORUS DEMONSTRACAO (ID: 1) |
+     <strong>Operador:</strong> Operador Caixa 01 |
+     <strong>Sessão de Caixa:</strong> #77 (Feira do Livro - Estande Principal)</p>
+  <div class="kpi-grid">
+    <div class="kpi"><div class="lbl">Total de Vendas</div><div class="val">1</div></div>
+    <div class="kpi"><div class="lbl">Sincronizadas na API (Prontas p/ Horus)</div><div class="val" style="color:#16a34a;">0</div></div>
+    <div class="kpi"><div class="lbl">Pendentes Offline</div><div class="val" style="color:#d97706;">1</div></div>
+    <div class="kpi"><div class="lbl">Faturamento Total</div><div class="val" style="color:#2563eb;">R$ 110,00</div></div>
+  </div>
+  <h3>Resumo por Forma de Pagamento</h3>
+  <table style="max-width: 420px;">
+    <thead><tr><th>Forma de Pagamento</th><th style="text-align:right;">Total</th></tr></thead>
+    <tbody><tr><td><strong>DINHEIRO</strong></td><td style='text-align:right;'>R$ 110,00</td></tr></tbody>
+  </table>
+  <h3>Detalhamento das Vendas da Sessão</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Nº Venda</th>
+        <th>Data/Hora</th>
+        <th>Cliente</th>
+        <th>Pagamento</th>
+        <th>Itens (SKU / ISBN / Título)</th>
+        <th style="text-align:right;">Valor Total</th>
+        <th>Status API / Horus</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td>PDV-77-0001</td>
+          <td>2026-10-27 20:18:01</td>
+          <td>Cliente Feira</td>
+          <td>DINHEIRO (1x)</td>
+          <td>2x [10452] 1984 - GEORGE ORWELL</td>
+          <td style="text-align:right; font-weight:bold;">R$ 110,00</td>
+          <td style="color:#d97706; font-weight:bold;">PENDENTE OFFLINE</td>
+        </tr></tbody>
+  </table>
+</body>
+</html>
