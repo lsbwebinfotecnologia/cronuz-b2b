@@ -190,6 +190,7 @@ export default function CompanyModulesPage() {
       module_schools: company.module_schools ?? false,
       module_cafeteria: company.module_cafeteria ?? false,
       module_encomendas: company.module_encomendas ?? false,
+      module_order_intake: company.module_order_intake ?? false,
       [moduleName]: !currentValue
     };
 
@@ -343,6 +344,30 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_orders', company.module_orders)} 
                     disabled={togglingModule !== null}
                     colorClass="bg-orange-500"
+                  />
+                </div>
+              </div>
+
+              {/* Mesa de Pedidos (Order Intake) */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_order_intake ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <ListOrdered className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Mesa de Pedidos (Análise & Intake B2B)</p>
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 text-indigo-800 rounded dark:bg-indigo-900/30 dark:text-indigo-400">Novo</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Validação de pedidos na mesa (Planilha Excel, E-mail ou Manual), políticas comerciais de consignação/estoque mínimo, sugestões de giro e envio ao Horus.</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch
+                    active={company.module_order_intake ?? false}
+                    onClick={() => handleToggleModule('module_order_intake', company.module_order_intake ?? false)}
+                    disabled={togglingModule !== null}
+                    colorClass="bg-indigo-500"
                   />
                 </div>
               </div>

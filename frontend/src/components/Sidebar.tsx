@@ -216,6 +216,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduleSchools, setModuleSchools] = useState(false);
   const [moduleCafeteria, setModuleCafeteria] = useState(false);
   const [moduleEncomendas, setModuleEncomendas] = useState(false);
+  const [moduleOrderIntake, setModuleOrderIntake] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const _settingsFetchedRef = useRef(false);
@@ -277,10 +278,11 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setHorusSqlDbm(data.horus_sql_feature_dbm || false);
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
                setHasInventoryModule(data.has_inventory_module || false);
-                setModuleEditorial(data.module_editorial || false);
-                setModuleSchools(data.module_schools || false);
-                setModuleCafeteria(data.module_cafeteria || false);
-                setModuleEncomendas(data.module_encomendas || false);
+               setModuleEditorial(data.module_editorial || false);
+               setModuleSchools(data.module_schools || false);
+               setModuleCafeteria(data.module_cafeteria || false);
+               setModuleEncomendas(data.module_encomendas || false);
+               setModuleOrderIntake(data.module_order_intake || false);
                if (data.company_logo) setCompanyLogo(data.company_logo);
             }
          } catch (e) {}
@@ -320,7 +322,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
 
   const filteredSellerNavigation = [...sellerNavigation.filter(nav => {
     if (!moduleProducts && nav.name === 'Produtos') return false;
-    if (!moduleOrders && nav.name === 'Pedidos') return false;
+    if (!moduleOrders && !moduleOrderIntake && nav.name === 'Pedidos') return false;
     if (!moduleCustomers && nav.name === 'Empresas') return false;
     if (!moduleMarketing && nav.name === 'Marketing') return false;
     if (!usesBookinfo && nav.name === 'Bookinfo') return false;
@@ -329,6 +331,24 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     if (!moduleProposals && nav.name === 'Propostas') return false;
     return true;
   })].map(nav => {
+    if (nav.name === 'Pedidos') {
+      if (moduleOrders && moduleOrderIntake) {
+        return nav;
+      } else if (moduleOrders && !moduleOrderIntake) {
+        return {
+          ...nav,
+          href: '/orders',
+          subItems: undefined
+        };
+      } else if (!moduleOrders && moduleOrderIntake) {
+        return {
+          ...nav,
+          name: 'Mesa de Pedidos',
+          href: '/orders/intake',
+          subItems: undefined
+        };
+      }
+    }
     if (nav.name === 'Marketing' && usesHorus) {
       return {
         ...nav,
@@ -564,7 +584,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
         if (nav.name === 'Encomendas' || nav.href === '/encomendas') return userAllowedModules.includes('encomendas') || userAllowedModules.includes('orders');
         if (nav.name === 'Cafeteria' || nav.href.startsWith('/cafeteria')) return userAllowedModules.includes('cafeteria');
         if (nav.name === 'Produtos' || nav.href === '/products') return userAllowedModules.includes('products');
-        if (nav.name === 'Pedidos' || nav.href === '/orders') return userAllowedModules.includes('orders');
+        if (nav.name === 'Pedidos' || nav.href === '/orders' || nav.name === 'Mesa de Pedidos' || nav.href === '/orders/intake') return userAllowedModules.includes('orders') || userAllowedModules.includes('order_intake');
         if (nav.name === 'Empresas' || nav.href === '/customers') return userAllowedModules.includes('customers');
         if (nav.name === 'Serviços' || nav.href === '/services') return userAllowedModules.includes('services');
         if (nav.name === 'Financeiro' || nav.href === '/financial') return userAllowedModules.includes('financial');

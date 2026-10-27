@@ -49,6 +49,7 @@ class ModuleUpdate(BaseModel):
     module_schools: Optional[bool] = None
     module_cafeteria: Optional[bool] = None
     module_encomendas: Optional[bool] = None
+    module_order_intake: Optional[bool] = None
 
 class HorusTestRequest(BaseModel):
     url: str
@@ -223,6 +224,7 @@ def update_company_modules(
     if current_user.type != user_models.UserRole.MASTER:
         MASTER_ONLY_MODULES = [
             "module_encomendas",
+            "module_order_intake",
             "module_busca_preco",
             "module_consignment",
             "module_logistica_horus",

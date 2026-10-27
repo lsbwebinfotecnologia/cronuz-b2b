@@ -68,6 +68,7 @@ class CompanyBase(BaseModel):
     module_schools: bool = False
     module_cafeteria: bool = False
     module_encomendas: bool = False
+    module_order_intake: bool = False
     active: bool = True
 
 
@@ -143,6 +144,7 @@ class CompanyUpdate(BaseModel):
     module_schools: Optional[bool] = None
     module_cafeteria: Optional[bool] = None
     module_encomendas: Optional[bool] = None
+    module_order_intake: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

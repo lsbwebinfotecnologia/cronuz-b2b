@@ -29,6 +29,7 @@ export interface SettingsCompany {
   module_schools?: boolean;
   module_cafeteria?: boolean;
   module_encomendas?: boolean;
+  module_order_intake?: boolean;
   active: boolean;
 }
 

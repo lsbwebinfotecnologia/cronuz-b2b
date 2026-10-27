@@ -1228,6 +1228,14 @@ def get_orders_metrics(
     pending_count = sum(status_counts.get(st, 0) for st in ["PROCESSING", "SENT_TO_HORUS", "DISPATCH"])
     draft_count = status_counts.get("NEW", 0)
 
+    module_order_intake = False
+    if current_user.company_id:
+        from app.models.company import Company
+        comp = db.query(Company).filter(Company.id == current_user.company_id).first()
+        module_order_intake = bool(getattr(comp, "module_order_intake", False)) if comp else False
+    elif current_user.type == "MASTER":
+        module_order_intake = True
+
     return {
         "period_days": days,
         "total_revenue": total_revenue,
@@ -1235,5 +1243,6 @@ def get_orders_metrics(
         "top_items": top_items,
         "status_counts": status_counts,
         "pending_count": pending_count,
-        "draft_count": draft_count
+        "draft_count": draft_count,
+        "module_order_intake": module_order_intake
     }

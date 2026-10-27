@@ -79,6 +79,7 @@ def get_dashboard_metrics(
     module_schools = getattr(company, "module_schools", False) if company else False
     module_cafeteria = getattr(company, "module_cafeteria", False) if company else False
     module_encomendas = getattr(company, "module_encomendas", False) if company else False
+    module_order_intake = False if is_master_global else (getattr(company, "module_order_intake", False) if company else False)
     horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
     horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
@@ -371,6 +372,7 @@ def get_dashboard_metrics(
         "module_schools": module_schools,
         "module_cafeteria": module_cafeteria,
         "module_encomendas": module_encomendas,
+        "module_order_intake": module_order_intake,
         "horus_sql_feature_vindi_baixa": horus_sql_feature_vindi_baixa,
         "horus_sql_feature_pedidos": horus_sql_feature_pedidos,
         "horus_sql_feature_dbm": horus_sql_feature_dbm,
@@ -486,6 +488,7 @@ def get_master_overview(
     module_definitions = [
         {"key": "b2b", "label": "B2B / Catálogo", "field": "module_products", "color": "blue"},
         {"key": "orders", "label": "Pedidos B2B", "field": "module_orders", "color": "indigo"},
+        {"key": "order_intake", "label": "Mesa de Pedidos B2B", "field": "module_order_intake", "color": "indigo"},
         {"key": "customers", "label": "Clientes / CRM", "field": "module_customers", "color": "sky"},
         {"key": "financial", "label": "Financeiro", "field": "module_financial", "color": "emerald"},
         {"key": "services", "label": "Serviços (OS)", "field": "module_services", "color": "purple"},

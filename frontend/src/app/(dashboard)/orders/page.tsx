@@ -182,13 +182,15 @@ export default function OrdersPage() {
                         ))}
                     </div>
                     <div className="flex items-center gap-2 w-full sm:w-auto">
-                        <Link
-                            href="/orders/intake"
-                            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 px-4 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-sm flex-1 sm:flex-initial justify-center text-sm"
-                        >
-                            <Package className="w-4 h-4" />
-                            Mesa de Análise
-                        </Link>
+                        {Boolean(metrics?.module_order_intake) && (
+                            <Link
+                                href="/orders/intake"
+                                className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 px-4 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-sm flex-1 sm:flex-initial justify-center text-sm"
+                            >
+                                <Package className="w-4 h-4" />
+                                Mesa de Pedidos
+                            </Link>
+                        )}
                         <Link
                             href="/orders/new"
                             className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white px-5 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2 shadow-sm flex-1 sm:flex-initial justify-center"
@@ -366,8 +368,11 @@ export default function OrdersPage() {
                             ) : (
                                 orders.map((order) => {
                                     const isBookinfo = (order.origin || '').toLowerCase() === 'bookinfo' && !!order.external_id;
+                                    const isIntakeDesk = (order.origin || '').toLowerCase() === 'intake_desk' && Boolean(metrics?.module_order_intake);
                                     const orderHref = isBookinfo
                                         ? `/bookinfo/orders/${order.external_id}`
+                                        : isIntakeDesk
+                                        ? `/orders/intake/${order.id}`
                                         : `/orders/${order.id}`;
 
                                     return (

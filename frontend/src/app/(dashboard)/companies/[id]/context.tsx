@@ -52,6 +52,7 @@ export interface Company {
   module_editorial?: boolean;
   module_schools?: boolean;
   module_encomendas?: boolean;
+  module_order_intake?: boolean;
   module_cafeteria?: boolean;
   active: boolean;
 }

@@ -120,6 +120,7 @@ export default function OrderIntakeDeskListPage() {
   const [cancelOrderTarget, setCancelOrderTarget] = useState<any | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [cancellingOrder, setCancellingOrder] = useState(false);
+  const [moduleDisabled, setModuleDisabled] = useState(false);
 
   const formatCnpj = (cnpj: string) => {
     if (!cnpj) return '—';
@@ -145,6 +146,10 @@ export default function OrderIntakeDeskListPage() {
       const res = await fetch(`${API}/orders/intake/orders?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (res.status === 403) {
+        setModuleDisabled(true);
+        return;
+      }
       if (!res.ok) throw new Error('Falha ao carregar pedidos da Mesa.');
       const data = await res.json();
       setOrders(data.itens || []);
@@ -425,6 +430,32 @@ export default function OrderIntakeDeskListPage() {
       setSavingPolicies(false);
     }
   };
+
+  if (moduleDisabled) {
+    return (
+      <div className="w-full max-w-xl mx-auto p-6 mt-12">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-8 text-center space-y-4 shadow-sm">
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto">
+            <AlertTriangle className="w-6 h-6" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+            Módulo Mesa de Pedidos não habilitado
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Este módulo não está ativo para sua organização. Solicite a ativação ao Administrador Master em <strong>Módulos da Empresa</strong>.
+          </p>
+          <div className="pt-2">
+            <Link
+              href="/orders"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-sm"
+            >
+              Voltar para Gestão de Pedidos
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-[1920px] mx-auto p-3 sm:p-5 lg:p-6 space-y-6">

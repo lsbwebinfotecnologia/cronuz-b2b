@@ -28,7 +28,28 @@ from app.api.orders import send_order_to_horus
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/orders/intake", tags=["order-intake"])
+from app.models.company import Company
+
+def _ensure_module_order_intake(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if getattr(current_user, "type", None) == "MASTER":
+        return
+    if not current_user.company_id:
+        raise HTTPException(status_code=403, detail="Empresa não identificada.")
+    comp = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not comp or not getattr(comp, "module_order_intake", False):
+        raise HTTPException(
+            status_code=403,
+            detail="O módulo Mesa de Pedidos não está habilitado para esta empresa."
+        )
+
+router = APIRouter(
+    prefix="/orders/intake",
+    tags=["order-intake"],
+    dependencies=[Depends(_ensure_module_order_intake)]
+)
 
 # Limite máximo rígido de arquivo: 10 MB (conforme regra de arquitetura)
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
