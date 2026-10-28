@@ -1,6 +1,7 @@
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, model_validator
+from typing import List, Optional, Any
 from datetime import datetime
+import json
 
 
 class POSSessionCreate(BaseModel):
@@ -80,15 +81,52 @@ class POSSessionProductsListResponse(BaseModel):
 
 
 class POSSaleItemSchema(BaseModel):
-    barcode: str
+    barcode: str = "SEM_BARRAS"
     sku: Optional[str] = None
-    title: str
+    title: str = "Item PDV"
     publisher: Optional[str] = None
-    quantity: float
-    unit_price: float
-    total_price: float
+    quantity: float = 1.0
+    unit_price: float = 0.0
+    total_price: float = 0.0
     horus_item_code: Optional[str] = None
     product_id: Optional[int] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_desktop_item_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("barcode"):
+            d["barcode"] = str(
+                d.get("isbn")
+                or d.get("ean")
+                or d.get("sku")
+                or d.get("product_id")
+                or "SEM_BARRAS"
+            ).strip()
+        if not d.get("title"):
+            d["title"] = str(d.get("name") or d.get("description") or "Item PDV").strip()
+        if not d.get("publisher") and d.get("brand"):
+            d["publisher"] = str(d.get("brand")).strip()
+        if not d.get("horus_item_code"):
+            sku_val = d.get("sku") or d.get("product_id")
+            if sku_val is not None and str(sku_val).strip():
+                d["horus_item_code"] = str(sku_val).strip()
+        raw_pid = d.get("product_id")
+        if raw_pid is not None:
+            if isinstance(raw_pid, int):
+                d["product_id"] = raw_pid
+            elif isinstance(raw_pid, str) and raw_pid.strip().isdigit():
+                d["product_id"] = int(raw_pid.strip())
+            else:
+                d["product_id"] = None
+        if d.get("total_price") is None:
+            try:
+                d["total_price"] = round(float(d.get("unit_price") or 0.0) * float(d.get("quantity") or 1.0), 2)
+            except Exception:
+                d["total_price"] = 0.0
+        return d
 
 
 class POSSaleCreate(BaseModel):
@@ -103,11 +141,48 @@ class POSSaleCreate(BaseModel):
     subtotal: float
     discount: float = 0.0
     total_amount: float
-    items_count: int
+    items_count: int = 1
     sold_at: datetime
     origin: str = "pdv_offline"
     notes: Optional[str] = None
     items: List[POSSaleItemSchema]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_desktop_sale_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("sold_at"):
+            d["sold_at"] = d.get("created_at") or datetime.utcnow().isoformat()
+        if d.get("discount") is None and d.get("discount_amount") is not None:
+            try:
+                d["discount"] = float(d.get("discount_amount") or 0.0)
+            except Exception:
+                d["discount"] = 0.0
+        if d.get("items_count") is None:
+            items_list = d.get("items") or []
+            try:
+                cnt = int(sum(float(i.get("quantity") or 1) for i in items_list if isinstance(i, dict)))
+                d["items_count"] = max(1, cnt) if items_list else 0
+            except Exception:
+                d["items_count"] = len(items_list)
+        if not d.get("payment_details"):
+            extra_details = {}
+            if d.get("installments") is not None:
+                extra_details["installments"] = d.get("installments")
+            if d.get("payment_splits"):
+                extra_details["payments"] = d.get("payment_splits")
+            if d.get("cash_received") is not None:
+                extra_details["cash_received"] = d.get("cash_received")
+            if d.get("change_amount") is not None:
+                extra_details["change_amount"] = d.get("change_amount")
+            if extra_details:
+                try:
+                    d["payment_details"] = json.dumps(extra_details, ensure_ascii=False)
+                except Exception:
+                    pass
+        return d
 
 
 class POSSyncBatchRequest(BaseModel):
@@ -116,9 +191,13 @@ class POSSyncBatchRequest(BaseModel):
 
 
 class POSSyncBatchResponse(BaseModel):
+    status: str = "ok"
     total_received: int
     success_count: int
     already_synced_count: int
+    synced: int = 0
+    skipped_duplicates: int = 0
     failed_count: int
     synced_uuids: List[str]
     errors: List[dict]
+

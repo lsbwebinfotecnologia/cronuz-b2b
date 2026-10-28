@@ -1400,17 +1400,27 @@ def sync_pos_sales(
             db.flush()
 
             for it in s_in.items:
+                valid_product_id = None
+                if it.product_id and int(it.product_id) > 0:
+                    prod_row = db.query(Product.id).filter(
+                        Product.id == int(it.product_id),
+                        Product.company_id == company_id,
+                    ).first()
+                    if prod_row:
+                        valid_product_id = prod_row[0]
+
+                horus_code = it.horus_item_code or it.sku or (str(it.product_id) if it.product_id else None)
                 sale_item = POSSaleItem(
                     sale_id=new_sale.id,
-                    product_id=it.product_id if (it.product_id and it.product_id > 0) else None,
+                    product_id=valid_product_id,
                     barcode=str(it.barcode or "SEM_BARRAS").strip()[:50],
-                    sku=str(it.sku).strip()[:100] if it.sku else None,
+                    sku=str(it.sku or horus_code).strip()[:100] if (it.sku or horus_code) else None,
                     title=str(it.title or "Item sem título").strip()[:255],
                     publisher=str(it.publisher).strip()[:255] if it.publisher else None,
                     quantity=max(1.0, float(it.quantity or 1.0)),
                     unit_price=max(0.0, float(it.unit_price or 0.0)),
                     total_price=max(0.0, float(it.total_price or 0.0)),
-                    horus_item_code=str(it.horus_item_code).strip()[:50] if it.horus_item_code else None,
+                    horus_item_code=str(horus_code).strip()[:50] if horus_code else None,
                 )
                 db.add(sale_item)
 
@@ -1429,9 +1439,12 @@ def sync_pos_sales(
             errors.append({"uuid": uuid_key, "error": str(e)})
 
     return POSSyncBatchResponse(
+        status="ok" if failed_count == 0 else "partial_error",
         total_received=len(payload.sales),
         success_count=success_count,
         already_synced_count=already_synced_count,
+        synced=success_count,
+        skipped_duplicates=already_synced_count,
         failed_count=failed_count,
         synced_uuids=synced_uuids,
         errors=errors,
@@ -1505,13 +1518,20 @@ def list_pos_sales(
     }
 
     # Registros paginados
+    sales = query.order_by(desc(POSSale.sold_at), POSSale.id.desc()).offset(skip).limit(limit).all()
     sales_result = []
     for s in sales:
-        _, display_label, _, _ = _parse_payment_breakdown(s.payment_method, s.payment_details, float(s.total_amount or 0.0))
+        _, display_label, _, inst_num = _parse_payment_breakdown(
+            s.payment_method, s.payment_details, float(s.total_amount or 0.0)
+        )
         items_data = [
             {
                 "barcode": it.barcode,
+                "isbn": it.barcode,
+                "sku": it.sku or it.horus_item_code,
+                "horus_item_code": it.horus_item_code or it.sku,
                 "title": it.title,
+                "name": it.title,
                 "quantity": float(it.quantity),
                 "unit_price": float(it.unit_price),
                 "total_price": float(it.total_price),
@@ -1519,6 +1539,7 @@ def list_pos_sales(
             }
             for it in s.items
         ]
+        sold_iso = s.sold_at.isoformat() if s.sold_at else None
         sales_result.append({
             "id": s.id,
             "client_sale_uuid": s.client_sale_uuid,
@@ -1527,13 +1548,16 @@ def list_pos_sales(
             "customer_name": s.customer_name,
             "customer_document": s.customer_document,
             "payment_method": s.payment_method,
+            "installments": inst_num or 1,
             "payment_display": display_label,
             "payment_details": s.payment_details,
             "subtotal": float(s.subtotal),
             "discount": float(s.discount),
+            "discount_amount": float(s.discount),
             "total_amount": float(s.total_amount),
             "items_count": s.items_count,
-            "sold_at": s.sold_at.isoformat() if s.sold_at else None,
+            "sold_at": sold_iso,
+            "created_at": sold_iso,
             "synced_at": s.synced_at.isoformat() if s.synced_at else None,
             "origin": s.origin,
             "status": s.status,
@@ -1547,6 +1571,7 @@ def list_pos_sales(
             "by_payment_method": by_payment,
         },
         "sales": sales_result,
+        "items": sales_result,
         "skip": skip,
         "limit": limit,
     }

@@ -91,39 +91,117 @@ logger = logging.getLogger("horus.pdv")
 # Segredo criptográfico compartilhado com o Backend para verificação offline da licença
 PDV_DESKTOP_LICENSE_SECRET = b"CRONUZ-HORUS-PDV-LICENSE-V1-2026-KEY-9F8A7B6C5D4E"
 
-# Logo Oficial Horus B2B embutida em Base64
+# Logo Oficial Horus B2B embutida em Base64 (PNG 48x48 e ICO multi-resolução para remover a pena do Tkinter no Windows)
 HORUS_ICON_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAACkAAAAqCAYAAAAu9HJYAAABJGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGAycHRxcmUSYGDIzSspCnJ3"
+    "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"
-    "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"
+    "BpY/CDGTXgaGBToMDPxTEWJqhgwMAvoMDPvmAADAxk/9GlU2EAAACPlJREFUeJzNmvtTFFcWx78908zg+wWaICbxkaiIoiY+IkaN"
+    "r+yWtftnpmp/2Kr9aXcVAeOTTYiJ72dUiAgqoKAwPGdSnz597RYGlW5qd28VMN237+3veX3POXfwSqVSSeHgk+fZ5+Fh6UW/NDGh"
+    "/9nIZKTFS6QlS6bjY/jug5vo75duXpe6n0iFEalUTP5y9otUk2x9LietqJI2b5Fqa6fMo3kH/N4dqa1NmhiXfF/KZpO+1YSenJCy"
+    "vmkwqRDFolmf9fXbpF27I0V7xWKpxIcHv0k/tEq5CimTtUWJcHvS5KQJX1VllhwdteukAnihqxQK0rYGadce28tn4tUrqe2iVFEh"
+    "eZm5Af7tEemjj6Xe51LLaWlkJLkApXDNvHnS9Wu275pPpAw38XE2x03SaMcBP3zUXsCoqpaOfidVVpr54wGXZOCCCADODCZ9/Ltp"
+    "Pa3GER7gqz6y++zNWL5cOnJMyufTCVDCVXypr1d6/lzKvHxhvoRESYEXJ209ruKA370j/e170xIDxjhyPL0AXqgocGfGxuwiyWZu"
+    "IwIc4B/XmHaedEm3b0rLlkn370qPHppVCWAskMuld6HxsRjPJwEOIDR+8LBUs9quub90mXTir+ZG3COeHOcTA0eOSc1N0vh48jgr"
+    "4vNpgPP30GFp9erIdbg3f36UI7jHdcDLoYtVrzQBiLOkVmf4SYEzAuC1YeSHYF+/kgYHpOFCFMRQ3OLF0qLF9lypZAIQ3FgAF0pi"
+    "AT8p8IPfGnB3nyT3232pv08K4oisaMk2AJbLS0uXSus3SOs22JqVq0wA8kASAfykwEkSjL4+6ac26elTuMwA84uywPk5FqDQg9W6"
+    "u6U7ty1LAh52chZwlvpQAfzZAGfTOPDOTun8DxFz+BUGhgRFJYhPM/dqUOrpMeBjoybwyX9L+xrNEqyBrVqbZyeAPxvgBw5Jn3xq"
+    "9zs6pLOtkXZr10jbtkvV1eX32VQnvXghXbsiPXwgZT3pwjmbQwBo1rnQhwrgzwb4p5/Z/d87pXNnjEnQ7PYdUsOOaB0BOzBgc2RE"
+    "V5PD++xTVS21/2gAEYC4IA6wGCTwoRbw3wecnzhwSgmqT+bh6a92WanKeP5MunZVevbUSgPWAgD3gV22NkirVkl1W0yoSxfsbyCA"
+    "J61db/nCuZDLIzMJUJbnnStQk39zUPpsrV2TKePAd34VAaccOPkvqbPDApMsunBhlKgQ+uQ/pVs37fkvNkp795l1oM/z56RHD2zO"
+    "CcAoviMPTAMfZ4jGA9LadZHkaHSkYC/8cpfV1owb16WLofayGQN2/E/S/AVREkIYBKH0vnbF1m3cJO35OhQgI507O12AoESfQYBp"
+    "4NESL9x/QFq33u45NoHe6urN/FtDjd+8If3YJuUrzRrrP5cavzHKpJaP1/DsQWHW/pMJzNi0Wdqz17o3J0DHI5sjjxwKBQDTe8Hz"
+    "osb9BtwVWf/4u5mdl3/dKO380uZwgQB43oQmESFU0KbF9nOB7QDkcpYbrl+1eZgoboGzZ0wA5ig9iLlyVe+bWwBjMbU32sPfuSaY"
+    "Xr+2DbseR4Ce9kgXzxsQZzHKAFyFvSiBCUyyLTFAdl20KOZGeantkinFCYBlsQCD91LQMUdeqak1y8bd5w14HsInaQlJIpiKLLm5"
+    "zqQG3JkWqavLNli+wuZgFVd0Uaa6ZpkfwPz5hPku3ZSrazzP1uHzZFkHCGFZA0jm8jmbI8n1906nzreMAUg01XraEkrGMzbZsTMC"
+    "dabZXAmNwxafbzTN4tuUAPfvRWB4Hu4m6Hu6re6BNkcK5pb79pvLBSXDrVCAeunEX4zJEJZC7/Qps/7U04xMuTYLECygW2GQOZ0A"
+    "RCIW4FwHYRsbTUusQaArl6V7d+05lyvIqP+5ZPO4wtoNRgiAwf1QyIXz0o2wN6VcYG0A/KQlPISeyvfTkpQToDAsNZ2Sjn1n/uoy"
+    "6C+XpQrfkojrntAgL7t9y9a2XTDeX7DA9unti2JowxdGCNmsUa/LpqwfHopwDL02BQ4MRoQwY8CWFWDIJHcWQICG7dL4hG3W2mLu"
+    "4FiIHxqPyaLU3WUCEOSUxwQzlBjXeEtYCuPjwYHSXttraMgU9/KlWWumgwGvs6NUYpNyZnExgAaxwJKlofZ/lq78Gp2qUWmSVBi4"
+    "BS7FYRMVJPsuW24WQjDGkydW1DngW+ql3XtDjYcKI+bKaTye3d8JPv4wqR7GcIeel9tNgOCgyrO4IOFwPdMALIH56y92DTvVbZV2"
+    "77Fr4qYJ4P0zu0oc/HtLYgQCENHefEo6etyqRBYzrmKBChOGwIRFVq6UFi6ydbyIwMO/mcci2WwZ4Gi8yYC/y1Vm3Yw4AcgBBBEW"
+    "oCdFABLPz+2mVV7cDh36Un6egcTf4XSXYIKM61lGhRYZBDWdFFQ6k8YTgy8nADEAcHgeLudwic4KDh8bl0bHorWAJn4q81LNGql+"
+    "q9X2AfCCAe+bJfBg3/f5/NThghjXQQBiwQ18FhbhOI7AdUfclAJVK4y/F8SeHymYq1DAfSjwWfn81BEUYDnrlmAFBAAQ92ETsik/"
+    "71qfyZgrNc8S+NSR6NDJCTDw0lwIegs6nrBlnArEdWSuwhwF+Cnp2bPkwBmJj/t4YUXe+NjFAJoH4OPHUsdDC+rBQWvO6cZcQdbc"
+    "ZOzDsXdS4IyEZ8M2SqEFYBkEgDUAWFNjf2ntSP2A55pYaQF4jzUvaYCn0vwbAUpmemjO0SilgOvEyKwB8FGppdnObyrnAPgbzaf8"
+    "siIAggB9oQCwCIOSwbEDwCkb5go4I+Ma4zRfOb4lQK/5NPzNcP3BXAPPVUg+fA0Pj3KGnioCoj6Wr1wQgJMwjkuoPOcKeCn25bKP"
+    "f5I8OOFFc2kt4IKYGOAQCqumocP4cH02X15wiJVxvSPnLa77STtcPwDoNN+/Th0ufurqbN+M+6qlYad9Xe8eSjtcEz4XwL2wNqL8"
+    "wBWD0w33JTIf6JDgZErc4Lg6PF//fxiTNC0TVnZwoOVwBf97EH+Qto0mA58td0r13x6eZ5maf5yg0X9rbqZ/WaE6pGunOuSsMHUy"
+    "SACamKFqhVDKdWh/AFevj6sWqPbuAAAAAElFTkSuQmCC"
+)
+
+HORUS_ICO_B64 = (
+    "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"
 )
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -1060,32 +1138,55 @@ class CronuzPOSApiClient:
 
         sales_payload = []
         for s in pending_sales:
+            raw_items = s.get("items") or []
+            items_count = max(1, int(sum(int(it.get("quantity") or 1) for it in raw_items)))
+            sold_at_iso = s.get("sold_at") or s.get("created_at") or datetime.now().isoformat()
+            disc_val = float(s.get("discount") if s.get("discount") is not None else (s.get("discount_amount") or 0.0))
+
+            extra_details: Dict[str, Any] = {"installments": int(s.get("installments") or 1)}
+            if s.get("payment_splits"):
+                extra_details["payments"] = s.get("payment_splits")
+            if s.get("cash_received") is not None:
+                extra_details["cash_received"] = s.get("cash_received")
+            if s.get("change_amount") is not None:
+                extra_details["change_amount"] = s.get("change_amount")
+
             sales_payload.append({
                 "client_sale_uuid": s["client_sale_uuid"],
-                "customer_name": s.get("customer_name"),
+                "sale_number": s.get("sale_number"),
+                "session_id": int(session_id),
+                "customer_name": s.get("customer_name") or "Consumidor Final",
                 "customer_document": s.get("customer_document"),
                 "payment_method": s.get("payment_method", "DINHEIRO"),
+                "payment_details": json.dumps(extra_details, ensure_ascii=False),
                 "installments": int(s.get("installments") or 1),
                 "payment_splits": s.get("payment_splits"),
                 "subtotal": float(s.get("subtotal") or s.get("total_amount") or 0.0),
-                "discount_amount": float(s.get("discount_amount") or 0.0),
+                "discount": disc_val,
+                "discount_amount": disc_val,
                 "total_amount": float(s.get("total_amount") or 0.0),
+                "items_count": items_count,
+                "sold_at": sold_at_iso,
+                "created_at": sold_at_iso,
                 "cash_received": s.get("cash_received"),
                 "change_amount": s.get("change_amount"),
                 "notes": s.get("notes"),
-                "created_at": s.get("created_at"),
+                "origin": "pdv_offline",
                 "items": [
                     {
-                        "product_id": str(it.get("product_id") or it.get("sku") or ""),
-                        "sku": str(it.get("sku") or ""),
-                        "isbn": str(it.get("isbn") or ""),
-                        "name": str(it.get("name") or "Item PDV"),
+                        "product_id": None,
+                        "sku": str(it.get("sku") or it.get("product_id") or ""),
+                        "horus_item_code": str(it.get("sku") or it.get("product_id") or ""),
+                        "barcode": str(it.get("isbn") or it.get("barcode") or it.get("sku") or "SEM_BARRAS"),
+                        "isbn": str(it.get("isbn") or it.get("barcode") or it.get("sku") or ""),
+                        "title": str(it.get("name") or it.get("title") or "Item PDV"),
+                        "name": str(it.get("name") or it.get("title") or "Item PDV"),
                         "quantity": int(it.get("quantity") or 1),
                         "unit_price": float(it.get("unit_price") or 0.0),
                         "discount": float(it.get("discount") or 0.0),
                         "total_price": float(it.get("total_price") or 0.0),
                     }
-                    for it in (s.get("items") or [])
+                    for it in raw_items
                 ],
             })
 
@@ -1094,9 +1195,9 @@ class CronuzPOSApiClient:
             "sales": sales_payload,
         }
         st, body = self._request("POST", f"/companies/{self.company_id}/pos/sync-sales", payload=batch, timeout=25.0)
-        if st == 200 and isinstance(body, dict) and body.get("status") == "ok":
-            synced_n = int(body.get("synced") or 0)
-            dup_n = int(body.get("skipped_duplicates") or 0)
+        if st == 200 and isinstance(body, dict) and (body.get("status") == "ok" or "success_count" in body):
+            synced_n = int(body.get("synced") if body.get("synced") is not None else (body.get("success_count") or 0))
+            dup_n = int(body.get("skipped_duplicates") if body.get("skipped_duplicates") is not None else (body.get("already_synced_count") or 0))
             return True, f"Sincronização concluída! ({synced_n} novas vendas gravadas na sessão #{session_id}, {dup_n} já sincronizadas).", body
 
         detail = body.get("detail") if isinstance(body, dict) else str(body)
@@ -1351,6 +1452,27 @@ class HorusPDVWindow:
         self.root.after(45000, self._auto_sync_tick)
 
     def _apply_window_icon(self) -> None:
+        """
+        Substitui a pena padrão do Tkinter pelo ícone oficial do Horus B2B
+        na barra de título da janela, nos diálogos (messagebox) e na barra de tarefas do Windows.
+        """
+        self._icon_img = None
+        try:
+            ico_file = BASE_DIR / "horus_icon.ico"
+            if not ico_file.exists():
+                ico_file.write_bytes(base64.b64decode(HORUS_ICO_B64))
+            if os.name == "nt":
+                try:
+                    self.root.iconbitmap(default=str(ico_file))
+                except Exception:
+                    pass
+                try:
+                    self.root.iconbitmap(str(ico_file))
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.debug("Não foi possível aplicar iconbitmap .ico: %s", exc)
+
         try:
             self._icon_img = tk.PhotoImage(data=HORUS_ICON_B64)
             self.root.iconphoto(True, self._icon_img)
@@ -3579,6 +3701,12 @@ def main() -> None:
     if not HAS_TK:
         print("Erro: Tkinter não está disponível neste interpretador Python.", file=sys.stderr)
         sys.exit(1)
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Cronuz.HorusPDV.Desktop.1.1")
+        except Exception:
+            pass
     root = tk.Tk()
     HorusPDVWindow(root)
     root.mainloop()
