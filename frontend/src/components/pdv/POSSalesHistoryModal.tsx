@@ -73,33 +73,36 @@ export default function POSSalesHistoryModal({
               for (const srv of serverSales) {
                 const uuid = srv.client_sale_uuid || `srv-${srv.id}`;
                 if (!mergedMap.has(uuid)) {
+                  const mappedItems = Array.isArray(srv.items)
+                    ? srv.items.map((it: any) => ({
+                        barcode: it.barcode || '',
+                        sku: it.sku || '',
+                        title: it.title || '',
+                        publisher: it.publisher || '',
+                        quantity: Number(it.quantity || 1),
+                        unit_price: Number(it.unit_price || 0),
+                        total_price: Number(it.total_price || 0),
+                        horus_item_code: it.horus_item_code || undefined,
+                        product_id: it.product_id || undefined,
+                      }))
+                    : [];
                   mergedMap.set(uuid, {
                     client_sale_uuid: uuid,
                     sale_number: srv.sale_number || `PDV-${srv.id}`,
                     session_id: srv.session_id,
                     customer_name: srv.customer_name || 'Consumidor Final',
                     customer_document: srv.customer_document || '',
-                    payment_method: srv.payment_method || 'DINHEIRO',
-                    change_amount: Number(srv.change_amount || 0),
+                    payment_method: (srv.payment_method || 'DINHEIRO') as PDVPendingSaleRecord['payment_method'],
+                    payment_details: srv.payment_details || undefined,
                     subtotal: Number(srv.subtotal || srv.total_amount || 0),
-                    discount_amount: Number(srv.discount_amount || 0),
+                    discount: Number(srv.discount || srv.discount_amount || 0),
                     total_amount: Number(srv.total_amount || 0),
+                    items_count: Number(srv.items_count || mappedItems.reduce((acc: number, i: any) => acc + i.quantity, 0)),
                     sold_at: srv.sold_at || srv.created_at || new Date().toISOString(),
                     status: 'synced',
-                    synced_at: srv.synced_at || srv.created_at,
+                    origin: srv.origin || 'PDV_DESKTOP',
                     notes: srv.notes || '',
-                    items: Array.isArray(srv.items)
-                      ? srv.items.map((it: any) => ({
-                          barcode: it.barcode || '',
-                          sku: it.sku || '',
-                          title: it.title || '',
-                          publisher: it.publisher || '',
-                          quantity: Number(it.quantity || 1),
-                          unit_price: Number(it.unit_price || 0),
-                          discount_percent: Number(it.discount_percent || 0),
-                          total_price: Number(it.total_price || 0),
-                        }))
-                      : [],
+                    items: mappedItems,
                   });
                 } else {
                   const existing = mergedMap.get(uuid)!;
