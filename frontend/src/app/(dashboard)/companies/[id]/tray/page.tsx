@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
-import CurrencyInput from '@/components/CurrencyInput';
+import { CurrencyInput } from '@/components/CurrencyInput';
 import { useCompany } from '../context';
 
 export default function MasterTrayAndB2CSettingsPage() {

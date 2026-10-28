@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
-import CurrencyInput from '@/components/CurrencyInput';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 export default function SellerB2CStorefrontManagementPage() {
   const [activeTab, setActiveTab] = useState<'batches' | 'coupons' | 'redemptions' | 'lgpd'>('batches');
