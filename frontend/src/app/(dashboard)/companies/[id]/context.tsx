@@ -9,6 +9,7 @@ export interface Company {
   domain: string;
   tenant_id?: string;
   custom_domain?: string;
+  b2c_custom_domain?: string;
   logo: string | null;
   login_background_url?: string | null;
   favicon_url?: string | null;
@@ -53,6 +54,7 @@ export interface Company {
   module_schools?: boolean;
   module_encomendas?: boolean;
   module_order_intake?: boolean;
+  module_b2c_storefront?: boolean;
   module_cafeteria?: boolean;
   active: boolean;
 }
