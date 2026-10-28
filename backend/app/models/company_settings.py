@@ -160,6 +160,24 @@ class CompanySettings(Base):
     # Habilitação do Job/Rotina de Sincronização de BI do Hórus por Seller
     horus_bi_sync_enabled = Column(Boolean, default=False, nullable=False)
 
+    # ── Storefront Aberto B2C & Integração Tray E-commerce (REST + MCP) ──────
+    b2c_storefront_open        = Column(Boolean, default=False, nullable=False, server_default="false")
+    b2c_checkout_mode          = Column(String(30), default='NATIVE_GATEWAY', nullable=False, server_default="'NATIVE_GATEWAY'") # NATIVE_GATEWAY or TRAY_REDIRECT
+    b2c_lgpd_terms_text        = Column(String, nullable=True)
+    b2c_default_freight_value  = Column(Numeric(10, 2), default=0.00, nullable=False, server_default="0")
+    b2c_free_shipping_min_value = Column(Numeric(10, 2), default=0.00, nullable=False, server_default="0")
+
+    tray_enabled               = Column(Boolean, default=False, nullable=False, server_default="false")
+    tray_store_url             = Column(String(255), nullable=True)
+    tray_api_address           = Column(String(255), nullable=True)
+    tray_store_id              = Column(String(100), nullable=True)
+    tray_consumer_key          = Column(String(255), nullable=True)
+    tray_consumer_secret       = Column(String(255), nullable=True)
+    tray_auth_code             = Column(String(255), nullable=True)
+    tray_access_token          = Column(String(500), nullable=True)
+    tray_refresh_token         = Column(String(500), nullable=True)
+    tray_token_expires_at      = Column(DateTime(timezone=True), nullable=True)
+
     # ────────────────────────────────────────────────────────────────────────────
 
     company = relationship("Company")

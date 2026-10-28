@@ -19,9 +19,10 @@ class Company(Base):
     branches = relationship("SellerBranch", back_populates="company", foreign_keys="SellerBranch.company_id", cascade="all, delete-orphan")
     conferences = relationship("OrderConference", back_populates="company", foreign_keys="OrderConference.company_id", cascade="all, delete-orphan")
 
-    # B2B Configs
+    # B2B / B2C Configs
     domain = Column(String(255), unique=True, index=True, nullable=False)
     custom_domain = Column(String(255), unique=True, index=True, nullable=True)
+    b2c_custom_domain = Column(String(255), unique=True, index=True, nullable=True)
     logo = Column(String(500), nullable=True)
     login_background_url = Column(String(500), nullable=True)
     favicon_url = Column(String(500), nullable=True)
@@ -72,6 +73,7 @@ class Company(Base):
     module_cafeteria = Column(Boolean, default=False, nullable=False, server_default="false")      # Módulo Cafeteria (Mesas, Comandas, Balcão e KDS)
     module_encomendas = Column(Boolean, default=False, nullable=False, server_default="false")    # Módulo de Encomendas de Livros e Clientes (Busca Preço)
     module_order_intake = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo Mesa de Pedidos B2B (Análise, Importação & Políticas)
+    module_b2c_storefront = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo Storefront Aberto B2C (Cupons Corporativos, LGPD & Tray)
 
     
     # Mobile App Modules (per-seller, managed by MASTER)

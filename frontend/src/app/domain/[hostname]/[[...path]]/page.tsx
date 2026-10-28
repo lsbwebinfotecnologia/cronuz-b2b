@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { Loader2, AlertCircle, ArrowRight, BookOpen } from 'lucide-react';
 import Link from 'next/link';
 import 'react-quill-new/dist/quill.snow.css';
 import CommerceStorefront from '../_components/CommerceStorefront';
+import B2COpenStorefront from '../_components/B2COpenStorefront';
 import { getImageUrl } from '@/lib/image_helper';
 
 export default function DomainRouter() {
@@ -24,6 +25,9 @@ export default function DomainRouter() {
 
 // ============== Storefront Hub Component ==============
 function StorefrontHub({ hostname }: { hostname: string }) {
+    const searchParams = useSearchParams();
+    const forceB2cPreview = searchParams?.get('b2c') === '1';
+
     const [loading, setLoading] = useState(true);
     const [hubData, setHubData] = useState<any>(null);
     const [domainInfo, setDomainInfo] = useState<any>(null);
@@ -43,6 +47,17 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                 }
                 const domainData = await domainResponse.json();
                 setDomainInfo(domainData);
+
+                // If B2C Open Storefront domain or mode is active, no need to require subscriptions hub
+                if (
+                    forceB2cPreview ||
+                    domainData.is_b2c_domain ||
+                    domainData.b2c_storefront_open ||
+                    domainData.business_model === 'B2C_STOREFRONT'
+                ) {
+                    setLoading(false);
+                    return;
+                }
                 
                 // 2. Fetch all active subscriptions (Storefront Hub API)
                 const hubResponse = await fetch(`${apiUrl}/subscriptions/hub/${domainData.company_id}`);
@@ -60,7 +75,7 @@ function StorefrontHub({ hostname }: { hostname: string }) {
             }
         };
         fetchHub();
-    }, [hostname]);
+    }, [hostname, forceB2cPreview]);
 
     if (loading) {
         return (
@@ -68,6 +83,17 @@ function StorefrontHub({ hostname }: { hostname: string }) {
                 <Loader2 className="h-10 w-10 animate-spin text-slate-800" />
             </div>
         );
+    }
+
+    // Condition to render Open B2C Storefront (Horus + Corporate Coupons + LGPD + Tray/Gateway)
+    if (
+        domainInfo &&
+        (forceB2cPreview ||
+            domainInfo.is_b2c_domain ||
+            domainInfo.b2c_storefront_open ||
+            domainInfo.business_model === 'B2C_STOREFRONT')
+    ) {
+        return <B2COpenStorefront hostname={hostname} domainInfo={domainInfo} />;
     }
 
     if (error || !hubData) {

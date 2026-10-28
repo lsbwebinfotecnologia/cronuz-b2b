@@ -217,6 +217,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduleCafeteria, setModuleCafeteria] = useState(false);
   const [moduleEncomendas, setModuleEncomendas] = useState(false);
   const [moduleOrderIntake, setModuleOrderIntake] = useState(false);
+  const [moduleB2cStorefront, setModuleB2cStorefront] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const _settingsFetchedRef = useRef(false);
@@ -283,6 +284,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuleCafeteria(data.module_cafeteria || false);
                setModuleEncomendas(data.module_encomendas || false);
                setModuleOrderIntake(data.module_order_intake || false);
+               setModuleB2cStorefront(data.module_b2c_storefront || false);
                if (data.company_logo) setCompanyLogo(data.company_logo);
             }
          } catch (e) {}
@@ -549,6 +551,16 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     });
   }
 
+
+  if (moduleB2cStorefront) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Storefront B2C & Vouchers',
+      href: '/b2c-storefront',
+      icon: Ticket,
+    });
+  }
 
   if (modulePdv) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');

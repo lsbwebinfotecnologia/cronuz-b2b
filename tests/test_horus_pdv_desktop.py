@@ -103,12 +103,15 @@ def run_tests() -> None:
             change_amount=10.00,
             payment_splits=None,
             customer_name="Cliente Feira",
-            customer_document="123.456.789-00",
+            customer_document="529.982.247-25",
         )
         assert sale["session_id"] == 77
+        assert sale["customer_document"] == "52998224725"
         assert sale["user_email"] == "operador@livraria.com.br"
         assert sale["subtotal"] == 119.80
         assert sale["total_amount"] == 110.00
+        assert sale["items"][0]["discount"] == 9.80
+        assert sale["items"][0]["total_price"] == 110.00
         assert sale["synced"] is False
         assert len(storage.get_pending_sales(session_id=77)) == 1
         print(f"  ✅ Venda offline registrada com UUID {sale['client_sale_uuid']} na Sessão #77!")
@@ -227,9 +230,95 @@ def run_tests() -> None:
         assert total_after_merge == 2, f"Esperado continuar com 2 produtos sem duplicar, obtido {total_after_merge}"
         print("  ✅ Anti-duplicidade de produtos (SKU + ISBN) validada com sucesso!")
 
+        print("▶ [9/10] Testando validação obrigatória de CPF, CNPJ e Consumidor Padrão (99999999999)...")
+        ok_def, dig_def, tp_def, _ = pdv.validate_cpf_or_cnpj("99999999999")
+        assert ok_def is True and dig_def == "99999999999" and tp_def == "CONSUMIDOR_PADRAO"
+
+        ok_cpf, dig_cpf, tp_cpf, _ = pdv.validate_cpf_or_cnpj("529.982.247-25")
+        assert ok_cpf is True and dig_cpf == "52998224725" and tp_cpf == "CPF"
+
+        ok_bad_cpf, _, _, _ = pdv.validate_cpf_or_cnpj("123.456.789-00")
+        assert ok_bad_cpf is False
+
+        ok_rep_cpf, _, _, _ = pdv.validate_cpf_or_cnpj("111.111.111-11")
+        assert ok_rep_cpf is False
+
+        ok_cnpj, dig_cnpj, tp_cnpj, _ = pdv.validate_cpf_or_cnpj("11.222.333/0001-81")
+        assert ok_cnpj is True and dig_cnpj == "11222333000181" and tp_cnpj == "CNPJ"
+
+        ok_bad_cnpj, _, _, _ = pdv.validate_cpf_or_cnpj("11.222.333/0001-99")
+        assert ok_bad_cnpj is False
+
+        # Venda com campo de documento em branco deve preencher 99999999999 automaticamente
+        sale_default_doc = storage.record_sale(
+            cfg=mock_cfg,
+            items=cart_items,
+            payment_method="PIX",
+            installments=1,
+            discount_amount=0.0,
+            cash_received=None,
+            change_amount=None,
+            payment_splits=None,
+            customer_name="",
+            customer_document="",
+        )
+        assert sale_default_doc["customer_document"] == "99999999999"
+        assert sale_default_doc["customer_name"] == "Consumidor Final"
+        print("  ✅ Validação de CPF, CNPJ e preenchimento obrigatório 99999999999 validados!")
+
+        print("▶ [10/10] Testando aplicação de Desconto: Ratear na Venda vs. Único Item Selecionado...")
+        test_cart = [
+            {"id": "1", "sku": "1", "isbn": "111", "name": "Livro A", "unit_price": 60.00, "quantity": 1, "discount": 0.0},
+            {"id": "2", "sku": "2", "isbn": "222", "name": "Livro B", "unit_price": 40.00, "quantity": 1, "discount": 0.0},
+        ]
+        # 1) Desconto individual de R$ 5,00 apenas no Item #2 (índice 1)
+        tot_disc_item = pdv.apply_cart_discount(test_cart, discount_value=5.00, discount_mode="BRL", scope="ITEM", selected_idx=1)
+        assert tot_disc_item == 5.00
+        assert test_cart[0]["discount"] == 0.00
+        assert test_cart[1]["discount"] == 5.00
+
+        # 2) Desconto rateado na venda toda de R$ 10,00 (proporcional: 60% = R$ 6,00 e 40% = R$ 4,00)
+        tot_disc_sale = pdv.apply_cart_discount(test_cart, discount_value=10.00, discount_mode="BRL", scope="SALE")
+        assert tot_disc_sale == 10.00
+        assert test_cart[0]["discount"] == 6.00
+        assert test_cart[1]["discount"] == 4.00
+        print("  ✅ Rateio proporcional na venda e desconto em item único validados com sucesso!")
+
+        print("▶ [11/11] Testando identificação do último COD_ITEM integrado e coleta incremental de novos itens Horus...")
+        # No catálogo temos COD_ITEM 10452 e 20881 -> último integrado na prática deve ser 20881
+        last_real_code = storage.get_last_integrated_horus_code()
+        assert last_real_code == 20881, f"Esperado último COD_ITEM 20881, obtido {last_real_code}"
+
+        # Mesmo se uma faixa vazia futura (ex: 20882..21500 com 0 itens) for consultada, o último código real continua 20881
+        storage.record_range_synced(20882, 21500, 0, max_cod_found=None)
+        assert storage.get_last_integrated_horus_code() == 20881
+
+        # Quando novos itens são cadastrados no Horus (ex: COD_ITEM 20882 e 20889) e sincronizados ao abrir o PDV:
+        new_horus_items = [
+            {
+                "COD_ITEM": "20882",
+                "COD_BARRA_ITEM": "9786555879001",
+                "NOM_ITEM": "LANCAMENTO HORUS 01",
+                "VLR_CAPA": 49.90,
+                "SALDO_DISPONIVEL": 12,
+            },
+            {
+                "COD_ITEM": "20889",
+                "COD_BARRA_ITEM": "9786555879002",
+                "NOM_ITEM": "LANCAMENTO HORUS 02",
+                "VLR_CAPA": 74.90,
+                "SALDO_DISPONIVEL": 8,
+            },
+        ]
+        storage.save_catalog(new_horus_items, merge=True)
+        assert storage.get_last_integrated_horus_code() == 20889
+        assert len(storage.products) == 4
+        print("  ✅ Detecção automática do último COD_ITEM (20881 ➔ 20889) e integração incremental validadas!")
+
 
 if __name__ == "__main__":
     run_tests()
-    print("\n🎉 TODOS OS 8 TESTES DO HORUS PDV WINDOWS PASSARAM 100%!")
+    print("\n🎉 TODOS OS 11 TESTES DO HORUS PDV WINDOWS PASSARAM 100%!")
+
 
 

@@ -111,11 +111,13 @@ from app.api import addressing as addressing_api
 from app.api import horus_bi as horus_bi_api
 from app.api import order_intake as order_intake_api
 from app.api import ebook_pearson as ebook_pearson_api
+from app.api import b2c_storefront as b2c_storefront_api
 from app.models import backorder as backorder_models
 from app.models import encomenda as encomenda_models
 from app.models import product_address as product_address_models
 from app.models import horus_bi_sale as horus_bi_sale_models
 from app.models import global_setting as global_setting_models
+from app.models import b2c_storefront as b2c_storefront_models
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -167,6 +169,7 @@ global_setting_models.Base.metadata.create_all(bind=engine)
 encomenda_models.Base.metadata.create_all(bind=engine)
 product_address_models.Base.metadata.create_all(bind=engine)
 horus_bi_sale_models.Base.metadata.create_all(bind=engine)
+b2c_storefront_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -294,6 +297,7 @@ app.include_router(addressing_api.router)
 app.include_router(horus_bi_api.router)
 app.include_router(order_intake_api.router)
 app.include_router(ebook_pearson_api.router)
+app.include_router(b2c_storefront_api.router)
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)

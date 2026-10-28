@@ -85,8 +85,9 @@ def map_horus_product(
         "sku": str(item.get("COD_ITEM", "")),
         "ean_gtin": str(item.get("BARRAS_ISBN") or item.get("COD_BARRA_ITEM") or item.get("ISBN") or ""),
         "name": item.get("NOM_ITEM", ""),
+        "author": item.get("NOM_AUTOR", ""),
         "base_price": vlr_capa,
-        "promotional_price": vlr_liq if vlr_liq < vlr_capa else None,
+        "promotional_price": vlr_liq if (0 < vlr_liq < vlr_capa) else None,
         "stock_quantity": stock_quantity,
         "consigned_balance": cd,
         "status": "ACTIVE",
@@ -111,13 +112,24 @@ def get_storefront_domain_info(
 ):
     from app.models.company import Company
     
-    # Check custom_domain first
+    is_b2c_domain = False
+
+    # 1. Check dedicated B2C custom domain first
     company = db.query(Company).filter(
-        Company.custom_domain == domain_name,
+        Company.b2c_custom_domain == domain_name,
         Company.active == True
     ).first()
+    if company:
+        is_b2c_domain = True
+
+    # 2. Check custom_domain
+    if not company:
+        company = db.query(Company).filter(
+            Company.custom_domain == domain_name,
+            Company.active == True
+        ).first()
     
-    # Fallback to internal app domain
+    # 3. Fallback to internal app domain
     if not company:
         company = db.query(Company).filter(
             Company.domain == domain_name,
@@ -130,12 +142,21 @@ def get_storefront_domain_info(
     from app.models.company_settings import CompanySettings
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
     business_model = settings.business_model if settings else "B2B_CRONUZ"
+    b2c_open = bool(getattr(settings, "b2c_storefront_open", False)) if settings else False
+    if is_b2c_domain or b2c_open or business_model == "B2C_STOREFRONT":
+        is_b2c_domain = True
         
     return {
         "company_id": company.id,
         "name": company.name,
         "domain": company.domain,
         "custom_domain": company.custom_domain,
+        "b2c_custom_domain": getattr(company, "b2c_custom_domain", None),
+        "is_b2c_domain": is_b2c_domain,
+        "module_b2c_storefront": bool(getattr(company, "module_b2c_storefront", False)),
+        "b2c_storefront_open": b2c_open,
+        "b2c_checkout_mode": getattr(settings, "b2c_checkout_mode", "NATIVE_GATEWAY") if settings else "NATIVE_GATEWAY",
+        "tray_enabled": bool(getattr(settings, "tray_enabled", False)) if settings else False,
         "login_background_url": company.login_background_url,
         "logo": company.logo,
         "tenant_id": company.tenant_id,
@@ -164,7 +185,11 @@ def get_storefront_config(
         "b2b_show_stock_quantity": settings.b2b_show_stock_quantity if settings else True,
         "logo": company.logo if company else None,
         "name": company.name if company else None,
-        "horus_use_cronuz_discount": settings.horus_use_cronuz_discount if settings else False
+        "horus_use_cronuz_discount": settings.horus_use_cronuz_discount if settings else False,
+        "module_b2c_storefront": bool(getattr(company, "module_b2c_storefront", False)) if company else False,
+        "b2c_storefront_open": bool(getattr(settings, "b2c_storefront_open", False)) if settings else False,
+        "b2c_checkout_mode": getattr(settings, "b2c_checkout_mode", "NATIVE_GATEWAY") if settings else "NATIVE_GATEWAY",
+        "tray_enabled": bool(getattr(settings, "tray_enabled", False)) if settings else False,
     }
 
 from pydantic import BaseModel
@@ -360,23 +385,56 @@ async def _fetch_from_horus_storefront(
                 **extra_ac_params
             )
         else:
-            if search_type == "SEARCH":
-                if search_filter == "NOM_AUTOR":
-                    search_option = "NOM_AUTOR"
-                elif search_filter == "NOM_EDITORA":
-                    search_option = "NOM_EDITORA"
+            default_guid = getattr(settings, "horus_default_b2b_guid", None) if settings else None
+            if default_guid and getattr(settings, "horus_api_mode", "B2B") == "B2B":
+                if search_type == "SEARCH":
+                    if search_filter == "NOM_AUTOR":
+                        search_option = "NOM_AUTOR"
+                    elif search_filter == "NOM_EDITORA":
+                        search_option = "NOM_EDITORA"
+                    elif search_filter == "COD_GENERO":
+                        search_option = "COD_GENERO"
+                    else:
+                        search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
                 else:
+                    search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "COD_ITEM"
+
+                extra_ac_params = {}
+                if search_type == "SEARCH" and getattr(settings, "horus_hide_zero_balance", False):
+                    if getattr(settings, "horus_company", None):
+                        extra_ac_params["AC_COD_EMPRESA"] = settings.horus_company
+                    if getattr(settings, "horus_branch", None):
+                        extra_ac_params["AC_COD_FILIAL"] = settings.horus_branch
+                    if getattr(settings, "horus_stock_local", None):
+                        extra_ac_params["AC_LOCAL_ESTOQUE"] = settings.horus_stock_local
+
+                horus_response = await horus_client.busca_acervo_b2b(
+                    id_doc=company.document,
+                    id_guid=default_guid,
+                    term=term,
+                    search_option=search_option,
+                    offset=skip,
+                    limit=limit,
+                    **extra_ac_params
+                )
+            else:
+                if search_type == "SEARCH":
+                    if search_filter == "NOM_AUTOR":
+                        search_option = "NOM_AUTOR"
+                    elif search_filter == "NOM_EDITORA":
+                        search_option = "NOM_EDITORA"
+                    else:
+                        search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOME"
+                else: # PRODUCT
                     search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOME"
-            else: # PRODUCT
-                search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOME"
-                
-            horus_response = await horus_client.busca_acervo_padrao(
-                id_doc=company.document,
-                term=term,
-                search_option=search_option,
-                offset=skip,
-                limit=limit
-            )
+                    
+                horus_response = await horus_client.busca_acervo_padrao(
+                    id_doc=company.document,
+                    term=term,
+                    search_option=search_option,
+                    offset=skip,
+                    limit=limit
+                )
         
         if isinstance(horus_response, list) and len(horus_response) > 0 and horus_response[0].get("Falha"):
             return []
@@ -431,6 +489,7 @@ async def search_storefront(
     filter: str = Query("default"),
     skip: int = Query(0, ge=0),
     limit: int = Query(24, ge=1, le=100),
+    company_id_param: int = Query(None, alias="company_id"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_optional)
 ):
@@ -440,7 +499,7 @@ async def search_storefront(
     from app.schemas.product import ProductResponse
     from app.models.company import Company
 
-    company_id = 1
+    company_id = company_id_param or 1
     if current_user and getattr(current_user, "company_id", None):
          company_id = current_user.company_id
 

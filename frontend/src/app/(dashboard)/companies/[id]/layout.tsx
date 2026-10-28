@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useParams, useRouter } from 'next/navigation';
-import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, DatabaseZap, Boxes, Settings, BookOpen, PackageCheck, Bell, Truck, Landmark } from 'lucide-react';
+import { Building2, Users, FileText, FileSignature, Receipt, ArrowLeft, Plug, Loader2, ChevronDown, CheckCircle2, XCircle, RefreshCw, TrendingUp, Database, DatabaseZap, Boxes, Settings, BookOpen, PackageCheck, Bell, Truck, Landmark, ShoppingBag } from 'lucide-react';
 import { getToken } from '@/lib/auth';
 import { Company, CompanyContext } from './context';
 
@@ -41,6 +41,7 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
     { name: 'Perfil', path: `/companies/${companyId}/profile`, icon: Building2 },
     { name: 'Acessos e Logins', path: `/companies/${companyId}/users`, icon: Users },
     { name: 'Módulos', path: `/companies/${companyId}/modules`, icon: Boxes },
+    { name: 'Tray & Storefront B2C', path: `/companies/${companyId}/tray`, icon: ShoppingBag },
     { name: 'Horus', path: `/companies/${companyId}/horus`, icon: Database },
     { name: 'Horus SQL', path: `/companies/${companyId}/horus-sql`, icon: DatabaseZap },
     { name: 'Bookinfo', path: `/companies/${companyId}/bookinfo`, icon: BookOpen },

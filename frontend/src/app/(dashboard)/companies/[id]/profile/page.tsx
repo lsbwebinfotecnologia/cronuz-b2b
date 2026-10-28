@@ -22,6 +22,7 @@ export default function CompanyProfilePage() {
     document: '',
     domain: '',
     custom_domain: '',
+    b2c_custom_domain: '',
     tenant_id: 'cronuz',
     zip_code: '',
     street: '',
@@ -87,6 +88,7 @@ export default function CompanyProfilePage() {
         document: maskCNPJ(company.document || ''),
         domain: company.domain || '',
         custom_domain: company.custom_domain || '',
+        b2c_custom_domain: company.b2c_custom_domain || '',
         tenant_id: company.tenant_id || 'cronuz',
         zip_code: company.zip_code || '',
         street: company.street || '',
@@ -447,8 +449,36 @@ export default function CompanyProfilePage() {
                   />
                 </div>
               </div>
+              <div className="space-y-1.5 md:col-span-1">
+                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Domínio Próprio B2B (Opcional)</label>
+                <div className="relative">
+                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    name="custom_domain"
+                    placeholder="Ex: b2b.minhaeditora.com.br"
+                    value={formData.custom_domain}
+                    onChange={handleInputChange}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5 md:col-span-1">
+                <label className="text-xs font-medium text-fuchsia-700 dark:text-fuchsia-300">Domínio Próprio Storefront Aberto (B2C)</label>
+                <div className="relative">
+                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-fuchsia-500" />
+                  <input
+                    type="text"
+                    name="b2c_custom_domain"
+                    placeholder="Ex: loja.minhaeditora.com.br"
+                    value={formData.b2c_custom_domain}
+                    onChange={handleInputChange}
+                    className="w-full rounded-xl border border-fuchsia-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-fuchsia-500 focus:border-transparent dark:border-fuchsia-900/50 dark:bg-slate-900/50 dark:text-slate-200"
+                  />
+                </div>
+              </div>
               {isGlobalMaster && (
-                <div className="space-y-1.5 md:col-span-4 mt-4 md:mt-0">
+                <div className="space-y-1.5 md:col-span-2 mt-4 md:mt-0">
                   <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Modelo de Negócio / Plataforma</label>
                   <div className="relative">
                     <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -466,6 +496,7 @@ export default function CompanyProfilePage() {
                       <option value="B2B_CRONUZ">B2B Cronuz (Padrão)</option>
                       <option value="B2B_HORUS">B2B Horus Emissor (ERP)</option>
                       <option value="CRONUZ_COMMERCE">Cronuz Commerce (Virtual Store)</option>
+                      <option value="B2C_STOREFRONT">Storefront Aberto B2C (Vouchers &amp; Tray)</option>
                       <option value="SUPORTE_HORUS">Suporte Horus</option>
                     </select>
                     <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />

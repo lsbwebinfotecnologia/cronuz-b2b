@@ -57,7 +57,7 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────────────
 # Diretórios e Arquivos de Persistência Local (Zero Dependências Externas)
 # ──────────────────────────────────────────────────────────────────────────────
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.4.0"
 APP_TITLE = f"Horus PDV — Frente de Caixa Omnichannel (Online & Offline) v{APP_VERSION}"
 
 if getattr(sys, "frozen", False):
@@ -221,6 +221,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "allow_out_of_stock": True,
     "max_installments": 12,
     "auto_sync_enabled": True,
+    "auto_sync_new_horus_items": True,
     "auto_print_receipt": False,
     "license_key": "",
     "last_seen_date": "",
@@ -428,6 +429,131 @@ def format_atm_currency(raw_text: str, mode: str = "BRL") -> Tuple[str, float]:
     return txt, val
 
 
+DEFAULT_CONSUMER_DOC = "99999999999"
+DEFAULT_CONSUMER_NAME = "Consumidor Final"
+
+
+def validate_cpf_or_cnpj(raw_doc: str) -> Tuple[bool, str, str, str]:
+    """
+    Valida CPF (11 dígitos), CNPJ (14 dígitos) ou o código padrão de Consumidor Final (99999999999).
+    Retorna: (is_valid, digits_only, doc_type, formatted_or_error_msg)
+    """
+    digits = "".join(ch for ch in str(raw_doc or "") if ch.isdigit())
+    if not digits:
+        return False, "", "EMPTY", "Informe o CPF (11 dígitos), CNPJ (14 dígitos) ou 99999999999."
+
+    if digits == DEFAULT_CONSUMER_DOC:
+        return True, DEFAULT_CONSUMER_DOC, "CONSUMIDOR_PADRAO", "Consumidor Padrão (99999999999)"
+
+    if len(digits) == 11:
+        if len(set(digits)) == 1:
+            return False, digits, "CPF", "CPF inválido (dígitos repetidos)."
+        s1 = sum(int(digits[i]) * (10 - i) for i in range(9))
+        d1 = (s1 * 10) % 11
+        if d1 == 10:
+            d1 = 0
+        s2 = sum(int(digits[i]) * (11 - i) for i in range(10))
+        d2 = (s2 * 10) % 11
+        if d2 == 10:
+            d2 = 0
+        if int(digits[9]) == d1 and int(digits[10]) == d2:
+            fmt = f"{digits[:3]}.{digits[3:6]}.{digits[6:9]}-{digits[9:]}"
+            return True, digits, "CPF", f"CPF Válido ({fmt})"
+        return False, digits, "CPF", "CPF inválido (dígito verificador incorreto)."
+
+    if len(digits) == 14:
+        if len(set(digits)) == 1:
+            return False, digits, "CNPJ", "CNPJ inválido (dígitos repetidos)."
+        w1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+        r1 = sum(int(digits[i]) * w1[i] for i in range(12)) % 11
+        d1 = 0 if r1 < 2 else (11 - r1)
+        w2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+        r2 = sum(int(digits[i]) * w2[i] for i in range(13)) % 11
+        d2 = 0 if r2 < 2 else (11 - r2)
+        if int(digits[12]) == d1 and int(digits[13]) == d2:
+            fmt = f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"
+            return True, digits, "CNPJ", f"CNPJ Válido ({fmt})"
+        return False, digits, "CNPJ", "CNPJ inválido (dígito verificador incorreto)."
+
+    return (
+        False,
+        digits,
+        "INVALIDO",
+        f"Documento com {len(digits)} dígito(s). Informe CPF (11), CNPJ (14) ou 99999999999.",
+    )
+
+
+def apply_cart_discount(
+    cart: List[Dict[str, Any]],
+    discount_value: float,
+    discount_mode: str = "BRL",
+    scope: str = "SALE",
+    selected_idx: Optional[int] = None,
+) -> float:
+    """
+    Aplica desconto (`BRL` ou `PCT`) no carrinho:
+    - `scope == "SALE"`: rateia proporcionalmente entre todos os itens do carrinho,
+      ajustando centavos residuais para que a soma bata 100% com o desconto total.
+    - `scope == "ITEM"`: aplica exclusivamente no item `selected_idx` do carrinho.
+    Retorna o desconto total (em R$) resultante no carrinho.
+    """
+    if not cart:
+        return 0.0
+
+    val = max(0.0, float(discount_value or 0.0))
+
+    if scope == "ITEM":
+        if selected_idx is None or not (0 <= selected_idx < len(cart)):
+            selected_idx = len(cart) - 1
+        target = cart[selected_idx]
+        gross = round(float(target.get("unit_price") or 0.0) * int(target.get("quantity") or 1), 2)
+        if discount_mode == "PCT":
+            disc_item = round(gross * (min(val, 100.0) / 100.0), 2)
+        else:
+            disc_item = round(min(val, gross), 2)
+        target["discount"] = disc_item
+        target["discount_source"] = "ITEM"
+        target["discount_mode_applied"] = discount_mode
+        target["discount_val_applied"] = val
+        return round(sum(float(it.get("discount") or 0.0) for it in cart), 2)
+
+    # scope == "SALE" (Ratear proporcionalmente na venda inteira)
+    gross_list = [round(float(it.get("unit_price") or 0.0) * int(it.get("quantity") or 1), 2) for it in cart]
+    total_gross = round(sum(gross_list), 2)
+    if total_gross <= 0 or val <= 0:
+        for it in cart:
+            it["discount"] = 0.0
+            it["discount_source"] = "NONE"
+        return 0.0
+
+    if discount_mode == "PCT":
+        total_disc = round(total_gross * (min(val, 100.0) / 100.0), 2)
+    else:
+        total_disc = round(min(val, total_gross), 2)
+
+    shares: List[float] = []
+    for g in gross_list:
+        share = round(total_disc * (g / total_gross), 2)
+        share = min(share, g)
+        shares.append(share)
+
+    diff = round(total_disc - round(sum(shares), 2), 2)
+    if diff != 0.0 and shares:
+        for i in range(len(shares) - 1, -1, -1):
+            candidate = round(shares[i] + diff, 2)
+            if 0.0 <= candidate <= gross_list[i]:
+                shares[i] = candidate
+                break
+
+    for it, sh in zip(cart, shares):
+        it["discount"] = sh
+        it["discount_source"] = "PRORATED"
+        it["discount_mode_applied"] = discount_mode
+        it["discount_val_applied"] = val
+
+    return round(sum(shares), 2)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Gerenciador de Catálogo Offline, Controle de Faixas Horus e Fila de Vendas
 # ──────────────────────────────────────────────────────────────────────────────
@@ -465,6 +591,14 @@ class LocalPOSStorage:
 
     def load_all(self) -> None:
         with self._lock:
+            if self.sync_state_path.exists():
+                try:
+                    st = json.loads(self.sync_state_path.read_text(encoding="utf-8"))
+                    if isinstance(st, dict):
+                        self.sync_state.update(st)
+                except Exception as exc:
+                    logger.warning("Erro ao ler pos_catalog_sync_state.json: %s", exc)
+
             if self.catalog_path.exists():
                 try:
                     data = json.loads(self.catalog_path.read_text(encoding="utf-8"))
@@ -475,14 +609,6 @@ class LocalPOSStorage:
                 except Exception as exc:
                     logger.warning("Erro ao ler cache de catálogo: %s", exc)
             self._rebuild_catalog_index()
-
-            if self.sync_state_path.exists():
-                try:
-                    st = json.loads(self.sync_state_path.read_text(encoding="utf-8"))
-                    if isinstance(st, dict):
-                        self.sync_state.update(st)
-                except Exception as exc:
-                    logger.warning("Erro ao ler pos_catalog_sync_state.json: %s", exc)
 
             if self.sales_path.exists():
                 try:
@@ -503,8 +629,8 @@ class LocalPOSStorage:
 
     def _rebuild_catalog_index(self) -> None:
         self.index_by_code.clear()
-        min_c = None
-        max_c = None
+        min_c: Optional[int] = None
+        max_c: Optional[int] = None
         for prod in self.products:
             for key in ("isbn", "barcode", "sku", "id"):
                 val = str(prod.get(key) or "").strip()
@@ -513,16 +639,40 @@ class LocalPOSStorage:
                     digits = "".join(c for c in val if c.isdigit())
                     if digits:
                         self.index_by_code[digits] = prod
-            c_int = prod.get("cod_item")
-            if c_int is None and str(prod.get("sku") or "").isdigit():
-                c_int = int(prod["sku"])
-            if isinstance(c_int, int):
+
+            raw_ci = prod.get("cod_item") if prod.get("cod_item") is not None else prod.get("COD_ITEM")
+            if raw_ci is None:
+                raw_ci = prod.get("sku")
+            c_int: Optional[int] = None
+            if isinstance(raw_ci, int):
+                c_int = raw_ci
+            elif str(raw_ci or "").strip().isdigit():
+                c_int = int(str(raw_ci).strip())
+
+            # Código sequencial do Horus (COD_ITEM) é menor que 1 bilhão (evita confundir com EAN-13)
+            if isinstance(c_int, int) and 0 < c_int < 1_000_000_000:
+                prod["cod_item"] = c_int
                 if min_c is None or c_int < min_c:
                     min_c = c_int
                 if max_c is None or c_int > max_c:
                     max_c = c_int
+
         self.sync_state["min_cod_item_cached"] = min_c
         self.sync_state["max_cod_item_cached"] = max_c
+
+    def get_last_integrated_horus_code(self) -> int:
+        """
+        Identifica na prática qual foi o último código de item (COD_ITEM) do Horus
+        efetivamente integrado/cadastrado no catálogo local.
+        Prioriza o maior `COD_ITEM` real presente nos produtos sincronizados (`max_cod_item_cached`),
+        para que faixas vazias consultadas anteriormente não façam o PDV pular itens novos.
+        """
+        max_cached = self.sync_state.get("max_cod_item_cached")
+        if isinstance(max_cached, int) and max_cached > 0:
+            return int(max_cached)
+        if str(max_cached or "").strip().isdigit() and int(str(max_cached).strip()) > 0:
+            return int(str(max_cached).strip())
+        return int(self.sync_state.get("last_cod_item_synced") or 0)
 
     def save_sync_state(self) -> None:
         try:
@@ -532,11 +682,21 @@ class LocalPOSStorage:
         except Exception as exc:
             logger.error("Erro ao gravar pos_catalog_sync_state.json: %s", exc)
 
-    def record_range_synced(self, cod_ini: int, cod_fim: int, items_count: int) -> None:
+    def record_range_synced(
+        self,
+        cod_ini: int,
+        cod_fim: int,
+        items_count: int,
+        max_cod_found: Optional[int] = None,
+    ) -> None:
         with self._lock:
             now_iso = datetime.now().isoformat()
-            if cod_fim > int(self.sync_state.get("last_cod_item_synced") or 0):
-                self.sync_state["last_cod_item_synced"] = int(cod_fim)
+            if max_cod_found is not None and max_cod_found > 0:
+                if int(max_cod_found) > int(self.sync_state.get("last_cod_item_synced") or 0):
+                    self.sync_state["last_cod_item_synced"] = int(max_cod_found)
+            elif int(items_count) > 0:
+                if int(cod_fim) > int(self.sync_state.get("last_cod_item_synced") or 0):
+                    self.sync_state["last_cod_item_synced"] = int(cod_fim)
             self.sync_state["last_full_sync_at"] = now_iso
 
             ranges: List[Dict[str, Any]] = list(self.sync_state.get("ranges_history") or [])
@@ -653,8 +813,13 @@ class LocalPOSStorage:
             or raw.get("id")
             or isbn
         ).strip()
-        cod_item_int = raw.get("cod_item")
-        if cod_item_int is None and sku.isdigit():
+        raw_cod = raw.get("cod_item") if raw.get("cod_item") is not None else raw.get("COD_ITEM")
+        cod_item_int: Optional[int] = None
+        if isinstance(raw_cod, int):
+            cod_item_int = raw_cod
+        elif str(raw_cod or "").strip().isdigit():
+            cod_item_int = int(str(raw_cod).strip())
+        elif sku.isdigit() and int(sku) < 1_000_000_000:
             cod_item_int = int(sku)
         name = str(
             raw.get("name")
@@ -751,8 +916,28 @@ class LocalPOSStorage:
             session_id = cfg.get("active_session_id")
             sale_number = f"PDV-{session_id or 'OFF'}-{seq:04d}"
 
-            subtotal = round(sum(float(i["unit_price"]) * int(i["quantity"]) for i in items), 2)
-            discount = round(min(float(discount_amount or 0.0), subtotal), 2)
+            raw_doc = (customer_document or "").strip()
+            if not raw_doc:
+                raw_doc = DEFAULT_CONSUMER_DOC
+            is_valid_doc, clean_doc_digits, _, doc_msg = validate_cpf_or_cnpj(raw_doc)
+            if not is_valid_doc:
+                raise ValueError(f"CPF/CNPJ inválido: {doc_msg}")
+
+            clean_cust_name = (customer_name or "").strip() or DEFAULT_CONSUMER_NAME
+
+            items_copy = [dict(it) for it in items]
+            subtotal = round(sum(float(i["unit_price"]) * int(i["quantity"]) for i in items_copy), 2)
+            existing_item_disc = round(sum(float(i.get("discount") or 0.0) for i in items_copy), 2)
+            requested_disc = round(min(float(discount_amount or 0.0), subtotal), 2)
+
+            if requested_disc > 0 and existing_item_disc == 0.0:
+                apply_cart_discount(items_copy, requested_disc, discount_mode="BRL", scope="SALE")
+                discount = round(sum(float(i.get("discount") or 0.0) for i in items_copy), 2)
+            elif existing_item_disc > 0:
+                discount = round(min(existing_item_disc, subtotal), 2)
+            else:
+                discount = 0.0
+
             total = round(max(0.0, subtotal - discount), 2)
 
             sale_record: Dict[str, Any] = {
@@ -765,8 +950,8 @@ class LocalPOSStorage:
                 "user_id": cfg.get("user_id"),
                 "user_email": str(cfg.get("email") or ""),
                 "user_name": str(cfg.get("user_name") or cfg.get("email") or "Operador PDV"),
-                "customer_name": (customer_name or "").strip() or None,
-                "customer_document": (customer_document or "").strip() or None,
+                "customer_name": clean_cust_name,
+                "customer_document": clean_doc_digits,
                 "payment_method": payment_method,
                 "installments": int(installments or 1),
                 "payment_splits": payment_splits,
@@ -788,10 +973,13 @@ class LocalPOSStorage:
                         "name": str(it.get("name") or ""),
                         "quantity": int(it["quantity"]),
                         "unit_price": round(float(it["unit_price"]), 2),
-                        "discount": 0.0,
-                        "total_price": round(float(it["unit_price"]) * int(it["quantity"]), 2),
+                        "discount": round(float(it.get("discount") or 0.0), 2),
+                        "total_price": round(
+                            max(0.0, float(it["unit_price"]) * int(it["quantity"]) - float(it.get("discount") or 0.0)),
+                            2,
+                        ),
                     }
-                    for it in items
+                    for it in items_copy
                 ],
             }
 
@@ -1485,14 +1673,19 @@ class HorusPDVWindow:
         self.is_online: bool = False
         self.cart: List[Dict[str, Any]] = []
         self.discount_mode: str = "BRL"
+        self.discount_scope: str = "SALE"
         self.discount_raw_digits: str = ""
         self.discount_value: float = 0.0
+        self.active_prorated_discount: Optional[Tuple[str, float]] = None
         self.cash_received_digits: str = ""
         self.cash_received_value: float = 0.0
         self.open_sessions_cache: List[Dict[str, Any]] = []
         self.range_sync_running: bool = False
         self.range_sync_stop_requested: bool = False
         self.var_validate_stock = tk.BooleanVar(value=bool(self.cfg.get("validate_stock", False)))
+        self.var_auto_sync_new_items = tk.BooleanVar(
+            value=bool(self.cfg.get("auto_sync_new_horus_items", True))
+        )
 
         self.license_status: Dict[str, Any] = verify_pdv_desktop_license_key(
             self.cfg.get("license_key", ""),
@@ -1690,10 +1883,41 @@ class HorusPDVWindow:
         self._build_tab_config()
 
     def _bind_shortcuts(self) -> None:
+        # Atalhos Gerais de Operação do Caixa
         self.root.bind("<F2>", lambda e: self.entry_search.focus_set())
+        self.root.bind("<F3>", lambda e: self.focus_discount_entry())
         self.root.bind("<F4>", lambda e: self.clear_cart())
         self.root.bind("<F5>", lambda e: self.trigger_manual_sync())
+        self.root.bind("<F6>", lambda e: self.focus_customer_doc_entry())
         self.root.bind("<F12>", lambda e: self.finalize_sale())
+
+        # Atalhos de Teclado para Formas de Pagamento (F7..F10 e Alt+1..4)
+        self.root.bind("<F7>", lambda e: self.select_payment_shortcut("DINHEIRO"))
+        self.root.bind("<F8>", lambda e: self.select_payment_shortcut("PIX"))
+        self.root.bind("<F9>", lambda e: self.select_payment_shortcut("DEBITO"))
+        self.root.bind("<F10>", lambda e: self.select_payment_shortcut("CREDITO"))
+        self.root.bind("<Alt-Key-1>", lambda e: self.select_payment_shortcut("DINHEIRO"))
+        self.root.bind("<Alt-Key-2>", lambda e: self.select_payment_shortcut("PIX"))
+        self.root.bind("<Alt-Key-3>", lambda e: self.select_payment_shortcut("DEBITO"))
+        self.root.bind("<Alt-Key-4>", lambda e: self.select_payment_shortcut("CREDITO"))
+
+        # Atalhos de Teclado para Parcelas (F11, Alt+Setas, Ctrl+1..9/0/-/=)
+        self.root.bind("<F11>", lambda e: self.cycle_installments_shortcut(1))
+        self.root.bind("<Alt-Up>", lambda e: self.cycle_installments_shortcut(1))
+        self.root.bind("<Alt-Right>", lambda e: self.cycle_installments_shortcut(1))
+        self.root.bind("<Alt-Down>", lambda e: self.cycle_installments_shortcut(-1))
+        self.root.bind("<Alt-Left>", lambda e: self.cycle_installments_shortcut(-1))
+        for n in range(1, 10):
+            self.root.bind(f"<Control-Key-{n}>", lambda e, num=n: self.set_installments_shortcut(num))
+        self.root.bind("<Control-Key-0>", lambda e: self.set_installments_shortcut(10))
+        self.root.bind("<Control-minus>", lambda e: self.set_installments_shortcut(11))
+        self.root.bind("<Control-equal>", lambda e: self.set_installments_shortcut(12))
+
+        # Atalhos para Aplicação de Desconto (Ratear na Venda vs Item Selecionado)
+        self.root.bind("<Alt-r>", lambda e: self.apply_discount_by_scope("SALE"))
+        self.root.bind("<Alt-R>", lambda e: self.apply_discount_by_scope("SALE"))
+        self.root.bind("<Alt-i>", lambda e: self.apply_discount_by_scope("ITEM"))
+        self.root.bind("<Alt-I>", lambda e: self.apply_discount_by_scope("ITEM"))
 
     # ──────────────────────────────────────────────────────────────────────────
     # ABA 1: FRENTE DE CAIXA (PDV ONLINE & OFFLINE)
@@ -1802,7 +2026,7 @@ class HorusPDVWindow:
 
         cart_card = tk.LabelFrame(
             left_col,
-            text=" 🛒 Itens no Carrinho da Venda Atual (Clique direto em ➖ ou ➕ ao lado da Qtd, ou use teclas + / -) ",
+            text=" 🛒 Itens no Carrinho da Venda Atual (Clique em ➖ ou ➕ ao lado da Qtd, ou selecione o item p/ aplicar desconto) ",
             font=("Segoe UI", 10, "bold"),
             bg="#ffffff",
             fg="#0f172a",
@@ -1811,7 +2035,7 @@ class HorusPDVWindow:
         )
         cart_card.pack(fill="both", expand=True)
 
-        cols_cart = ("seq", "isbn", "name", "stock", "minus", "qty", "plus", "unit_price", "subtotal", "remove")
+        cols_cart = ("seq", "isbn", "name", "stock", "minus", "qty", "plus", "unit_price", "discount", "subtotal", "remove")
         self.tree_cart = ttk.Treeview(cart_card, columns=cols_cart, show="headings", height=9)
         self.tree_cart.heading("seq", text="#")
         self.tree_cart.heading("isbn", text="ISBN / SKU")
@@ -1821,19 +2045,21 @@ class HorusPDVWindow:
         self.tree_cart.heading("qty", text="Qtd")
         self.tree_cart.heading("plus", text="[+]")
         self.tree_cart.heading("unit_price", text="Unitário")
-        self.tree_cart.heading("subtotal", text="Subtotal")
+        self.tree_cart.heading("discount", text="Desconto")
+        self.tree_cart.heading("subtotal", text="Total Líq.")
         self.tree_cart.heading("remove", text="Excluir")
 
-        self.tree_cart.column("seq", width=34, anchor="center")
-        self.tree_cart.column("isbn", width=110, anchor="w")
-        self.tree_cart.column("name", width=255, anchor="w")
-        self.tree_cart.column("stock", width=52, anchor="center")
-        self.tree_cart.column("minus", width=40, anchor="center")
-        self.tree_cart.column("qty", width=48, anchor="center")
-        self.tree_cart.column("plus", width=40, anchor="center")
-        self.tree_cart.column("unit_price", width=90, anchor="e")
-        self.tree_cart.column("subtotal", width=100, anchor="e")
-        self.tree_cart.column("remove", width=54, anchor="center")
+        self.tree_cart.column("seq", width=30, anchor="center")
+        self.tree_cart.column("isbn", width=100, anchor="w")
+        self.tree_cart.column("name", width=215, anchor="w")
+        self.tree_cart.column("stock", width=46, anchor="center")
+        self.tree_cart.column("minus", width=36, anchor="center")
+        self.tree_cart.column("qty", width=44, anchor="center")
+        self.tree_cart.column("plus", width=36, anchor="center")
+        self.tree_cart.column("unit_price", width=80, anchor="e")
+        self.tree_cart.column("discount", width=80, anchor="e")
+        self.tree_cart.column("subtotal", width=88, anchor="e")
+        self.tree_cart.column("remove", width=48, anchor="center")
         self.tree_cart.pack(fill="both", expand=True)
 
         # Clique inline direto nas colunas ➖, ➕ e 🗑️ do carrinho sem perder seleção!
@@ -1919,52 +2145,106 @@ class HorusPDVWindow:
             relief="flat",
         ).pack(side="right")
 
-        right_col = tk.Frame(pane, bg="#ffffff", width=380, bd=1, relief="solid", padx=14, pady=12)
+        right_col = tk.Frame(pane, bg="#ffffff", width=405, bd=1, relief="solid", padx=12, pady=8)
         right_col.pack(side="right", fill="y")
         right_col.pack_propagate(False)
 
         tk.Label(
             right_col,
-            text="RESUMO & PAGAMENTO",
-            font=("Segoe UI", 12, "bold"),
+            text="RESUMO, CLIENTE & PAGAMENTO",
+            font=("Segoe UI", 11, "bold"),
             fg="#0f172a",
             bg="#ffffff",
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(anchor="w", pady=(0, 4))
 
+        # ── 1. CLIENTE OBRIGATÓRIO (CPF / CNPJ ou 99999999999) ───────────────
         cust_frame = tk.LabelFrame(
             right_col,
-            text=" 👤 Cliente (Opcional) ",
+            text=" 👤 Cliente Obrigatório (F6 — CPF / CNPJ ou 99999999999) ",
             font=("Segoe UI", 9, "bold"),
             bg="#ffffff",
             fg="#334155",
             padx=8,
-            pady=6,
+            pady=4,
         )
-        cust_frame.pack(fill="x", pady=(0, 8))
+        cust_frame.pack(fill="x", pady=(0, 6))
 
-        tk.Label(cust_frame, text="Nome:", bg="#ffffff", font=("Segoe UI", 9)).grid(row=0, column=0, sticky="w")
-        self.var_customer_name = tk.StringVar()
-        tk.Entry(cust_frame, textvariable=self.var_customer_name, font=("Segoe UI", 9), width=28).grid(
-            row=0, column=1, sticky="ew", padx=(6, 0), pady=2
-        )
+        cust_btn_row = tk.Frame(cust_frame, bg="#ffffff")
+        cust_btn_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 3))
 
-        tk.Label(cust_frame, text="CPF/CNPJ:", bg="#ffffff", font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w")
-        self.var_customer_doc = tk.StringVar()
-        tk.Entry(cust_frame, textvariable=self.var_customer_doc, font=("Segoe UI", 9), width=28).grid(
-            row=1, column=1, sticky="ew", padx=(6, 0), pady=2
+        tk.Button(
+            cust_btn_row,
+            text="⚡ Consumidor (99999999999)",
+            command=self.set_default_consumer_customer,
+            bg="#dcfce7",
+            fg="#166534",
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=2,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="left", padx=(0, 4))
+
+        tk.Button(
+            cust_btn_row,
+            text="✏️ Informar CPF/CNPJ (F6)",
+            command=self.clear_for_custom_customer,
+            bg="#e0e7ff",
+            fg="#1d4ed8",
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=2,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="left")
+
+        tk.Label(cust_frame, text="CPF/CNPJ *:", bg="#ffffff", font=("Segoe UI", 9, "bold")).grid(
+            row=1, column=0, sticky="w"
         )
+        self.var_customer_doc = tk.StringVar(value=DEFAULT_CONSUMER_DOC)
+        self.entry_customer_doc = tk.Entry(
+            cust_frame,
+            textvariable=self.var_customer_doc,
+            font=("Segoe UI", 9, "bold"),
+            width=26,
+            bg="#f8fafc",
+        )
+        self.entry_customer_doc.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=2)
+        self.entry_customer_doc.bind("<KeyRelease>", self._on_customer_doc_key)
+        self.entry_customer_doc.bind("<FocusOut>", self._on_customer_doc_focus_out)
+
+        tk.Label(cust_frame, text="Nome *:", bg="#ffffff", font=("Segoe UI", 9)).grid(row=2, column=0, sticky="w")
+        self.var_customer_name = tk.StringVar(value=DEFAULT_CONSUMER_NAME)
+        self.entry_customer_name = tk.Entry(
+            cust_frame,
+            textvariable=self.var_customer_name,
+            font=("Segoe UI", 9),
+            width=26,
+            bg="#f8fafc",
+        )
+        self.entry_customer_name.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=2)
+
+        self.lbl_customer_doc_status = tk.Label(
+            cust_frame,
+            text="✅ Consumidor Padrão (99999999999)",
+            font=("Segoe UI", 8, "bold"),
+            fg="#16a34a",
+            bg="#ffffff",
+        )
+        self.lbl_customer_doc_status.grid(row=3, column=0, columnspan=2, sticky="w", pady=(1, 0))
         cust_frame.columnconfigure(1, weight=1)
 
+        # ── 2. DESCONTO (RATEAR NA VENDA OU APLICAR NO ITEM SELECIONADO) ─────
         disc_frame = tk.LabelFrame(
             right_col,
-            text=" 🏷️ Desconto (Máscara Automática R$ / %) ",
+            text=" 🏷️ Desconto (F3 — R$ / % | Ratear Venda ou Item) ",
             font=("Segoe UI", 9, "bold"),
             bg="#ffffff",
             fg="#334155",
             padx=8,
-            pady=6,
+            pady=4,
         )
-        disc_frame.pack(fill="x", pady=(0, 8))
+        disc_frame.pack(fill="x", pady=(0, 6))
 
         d_row = tk.Frame(disc_frame, bg="#ffffff")
         d_row.pack(fill="x")
@@ -1976,10 +2256,10 @@ class HorusPDVWindow:
             bg="#2563eb",
             fg="#ffffff",
             font=("Segoe UI", 9, "bold"),
-            width=4,
+            width=3,
             relief="flat",
         )
-        self.btn_disc_brl.pack(side="left", padx=(0, 3))
+        self.btn_disc_brl.pack(side="left", padx=(0, 2))
 
         self.btn_disc_pct = tk.Button(
             d_row,
@@ -1988,39 +2268,92 @@ class HorusPDVWindow:
             bg="#e2e8f0",
             fg="#0f172a",
             font=("Segoe UI", 9, "bold"),
-            width=4,
+            width=3,
             relief="flat",
         )
-        self.btn_disc_pct.pack(side="left", padx=(0, 6))
+        self.btn_disc_pct.pack(side="left", padx=(0, 4))
 
         self.var_discount_display = tk.StringVar(value="R$ 0,00")
         self.entry_discount = tk.Entry(
             d_row,
             textvariable=self.var_discount_display,
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
             justify="right",
             bg="#f8fafc",
         )
-        self.entry_discount.pack(side="left", fill="x", expand=True, ipady=3)
+        self.entry_discount.pack(side="left", fill="x", expand=True, ipady=2, padx=(0, 4))
         self.entry_discount.bind("<KeyRelease>", self._on_discount_key)
+        self.entry_discount.bind("<Return>", lambda e: self.apply_discount_by_scope(self.var_discount_scope.get()))
 
+        tk.Button(
+            d_row,
+            text="✖",
+            command=self.clear_discounts_clicked,
+            bg="#fee2e2",
+            fg="#b91c1c",
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="right")
+
+        self.var_discount_scope = tk.StringVar(value="SALE")
+        d_apply_row = tk.Frame(disc_frame, bg="#ffffff")
+        d_apply_row.pack(fill="x", pady=(4, 2))
+
+        tk.Button(
+            d_apply_row,
+            text="📊 Ratear na Venda (Alt+R)",
+            command=lambda: self.apply_discount_by_scope("SALE"),
+            bg="#0f172a",
+            fg="#ffffff",
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=3,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="left", fill="x", expand=True, padx=(0, 3))
+
+        tk.Button(
+            d_apply_row,
+            text="🎯 No Item Selecionado (Alt+I)",
+            command=lambda: self.apply_discount_by_scope("ITEM"),
+            bg="#2563eb",
+            fg="#ffffff",
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=3,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="left", fill="x", expand=True)
+
+        self.lbl_discount_scope_info = tk.Label(
+            disc_frame,
+            text="Escolha 'Ratear na Venda' ou selecione 1 item e clique 'No Item'.",
+            font=("Segoe UI", 8),
+            fg="#64748b",
+            bg="#ffffff",
+        )
+        self.lbl_discount_scope_info.pack(anchor="w")
+
+        # ── 3. FORMA DE PAGAMENTO & PARCELAS COM ATALHOS DE TECLADO ──────────
         pay_frame = tk.LabelFrame(
             right_col,
-            text=" 💳 Forma de Pagamento ",
+            text=" 💳 Pagamento (F7..F10) & Parcelas (F11 / Ctrl+1..9) ",
             font=("Segoe UI", 9, "bold"),
             bg="#ffffff",
             fg="#334155",
             padx=8,
-            pady=6,
+            pady=4,
         )
-        pay_frame.pack(fill="x", pady=(0, 8))
+        pay_frame.pack(fill="x", pady=(0, 6))
 
         self.var_payment_method = tk.StringVar(value="DINHEIRO")
         methods = [
-            ("💵 Dinheiro", "DINHEIRO"),
-            ("⚡ PIX", "PIX"),
-            ("💳 Débito", "DEBITO"),
-            ("💳 Crédito", "CREDITO"),
+            ("💵 Dinheiro (F7)", "DINHEIRO"),
+            ("⚡ PIX (F8)", "PIX"),
+            ("💳 Débito (F9)", "DEBITO"),
+            ("💳 Crédito (F10)", "CREDITO"),
         ]
         m_grid = tk.Frame(pay_frame, bg="#ffffff")
         m_grid.pack(fill="x")
@@ -2035,63 +2368,113 @@ class HorusPDVWindow:
                 font=("Segoe UI", 9, "bold"),
                 anchor="w",
             )
-            rb.grid(row=idx // 2, column=idx % 2, sticky="w", padx=4, pady=2)
+            rb.grid(row=idx // 2, column=idx % 2, sticky="w", padx=2, pady=1)
 
-        extra_pay = tk.Frame(pay_frame, bg="#ffffff", pady=4)
-        extra_pay.pack(fill="x")
+        inst_row = tk.Frame(pay_frame, bg="#ffffff", pady=2)
+        inst_row.pack(fill="x")
 
-        tk.Label(extra_pay, text="Parcelas:", bg="#ffffff", font=("Segoe UI", 9)).grid(row=0, column=0, sticky="w")
+        tk.Label(inst_row, text="Parcelas (F11):", bg="#ffffff", font=("Segoe UI", 9, "bold")).pack(side="left")
+        tk.Button(
+            inst_row,
+            text="➖",
+            command=lambda: self.cycle_installments_shortcut(-1),
+            bg="#f1f5f9",
+            fg="#0f172a",
+            font=("Segoe UI", 8, "bold"),
+            padx=5,
+            pady=1,
+            relief="flat",
+        ).pack(side="left", padx=(6, 2))
+
         self.var_installments = tk.StringVar(value="1")
         self.combo_installments = ttk.Combobox(
-            extra_pay,
+            inst_row,
             textvariable=self.var_installments,
             values=[str(i) for i in range(1, 13)],
-            width=6,
+            width=4,
             state="readonly",
         )
-        self.combo_installments.grid(row=0, column=1, sticky="w", padx=6, pady=2)
+        self.combo_installments.pack(side="left", padx=2)
+        self.combo_installments.bind("<<ComboboxSelected>>", lambda e: self._on_installments_combo_change())
 
-        tk.Label(extra_pay, text="Recebido (Dinheiro):", bg="#ffffff", font=("Segoe UI", 9)).grid(
-            row=1, column=0, sticky="w"
+        tk.Button(
+            inst_row,
+            text="➕",
+            command=lambda: self.cycle_installments_shortcut(1),
+            bg="#f1f5f9",
+            fg="#0f172a",
+            font=("Segoe UI", 8, "bold"),
+            padx=5,
+            pady=1,
+            relief="flat",
+        ).pack(side="left", padx=(2, 6))
+
+        self.lbl_installment_preview = tk.Label(
+            inst_row,
+            text="1x de R$ 0,00",
+            font=("Segoe UI", 8, "bold"),
+            fg="#2563eb",
+            bg="#ffffff",
         )
+        self.lbl_installment_preview.pack(side="left")
+
+        quick_inst_row = tk.Frame(pay_frame, bg="#ffffff")
+        quick_inst_row.pack(fill="x", pady=(1, 3))
+        for q_inst in (1, 2, 3, 4, 6, 10, 12):
+            tk.Button(
+                quick_inst_row,
+                text=f"{q_inst}x",
+                command=lambda n=q_inst: self.set_installments_shortcut(n),
+                bg="#e2e8f0",
+                fg="#0f172a",
+                font=("Segoe UI", 8, "bold"),
+                padx=5,
+                pady=1,
+                relief="flat",
+                cursor="hand2",
+            ).pack(side="left", padx=2)
+
+        cash_row = tk.Frame(pay_frame, bg="#ffffff")
+        cash_row.pack(fill="x", pady=(2, 0))
+        tk.Label(cash_row, text="Recebido (Dinheiro):", bg="#ffffff", font=("Segoe UI", 9)).pack(side="left")
         self.var_cash_received = tk.StringVar(value="R$ 0,00")
         self.entry_cash_received = tk.Entry(
-            extra_pay,
+            cash_row,
             textvariable=self.var_cash_received,
             font=("Segoe UI", 10, "bold"),
             justify="right",
             width=14,
             bg="#f8fafc",
         )
-        self.entry_cash_received.grid(row=1, column=1, sticky="ew", padx=6, pady=2)
+        self.entry_cash_received.pack(side="right", fill="x", expand=True, padx=(6, 0))
         self.entry_cash_received.bind("<KeyRelease>", self._on_cash_received_key)
 
-        tot_box = tk.Frame(right_col, bg="#0f172a", padx=12, pady=10)
-        tot_box.pack(fill="x", pady=(4, 10))
+        tot_box = tk.Frame(right_col, bg="#0f172a", padx=12, pady=8)
+        tot_box.pack(fill="x", pady=(2, 6))
 
         self.lbl_subtotal = tk.Label(
-            tot_box, text="Subtotal: R$ 0,00", font=("Segoe UI", 10), fg="#cbd5e1", bg="#0f172a"
+            tot_box, text="Subtotal: R$ 0,00", font=("Segoe UI", 9), fg="#cbd5e1", bg="#0f172a"
         )
         self.lbl_subtotal.pack(anchor="e")
 
         self.lbl_discount_applied = tk.Label(
-            tot_box, text="Desconto: - R$ 0,00", font=("Segoe UI", 10), fg="#fca5a5", bg="#0f172a"
+            tot_box, text="Desconto: - R$ 0,00", font=("Segoe UI", 9), fg="#fca5a5", bg="#0f172a"
         )
         self.lbl_discount_applied.pack(anchor="e")
 
         self.lbl_total_big = tk.Label(
             tot_box,
             text="R$ 0,00",
-            font=("Segoe UI", 22, "bold"),
+            font=("Segoe UI", 20, "bold"),
             fg="#4ade80",
             bg="#0f172a",
         )
-        self.lbl_total_big.pack(anchor="e", pady=(4, 2))
+        self.lbl_total_big.pack(anchor="e", pady=(2, 1))
 
         self.lbl_change = tk.Label(
             tot_box,
             text="Troco: R$ 0,00",
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
             fg="#38bdf8",
             bg="#0f172a",
         )
@@ -2104,7 +2487,7 @@ class HorusPDVWindow:
             variable=self.var_print_receipt,
             bg="#ffffff",
             font=("Segoe UI", 9),
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(anchor="w", pady=(0, 4))
 
         self.btn_finalize = tk.Button(
             right_col,
@@ -2112,8 +2495,8 @@ class HorusPDVWindow:
             command=self.finalize_sale,
             bg="#16a34a",
             fg="#ffffff",
-            font=("Segoe UI", 13, "bold"),
-            pady=12,
+            font=("Segoe UI", 12, "bold"),
+            pady=10,
             relief="flat",
             cursor="hand2",
         )
@@ -2501,7 +2884,7 @@ class HorusPDVWindow:
         tk.Label(r_inputs, text="COD_ITEM_INI (Inicial):", bg="#f8fafc", font=("Segoe UI", 9, "bold")).grid(
             row=0, column=0, sticky="w", padx=(0, 4)
         )
-        last_synced = int(self.storage.sync_state.get("last_cod_item_synced") or 0)
+        last_synced = self.storage.get_last_integrated_horus_code()
         self.var_cod_ini = tk.StringVar(value=str(last_synced + 1 if last_synced > 0 else 1))
         tk.Entry(r_inputs, textvariable=self.var_cod_ini, font=("Segoe UI", 10, "bold"), width=10, justify="center").grid(
             row=0, column=1, padx=(0, 12)
@@ -2532,17 +2915,31 @@ class HorusPDVWindow:
 
         self.btn_start_range_sync = tk.Button(
             r_btns,
-            text="🚀 Sincronizar Faixa Horus (COD_ITEM_INI ➔ FIM)",
+            text="🚀 Sincronizar Faixa (INI ➔ FIM)",
             command=self.start_horus_range_sync_clicked,
             bg="#16a34a",
             fg="#ffffff",
             font=("Segoe UI", 9, "bold"),
-            padx=12,
+            padx=10,
             pady=6,
             relief="flat",
             cursor="hand2",
         )
         self.btn_start_range_sync.pack(side="left", padx=(0, 6))
+
+        self.btn_sync_new_horus = tk.Button(
+            r_btns,
+            text="⚡ Buscar Novos do Horus (A partir do últ. COD_ITEM)",
+            command=lambda: self.sync_new_horus_items_from_last_code(interactive=True),
+            bg="#2563eb",
+            fg="#ffffff",
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=6,
+            relief="flat",
+            cursor="hand2",
+        )
+        self.btn_sync_new_horus.pack(side="left", padx=(0, 6))
 
         self.btn_stop_range_sync = tk.Button(
             r_btns,
@@ -2560,11 +2957,11 @@ class HorusPDVWindow:
 
         tk.Button(
             r_btns,
-            text="⏭️ Próxima Sequência (+Novos)",
+            text="⏭️ Preencher Próx. Sequência",
             command=self.fill_next_sequence_clicked,
             bg="#e2e8f0",
             fg="#0f172a",
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
             padx=8,
             pady=6,
             relief="flat",
@@ -2572,15 +2969,27 @@ class HorusPDVWindow:
 
         tk.Button(
             r_btns,
-            text="♻️ Recarregar Faixas Antigas",
+            text="♻️ Recarregar Antigas",
             command=self.reload_existing_ranges_clicked,
             bg="#dbeafe",
             fg="#1d4ed8",
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
             padx=8,
             pady=6,
             relief="flat",
         ).pack(side="left")
+
+        chk_auto_delta = tk.Checkbutton(
+            range_card,
+            text="⚡ Ao abrir o PDV online, identificar o último COD_ITEM integrado e sincronizar automaticamente os últimos itens cadastrados no Horus",
+            variable=self.var_auto_sync_new_items,
+            command=self.on_toggle_auto_sync_new_items,
+            bg="#f8fafc",
+            fg="#0f172a",
+            activebackground="#f8fafc",
+            font=("Segoe UI", 8, "bold"),
+        )
+        chk_auto_delta.pack(anchor="w", pady=(2, 2))
 
         self.progress_range = ttk.Progressbar(range_card, orient="horizontal", mode="determinate")
         self.progress_range.pack(fill="x", pady=(4, 2))
@@ -2862,16 +3271,154 @@ class HorusPDVWindow:
     # ──────────────────────────────────────────────────────────────────────────
     # Sincronização Sequencial de Catálogo Horus (COD_ITEM_INI -> COD_ITEM_FIM)
     # ──────────────────────────────────────────────────────────────────────────
+    def on_toggle_auto_sync_new_items(self) -> None:
+        enabled = bool(self.var_auto_sync_new_items.get())
+        self.cfg["auto_sync_new_horus_items"] = enabled
+        save_config(self.cfg)
+        last_code = self.storage.get_last_integrated_horus_code()
+        if enabled:
+            self.lbl_range_progress.configure(
+                text=f"⚡ Sincronização automática ao abrir ATIVADA (último COD_ITEM integrado: {last_code}).",
+                fg="#059669",
+            )
+        else:
+            self.lbl_range_progress.configure(
+                text="ℹ️ Sincronização automática ao abrir DESATIVADA pelo operador.",
+                fg="#64748b",
+            )
+
     def fill_next_sequence_clicked(self) -> None:
-        last_c = int(self.storage.sync_state.get("last_cod_item_synced") or 0)
+        last_c = self.storage.get_last_integrated_horus_code()
         next_ini = last_c + 1
         next_fim = last_c + 5000
         self.var_cod_ini.set(str(next_ini))
         self.var_cod_fim.set(str(next_fim))
         self.lbl_range_progress.configure(
-            text=f"Sequência preenchida automaticamente a partir do último código sincronizado: {next_ini} até {next_fim}.",
+            text=f"Sequência preenchida a partir do último COD_ITEM integrado no Horus ({last_c}): {next_ini} até {next_fim}.",
             fg="#2563eb",
         )
+
+    def sync_new_horus_items_from_last_code(self, interactive: bool = False) -> None:
+        """
+        Identifica automaticamente qual foi o último item integrado do Horus (COD_ITEM)
+        na prática e consulta o Horus online a partir de `ultimo_codigo + 1` para
+        coletar e salvar no cache local todos os novos produtos recém-cadastrados.
+        """
+        if self.range_sync_running:
+            if interactive:
+                messagebox.showinfo("Sincronização em Andamento", "Já existe uma sincronização do catálogo Horus em execução.")
+            return
+
+        if not self.cfg.get("access_token") or not self.cfg.get("company_id"):
+            if interactive:
+                messagebox.showwarning("Credenciais Seller", "Autentique o Seller na aba 4 antes de buscar novos itens no Horus.")
+            return
+
+        try:
+            self.api.fetch_desktop_license(timeout=3.5)
+            self.var_license_key.set(str(self.cfg.get("license_key") or ""))
+        except Exception:
+            pass
+        self.refresh_license_ui()
+
+        if not self.license_status.get("is_valid") or not self.license_status.get("range_sync_enabled"):
+            if interactive:
+                messagebox.showwarning(
+                    "Licença / Sincronização Horus",
+                    "Verifique se a chave de licença do PDV está válida e com a Sincronização por Sequência habilitada no Master.",
+                )
+            return
+
+        try:
+            step = max(100, min(2000, int(self.var_cod_step.get().strip() or "500")))
+        except ValueError:
+            step = 500
+
+        last_code = self.storage.get_last_integrated_horus_code()
+        self.range_sync_running = True
+        self.range_sync_stop_requested = False
+        self.btn_start_range_sync.configure(state="disabled")
+        if hasattr(self, "btn_sync_new_horus"):
+            self.btn_sync_new_horus.configure(state="disabled")
+        self.btn_stop_range_sync.configure(state="normal")
+
+        threading.Thread(
+            target=self._delta_horus_sync_worker,
+            args=(last_code, step, interactive),
+            daemon=True,
+        ).start()
+
+    def _delta_horus_sync_worker(self, initial_last_code: int, step: int, interactive: bool) -> None:
+        sid = self.cfg.get("active_session_id")
+        bid = self.cfg.get("active_branch_id")
+        cur_ini = max(1, initial_last_code + 1)
+        max_batches = 12 if interactive else 6
+        consecutive_empty = 0
+        total_new_items = 0
+        highest_code_seen = initial_last_code
+
+        for batch_idx in range(1, max_batches + 1):
+            if self.range_sync_stop_requested:
+                break
+            cur_fim = cur_ini + step - 1
+            self.ui_queue.put((
+                "RANGE_SYNC_PROGRESS",
+                (
+                    batch_idx - 1,
+                    max_batches,
+                    f"⚡ Auto-Sync Horus: verificando novos itens cadastrados após COD_ITEM {highest_code_seen} (faixa {cur_ini}..{cur_fim})...",
+                ),
+            ))
+
+            ok, msg, body = self.api.sync_horus_catalog_range(
+                cod_item_ini=cur_ini,
+                cod_item_fim=cur_fim,
+                session_id=int(sid) if sid else None,
+                branch_id=int(bid) if bid else None,
+                limit=max(500, step),
+            )
+            if not ok:
+                self.ui_queue.put(("DELTA_SYNC_FINISHED", (False, msg, interactive, total_new_items, highest_code_seen)))
+                return
+
+            batch_items = body.get("items") or []
+            if batch_items:
+                consecutive_empty = 0
+                self.storage.save_catalog(batch_items, merge=True)
+                total_new_items += len(batch_items)
+                new_max = self.storage.get_last_integrated_horus_code()
+                if new_max > highest_code_seen:
+                    highest_code_seen = new_max
+                rec_fim = max(cur_ini, highest_code_seen)
+                self.storage.record_range_synced(cur_ini, rec_fim, len(batch_items), max_cod_found=highest_code_seen)
+                self.ui_queue.put((
+                    "RANGE_SYNC_PROGRESS",
+                    (
+                        batch_idx,
+                        max_batches,
+                        f"✅ +{len(batch_items)} novo(s) item(ns) integrado(s) do Horus! Último COD_ITEM: {highest_code_seen}.",
+                    ),
+                ))
+            else:
+                consecutive_empty += 1
+                # Se já tínhamos base sincronizada e encontramos 2 lotes seguidos vazios (ou 1 lote vazio sem nenhum item novo),
+                # significa que já alcançamos o topo dos itens cadastrados no Horus na prática.
+                if initial_last_code > 0 and (consecutive_empty >= 2 or (batch_idx == 1 and total_new_items == 0)):
+                    break
+
+            cur_ini = cur_fim + 1
+
+        if total_new_items > 0:
+            summary_msg = (
+                f"⚡ Sincronização incremental Horus concluída: {total_new_items} novo(s) produto(s) "
+                f"integrado(s) ao cache offline! (Último COD_ITEM integrado: {highest_code_seen})."
+            )
+        else:
+            summary_msg = (
+                f"✅ Catálogo local já está 100% atualizado com os últimos cadastros do Horus "
+                f"(Último COD_ITEM integrado: {highest_code_seen})."
+            )
+        self.ui_queue.put(("DELTA_SYNC_FINISHED", (True, summary_msg, interactive, total_new_items, highest_code_seen)))
 
     def start_horus_range_sync_clicked(self) -> None:
         if self.cfg.get("access_token") and self.cfg.get("company_id"):
@@ -2963,6 +3510,8 @@ class HorusPDVWindow:
         self.range_sync_running = True
         self.range_sync_stop_requested = False
         self.btn_start_range_sync.configure(state="disabled")
+        if hasattr(self, "btn_sync_new_horus"):
+            self.btn_sync_new_horus.configure(state="disabled")
         self.btn_stop_range_sync.configure(state="normal")
         self.progress_range["value"] = 0
         self.progress_range["maximum"] = max(1, len(ranges_list))
@@ -3010,7 +3559,12 @@ class HorusPDVWindow:
             if batch_items:
                 self.storage.save_catalog(batch_items, merge=True)
                 total_loaded += len(batch_items)
-            self.storage.record_range_synced(c_ini, c_fim, len(batch_items))
+            self.storage.record_range_synced(
+                c_ini,
+                c_fim,
+                len(batch_items),
+                max_cod_found=self.storage.get_last_integrated_horus_code() if batch_items else None,
+            )
 
             self.ui_queue.put((
                 "RANGE_SYNC_PROGRESS",
@@ -3023,8 +3577,59 @@ class HorusPDVWindow:
         ))
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Lógica de Máscaras Monetárias (R$ e %) e Carrinho de Compras
+    # Cliente Obrigatório (CPF / CNPJ Válido ou Consumidor Padrão 99999999999)
     # ──────────────────────────────────────────────────────────────────────────
+    def set_default_consumer_customer(self) -> None:
+        self.var_customer_doc.set(DEFAULT_CONSUMER_DOC)
+        self.var_customer_name.set(DEFAULT_CONSUMER_NAME)
+        self._update_customer_doc_status_ui()
+
+    def clear_for_custom_customer(self) -> None:
+        if self.var_customer_doc.get().strip() == DEFAULT_CONSUMER_DOC:
+            self.var_customer_doc.set("")
+        if self.var_customer_name.get().strip() == DEFAULT_CONSUMER_NAME:
+            self.var_customer_name.set("")
+        self._update_customer_doc_status_ui()
+        self.entry_customer_doc.focus_set()
+
+    def focus_customer_doc_entry(self) -> None:
+        self.notebook.select(self.tab_pos)
+        self.entry_customer_doc.focus_set()
+        self.entry_customer_doc.select_range(0, tk.END)
+
+    def _on_customer_doc_key(self, event: Any = None) -> None:
+        self._update_customer_doc_status_ui()
+
+    def _on_customer_doc_focus_out(self, event: Any = None) -> None:
+        raw = self.var_customer_doc.get().strip()
+        if not raw:
+            self.var_customer_doc.set(DEFAULT_CONSUMER_DOC)
+            if not self.var_customer_name.get().strip():
+                self.var_customer_name.set(DEFAULT_CONSUMER_NAME)
+        self._update_customer_doc_status_ui()
+
+    def _update_customer_doc_status_ui(self) -> None:
+        raw = self.var_customer_doc.get().strip()
+        if not raw:
+            self.lbl_customer_doc_status.configure(
+                text="⚠️ Vazio: ao finalizar preencherá 99999999999 (Consumidor Final)",
+                fg="#d97706",
+            )
+            return
+        ok, _, _, msg = validate_cpf_or_cnpj(raw)
+        if ok:
+            self.lbl_customer_doc_status.configure(text=f"✅ {msg}", fg="#16a34a")
+        else:
+            self.lbl_customer_doc_status.configure(text=f"❌ {msg}", fg="#dc2626")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Lógica de Máscaras Monetárias (R$ e %), Desconto (Venda vs Item) e Pagamento
+    # ──────────────────────────────────────────────────────────────────────────
+    def focus_discount_entry(self) -> None:
+        self.notebook.select(self.tab_pos)
+        self.entry_discount.focus_set()
+        self.entry_discount.icursor(tk.END)
+
     def set_discount_mode(self, mode: str) -> None:
         self.discount_mode = mode
         if mode == "BRL":
@@ -3036,15 +3641,157 @@ class HorusPDVWindow:
         txt, val = format_atm_currency(self.discount_raw_digits, mode=self.discount_mode)
         self.discount_value = val
         self.var_discount_display.set(txt)
-        self.refresh_cart_ui()
 
     def _on_discount_key(self, event: Any) -> None:
+        if getattr(event, "keysym", "") == "Return":
+            return
         raw = self.var_discount_display.get()
         self.discount_raw_digits = "".join(c for c in raw if c.isdigit())
         txt, val = format_atm_currency(self.discount_raw_digits, mode=self.discount_mode)
         self.discount_value = val
         self.var_discount_display.set(txt)
         self.entry_discount.icursor(tk.END)
+
+    def apply_discount_by_scope(self, scope: str) -> None:
+        """
+        Aplica o valor/percentual de desconto digitado:
+        - `scope == "SALE"`: rateia proporcionalmente entre todos os itens da venda.
+        - `scope == "ITEM"`: aplica exclusivamente no único item selecionado na tabela do carrinho.
+        """
+        self.discount_scope = scope
+        self.var_discount_scope.set(scope)
+
+        if not self.cart:
+            messagebox.showinfo("Carrinho Vazio", "Adicione itens ao carrinho antes de aplicar um desconto.")
+            return
+
+        if scope == "ITEM":
+            sel = self.tree_cart.selection()
+            if sel and str(sel[0]).isdigit():
+                sel_idx = int(sel[0])
+            elif len(self.cart) == 1:
+                sel_idx = 0
+            else:
+                messagebox.showwarning(
+                    "Selecione um Item",
+                    "Clique em um item na tabela do carrinho para aplicar o desconto individual nele,\n"
+                    "ou clique em '📊 Ratear na Venda' para distribuir o desconto em toda a venda.",
+                )
+                return
+
+            self.active_prorated_discount = None
+            apply_cart_discount(
+                self.cart,
+                discount_value=self.discount_value,
+                discount_mode=self.discount_mode,
+                scope="ITEM",
+                selected_idx=sel_idx,
+            )
+            item_disc = float(self.cart[sel_idx].get("discount") or 0.0)
+            item_name = str(self.cart[sel_idx].get("name") or "")[:24]
+            self.lbl_discount_scope_info.configure(
+                text=f"🎯 Desconto no Item #{sel_idx + 1} ({item_name}): - {format_brl(item_disc)}",
+                fg="#2563eb",
+            )
+            self.refresh_cart_ui(selected_idx=sel_idx)
+            return
+
+        # scope == "SALE" (Ratear na Venda Toda)
+        self.active_prorated_discount = (self.discount_mode, self.discount_value)
+        total_disc = apply_cart_discount(
+            self.cart,
+            discount_value=self.discount_value,
+            discount_mode=self.discount_mode,
+            scope="SALE",
+        )
+        self.lbl_discount_scope_info.configure(
+            text=f"📊 Desconto rateado em {len(self.cart)} item(ns) da venda: - {format_brl(total_disc)}",
+            fg="#16a34a" if total_disc > 0 else "#64748b",
+        )
+        self.refresh_cart_ui()
+
+    def clear_discounts_clicked(self) -> None:
+        self.discount_raw_digits = ""
+        self.discount_value = 0.0
+        self.active_prorated_discount = None
+        self.var_discount_display.set("R$ 0,00" if self.discount_mode == "BRL" else "0,00%")
+        for it in self.cart:
+            it["discount"] = 0.0
+            it["discount_source"] = "NONE"
+        self.lbl_discount_scope_info.configure(
+            text="Descontos zerados. Escolha 'Ratear na Venda' ou 'No Item'.",
+            fg="#64748b",
+        )
+        self.refresh_cart_ui()
+
+    def _recompute_active_discounts(self) -> None:
+        """
+        Mantém os descontos consistentes quando quantidades ou itens mudam no carrinho.
+        """
+        if not self.cart:
+            return
+        if self.active_prorated_discount is not None:
+            mode, val = self.active_prorated_discount
+            apply_cart_discount(self.cart, discount_value=val, discount_mode=mode, scope="SALE")
+            return
+        for it in self.cart:
+            gross = round(float(it.get("unit_price") or 0.0) * int(it.get("quantity") or 1), 2)
+            if it.get("discount_source") == "ITEM":
+                m_app = it.get("discount_mode_applied", "BRL")
+                v_app = float(it.get("discount_val_applied") or 0.0)
+                if m_app == "PCT":
+                    it["discount"] = round(gross * (min(v_app, 100.0) / 100.0), 2)
+                else:
+                    it["discount"] = round(min(v_app, gross), 2)
+            else:
+                it["discount"] = round(min(float(it.get("discount") or 0.0), gross), 2)
+
+    def select_payment_shortcut(self, method: str) -> None:
+        self.var_payment_method.set(method)
+        if method != "CREDITO":
+            self.var_installments.set("1")
+        self.refresh_cart_ui()
+        if method == "DINHEIRO":
+            self.entry_cash_received.focus_set()
+            self.entry_cash_received.icursor(tk.END)
+        self.lbl_search_feedback.configure(
+            text=f"💳 Forma de pagamento selecionada via atalho: {method} ({self.var_installments.get()}x).",
+            fg="#2563eb",
+        )
+
+    def set_installments_shortcut(self, count: int) -> None:
+        n = max(1, min(12, int(count)))
+        if n > 1 and self.var_payment_method.get() != "CREDITO":
+            self.var_payment_method.set("CREDITO")
+        self.var_installments.set(str(n))
+        self.refresh_cart_ui()
+        self.lbl_search_feedback.configure(
+            text=f"💳 Parcelamento definido via atalho: {self.var_payment_method.get()} em {n}x.",
+            fg="#2563eb",
+        )
+
+    def cycle_installments_shortcut(self, delta: int = 1) -> None:
+        if self.var_payment_method.get() != "CREDITO":
+            self.var_payment_method.set("CREDITO")
+            cur = 1
+        else:
+            cur = int(self.var_installments.get() or 1)
+        nxt = cur + delta
+        if nxt > 12:
+            nxt = 1
+        elif nxt < 1:
+            nxt = 12
+        self.var_installments.set(str(nxt))
+        self.refresh_cart_ui()
+        self.lbl_search_feedback.configure(
+            text=f"💳 Parcelamento alterado: CRÉDITO em {nxt}x.",
+            fg="#2563eb",
+        )
+
+    def _on_installments_combo_change(self) -> None:
+        n = int(self.var_installments.get() or 1)
+        if n > 1 and self.var_payment_method.get() != "CREDITO":
+            self.var_payment_method.set("CREDITO")
         self.refresh_cart_ui()
 
     def _on_cash_received_key(self, event: Any) -> None:
@@ -3070,10 +3817,7 @@ class HorusPDVWindow:
 
     def compute_totals(self) -> Tuple[float, float, float, float]:
         subtotal = round(sum(float(i["unit_price"]) * int(i["quantity"]) for i in self.cart), 2)
-        if self.discount_mode == "PCT":
-            disc = round(subtotal * (min(self.discount_value, 100.0) / 100.0), 2)
-        else:
-            disc = round(min(self.discount_value, subtotal), 2)
+        disc = round(min(sum(float(i.get("discount") or 0.0) for i in self.cart), subtotal), 2)
         total = round(max(0.0, subtotal - disc), 2)
         change = 0.0
         if self.var_payment_method.get() == "DINHEIRO" and self.cash_received_value > total:
@@ -3182,6 +3926,7 @@ class HorusPDVWindow:
         if existing_idx is not None:
             self.cart[existing_idx]["quantity"] = desired_qty
             self.cart[existing_idx]["stock_quantity"] = stock_qty
+            self._recompute_active_discounts()
             self.refresh_cart_ui(selected_idx=existing_idx)
             return
 
@@ -3193,7 +3938,10 @@ class HorusPDVWindow:
             "unit_price": float(prod.get("price") or 0.0),
             "stock_quantity": stock_qty,
             "quantity": 1,
+            "discount": 0.0,
+            "discount_source": "NONE",
         })
+        self._recompute_active_discounts()
         self.refresh_cart_ui(selected_idx=len(self.cart) - 1)
 
     def _on_cart_tree_click(self, event: Any) -> None:
@@ -3209,12 +3957,12 @@ class HorusPDVWindow:
         if not row_id or not str(row_id).isdigit():
             return
         idx = int(row_id)
-        # Colunas: #1=seq, #2=isbn, #3=name, #4=stock, #5=minus, #6=qty, #7=plus, #8=unit_price, #9=subtotal, #10=remove
+        # Colunas: #1=seq, #2=isbn, #3=name, #4=stock, #5=minus, #6=qty, #7=plus, #8=unit_price, #9=discount, #10=subtotal, #11=remove
         if col_id == "#5":
             self.change_cart_qty(-1, target_idx=idx)
         elif col_id == "#7":
             self.change_cart_qty(1, target_idx=idx)
-        elif col_id == "#10":
+        elif col_id == "#11":
             self.remove_cart_item(target_idx=idx)
 
     def change_cart_qty(self, delta: int, target_idx: Optional[int] = None) -> None:
@@ -3245,10 +3993,12 @@ class HorusPDVWindow:
 
             if new_q <= 0:
                 self.cart.pop(idx)
+                self._recompute_active_discounts()
                 next_sel = min(idx, len(self.cart) - 1) if self.cart else None
                 self.refresh_cart_ui(selected_idx=next_sel)
             else:
                 item["quantity"] = new_q
+                self._recompute_active_discounts()
                 self.refresh_cart_ui(selected_idx=idx)
 
     def remove_cart_item(self, target_idx: Optional[int] = None) -> None:
@@ -3264,6 +4014,7 @@ class HorusPDVWindow:
 
         if 0 <= idx < len(self.cart):
             self.cart.pop(idx)
+            self._recompute_active_discounts()
             next_sel = min(idx, len(self.cart) - 1) if self.cart else None
             self.refresh_cart_ui(selected_idx=next_sel)
 
@@ -3294,12 +4045,19 @@ class HorusPDVWindow:
         self.cart.clear()
         self.discount_raw_digits = ""
         self.discount_value = 0.0
+        self.active_prorated_discount = None
         self.var_discount_display.set("R$ 0,00" if self.discount_mode == "BRL" else "0,00%")
+        if hasattr(self, "lbl_discount_scope_info"):
+            self.lbl_discount_scope_info.configure(
+                text="Escolha 'Ratear na Venda' ou selecione 1 item e clique 'No Item'.",
+                fg="#64748b",
+            )
         self.cash_received_digits = ""
         self.cash_received_value = 0.0
         self.var_cash_received.set("R$ 0,00")
-        self.var_customer_name.set("")
-        self.var_customer_doc.set("")
+        self.var_customer_name.set(DEFAULT_CONSUMER_NAME)
+        self.var_customer_doc.set(DEFAULT_CONSUMER_DOC)
+        self._update_customer_doc_status_ui()
         self.refresh_cart_ui()
         self.entry_search.focus_set()
 
@@ -3313,8 +4071,11 @@ class HorusPDVWindow:
             self.tree_cart.delete(row)
 
         for idx, it in enumerate(self.cart):
-            sub = float(it["unit_price"]) * int(it["quantity"])
+            gross = round(float(it["unit_price"]) * int(it["quantity"]), 2)
+            item_disc = round(float(it.get("discount") or 0.0), 2)
+            net_sub = round(max(0.0, gross - item_disc), 2)
             stk = it.get("stock_quantity", 0)
+            disc_str = f"- {format_brl(item_disc)}" if item_disc > 0 else "R$ 0,00"
             self.tree_cart.insert(
                 "",
                 "end",
@@ -3328,7 +4089,8 @@ class HorusPDVWindow:
                     it.get("quantity"),
                     "➕",
                     format_brl(it.get("unit_price", 0)),
-                    format_brl(sub),
+                    disc_str,
+                    format_brl(net_sub),
                     "🗑️",
                 ),
             )
@@ -3344,9 +4106,14 @@ class HorusPDVWindow:
 
         subtotal, disc, total, change = self.compute_totals()
         self.lbl_subtotal.configure(text=f"Subtotal: {format_brl(subtotal)}")
-        self.lbl_discount_applied.configure(text=f"Desconto: - {format_brl(disc)}")
+        self.lbl_discount_applied.configure(text=f"Desconto Aplicado: - {format_brl(disc)}")
         self.lbl_total_big.configure(text=format_brl(total))
         self.lbl_change.configure(text=f"Troco: {format_brl(change)}")
+
+        if hasattr(self, "lbl_installment_preview"):
+            inst_n = max(1, int(self.var_installments.get() or 1))
+            per_inst = round(total / inst_n, 2) if inst_n > 0 else total
+            self.lbl_installment_preview.configure(text=f"{inst_n}x de {format_brl(per_inst)}")
 
     def finalize_sale(self) -> None:
         # Sincroniza em tempo real com o servidor (se online) para detectar revogação/expiração imediata no Master
@@ -3372,6 +4139,35 @@ class HorusPDVWindow:
             messagebox.showwarning("Carrinho Vazio", "Adicione pelo menos 1 produto ao carrinho antes de finalizar a venda.")
             return
 
+        # 1. Validação Obrigatória de Cliente (CPF, CNPJ ou Consumidor Padrão 99999999999)
+        raw_doc = self.var_customer_doc.get().strip()
+        if not raw_doc:
+            raw_doc = DEFAULT_CONSUMER_DOC
+            self.var_customer_doc.set(DEFAULT_CONSUMER_DOC)
+        is_valid_doc, clean_doc_digits, _, doc_msg = validate_cpf_or_cnpj(raw_doc)
+        self._update_customer_doc_status_ui()
+        if not is_valid_doc:
+            messagebox.showerror(
+                "CPF ou CNPJ Inválido (Cliente Obrigatório)",
+                f"Não é possível finalizar a venda:\n\n"
+                f"• {doc_msg}\n\n"
+                f"Informe um CPF válido (11 dígitos), um CNPJ válido (14 dígitos) "
+                f"ou clique em '⚡ Consumidor (99999999999)'.",
+            )
+            self.entry_customer_doc.focus_set()
+            return
+
+        cust_name = self.var_customer_name.get().strip()
+        if not cust_name:
+            cust_name = DEFAULT_CONSUMER_NAME
+            self.var_customer_name.set(cust_name)
+
+        # 2. Caso o operador tenha digitado um valor no campo de desconto e ainda não tenha clicado em Aplicar:
+        existing_disc_sum = round(sum(float(i.get("discount") or 0.0) for i in self.cart), 2)
+        if self.discount_value > 0 and existing_disc_sum == 0.0:
+            self.apply_discount_by_scope(self.var_discount_scope.get() or "SALE")
+
+        # 3. Validação de Estoque da Sessão (se ativa)
         if bool(self.cfg.get("validate_stock", False)):
             for it in self.cart:
                 stk_q = int(it.get("stock_quantity") if it.get("stock_quantity") is not None else 0)
@@ -3398,8 +4194,8 @@ class HorusPDVWindow:
             cash_received=cash_rec,
             change_amount=change if cash_rec else None,
             payment_splits=None,
-            customer_name=self.var_customer_name.get(),
-            customer_document=self.var_customer_doc.get(),
+            customer_name=cust_name,
+            customer_document=clean_doc_digits,
         )
 
         receipt_path = generate_receipt_html(sale, self.cfg)
@@ -3727,13 +4523,13 @@ class HorusPDVWindow:
             fg="#2563eb",
         )
         st = self.storage.sync_state
-        last_c = int(st.get("last_cod_item_synced") or 0)
+        last_c = self.storage.get_last_integrated_horus_code()
         min_c = st.get("min_cod_item_cached")
         max_c = st.get("max_cod_item_cached")
         stale = self.storage.get_stale_ranges(max_age_hours=24.0)
         self.lbl_catalog_watermark.configure(
             text=(
-                f"Último COD_ITEM Sincronizado: {last_c}  |  "
+                f"Último COD_ITEM Integrado do Horus: {last_c}  |  "
                 f"Faixa no Cache: {min_c or '---'} até {max_c or '---'}  |  "
                 f"Faixas precisando recarregar (>24h): {len(stale)}"
             )
@@ -3795,6 +4591,10 @@ class HorusPDVWindow:
                 self.ui_queue.put(("SESSIONS_LIST", (True, sessions)))
             if self.cfg.get("active_session_id"):
                 self._sync_worker(interactive=False)
+            # Se o sistema estiver online e com a opção ativa, identifica o último COD_ITEM
+            # integrado e sincroniza automaticamente os últimos itens cadastrados no Horus
+            if bool(self.cfg.get("auto_sync_new_horus_items", True)):
+                self.ui_queue.put(("TRIGGER_STARTUP_DELTA_SYNC", None))
 
     def _license_heartbeat_tick(self) -> None:
         """
@@ -3832,6 +4632,20 @@ class HorusPDVWindow:
                         else:
                             messagebox.showwarning("Licença Master", msg)
 
+                elif ev == "TRIGGER_STARTUP_DELTA_SYNC":
+                    if (
+                        self.is_online
+                        and bool(self.cfg.get("auto_sync_new_horus_items", True))
+                        and self.license_status.get("is_valid")
+                        and self.license_status.get("range_sync_enabled")
+                    ):
+                        last_c = self.storage.get_last_integrated_horus_code()
+                        self.lbl_search_feedback.configure(
+                            text=f"⚡ Auto-Sync Horus Online: buscando novos itens cadastrados após COD_ITEM {last_c}...",
+                            fg="#2563eb",
+                        )
+                        self.sync_new_horus_items_from_last_code(interactive=False)
+
                 elif ev == "RANGE_SYNC_PROGRESS":
                     done_n, total_n, status_txt = payload
                     self.progress_range["maximum"] = max(1, total_n)
@@ -3843,13 +4657,48 @@ class HorusPDVWindow:
                     ok, msg = payload
                     self.range_sync_running = False
                     self.btn_start_range_sync.configure(state="normal")
+                    if hasattr(self, "btn_sync_new_horus"):
+                        self.btn_sync_new_horus.configure(state="normal")
                     self.btn_stop_range_sync.configure(state="disabled")
                     self.lbl_range_progress.configure(text=msg, fg="#16a34a" if ok else "#dc2626")
+                    last_c = self.storage.get_last_integrated_horus_code()
+                    if last_c > 0:
+                        self.var_cod_ini.set(str(last_c + 1))
+                        self.var_cod_fim.set(str(last_c + 5000))
                     self.refresh_catalog_stats_ui()
                     if ok:
                         messagebox.showinfo("Sincronização Sequencial Horus", msg)
                     else:
                         messagebox.showerror("Erro na Sincronização Horus", msg)
+
+                elif ev == "DELTA_SYNC_FINISHED":
+                    ok, msg, interactive, total_new, highest_code = payload
+                    self.range_sync_running = False
+                    self.btn_start_range_sync.configure(state="normal")
+                    if hasattr(self, "btn_sync_new_horus"):
+                        self.btn_sync_new_horus.configure(state="normal")
+                    self.btn_stop_range_sync.configure(state="disabled")
+                    self.progress_range["value"] = self.progress_range["maximum"] if ok else 0
+                    self.lbl_range_progress.configure(text=msg, fg="#16a34a" if ok else "#dc2626")
+                    if highest_code > 0:
+                        self.var_cod_ini.set(str(highest_code + 1))
+                        self.var_cod_fim.set(str(highest_code + 5000))
+                    self.refresh_catalog_stats_ui()
+                    if ok and total_new > 0:
+                        self.lbl_search_feedback.configure(
+                            text=f"⚡ {total_new} novo(s) item(ns) do Horus integrado(s) automaticamente! (Últ. COD_ITEM: {highest_code})",
+                            fg="#16a34a",
+                        )
+                    elif ok:
+                        self.lbl_search_feedback.configure(
+                            text=f"✅ Catálogo Horus atualizado (Último COD_ITEM integrado: {highest_code} | {len(self.storage.products)} itens offline).",
+                            fg="#059669",
+                        )
+                    if interactive:
+                        if ok:
+                            messagebox.showinfo("Novos Itens do Horus", msg)
+                        else:
+                            messagebox.showerror("Erro ao Buscar Novos Itens", msg)
 
                 elif ev == "SEARCH_RESULTS":
                     term, items = payload

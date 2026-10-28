@@ -115,6 +115,24 @@ class CompanySettingsBase(BaseModel):
     dev_consign_cfops: Optional[str] = "1918,2918"
     horus_bi_sync_enabled: Optional[bool] = False
 
+    # Storefront Aberto B2C & Integração Tray E-commerce
+    b2c_storefront_open: Optional[bool] = False
+    b2c_checkout_mode: Optional[str] = "NATIVE_GATEWAY"
+    b2c_lgpd_terms_text: Optional[str] = None
+    b2c_default_freight_value: Optional[float] = 0.00
+    b2c_free_shipping_min_value: Optional[float] = 0.00
+
+    tray_enabled: Optional[bool] = False
+    tray_store_url: Optional[str] = None
+    tray_api_address: Optional[str] = None
+    tray_store_id: Optional[str] = None
+    tray_consumer_key: Optional[str] = None
+    tray_consumer_secret: Optional[str] = None
+    tray_auth_code: Optional[str] = None
+    tray_access_token: Optional[str] = None
+    tray_refresh_token: Optional[str] = None
+    tray_token_expires_at: Optional[datetime] = None
+
 
 class CompanySettingsUpdate(CompanySettingsBase):
     pass

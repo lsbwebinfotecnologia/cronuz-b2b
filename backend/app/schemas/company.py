@@ -7,6 +7,7 @@ class CompanyBase(BaseModel):
     document: str
     domain: str
     custom_domain: Optional[str] = None
+    b2c_custom_domain: Optional[str] = None
     tenant_id: Optional[str] = "cronuz"
     logo: Optional[str] = None
     login_background_url: Optional[str] = None
@@ -69,6 +70,7 @@ class CompanyBase(BaseModel):
     module_cafeteria: bool = False
     module_encomendas: bool = False
     module_order_intake: bool = False
+    module_b2c_storefront: bool = False
     active: bool = True
 
 
@@ -80,6 +82,7 @@ class CompanyUpdate(BaseModel):
     document: Optional[str] = None
     domain: Optional[str] = None
     custom_domain: Optional[str] = None
+    b2c_custom_domain: Optional[str] = None
     tenant_id: Optional[str] = None
     login_background_url: Optional[str] = None
     logo: Optional[str] = None
@@ -145,6 +148,7 @@ class CompanyUpdate(BaseModel):
     module_cafeteria: Optional[bool] = None
     module_encomendas: Optional[bool] = None
     module_order_intake: Optional[bool] = None
+    module_b2c_storefront: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):
