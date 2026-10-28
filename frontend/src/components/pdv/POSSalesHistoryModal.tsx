@@ -48,8 +48,77 @@ export default function POSSalesHistoryModal({
   async function loadSales() {
     try {
       setLoading(true);
-      const list = await getAllSales();
-      setSales(list);
+      const localList = await getAllSales();
+      const mergedMap = new Map<string, PDVPendingSaleRecord>();
+      for (const item of localList) {
+        if (item.client_sale_uuid) {
+          mergedMap.set(item.client_sale_uuid, item);
+        }
+      }
+
+      // Busca também as vendas já sincronizadas no servidor (incluindo vendas do HorusPDV.exe Desktop)
+      try {
+        const token = getToken();
+        const userRaw = getUser();
+        const userObj = typeof userRaw === 'string' ? JSON.parse(userRaw) : userRaw;
+        const companyId = userObj?.company_id;
+        if (token && companyId) {
+          const res = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sales?limit=200`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (res.ok) {
+            const serverSales = await res.json();
+            if (Array.isArray(serverSales)) {
+              for (const srv of serverSales) {
+                const uuid = srv.client_sale_uuid || `srv-${srv.id}`;
+                if (!mergedMap.has(uuid)) {
+                  mergedMap.set(uuid, {
+                    client_sale_uuid: uuid,
+                    sale_number: srv.sale_number || `PDV-${srv.id}`,
+                    session_id: srv.session_id,
+                    customer_name: srv.customer_name || 'Consumidor Final',
+                    customer_document: srv.customer_document || '',
+                    payment_method: srv.payment_method || 'DINHEIRO',
+                    change_amount: Number(srv.change_amount || 0),
+                    subtotal: Number(srv.subtotal || srv.total_amount || 0),
+                    discount_amount: Number(srv.discount_amount || 0),
+                    total_amount: Number(srv.total_amount || 0),
+                    sold_at: srv.sold_at || srv.created_at || new Date().toISOString(),
+                    status: 'synced',
+                    synced_at: srv.synced_at || srv.created_at,
+                    notes: srv.notes || '',
+                    items: Array.isArray(srv.items)
+                      ? srv.items.map((it: any) => ({
+                          barcode: it.barcode || '',
+                          sku: it.sku || '',
+                          title: it.title || '',
+                          publisher: it.publisher || '',
+                          quantity: Number(it.quantity || 1),
+                          unit_price: Number(it.unit_price || 0),
+                          discount_percent: Number(it.discount_percent || 0),
+                          total_price: Number(it.total_price || 0),
+                        }))
+                      : [],
+                  });
+                } else {
+                  const existing = mergedMap.get(uuid)!;
+                  if (existing.status === 'pending') {
+                    mergedMap.set(uuid, { ...existing, status: 'synced' });
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (srvErr) {
+        console.warn('[POSSalesHistoryModal] Offline ou falha ao buscar vendas do servidor:', srvErr);
+      }
+
+      const combined = Array.from(mergedMap.values()).sort(
+        (a, b) => new Date(b.sold_at).getTime() - new Date(a.sold_at).getTime()
+      );
+      setSales(combined);
     } catch (e) {
       console.error(e);
     } finally {

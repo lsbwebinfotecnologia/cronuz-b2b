@@ -197,10 +197,39 @@ def run_tests() -> None:
             last_seen_date="2099-01-01",
         )
         assert res_rollback["is_valid"] is False and "RELÓGIO" in res_rollback["status_label"].upper()
-        print("  ✅ Licença HPDV1 (Validade, HMAC-SHA256, Empresa e Anti-Rollback de Relógio) validada!")
+
+        # Validação de expiração imediata quando a chave é colocada para ontem (ex: dia 25 sendo hoje dia 26)
+        from datetime import datetime, timedelta
+        yesterday_iso = (datetime.now().date() - timedelta(days=1)).isoformat()
+        yesterday_key = make_test_key(1, yesterday_iso, rng=True)
+        res_yesterday = pdv.verify_pdv_desktop_license_key(yesterday_key, expected_company_id=1)
+        assert res_yesterday["is_valid"] is False and res_yesterday["days_remaining"] == -1
+        print("  ✅ Licença HPDV1 (Validade, Ontem=-1d, HMAC-SHA256, Empresa e Anti-Rollback) validada!")
+
+        print("▶ [8/8] Testando anti-duplicidade de produtos (por SKU e por ISBN/Barras)...")
+        dup_candidates = [
+            {
+                "sku": "",
+                "isbn": "9788535914849",
+                "name": "1984 - GEORGE ORWELL (ATUALIZADO)",
+                "price": 64.90,
+                "stock_quantity": 30,
+            },
+            {
+                "COD_ITEM": "20881",
+                "COD_BARRA_ITEM": "9786555871234",
+                "NOM_ITEM": "DOM CASMURRO - EDICAO LUXO",
+                "VLR_CAPA": 92.00,
+                "SALDO_DISPONIVEL": 15,
+            },
+        ]
+        total_after_merge = storage.save_catalog(dup_candidates, merge=True)
+        assert total_after_merge == 2, f"Esperado continuar com 2 produtos sem duplicar, obtido {total_after_merge}"
+        print("  ✅ Anti-duplicidade de produtos (SKU + ISBN) validada com sucesso!")
 
 
 if __name__ == "__main__":
     run_tests()
-    print("\n🎉 TODOS OS 7 TESTES DO HORUS PDV WINDOWS PASSARAM 100%!")
+    print("\n🎉 TODOS OS 8 TESTES DO HORUS PDV WINDOWS PASSARAM 100%!")
+
 

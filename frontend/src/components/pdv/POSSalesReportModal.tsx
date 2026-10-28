@@ -82,8 +82,9 @@ export default function POSSalesReportModal({
       } else {
         setSelectedSessionId('');
       }
-      // Padrão: data de hoje
-      const today = new Date().toISOString().split('T')[0];
+      // Padrão: data de hoje no fuso local (evita pular para amanhã após as 21h BRT devido ao UTC)
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       setStartDate(today);
       setEndDate(today);
       // Carrega dados iniciais

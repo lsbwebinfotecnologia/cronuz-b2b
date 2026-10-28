@@ -201,6 +201,41 @@ export default function POSSessionModal({
     }
   }
 
+  async function handleToggleValidateStock(s: POSSessionData) {
+    if (s.status === 'CLOSED') return;
+    const nextVal = s.validate_stock === false ? true : false;
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions/${s.id}/settings`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ validate_stock: nextVal }),
+        }
+      );
+      if (res.ok) {
+        const updated = await res.json();
+        toast.success(
+          updated.validate_stock
+            ? `Sessão "${s.title}": Validação de estoque ATIVADA`
+            : `Sessão "${s.title}": Venda Livre (sem bloqueio de estoque)`
+        );
+        if (activeSession?.id === s.id) {
+          onSelectSession({ ...activeSession, validate_stock: updated.validate_stock });
+        }
+        fetchSessions();
+      } else {
+        toast.error('Erro ao alterar configuração de estoque da sessão');
+      }
+    } catch (e) {
+      toast.error('Erro de conexão ao alterar validação de estoque');
+    }
+  }
+
   if (!isOpen) return null;
 
   return (
@@ -514,15 +549,19 @@ export default function POSSessionModal({
                             {pCount} produtos
                           </span>
                         )}
-                        {s.validate_stock !== false ? (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                            🛡️ Valida Estoque
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                            ⚡ Venda Livre
-                          </span>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleValidateStock(s)}
+                          disabled={isClosed}
+                          title={isClosed ? 'Sessão encerrada' : 'Clique para alternar entre Validar Estoque e Venda Livre'}
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border transition ${
+                            s.validate_stock !== false
+                              ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
+                              : 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 hover:bg-amber-100'
+                          } ${!isClosed ? 'cursor-pointer' : 'cursor-default'}`}
+                        >
+                          {s.validate_stock !== false ? '🛡️ Valida Estoque (Alterar)' : '⚡ Venda Livre (Alterar)'}
+                        </button>
                         {Number(s.initial_cash_amount || 0) > 0 && (
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                             💵 R$ {Number(s.initial_cash_amount).toFixed(2)}

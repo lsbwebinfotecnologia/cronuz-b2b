@@ -1298,6 +1298,7 @@ def sync_pos_sales(
     failed_count = 0
     synced_uuids = []
     errors = []
+    seen_uuids_in_batch = set()
 
     for s_in in payload.sales:
         uuid_key = s_in.client_sale_uuid.strip()
@@ -1306,7 +1307,15 @@ def sync_pos_sales(
             errors.append({"uuid": "", "error": "client_sale_uuid obrigatório"})
             continue
 
-        # Verifica se já existe (idempotência)
+        # Trava anti-duplicidade dentro do próprio lote recebido
+        if uuid_key in seen_uuids_in_batch:
+            already_synced_count += 1
+            if uuid_key not in synced_uuids:
+                synced_uuids.append(uuid_key)
+            continue
+        seen_uuids_in_batch.add(uuid_key)
+
+        # Verifica se já existe no banco (idempotência global)
         existing = db.query(POSSale).filter(
             POSSale.company_id == company_id,
             POSSale.client_sale_uuid == uuid_key
@@ -1318,7 +1327,7 @@ def sync_pos_sales(
             continue
 
         try:
-            sale_num = s_in.sale_number or f"PDV-{datetime.utcnow().strftime('%y%m%d%H%M')}-{success_count+1}"
+            sale_num = (s_in.sale_number or "").strip() or f"PDV-{datetime.utcnow().strftime('%y%m%d%H%M')}-{success_count+1}"
 
             # Resolução e Auto-cadastro de Cliente para relatórios gerenciais:
             cust_name = (s_in.customer_name or "").strip() or "Consumidor Final"
@@ -2109,26 +2118,32 @@ def _generate_pdv_desktop_license_key(
     return f"HPDV1.{b64_payload}.{sig}"
 
 
+class POSSessionSettingsUpdateRequest(BaseModel):
+    validate_stock: bool = True
+    branch_id: Optional[int] = None
+
+
 def _build_license_status_response(company: Company, settings: Optional[CompanySettings]) -> dict:
+    from datetime import timedelta as _td
+    br_tz = timezone(_td(hours=-3))
+    today_br = datetime.now(br_tz).date()
+
     enabled = bool(getattr(settings, "pdv_desktop_license_enabled", False)) if settings else False
     range_sync = bool(getattr(settings, "pdv_horus_range_sync_enabled", False)) if settings else False
     exp_dt = getattr(settings, "pdv_desktop_expires_at", None) if settings else None
     lic_key = getattr(settings, "pdv_desktop_license_key", None) if settings else None
 
-    now_utc = datetime.now(timezone.utc)
     days_remaining = None
     is_expired = True
     exp_iso = None
+    exp_br = None
 
     if exp_dt is not None:
-        if exp_dt.tzinfo is None:
-            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-        exp_iso = exp_dt.strftime("%Y-%m-%d")
-        # Considera válido até 23:59:59 da data de expiração
-        end_of_day = exp_dt.replace(hour=23, minute=59, second=59)
-        delta = end_of_day - now_utc
-        days_remaining = max(0, delta.days + (1 if delta.seconds > 0 else 0)) if delta.total_seconds() >= 0 else delta.days
-        is_expired = delta.total_seconds() < 0
+        exp_date = exp_dt.date() if hasattr(exp_dt, "date") else exp_dt
+        exp_iso = exp_date.strftime("%Y-%m-%d")
+        exp_br = exp_date.strftime("%d/%m/%Y")
+        days_remaining = (exp_date - today_br).days
+        is_expired = days_remaining < 0
 
     is_valid = bool(company.module_pdv and enabled and exp_dt is not None and not is_expired)
 
@@ -2139,9 +2154,9 @@ def _build_license_status_response(company: Company, settings: Optional[CompanyS
     elif exp_dt is None:
         status_label = "SEM DATA DE VALIDADE DEFINIDA PELO MASTER"
     elif is_expired:
-        status_label = f"LICENÇA EXPIRADA EM {exp_dt.strftime('%d/%m/%Y')}"
+        status_label = f"LICENÇA EXPIRADA EM {exp_br}"
     else:
-        status_label = f"LICENÇA ATIVA ATÉ {exp_dt.strftime('%d/%m/%Y')} ({days_remaining} dia(s) restante(s))"
+        status_label = f"LICENÇA ATIVA ATÉ {exp_br} ({days_remaining} dia(s) restante(s))"
 
     return {
         "company_id": company.id,
@@ -2150,12 +2165,15 @@ def _build_license_status_response(company: Company, settings: Optional[CompanyS
         "enabled": enabled,
         "range_sync_enabled": range_sync,
         "expires_at": exp_iso,
-        "expires_at_br": exp_dt.strftime("%d/%m/%Y") if exp_dt else None,
+        "expires_at_br": exp_br,
         "days_remaining": days_remaining,
         "is_expired": is_expired,
         "is_valid": is_valid,
+        "server_today": today_br.strftime("%Y-%m-%d"),
         "status_label": status_label,
-        "license_key": lic_key if is_valid else None,
+        # Sempre envia a chave assinada atual (mesmo expirada ou bloqueada) para o HorusPDV.exe
+        # sobrescrever imediatamente qualquer chave antiga que estivesse salva no config_pdv.json
+        "license_key": lic_key,
         "horus_legacy_pagination": bool(getattr(settings, "horus_legacy_pagination", False)) if settings else False,
     }
 
@@ -2187,8 +2205,8 @@ def get_pdv_desktop_license(
         db.commit()
         db.refresh(settings)
 
-    # Se estiver habilitada e tiver data de expiração mas ainda não tiver a chave gerada, gera automaticamente
-    if settings.pdv_desktop_license_enabled and settings.pdv_desktop_expires_at and not settings.pdv_desktop_license_key:
+    # Se tiver data de expiração mas ainda não tiver a chave gerada, gera automaticamente
+    if settings.pdv_desktop_expires_at and not settings.pdv_desktop_license_key:
         exp_str = settings.pdv_desktop_expires_at.strftime("%Y-%m-%d")
         settings.pdv_desktop_license_key = _generate_pdv_desktop_license_key(
             company_id=company.id,
@@ -2200,10 +2218,7 @@ def get_pdv_desktop_license(
         db.commit()
         db.refresh(settings)
 
-    res = _build_license_status_response(company, settings)
-    if is_master:
-        res["license_key"] = settings.pdv_desktop_license_key
-    return res
+    return _build_license_status_response(company, settings)
 
 
 @router.put("/desktop-license")
@@ -2242,11 +2257,11 @@ def update_pdv_desktop_license(
     settings.pdv_horus_range_sync_enabled = bool(payload.range_sync_enabled)
     settings.pdv_desktop_expires_at = exp_dt
 
-    if payload.enabled and exp_str:
+    if exp_str:
         settings.pdv_desktop_license_key = _generate_pdv_desktop_license_key(
             company_id=company.id,
             company_document=company.document or "",
-            enabled=True,
+            enabled=bool(payload.enabled),
             expires_at_iso=exp_str,
             range_sync_enabled=bool(payload.range_sync_enabled),
         )
@@ -2256,9 +2271,34 @@ def update_pdv_desktop_license(
     db.commit()
     db.refresh(settings)
 
-    res = _build_license_status_response(company, settings)
-    res["license_key"] = settings.pdv_desktop_license_key
-    return res
+    return _build_license_status_response(company, settings)
+
+
+@router.put("/sessions/{session_id}/settings", response_model=POSSessionResponse)
+def update_pos_session_settings(
+    company_id: int,
+    session_id: int,
+    payload: POSSessionSettingsUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Atualiza as configurações operacionais de uma sessão de caixa (ex: ativar/desativar
+    validação de estoque 'validate_stock' ou alterar filial vinculada 'branch_id').
+    """
+    _assert_pos_access(current_user, company_id, db)
+    session = db.query(POSSession).filter(
+        POSSession.id == session_id,
+        POSSession.company_id == company_id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+    session.validate_stock = bool(payload.validate_stock)
+    if payload.branch_id is not None:
+        session.branch_id = payload.branch_id if payload.branch_id > 0 else None
+    db.commit()
+    db.refresh(session)
+    return session
 
 
 @router.post("/horus-catalog-range")
@@ -2274,6 +2314,7 @@ async def sync_horus_catalog_by_range(
     1. Validade da licença do Horus PDV Desktop e flag `pdv_horus_range_sync_enabled` liberados pelo Master.
     2. Configuração `horus_legacy_pagination` (OFFSET/LIMIT) do Seller no Master.
     3. Consulta em lote de saldo no endpoint `Estoque` para o mesmo range (`COD_ITEM_INI`..`COD_ITEM_FIM`).
+    4. Deduplicação rigorosa por `sku`/`cod_item` e `barcode`/`isbn` para jamais duplicar produtos.
     """
     company = _assert_pos_access(current_user, company_id, db)
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
@@ -2413,7 +2454,8 @@ async def sync_horus_catalog_by_range(
     finally:
         await client.close()
 
-    formatted_items = []
+    dedup_batch_map: dict = {}
+    seen_barcodes_in_batch: dict = {}
     min_cod = None
     max_cod = None
 
@@ -2459,7 +2501,7 @@ async def sync_horus_catalog_by_range(
                 stock_val = 0.0
 
         sku_str = str(cod_item_int if cod_item_int is not None else (cod_item_raw or cod_barra))
-        formatted_items.append({
+        item_dict = {
             "id": sku_str,
             "cod_item": cod_item_int,
             "sku": sku_str,
@@ -2474,9 +2516,18 @@ async def sync_horus_catalog_by_range(
             "stock": round(stock_val, 2),
             "horus_item_code": sku_str,
             "source": "HORUS_RANGE_SYNC",
-        })
+        }
+        # Deduplicação por SKU e por Barcode dentro do lote
+        if cod_barra in seen_barcodes_in_batch:
+            prev_sku = seen_barcodes_in_batch[cod_barra]
+            dedup_batch_map[prev_sku] = item_dict
+        else:
+            seen_barcodes_in_batch[cod_barra] = sku_str
+            dedup_batch_map[sku_str] = item_dict
 
-    # Se session_id foi informado e merge_into_session=True, faz upsert incremental nos produtos da sessão
+    formatted_items = list(dedup_batch_map.values())
+
+    # Se session_id foi informado e merge_into_session=True, faz upsert incremental sem jamais duplicar
     if payload.session_id and payload.merge_into_session and formatted_items:
         sess = db.query(POSSession).filter(
             POSSession.id == payload.session_id,
@@ -2486,32 +2537,48 @@ async def sync_horus_catalog_by_range(
             existing_rows = db.query(POSSessionProduct).filter(
                 POSSessionProduct.session_id == sess.id
             ).all()
-            by_sku = {str(r.horus_item_code or r.sku or r.barcode): r for r in existing_rows}
+            by_sku = {}
+            by_barcode = {}
+            for r in existing_rows:
+                if r.horus_item_code:
+                    by_sku[str(r.horus_item_code).strip()] = r
+                if r.sku:
+                    by_sku[str(r.sku).strip()] = r
+                if r.barcode:
+                    by_barcode[str(r.barcode).strip()] = r
+
             new_objs = []
             for fi in formatted_items:
-                key = str(fi["sku"])
-                if key in by_sku:
-                    row_obj = by_sku[key]
-                    row_obj.barcode = fi["barcode"]
+                sku_key = str(fi["sku"]).strip()
+                bar_key = str(fi["barcode"]).strip()
+                row_obj = by_sku.get(sku_key) or by_barcode.get(bar_key)
+                if row_obj:
+                    row_obj.barcode = bar_key
+                    row_obj.sku = sku_key
+                    row_obj.horus_item_code = fi["horus_item_code"]
                     row_obj.title = fi["title"]
                     row_obj.publisher = fi["publisher"]
                     row_obj.price = fi["price"]
                     row_obj.stock = fi["stock"]
+                    by_sku[sku_key] = row_obj
+                    by_barcode[bar_key] = row_obj
                 else:
-                    new_objs.append(
-                        POSSessionProduct(
-                            session_id=sess.id,
-                            company_id=company_id,
-                            barcode=fi["barcode"],
-                            sku=fi["sku"],
-                            title=fi["title"],
-                            publisher=fi["publisher"],
-                            price=fi["price"],
-                            stock=fi["stock"],
-                            horus_item_code=fi["horus_item_code"],
-                            source="HORUS_RANGE_SYNC",
-                        )
+                    new_row = POSSessionProduct(
+                        session_id=sess.id,
+                        company_id=company_id,
+                        barcode=bar_key,
+                        sku=sku_key,
+                        title=fi["title"],
+                        publisher=fi["publisher"],
+                        price=fi["price"],
+                        stock=fi["stock"],
+                        horus_item_code=fi["horus_item_code"],
+                        source="HORUS_RANGE_SYNC",
                     )
+                    new_objs.append(new_row)
+                    by_sku[sku_key] = new_row
+                    by_barcode[bar_key] = new_row
+
             if new_objs:
                 db.bulk_save_objects(new_objs)
             sess.products_count = len(existing_rows) + len(new_objs)

@@ -137,11 +137,12 @@ export default function CompanyModulesPage() {
   }
 
   function addDaysToLicenseDate(days: number) {
-    const base = pdvLicense.expires_at ? new Date(`${pdvLicense.expires_at}T12:00:00`) : new Date();
-    const now = new Date();
-    const start = base > now ? base : now;
+    const start = new Date();
     start.setDate(start.getDate() + days);
-    const iso = start.toISOString().slice(0, 10);
+    const yyyy = start.getFullYear();
+    const mm = String(start.getMonth() + 1).padStart(2, '0');
+    const dd = String(start.getDate()).padStart(2, '0');
+    const iso = `${yyyy}-${mm}-${dd}`;
     setPdvLicense(prev => ({ ...prev, enabled: true, expires_at: iso }));
   }
 
@@ -582,7 +583,11 @@ export default function CompanyModulesPage() {
                       </div>
                       <Switch
                         active={pdvLicense.enabled}
-                        onClick={() => setPdvLicense(prev => ({ ...prev, enabled: !prev.enabled }))}
+                        onClick={() => {
+                          const nextEnabled = !pdvLicense.enabled;
+                          setPdvLicense(prev => ({ ...prev, enabled: nextEnabled }));
+                          handleSavePdvDesktopLicense({ enabled: nextEnabled });
+                        }}
                         disabled={savingPdvLicense}
                         colorClass="bg-indigo-600"
                       />
@@ -595,7 +600,11 @@ export default function CompanyModulesPage() {
                       </div>
                       <Switch
                         active={pdvLicense.range_sync_enabled}
-                        onClick={() => setPdvLicense(prev => ({ ...prev, range_sync_enabled: !prev.range_sync_enabled }))}
+                        onClick={() => {
+                          const nextRange = !pdvLicense.range_sync_enabled;
+                          setPdvLicense(prev => ({ ...prev, range_sync_enabled: nextRange }));
+                          handleSavePdvDesktopLicense({ range_sync_enabled: nextRange });
+                        }}
                         disabled={savingPdvLicense}
                         colorClass="bg-emerald-600"
                       />
@@ -607,6 +616,11 @@ export default function CompanyModulesPage() {
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
                           Data de Validade da Licença (Até quando estará ativo)
+                          {pdvLicense.expires_at && (
+                            <span className="ml-2 text-indigo-600 dark:text-indigo-400">
+                              ({pdvLicense.expires_at.split('-').reverse().join('/')})
+                            </span>
+                          )}
                         </label>
                         <input
                           type="date"
@@ -616,6 +630,21 @@ export default function CompanyModulesPage() {
                         />
                       </div>
                       <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => addDaysToLicenseDate(-1)}
+                          title="Define a data para ontem (para testar bloqueio de chave expirada)"
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100"
+                        >
+                          Ontem (Expirar)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addDaysToLicenseDate(0)}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
+                        >
+                          Hoje
+                        </button>
                         <button
                           type="button"
                           onClick={() => addDaysToLicenseDate(30)}
@@ -1039,6 +1068,30 @@ export default function CompanyModulesPage() {
                     onClick={() => handleToggleModule('module_editorial', company.module_editorial ?? false)}
                     disabled={togglingModule !== null}
                     colorClass="bg-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Storefront Aberto B2C (Cupons Corporativos, LGPD & Tray) */}
+              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`p-2 rounded-xl border ${company.module_b2c_storefront ? 'bg-fuchsia-500/10 border-fuchsia-500/20 text-fuchsia-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
+                    <Globe className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Storefront Aberto B2C (Cupons Corporativos, LGPD &amp; Tray)</p>
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-fuchsia-100 text-fuchsia-800 rounded dark:bg-fuchsia-900/30 dark:text-fuchsia-400">Novo</span>
+                    </div>
+                    <p className="text-xs text-slate-500">Habilita vitrine aberta B2C em domínio próprio integrada ao acervo Horus, emissão de lotes de cupons corporativos para empresas/colaboradores (com geração automática de saldo residual), auditoria LGPD e checkout via Intermediador ou Tray (REST + MCP).</p>
+                  </div>
+                </div>
+                <div className="shrink-0 pl-4">
+                  <Switch
+                    active={company.module_b2c_storefront ?? false}
+                    onClick={() => handleToggleModule('module_b2c_storefront', company.module_b2c_storefront ?? false)}
+                    disabled={togglingModule !== null}
+                    colorClass="bg-fuchsia-600"
                   />
                 </div>
               </div>

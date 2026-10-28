@@ -57,7 +57,7 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────────────
 # Diretórios e Arquivos de Persistência Local (Zero Dependências Externas)
 # ──────────────────────────────────────────────────────────────────────────────
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 APP_TITLE = f"Horus PDV — Frente de Caixa Omnichannel (Online & Offline) v{APP_VERSION}"
 
 if getattr(sys, "frozen", False):
@@ -488,7 +488,16 @@ class LocalPOSStorage:
                 try:
                     s_data = json.loads(self.sales_path.read_text(encoding="utf-8"))
                     if isinstance(s_data, list):
-                        self.sales = s_data
+                        dedup_sales: List[Dict[str, Any]] = []
+                        seen_uuids = set()
+                        for s in s_data:
+                            u = s.get("client_sale_uuid")
+                            if u and u in seen_uuids:
+                                continue
+                            if u:
+                                seen_uuids.add(u)
+                            dedup_sales.append(s)
+                        self.sales = dedup_sales
                 except Exception as exc:
                     logger.warning("Erro ao ler vendas locais: %s", exc)
 
@@ -575,22 +584,47 @@ class LocalPOSStorage:
             return stale
 
     def save_catalog(self, items: List[Dict[str, Any]], merge: bool = True) -> int:
+        """
+        Salva e mescla itens no catálogo local com deduplicação dupla (por SKU/COD_ITEM
+        e por ISBN/Código de Barras) para nunca duplicar produtos sincronizados.
+        """
         with self._lock:
-            if not merge:
-                self.products = []
-            existing_map: Dict[str, Dict[str, Any]] = {}
-            for p in self.products:
-                uid = str(p.get("sku") or p.get("isbn") or p.get("id") or "").strip()
-                if uid:
-                    existing_map[uid] = p
+            base_list: List[Dict[str, Any]] = list(self.products) if merge else []
+            dedup_list: List[Dict[str, Any]] = []
+            by_sku: Dict[str, int] = {}
+            by_isbn: Dict[str, int] = {}
+
+            def _upsert_prod(raw_or_norm: Dict[str, Any], is_already_norm: bool = False) -> None:
+                norm = raw_or_norm if is_already_norm else self.normalize_product(raw_or_norm)
+                sku_key = str(norm.get("sku") or "").strip().upper()
+                isbn_key = str(norm.get("isbn") or norm.get("barcode") or "").strip().upper()
+                if not sku_key and not isbn_key:
+                    return
+
+                target_idx: Optional[int] = None
+                if sku_key and sku_key in by_sku:
+                    target_idx = by_sku[sku_key]
+                elif isbn_key and isbn_key not in ("SEM_BARRAS", "") and isbn_key in by_isbn:
+                    target_idx = by_isbn[isbn_key]
+
+                if target_idx is not None:
+                    dedup_list[target_idx] = norm
+                else:
+                    target_idx = len(dedup_list)
+                    dedup_list.append(norm)
+
+                if sku_key:
+                    by_sku[sku_key] = target_idx
+                if isbn_key and isbn_key not in ("SEM_BARRAS", ""):
+                    by_isbn[isbn_key] = target_idx
+
+            for existing in base_list:
+                _upsert_prod(existing, is_already_norm=True)
 
             for item in items:
-                norm = self.normalize_product(item)
-                uid = str(norm.get("sku") or norm.get("isbn") or norm.get("id") or "").strip()
-                if uid:
-                    existing_map[uid] = norm
+                _upsert_prod(item, is_already_norm=False)
 
-            self.products = list(existing_map.values())
+            self.products = dedup_list
             self._rebuild_catalog_index()
             try:
                 tmp = self.catalog_path.with_suffix(".tmp")
@@ -991,19 +1025,23 @@ class CronuzPOSApiClient:
             return True, body
         return False, body if isinstance(body, dict) else {"detail": str(body)}
 
-    def fetch_desktop_license(self) -> Tuple[bool, str, Dict[str, Any]]:
-        """Busca a chave de licença e data de validade liberadas pelo Master para este Seller."""
+    def fetch_desktop_license(self, timeout: float = 8.0) -> Tuple[bool, str, Dict[str, Any]]:
+        """
+        Busca a chave de licença e data de validade liberadas pelo Master para este Seller.
+        Sempre atualiza (ou revoga) a chave local quando o servidor responde HTTP 200,
+        garantindo que qualquer alteração de validade no Master tenha efeito imediato mesmo com a tela aberta.
+        """
         if not self.company_id:
             return False, "Faça login do Seller primeiro.", {}
-        st, body = self._request("GET", f"/companies/{self.company_id}/pos/desktop-license", timeout=10.0)
+        st, body = self._request("GET", f"/companies/{self.company_id}/pos/desktop-license", timeout=timeout)
         if st == 200 and isinstance(body, dict):
-            lic_key = body.get("license_key")
-            if lic_key:
-                self.cfg["license_key"] = lic_key
-                save_config(self.cfg)
+            lic_key = body.get("license_key") or ""
+            is_val = bool(body.get("is_valid"))
+            self.cfg["license_key"] = lic_key
+            save_config(self.cfg)
+            if is_val and lic_key:
                 return True, f"Chave sincronizada com sucesso! {body.get('status_label', '')}", body
-            else:
-                return False, f"Licença não liberada ou expirada no Master: {body.get('status_label', '')}", body
+            return False, f"Licença bloqueada ou expirada no Master: {body.get('status_label', '')}", body
         detail = body.get("detail") if isinstance(body, dict) else str(body)
         return False, f"Falha ao consultar licença no servidor (HTTP {st}): {detail}", {}
 
@@ -1066,13 +1104,28 @@ class CronuzPOSApiClient:
             "catalog_source": catalog_source,
             "initial_cash_amount": round(float(initial_cash_amount or 0.0), 2),
             "branch_id": branch_id,
-            "validate_stock": validate_stock,
+            "validate_stock": bool(validate_stock),
         }
         st, body = self._request("POST", f"/companies/{self.company_id}/pos/sessions", payload=payload, timeout=15.0)
         if st in (200, 201) and isinstance(body, dict) and body.get("id"):
             return True, f"Sessão #{body['id']} aberta com sucesso!", body
         detail = body.get("detail") if isinstance(body, dict) else str(body)
         return False, f"Erro ao abrir sessão (HTTP {st}): {detail}", {}
+
+    def update_session_settings(self, session_id: int, validate_stock: bool) -> Tuple[bool, str, Dict[str, Any]]:
+        if not self.company_id or not session_id:
+            return False, "Sessão não selecionada.", {}
+        payload = {"validate_stock": bool(validate_stock)}
+        st, body = self._request(
+            "PUT",
+            f"/companies/{self.company_id}/pos/sessions/{session_id}/settings",
+            payload=payload,
+            timeout=10.0,
+        )
+        if st == 200 and isinstance(body, dict):
+            return True, "Configuração de estoque da sessão atualizada!", body
+        detail = body.get("detail") if isinstance(body, dict) else str(body)
+        return False, f"Erro ao atualizar sessão (HTTP {st}): {detail}", {}
 
     def get_close_summary(self, session_id: int) -> Tuple[bool, Dict[str, Any]]:
         st, body = self._request("GET", f"/companies/{self.company_id}/pos/sessions/{session_id}/close-summary", timeout=10.0)
@@ -1137,7 +1190,13 @@ class CronuzPOSApiClient:
             return True, "Nenhuma venda pendente para sincronizar.", {"synced": 0, "skipped_duplicates": 0}
 
         sales_payload = []
+        seen_batch_uuids = set()
         for s in pending_sales:
+            c_uuid = str(s.get("client_sale_uuid") or "").strip()
+            if not c_uuid or c_uuid in seen_batch_uuids:
+                continue
+            seen_batch_uuids.add(c_uuid)
+
             raw_items = s.get("items") or []
             items_count = max(1, int(sum(int(it.get("quantity") or 1) for it in raw_items)))
             sold_at_iso = s.get("sold_at") or s.get("created_at") or datetime.now().isoformat()
@@ -1152,7 +1211,7 @@ class CronuzPOSApiClient:
                 extra_details["change_amount"] = s.get("change_amount")
 
             sales_payload.append({
-                "client_sale_uuid": s["client_sale_uuid"],
+                "client_sale_uuid": c_uuid,
                 "sale_number": s.get("sale_number"),
                 "session_id": int(session_id),
                 "customer_name": s.get("customer_name") or "Consumidor Final",
@@ -1207,8 +1266,11 @@ class CronuzPOSApiClient:
         if not self.company_id or not session_id:
             return False, {}
         st, body = self._request("GET", f"/companies/{self.company_id}/pos/sales?session_id={session_id}", timeout=12.0)
-        if st == 200 and isinstance(body, dict):
-            return True, body
+        if st == 200:
+            if isinstance(body, list):
+                return True, {"items": body}
+            if isinstance(body, dict):
+                return True, body
         return False, {}
 
     def download_official_report(self, session_id: int, fmt: str, target_file: Path) -> Tuple[bool, str]:
@@ -1418,6 +1480,7 @@ class HorusPDVWindow:
         self.storage = LocalPOSStorage()
         self.api = CronuzPOSApiClient(self.cfg)
         self.ui_queue: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
+        self._sync_lock = threading.Lock()
 
         self.is_online: bool = False
         self.cart: List[Dict[str, Any]] = []
@@ -1429,6 +1492,7 @@ class HorusPDVWindow:
         self.open_sessions_cache: List[Dict[str, Any]] = []
         self.range_sync_running: bool = False
         self.range_sync_stop_requested: bool = False
+        self.var_validate_stock = tk.BooleanVar(value=bool(self.cfg.get("validate_stock", False)))
 
         self.license_status: Dict[str, Any] = verify_pdv_desktop_license_key(
             self.cfg.get("license_key", ""),
@@ -1449,6 +1513,7 @@ class HorusPDVWindow:
         self._run_initial_checks()
 
         self.root.after(200, self._poll_ui_queue)
+        self.root.after(15000, self._license_heartbeat_tick)
         self.root.after(45000, self._auto_sync_tick)
 
     def _apply_window_icon(self) -> None:
@@ -1503,7 +1568,7 @@ class HorusPDVWindow:
             "Treeview",
             background="#ffffff",
             foreground="#0f172a",
-            rowheight=26,
+            rowheight=28,
             fieldbackground="#ffffff",
             font=("Segoe UI", 9),
         )
@@ -1600,8 +1665,9 @@ class HorusPDVWindow:
     def _format_session_badge_text(self) -> str:
         sid = self.cfg.get("active_session_id")
         stitle = self.cfg.get("active_session_title") or "Caixa Local"
+        stk_lbl = "🛡️C/Est" if self.cfg.get("validate_stock") else "⚡Livre"
         if sid:
-            return f"📦 SESSÃO #{sid}: {stitle[:22]}"
+            return f"📦 SESSÃO #{sid}: {stitle[:18]} ({stk_lbl})"
         return "⚠️ SEM SESSÃO VINCULADA"
 
     def _build_notebook(self) -> None:
@@ -1736,7 +1802,7 @@ class HorusPDVWindow:
 
         cart_card = tk.LabelFrame(
             left_col,
-            text=" 🛒 Itens no Carrinho da Venda Atual ",
+            text=" 🛒 Itens no Carrinho da Venda Atual (Clique direto em ➖ ou ➕ ao lado da Qtd, ou use teclas + / -) ",
             font=("Segoe UI", 10, "bold"),
             bg="#ffffff",
             fg="#0f172a",
@@ -1745,29 +1811,47 @@ class HorusPDVWindow:
         )
         cart_card.pack(fill="both", expand=True)
 
-        cols_cart = ("seq", "isbn", "name", "qty", "unit_price", "subtotal")
+        cols_cart = ("seq", "isbn", "name", "stock", "minus", "qty", "plus", "unit_price", "subtotal", "remove")
         self.tree_cart = ttk.Treeview(cart_card, columns=cols_cart, show="headings", height=9)
         self.tree_cart.heading("seq", text="#")
         self.tree_cart.heading("isbn", text="ISBN / SKU")
         self.tree_cart.heading("name", text="Produto")
+        self.tree_cart.heading("stock", text="Saldo")
+        self.tree_cart.heading("minus", text="[-]")
         self.tree_cart.heading("qty", text="Qtd")
+        self.tree_cart.heading("plus", text="[+]")
         self.tree_cart.heading("unit_price", text="Unitário")
         self.tree_cart.heading("subtotal", text="Subtotal")
+        self.tree_cart.heading("remove", text="Excluir")
 
-        self.tree_cart.column("seq", width=36, anchor="center")
-        self.tree_cart.column("isbn", width=120, anchor="w")
-        self.tree_cart.column("name", width=320, anchor="w")
-        self.tree_cart.column("qty", width=60, anchor="center")
-        self.tree_cart.column("unit_price", width=100, anchor="e")
-        self.tree_cart.column("subtotal", width=110, anchor="e")
+        self.tree_cart.column("seq", width=34, anchor="center")
+        self.tree_cart.column("isbn", width=110, anchor="w")
+        self.tree_cart.column("name", width=255, anchor="w")
+        self.tree_cart.column("stock", width=52, anchor="center")
+        self.tree_cart.column("minus", width=40, anchor="center")
+        self.tree_cart.column("qty", width=48, anchor="center")
+        self.tree_cart.column("plus", width=40, anchor="center")
+        self.tree_cart.column("unit_price", width=90, anchor="e")
+        self.tree_cart.column("subtotal", width=100, anchor="e")
+        self.tree_cart.column("remove", width=54, anchor="center")
         self.tree_cart.pack(fill="both", expand=True)
+
+        # Clique inline direto nas colunas ➖, ➕ e 🗑️ do carrinho sem perder seleção!
+        self.tree_cart.bind("<ButtonRelease-1>", self._on_cart_tree_click)
+        self.tree_cart.bind("<plus>", lambda e: self.change_cart_qty(1))
+        self.tree_cart.bind("<equal>", lambda e: self.change_cart_qty(1))
+        self.tree_cart.bind("<KP_Add>", lambda e: self.change_cart_qty(1))
+        self.tree_cart.bind("<minus>", lambda e: self.change_cart_qty(-1))
+        self.tree_cart.bind("<KP_Subtract>", lambda e: self.change_cart_qty(-1))
+        self.tree_cart.bind("<Delete>", lambda e: self.remove_cart_item())
+        self.tree_cart.bind("<BackSpace>", lambda e: self.remove_cart_item())
 
         cart_btns = tk.Frame(cart_card, bg="#ffffff", pady=6)
         cart_btns.pack(fill="x")
 
         tk.Button(
             cart_btns,
-            text="➕ Adicionar Selecionado da Busca",
+            text="➕ Adicionar da Busca",
             command=self.add_selected_result_to_cart,
             bg="#2563eb",
             fg="#ffffff",
@@ -1779,10 +1863,10 @@ class HorusPDVWindow:
 
         tk.Button(
             cart_btns,
-            text="🔼 +1 Qtd",
+            text="➕ 1 Qtd (+)",
             command=lambda: self.change_cart_qty(1),
-            bg="#e2e8f0",
-            fg="#0f172a",
+            bg="#dcfce7",
+            fg="#166534",
             font=("Segoe UI", 9, "bold"),
             padx=10,
             pady=4,
@@ -1791,10 +1875,10 @@ class HorusPDVWindow:
 
         tk.Button(
             cart_btns,
-            text="🔽 -1 Qtd",
+            text="➖ 1 Qtd (-)",
             command=lambda: self.change_cart_qty(-1),
-            bg="#e2e8f0",
-            fg="#0f172a",
+            bg="#fef3c7",
+            fg="#92400e",
             font=("Segoe UI", 9, "bold"),
             padx=10,
             pady=4,
@@ -1803,7 +1887,7 @@ class HorusPDVWindow:
 
         tk.Button(
             cart_btns,
-            text="🗑️ Remover Item",
+            text="🗑️ Remover (Del)",
             command=self.remove_cart_item,
             bg="#fee2e2",
             fg="#b91c1c",
@@ -1813,9 +1897,19 @@ class HorusPDVWindow:
             relief="flat",
         ).pack(side="left", padx=6)
 
+        tk.Checkbutton(
+            cart_btns,
+            text="🛡️ Validar Estoque",
+            variable=self.var_validate_stock,
+            command=self.on_toggle_validate_stock_checkbox,
+            bg="#ffffff",
+            fg="#0f172a",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=6)
+
         tk.Button(
             cart_btns,
-            text="🧹 Limpar Carrinho (F4)",
+            text="🧹 Limpar (F4)",
             command=self.clear_cart,
             bg="#f1f5f9",
             fg="#475569",
@@ -2226,25 +2320,27 @@ class HorusPDVWindow:
             fg="#334155",
         ).pack(anchor="w")
 
-        cols_sess = ("id", "title", "source", "sales_count", "total_amount", "opened_at")
+        cols_sess = ("id", "title", "source", "stock_rule", "sales_count", "total_amount", "opened_at")
         self.tree_sessions = ttk.Treeview(left_box, columns=cols_sess, show="headings", height=6)
         self.tree_sessions.heading("id", text="ID")
         self.tree_sessions.heading("title", text="Título da Sessão / Evento")
         self.tree_sessions.heading("source", text="Fonte Acervo")
+        self.tree_sessions.heading("stock_rule", text="Estoque")
         self.tree_sessions.heading("sales_count", text="Vendas")
         self.tree_sessions.heading("total_amount", text="Total (R$)")
         self.tree_sessions.heading("opened_at", text="Abertura")
 
-        self.tree_sessions.column("id", width=50, anchor="center")
-        self.tree_sessions.column("title", width=165, anchor="w")
-        self.tree_sessions.column("source", width=90, anchor="center")
-        self.tree_sessions.column("sales_count", width=55, anchor="center")
-        self.tree_sessions.column("total_amount", width=90, anchor="e")
-        self.tree_sessions.column("opened_at", width=115, anchor="center")
+        self.tree_sessions.column("id", width=45, anchor="center")
+        self.tree_sessions.column("title", width=145, anchor="w")
+        self.tree_sessions.column("source", width=85, anchor="center")
+        self.tree_sessions.column("stock_rule", width=85, anchor="center")
+        self.tree_sessions.column("sales_count", width=50, anchor="center")
+        self.tree_sessions.column("total_amount", width=85, anchor="e")
+        self.tree_sessions.column("opened_at", width=110, anchor="center")
         self.tree_sessions.pack(fill="x", pady=6)
 
         sess_btns = tk.Frame(left_box, bg="#ffffff")
-        sess_btns.pack(fill="x", pady=(0, 8))
+        sess_btns.pack(fill="x", pady=(0, 4))
 
         tk.Button(
             sess_btns,
@@ -2282,6 +2378,18 @@ class HorusPDVWindow:
             relief="flat",
         ).pack(side="left")
 
+        active_stock_bar = tk.Frame(left_box, bg="#f8fafc", bd=1, relief="solid", padx=8, pady=4)
+        active_stock_bar.pack(fill="x", pady=(2, 6))
+        tk.Checkbutton(
+            active_stock_bar,
+            text="🛡️ Validar Saldo de Estoque na Sessão Ativa (Bloquear venda se saldo insuficiente)",
+            variable=self.var_validate_stock,
+            command=self.on_toggle_validate_stock_checkbox,
+            bg="#f8fafc",
+            fg="#0f172a",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+
         new_sess = tk.LabelFrame(
             left_box,
             text=" ➕ Abrir Nova Sessão de Caixa no Servidor ",
@@ -2291,7 +2399,7 @@ class HorusPDVWindow:
             padx=10,
             pady=8,
         )
-        new_sess.pack(fill="x", pady=(6, 0))
+        new_sess.pack(fill="x", pady=(4, 0))
 
         tk.Label(new_sess, text="Nome do Caixa / Feira / Evento:", bg="#f8fafc", font=("Segoe UI", 9)).grid(
             row=0, column=0, sticky="w", pady=3
@@ -2322,6 +2430,16 @@ class HorusPDVWindow:
         entry_init_cash.grid(row=2, column=1, sticky="w", padx=6, pady=3)
         entry_init_cash.bind("<KeyRelease>", self._on_initial_cash_key)
 
+        self.var_new_session_validate_stock = tk.BooleanVar(value=bool(self.cfg.get("validate_stock", False)))
+        tk.Checkbutton(
+            new_sess,
+            text="🛡️ Validar Saldo de Estoque nesta Nova Sessão",
+            variable=self.var_new_session_validate_stock,
+            bg="#f8fafc",
+            fg="#0f172a",
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=2)
+
         tk.Button(
             new_sess,
             text="🚀 Criar e Ativar Nova Sessão",
@@ -2332,7 +2450,7 @@ class HorusPDVWindow:
             padx=12,
             pady=6,
             relief="flat",
-        ).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 2))
+        ).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 2))
         new_sess.columnconfigure(1, weight=1)
 
         # ── Coluna Direita: Catálogo Local + Sincronização por Sequência Horus (COD_ITEM_INI / FIM) ──
@@ -2722,13 +2840,13 @@ class HorusPDVWindow:
             expected_company_id=self.cfg.get("company_id"),
             last_seen_date=self.cfg.get("last_seen_date"),
         )
+        # Sempre persiste a chave informada (mesmo se expirada) para não manter chave antiga em cache
+        self.cfg["license_key"] = key
+        save_config(self.cfg)
+        self.refresh_license_ui()
         if res.get("is_valid"):
-            self.cfg["license_key"] = key
-            save_config(self.cfg)
-            self.refresh_license_ui()
             messagebox.showinfo("Chave Ativada com Sucesso", res.get("status_label", "Licença válida!"))
         else:
-            self.refresh_license_ui()
             messagebox.showerror("Chave Inválida ou Expirada", res.get("status_label", "Chave inválida."))
 
     def fetch_license_from_master_clicked(self) -> None:
@@ -2756,6 +2874,12 @@ class HorusPDVWindow:
         )
 
     def start_horus_range_sync_clicked(self) -> None:
+        if self.cfg.get("access_token") and self.cfg.get("company_id"):
+            try:
+                self.api.fetch_desktop_license(timeout=3.5)
+                self.var_license_key.set(str(self.cfg.get("license_key") or ""))
+            except Exception:
+                pass
         self.refresh_license_ui()
         if not self.license_status.get("is_valid"):
             messagebox.showerror(
@@ -3029,42 +3153,142 @@ class HorusPDVWindow:
 
     def add_product_to_cart(self, prod: Dict[str, Any]) -> None:
         uid = str(prod.get("isbn") or prod.get("sku") or prod.get("id") or "")
-        for item in self.cart:
+        stock_qty = int(prod.get("stock_quantity") if prod.get("stock_quantity") is not None else 0)
+        validate_stk = bool(self.cfg.get("validate_stock", False))
+
+        existing_idx: Optional[int] = None
+        for idx, item in enumerate(self.cart):
             if str(item.get("isbn") or item.get("sku") or item.get("id")) == uid:
-                item["quantity"] = int(item["quantity"]) + 1
-                self.refresh_cart_ui()
-                return
+                existing_idx = idx
+                break
+
+        desired_qty = (int(self.cart[existing_idx]["quantity"]) + 1) if existing_idx is not None else 1
+        if validate_stk and desired_qty > stock_qty:
+            prod_name = prod.get("name") or "Produto"
+            self.lbl_search_feedback.configure(
+                text=f"🚫 Estoque insuficiente para '{prod_name}': Saldo disponível = {stock_qty} un. ( pedido: {desired_qty} un. )",
+                fg="#dc2626",
+            )
+            messagebox.showwarning(
+                "Estoque Insuficiente (Validação Ativa)",
+                f"Não é possível adicionar mais unidades de:\n\n"
+                f"• {prod_name}\n"
+                f"• Saldo disponível: {stock_qty} un.\n"
+                f"• Quantidade solicitada: {desired_qty} un.\n\n"
+                "Dica: Você pode desmarcar '🛡️ Validar Estoque' caso queira permitir venda livre sem saldo.",
+            )
+            return
+
+        if existing_idx is not None:
+            self.cart[existing_idx]["quantity"] = desired_qty
+            self.cart[existing_idx]["stock_quantity"] = stock_qty
+            self.refresh_cart_ui(selected_idx=existing_idx)
+            return
+
         self.cart.append({
             "id": prod.get("id") or uid,
             "sku": prod.get("sku") or uid,
             "isbn": prod.get("isbn") or prod.get("barcode") or uid,
             "name": prod.get("name") or "Produto PDV",
             "unit_price": float(prod.get("price") or 0.0),
+            "stock_quantity": stock_qty,
             "quantity": 1,
         })
-        self.refresh_cart_ui()
+        self.refresh_cart_ui(selected_idx=len(self.cart) - 1)
 
-    def change_cart_qty(self, delta: int) -> None:
-        sel = self.tree_cart.selection()
-        if not sel:
+    def _on_cart_tree_click(self, event: Any) -> None:
+        """
+        Permite clicar diretamente nos botões inline `➖`, `➕` e `🗑️` dentro da linha
+        da tabela do carrinho sem perder o foco/seleção do item.
+        """
+        region = self.tree_cart.identify("region", event.x, event.y)
+        if region != "cell":
             return
-        idx = int(sel[0])
+        row_id = self.tree_cart.identify_row(event.y)
+        col_id = self.tree_cart.identify_column(event.x)
+        if not row_id or not str(row_id).isdigit():
+            return
+        idx = int(row_id)
+        # Colunas: #1=seq, #2=isbn, #3=name, #4=stock, #5=minus, #6=qty, #7=plus, #8=unit_price, #9=subtotal, #10=remove
+        if col_id == "#5":
+            self.change_cart_qty(-1, target_idx=idx)
+        elif col_id == "#7":
+            self.change_cart_qty(1, target_idx=idx)
+        elif col_id == "#10":
+            self.remove_cart_item(target_idx=idx)
+
+    def change_cart_qty(self, delta: int, target_idx: Optional[int] = None) -> None:
+        if not self.cart:
+            return
+        if target_idx is not None:
+            idx = target_idx
+        else:
+            sel = self.tree_cart.selection()
+            if sel and str(sel[0]).isdigit():
+                idx = int(sel[0])
+            else:
+                idx = len(self.cart) - 1
+
         if 0 <= idx < len(self.cart):
-            new_q = int(self.cart[idx]["quantity"]) + delta
+            item = self.cart[idx]
+            new_q = int(item["quantity"]) + delta
+            if delta > 0 and bool(self.cfg.get("validate_stock", False)):
+                stock_q = int(item.get("stock_quantity") if item.get("stock_quantity") is not None else 0)
+                if new_q > stock_q:
+                    messagebox.showwarning(
+                        "Estoque Insuficiente (Validação Ativa)",
+                        f"O item '{item.get('name')}' possui saldo disponível de {stock_q} un.\n"
+                        f"Não é possível alterar para {new_q} un. enquanto '🛡️ Validar Estoque' estiver ativo.",
+                    )
+                    self.refresh_cart_ui(selected_idx=idx)
+                    return
+
             if new_q <= 0:
                 self.cart.pop(idx)
+                next_sel = min(idx, len(self.cart) - 1) if self.cart else None
+                self.refresh_cart_ui(selected_idx=next_sel)
             else:
-                self.cart[idx]["quantity"] = new_q
-            self.refresh_cart_ui()
+                item["quantity"] = new_q
+                self.refresh_cart_ui(selected_idx=idx)
 
-    def remove_cart_item(self) -> None:
-        sel = self.tree_cart.selection()
-        if not sel:
+    def remove_cart_item(self, target_idx: Optional[int] = None) -> None:
+        if not self.cart:
             return
-        idx = int(sel[0])
+        if target_idx is not None:
+            idx = target_idx
+        else:
+            sel = self.tree_cart.selection()
+            if not sel or not str(sel[0]).isdigit():
+                return
+            idx = int(sel[0])
+
         if 0 <= idx < len(self.cart):
             self.cart.pop(idx)
-            self.refresh_cart_ui()
+            next_sel = min(idx, len(self.cart) - 1) if self.cart else None
+            self.refresh_cart_ui(selected_idx=next_sel)
+
+    def on_toggle_validate_stock_checkbox(self) -> None:
+        val = bool(self.var_validate_stock.get())
+        self.cfg["validate_stock"] = val
+        save_config(self.cfg)
+        self.lbl_session_badge.configure(text=self._format_session_badge_text())
+        sid = self.cfg.get("active_session_id")
+        if sid and self.cfg.get("access_token"):
+            threading.Thread(
+                target=self._update_session_stock_setting_worker,
+                args=(int(sid), val),
+                daemon=True,
+            ).start()
+        status_txt = "ATIVADA (bloqueia venda sem saldo)" if val else "DESATIVADA (venda livre)"
+        self.lbl_search_feedback.configure(
+            text=f"🛡️ Validação de estoque da sessão {status_txt}.",
+            fg="#059669" if val else "#2563eb",
+        )
+
+    def _update_session_stock_setting_worker(self, session_id: int, validate_stock: bool) -> None:
+        ok, _, _ = self.api.update_session_settings(session_id, validate_stock=validate_stock)
+        if ok:
+            self.refresh_open_sessions_async()
 
     def clear_cart(self) -> None:
         self.cart.clear()
@@ -3079,11 +3303,18 @@ class HorusPDVWindow:
         self.refresh_cart_ui()
         self.entry_search.focus_set()
 
-    def refresh_cart_ui(self) -> None:
+    def refresh_cart_ui(self, selected_idx: Optional[int] = None) -> None:
+        if selected_idx is None:
+            prev_sel = self.tree_cart.selection()
+            if prev_sel and str(prev_sel[0]).isdigit():
+                selected_idx = int(prev_sel[0])
+
         for row in self.tree_cart.get_children():
             self.tree_cart.delete(row)
+
         for idx, it in enumerate(self.cart):
             sub = float(it["unit_price"]) * int(it["quantity"])
+            stk = it.get("stock_quantity", 0)
             self.tree_cart.insert(
                 "",
                 "end",
@@ -3092,11 +3323,25 @@ class HorusPDVWindow:
                     idx + 1,
                     it.get("isbn") or it.get("sku"),
                     it.get("name"),
+                    stk,
+                    "➖",
                     it.get("quantity"),
+                    "➕",
                     format_brl(it.get("unit_price", 0)),
                     format_brl(sub),
+                    "🗑️",
                 ),
             )
+
+        if self.cart:
+            if selected_idx is None or selected_idx >= len(self.cart):
+                selected_idx = len(self.cart) - 1
+            sel_iid = str(max(0, selected_idx))
+            if self.tree_cart.exists(sel_iid):
+                self.tree_cart.selection_set(sel_iid)
+                self.tree_cart.focus(sel_iid)
+                self.tree_cart.see(sel_iid)
+
         subtotal, disc, total, change = self.compute_totals()
         self.lbl_subtotal.configure(text=f"Subtotal: {format_brl(subtotal)}")
         self.lbl_discount_applied.configure(text=f"Desconto: - {format_brl(disc)}")
@@ -3104,13 +3349,21 @@ class HorusPDVWindow:
         self.lbl_change.configure(text=f"Troco: {format_brl(change)}")
 
     def finalize_sale(self) -> None:
+        # Sincroniza em tempo real com o servidor (se online) para detectar revogação/expiração imediata no Master
+        if self.cfg.get("access_token") and self.cfg.get("company_id"):
+            try:
+                self.api.fetch_desktop_license(timeout=3.5)
+                self.var_license_key.set(str(self.cfg.get("license_key") or ""))
+            except Exception:
+                pass
+
         # Trava de segurança de validade da Licença Master
         self.refresh_license_ui()
         if not self.license_status.get("is_valid"):
             messagebox.showerror(
-                "Licença do PDV Expirada ou Não Ativada",
+                "Licença do PDV Expirada ou Bloqueada pelo Master",
                 f"O Ponto de Venda está bloqueado:\n\n{self.license_status.get('status_label')}\n\n"
-                "Acesse a aba '4. Credenciais Seller & Chave de Licença' e clique em 'Buscar / Atualizar Chave Liberada no Painel Master'.",
+                "Solicite a renovação da data de validade no Painel Master e clique em 'Buscar / Atualizar Chave Liberada no Painel Master'.",
             )
             self.notebook.select(self.tab_config)
             return
@@ -3118,6 +3371,18 @@ class HorusPDVWindow:
         if not self.cart:
             messagebox.showwarning("Carrinho Vazio", "Adicione pelo menos 1 produto ao carrinho antes de finalizar a venda.")
             return
+
+        if bool(self.cfg.get("validate_stock", False)):
+            for it in self.cart:
+                stk_q = int(it.get("stock_quantity") if it.get("stock_quantity") is not None else 0)
+                if int(it["quantity"]) > stk_q:
+                    messagebox.showwarning(
+                        "Estoque Insuficiente na Venda",
+                        f"O produto '{it.get('name')}' possui saldo disponível de {stk_q} un., "
+                        f"mas está com {it['quantity']} un. no carrinho.\n\n"
+                        "Ajuste a quantidade ou desative a opção '🛡️ Validar Estoque'.",
+                    )
+                    return
 
         subtotal, disc, total, change = self.compute_totals()
         pay_method = self.var_payment_method.get()
@@ -3226,20 +3491,25 @@ class HorusPDVWindow:
         threading.Thread(target=self._sync_worker, args=(True,), daemon=True).start()
 
     def _sync_worker(self, interactive: bool = False) -> None:
-        session_id = self.cfg.get("active_session_id")
-        if not session_id or not self.cfg.get("access_token"):
+        if not self._sync_lock.acquire(blocking=False):
             return
-        pending = self.storage.get_pending_sales(session_id=int(session_id))
-        if not pending:
-            if interactive:
-                self.ui_queue.put(("SYNC_DONE", (True, "Todas as vendas locais já estão sincronizadas com a sessão ativa!")))
-            return
+        try:
+            session_id = self.cfg.get("active_session_id")
+            if not session_id or not self.cfg.get("access_token"):
+                return
+            pending = self.storage.get_pending_sales(session_id=int(session_id))
+            if not pending:
+                if interactive:
+                    self.ui_queue.put(("SYNC_DONE", (True, "Todas as vendas locais já estão sincronizadas com a sessão ativa!")))
+                return
 
-        ok, msg, _ = self.api.sync_pending_sales(int(session_id), pending)
-        if ok:
-            uuids = [s["client_sale_uuid"] for s in pending]
-            self.storage.mark_sales_synced(uuids, int(session_id))
-        self.ui_queue.put(("SYNC_DONE", (ok, msg if interactive else "")))
+            ok, msg, _ = self.api.sync_pending_sales(int(session_id), pending)
+            if ok:
+                uuids = [s["client_sale_uuid"] for s in pending]
+                self.storage.mark_sales_synced(uuids, int(session_id))
+            self.ui_queue.put(("SYNC_DONE", (ok, msg if interactive else "")))
+        finally:
+            self._sync_lock.release()
 
     def fetch_sales_from_server_async(self) -> None:
         sid = self.cfg.get("active_session_id")
@@ -3338,11 +3608,15 @@ class HorusPDVWindow:
                 self.cfg["active_session_id"] = sid
                 self.cfg["active_session_title"] = s.get("title") or f"Sessão #{sid}"
                 self.cfg["active_branch_id"] = s.get("branch_id")
+                val_stk = bool(s.get("validate_stock", False))
+                self.cfg["validate_stock"] = val_stk
+                self.var_validate_stock.set(val_stk)
                 save_config(self.cfg)
                 self.lbl_session_badge.configure(text=self._format_session_badge_text())
                 messagebox.showinfo(
                     "Sessão Vinculada",
-                    f"O PDV agora está vinculado à Sessão #{sid} ({self.cfg['active_session_title']}).\n\n"
+                    f"O PDV agora está vinculado à Sessão #{sid} ({self.cfg['active_session_title']}).\n"
+                    f"Validação de Estoque: {'ATIVADA 🛡️' if val_stk else 'VENDA LIVRE ⚡'}\n\n"
                     "Todas as vendas feitas offline ou online serão sincronizadas para esta sessão!",
                 )
                 self.trigger_manual_sync()
@@ -3355,14 +3629,20 @@ class HorusPDVWindow:
             return
         source = self.var_new_session_source.get()
         init_cash = parse_atm_digits_to_float(self.initial_cash_digits)
+        val_stk = bool(self.var_new_session_validate_stock.get())
         threading.Thread(
             target=self._create_session_worker,
-            args=(title, source, init_cash),
+            args=(title, source, init_cash, val_stk),
             daemon=True,
         ).start()
 
-    def _create_session_worker(self, title: str, source: str, init_cash: float) -> None:
-        ok, msg, body = self.api.create_session(title=title, catalog_source=source, initial_cash_amount=init_cash)
+    def _create_session_worker(self, title: str, source: str, init_cash: float, validate_stock: bool = False) -> None:
+        ok, msg, body = self.api.create_session(
+            title=title,
+            catalog_source=source,
+            initial_cash_amount=init_cash,
+            validate_stock=validate_stock,
+        )
         self.ui_queue.put(("SESSION_CREATED", (ok, msg, body)))
 
     def close_active_session_clicked(self) -> None:
@@ -3516,6 +3796,16 @@ class HorusPDVWindow:
             if self.cfg.get("active_session_id"):
                 self._sync_worker(interactive=False)
 
+    def _license_heartbeat_tick(self) -> None:
+        """
+        Revalida silenciosamente a chave de licença no servidor a cada 15 segundos
+        enquanto o PDV estiver aberto, garantindo bloqueio imediato se a validade
+        for alterada/expirada no Painel Master.
+        """
+        if self.cfg.get("access_token") and self.cfg.get("company_id"):
+            threading.Thread(target=self._fetch_license_worker, args=(False,), daemon=True).start()
+        self.root.after(15000, self._license_heartbeat_tick)
+
     def _auto_sync_tick(self) -> None:
         if self.cfg.get("auto_sync_enabled", True) and self.cfg.get("access_token") and self.cfg.get("active_session_id"):
             threading.Thread(target=self._sync_worker, args=(False,), daemon=True).start()
@@ -3627,7 +3917,9 @@ class HorusPDVWindow:
                         self.open_sessions_cache = sessions
                         for r in self.tree_sessions.get_children():
                             self.tree_sessions.delete(r)
+                        active_sid = self.cfg.get("active_session_id")
                         for s in sessions:
+                            stk_txt = "🛡️ Valida" if s.get("validate_stock") else "⚡ Livre"
                             self.tree_sessions.insert(
                                 "",
                                 "end",
@@ -3636,15 +3928,25 @@ class HorusPDVWindow:
                                     s["id"],
                                     s.get("title") or "",
                                     s.get("catalog_source") or "GENERAL",
+                                    stk_txt,
                                     s.get("total_sales_count", 0),
                                     format_brl(s.get("total_sales_amount", 0)),
                                     str(s.get("opened_at") or "")[:16].replace("T", " "),
                                 ),
                             )
+                            if active_sid and int(s["id"]) == int(active_sid):
+                                val_stk = bool(s.get("validate_stock", False))
+                                self.cfg["validate_stock"] = val_stk
+                                self.var_validate_stock.set(val_stk)
+                                self.lbl_session_badge.configure(text=self._format_session_badge_text())
+
                         if not self.cfg.get("active_session_id") and sessions:
                             first = sessions[0]
                             self.cfg["active_session_id"] = first["id"]
                             self.cfg["active_session_title"] = first.get("title") or f"Sessão #{first['id']}"
+                            val_stk = bool(first.get("validate_stock", False))
+                            self.cfg["validate_stock"] = val_stk
+                            self.var_validate_stock.set(val_stk)
                             save_config(self.cfg)
                             self.lbl_session_badge.configure(text=self._format_session_badge_text())
 
@@ -3653,6 +3955,9 @@ class HorusPDVWindow:
                     if ok:
                         self.cfg["active_session_id"] = body["id"]
                         self.cfg["active_session_title"] = body.get("title") or f"Sessão #{body['id']}"
+                        val_stk = bool(body.get("validate_stock", False))
+                        self.cfg["validate_stock"] = val_stk
+                        self.var_validate_stock.set(val_stk)
                         save_config(self.cfg)
                         self.lbl_session_badge.configure(text=self._format_session_badge_text())
                         self.refresh_open_sessions_async()
