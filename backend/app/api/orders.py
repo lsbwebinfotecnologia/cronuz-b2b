@@ -149,6 +149,10 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
         # Envia os itens
         items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
         items_sent = 0
+        is_bookinfo_post_conference = (
+            order.origin == "bookinfo"
+            and getattr(settings, "bookinfo_analysis_timing", "BEFORE_CONFERENCE") == "AFTER_CONFERENCE"
+        )
         cut_situations = [
             "sem_estoque",
             "esgotado",
@@ -160,12 +164,20 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
         ]
 
         for it in items:
-            # Pula itens cortados ou sem quantidade a atender
-            if not it.quantity or it.quantity <= 0:
-                continue
-
-            if it.partner_situation and it.partner_situation.lower() in cut_situations:
-                continue
+            if is_bookinfo_post_conference:
+                # No fluxo Pós-Conferência, enviamos TODOS os itens com a quantidade total pedida
+                # (inclusive sem_estoque, esgotado, fora_catalogo e atendimento_parcial_sem_reserva),
+                # pois a definição final de atendimento ocorrerá no retorno da conferência física do Hórus.
+                qty_to_send = it.quantity_requested if (it.quantity_requested and it.quantity_requested > 0) else (it.quantity or 0)
+                if not qty_to_send or qty_to_send <= 0:
+                    continue
+            else:
+                # No fluxo Pré-Conferência (ou demais origens), envia apenas itens aprovados / com saldo
+                if not it.quantity or it.quantity <= 0:
+                    continue
+                if it.partner_situation and it.partner_situation.lower() in cut_situations:
+                    continue
+                qty_to_send = it.quantity
 
             isbn_or_sku = it.ean_isbn or it.sku
             if not isbn_or_sku and it.product_id:
@@ -188,23 +200,31 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
                 if item_price is not None and item_price <= 0:
                     item_price = None
 
-            await horus_client.send_order_item(
-                id_doc=customer.document,
-                id_guid=customer.id_guid,
-                cnpj_destino=company.document,
-                cod_pedido_origem=cod_origem,
-                isbn=isbn_or_sku,
-                qty=it.quantity,
-                price=item_price
-            )
-            items_sent += 1
+            try:
+                res_item = await horus_client.send_order_item(
+                    id_doc=customer.document,
+                    id_guid=customer.id_guid,
+                    cnpj_destino=company.document,
+                    cod_pedido_origem=cod_origem,
+                    isbn=isbn_or_sku,
+                    qty=qty_to_send,
+                    price=item_price
+                )
+                if res_item and isinstance(res_item, list) and len(res_item) > 0 and res_item[0].get("Falha"):
+                    print(f"[send_order_to_horus] Aviso item {isbn_or_sku} rejeitado pelo Hórus: {res_item[0].get('Mensagem')}")
+                    continue
+                items_sent += 1
+            except Exception as item_err:
+                print(f"[send_order_to_horus] Exceção ao enviar item {isbn_or_sku} ao Hórus: {item_err}")
+                if not is_bookinfo_post_conference:
+                    raise
 
         if items_sent == 0:
             return {
                 "success": False,
                 "is_horus": True,
                 "reason": "no_active_items",
-                "detail": "Nenhum item com quantidade aprovada para envio ao ERP Hórus."
+                "detail": "Nenhum item com quantidade válida pôde ser inserido no ERP Hórus."
             }
 
         # Atualiza status do pedido no Horus
@@ -220,7 +240,10 @@ async def send_order_to_horus(order: Order, db: Session) -> dict:
 
         old_status = order.status
         order.horus_pedido_venda = str(horus_ped_venda).strip()
-        new_status = "PROCESSADO" if order.origin == "bookinfo" else "SENT_TO_HORUS"
+        if order.origin == "bookinfo":
+            new_status = "SENT_TO_HORUS" if (is_bookinfo_post_conference and not order.validated_items_partner) else "PROCESSADO"
+        else:
+            new_status = "SENT_TO_HORUS"
         order.status = new_status
         log_horus = OrderLog(order_id=order.id, old_status=old_status, new_status=new_status, note=f"Integrado ao Hórus: #{horus_ped_venda} ({items_sent} itens enviados)")
         db.add(log_horus)

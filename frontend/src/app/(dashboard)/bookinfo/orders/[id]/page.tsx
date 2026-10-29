@@ -381,17 +381,26 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
     setIsSubmitting(true);
     try {
       const token = getToken();
-      const payload = analysedItems.map(ev => ({
-        isbn13: ev.isbn13 || ev.ean_isbn,
-        quantidadeEfetiva: ['esgotado','fora_catalogo','item_nao_comercializado','item_rejeitado','sem_estoque','sem_cadastro_erp'].includes(ev.partner_situation)
+      const isPostConf = orderData?.settings?.bookinfo_analysis_timing === 'AFTER_CONFERENCE';
+      const payload = analysedItems.map(ev => {
+        const reqQty = Number(ev.qty_requested ?? ev.quantity_requested ?? 0);
+        const availQty = Number(ev.available_qty ?? 0);
+        const fulfQty = Number(ev.quantity_fulfilled ?? ev.qty_fulfilled ?? 0);
+        const isCut = ['esgotado','fora_catalogo','item_nao_comercializado','item_rejeitado','sem_estoque','sem_cadastro_erp'].includes(ev.partner_situation);
+        const effectiveQty = isCut
           ? 0
           : ev.partner_situation === 'atendimento_parcial_sem_reserva'
-          ? Math.min(Number(ev.qty_requested || ev.quantity_requested || 0), Number(ev.available_qty || 0))
-          : Number(ev.qty_requested || ev.quantity_requested || 0),
-        status: (ev.partner_situation || 'sem_estoque').toUpperCase(),
-        descontoEfetivo: ev.partner_discount || 0,
-        precoCapa: parseFloat(ev.price_gross || 0)
-      }));
+          ? (isPostConf && fulfQty > 0 ? fulfQty : Math.min(reqQty, availQty))
+          : (isPostConf && fulfQty > 0 ? fulfQty : reqQty);
+
+        return {
+          isbn13: ev.isbn13 || ev.ean_isbn,
+          quantidadeEfetiva: effectiveQty,
+          status: (ev.partner_situation || 'sem_estoque').toUpperCase(),
+          descontoEfetivo: ev.partner_discount || 0,
+          precoCapa: parseFloat(ev.price_gross || 0)
+        };
+      });
 
       const res = await fetch(`${API}/bookinfo/orders/${params.id}/evaluate-submit`, {
         method: 'POST',
@@ -629,9 +638,13 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const totalItemsCount = bookinfoItems.reduce((acc: number, it: any) => acc + Number(it.quantidade || 0), 0);
   const totalItemsAnalysed = analysedItems.reduce((acc: number, it: any) => acc + Number(it.qty_requested ?? it.quantity_requested ?? 0), 0);
   const totalItemsAttended = analysedItems.reduce((acc: number, it: any) => {
-    if (['esgotado','fora_catalogo','item_nao_comercializado','item_rejeitado','sem_estoque'].includes(it.partner_situation)) return acc;
+    if (['esgotado','fora_catalogo','item_nao_comercializado','item_rejeitado','sem_estoque','sem_cadastro_erp'].includes(it.partner_situation)) return acc;
     const req = Number(it.qty_requested ?? it.quantity_requested ?? 0);
     const avail = Number(it.available_qty ?? 0);
+    const fulf = Number(it.quantity_fulfilled ?? it.qty_fulfilled ?? 0);
+    if (isPostConference && (isHorusConferred || isCompletedOnBookinfo) && fulf > 0) {
+      return acc + fulf;
+    }
     return acc + (it.partner_situation === 'atendimento_parcial_sem_reserva' ? Math.min(req, avail) : req);
   }, 0);
   const attendanceRate = totalItemsAnalysed > 0 ? Math.round((totalItemsAttended / totalItemsAnalysed) * 100) : 0;
@@ -1234,12 +1247,16 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                   const discountAllowed = Number(ev.discount_allowed || 0);
                   const discountExceeded = partnerDiscount > discountAllowed;
                   const isCutSituation = ['esgotado', 'fora_catalogo', 'item_nao_comercializado', 'item_rejeitado', 'sem_estoque', 'sem_cadastro_erp'].includes(ev.partner_situation);
+                  const hasConferenceResult = isPostConference ? (isHorusConferred || isCompletedOnBookinfo) : isCompletedOnBookinfo;
+                  const fulfQty = ev.quantity_fulfilled !== undefined && ev.quantity_fulfilled !== null
+                    ? Number(ev.quantity_fulfilled)
+                    : ev.qty_fulfilled !== undefined && ev.qty_fulfilled !== null
+                    ? Number(ev.qty_fulfilled)
+                    : null;
                   const qtyAttended = isCutSituation
                     ? 0
-                    : ev.quantity_fulfilled !== undefined && ev.quantity_fulfilled !== null
-                    ? Number(ev.quantity_fulfilled)
-                    : ev.quantity !== undefined && ev.quantity !== null
-                    ? Number(ev.quantity)
+                    : hasConferenceResult && fulfQty !== null
+                    ? fulfQty
                     : ev.partner_situation === 'atendimento_parcial_sem_reserva'
                     ? Math.min(qtyRequested, qtyAvailable)
                     : qtyRequested;
@@ -1276,7 +1293,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                               Consignado: <strong>{consignedBalance} un</strong>
                             </span>
                           )}
-                          {isPostConference && hasAnalysedItems && (
+                          {isPostConference && hasAnalysedItems && (isHorusConferred || isCompletedOnBookinfo) && (
                             <span className="inline-flex items-center gap-1">
                               {qtyAttended >= qtyRequested && qtyRequested > 0 ? (
                                 <span className="inline-flex items-center gap-1 font-bold text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-100/80 dark:bg-emerald-950/60 px-2.5 py-0.5 rounded-lg border border-emerald-300 dark:border-emerald-700 shadow-xs">
@@ -1291,7 +1308,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                               ) : (
                                 <span className="inline-flex items-center gap-1 font-bold text-[11px] text-rose-700 dark:text-rose-300 bg-rose-100/90 dark:bg-rose-950/60 px-2.5 py-0.5 rounded-lg border border-rose-300 dark:border-rose-700 shadow-xs">
                                   <XCircle className="w-3.5 h-3.5 text-rose-600" />
-                                  Cortado Total na Conferência (0/{qtyRequested} un)
+                                  Não Atendido na Conferência (0/{qtyRequested} un)
                                 </span>
                               )}
                             </span>
@@ -1326,7 +1343,7 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
                               {consignedBalance}
                             </span>
                           </div>
-                          {(isCompletedOnBookinfo || isPostConference) && (
+                          {(isCompletedOnBookinfo || (isPostConference && isHorusConferred)) && (
                             <>
                               <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
                               <div className="text-center" title={isPostConference ? "Quantidade efetivamente separada e faturada pelo depósito no ERP Hórus" : "Quantidade aprovada no processamento e enviada ao Hórus"}>

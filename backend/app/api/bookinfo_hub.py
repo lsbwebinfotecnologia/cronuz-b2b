@@ -1091,7 +1091,10 @@ async def evaluate_preview(
                 if req_discount > allow_discount:
                     details_list.append("Divergência de desconto")
                     
-                if allow_qty >= req_qty:
+                if req_qty <= 0:
+                    status = "sem_estoque"
+                    details_list.append("Quantidade pedida zerada (0 un)")
+                elif allow_qty >= req_qty:
                     status = "reservado_total"
                     details_list.append("Disponível")
                 elif allow_qty > 0:
@@ -1231,8 +1234,9 @@ async def send_bookinfo_order_to_horus(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Envia o pedido da Bookinfo diretamente para o ERP Hórus como veio da Bookinfo
-    (sem corte prévio), gerando o número do pedido de venda no Hórus para conferência física.
+    Envia o pedido da Bookinfo para o ERP Hórus.
+    No fluxo Pós-Conferência (AFTER_CONFERENCE), garante que a análise preliminar de catálogo
+    seja registrada (se ainda não feita) e envia TODOS os itens do pedido na íntegra (sem corte).
     """
     from app.api.orders import send_order_to_horus
 
@@ -1295,6 +1299,17 @@ async def send_bookinfo_order_to_horus(
                         db.commit()
         except Exception as _e:
             print(f"[send_bookinfo_order_to_horus] Aviso ao buscar REF: {_e}")
+
+    # Se for Pós-Conferência e os itens ainda não tiverem sido analisados no catálogo do Hórus,
+    # executa a análise preliminar automaticamente para registrar classificações iniciais (fora_catalogo, esgotado, etc.)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    if settings and getattr(settings, "bookinfo_analysis_timing", "BEFORE_CONFERENCE") == "AFTER_CONFERENCE":
+        has_analysed = any(it.partner_situation for it in (local_order.items or []))
+        if not has_analysed:
+            try:
+                await _auto_analyse_items(local_order, settings, db)
+            except Exception as _an_err:
+                print(f"[send_bookinfo_order_to_horus] Aviso ao pré-analisar itens antes do envio: {_an_err}")
 
     # Executa o envio para o Hórus
     res = await send_order_to_horus(local_order, db)
@@ -1520,8 +1535,11 @@ async def analyse_order_items(
 
                 effective_stock = max(0, avail_qty - min_buffer)
 
-                # Regra: se consignação e estoque baixo/crítico
-                if is_consign and block_consign_low and avail_qty <= consign_threshold:
+                # Regra: se quantidade pedida <= 0, classifica como sem_estoque
+                if req_qty <= 0:
+                    auto_situation = "sem_estoque"
+                    details_list.append("quantidade pedida zerada (0 un)")
+                elif is_consign and block_consign_low and avail_qty <= consign_threshold:
                     auto_situation = "sem_estoque"
                     details_list.append(f"consignação retida (estoque crítico {avail_qty} un)")
                 elif effective_stock >= req_qty:
@@ -1595,10 +1613,15 @@ async def analyse_order_items(
 
         analysed_count += 1
         results.append({
+            "id": existing_item.id,
+            "ean_isbn": isbn,
             "isbn13": isbn,
             "name": existing_item.name,
             "brand": existing_item.brand,
             "qty_requested": req_qty,
+            "quantity_requested": req_qty,
+            "quantity": existing_item.quantity,
+            "quantity_fulfilled": existing_item.quantity_fulfilled,
             "available_qty": avail_qty,
             "consigned_balance": consigned_bal,
             "price_gross": price_gross,
@@ -1681,7 +1704,7 @@ async def update_item_situation(
         raise HTTPException(status_code=400, detail="Este pedido já foi finalizado. Alterações manuais estão bloqueadas.")
 
     if is_after_conference:
-        if local_order.horus_pedido_venda or local_order.validated_items_partner:
+        if local_order.validated_items_partner:
             raise HTTPException(status_code=400, detail="Este pedido já foi finalizado e processado na Bookinfo. Alterações manuais estão bloqueadas.")
     else:
         if local_order.horus_pedido_venda:
@@ -1719,8 +1742,11 @@ async def analyse_order_post_conference(
     """
     Executa a análise de itens PÓS-CONFERÊNCIA e PÓS-FATURAMENTO no Horus ERP:
     Confronta os itens solicitados pela Bookinfo com os itens efetivamente conferidos e faturados no ERP.
-    Detecta automaticamente se o item foi faturado integral, faturado parcial, cortado na conferência
-    ou se não possui cadastro no catálogo do ERP.
+    - Se o item foi conferido/atendido no retorno do Hórus (fulfilled_qty > 0), atualiza para
+      reservado_total (se integral) ou atendimento_parcial_sem_reserva (se parcial).
+    - Se não foi conferido/atendido (fulfilled_qty == 0), mantém a classificação do catálogo
+      (ex: fora_catalogo, esgotado, sem_estoque, sem_cadastro_erp) ou altera para sem_estoque
+      caso estivesse anteriormente previsto como disponível.
     """
     from datetime import datetime as dt
     from app.integrators.horus_orders import HorusOrders
@@ -1748,6 +1774,15 @@ async def analyse_order_post_conference(
     if not settings or not settings.horus_url:
         raise HTTPException(status_code=400, detail="ERP Horus não configurado para esta empresa.")
 
+    # Se os itens ainda não passaram pela análise preliminar de catálogo (ou não têm preço/situação inicial),
+    # roda _auto_analyse_items primeiro para garantir que fora_catalogo / esgotado / preços estejam preenchidos.
+    if not local_order.items or any(it.partner_situation is None or float(it.price_gross or 0) == 0 for it in local_order.items):
+        try:
+            await _auto_analyse_items(local_order, settings, db)
+            db.refresh(local_order)
+        except Exception as _pre_err:
+            print(f"[analyse-post-conference] Aviso ao carregar análise de catálogo preliminar: {_pre_err}")
+
     horus_orders = HorusOrders(db=db, company_id=current_user.company_id)
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
@@ -1771,6 +1806,7 @@ async def analyse_order_post_conference(
         print(f"[analyse-post-conference] Aviso ao consultar status do pedido no Horus: {e}")
 
     if horus_status not in ["LFT", "FAT"]:
+        await horus_orders.close()
         status_label = horus_status if horus_status else "Em Digitação/Expedição"
         raise HTTPException(
             status_code=400,
@@ -1785,62 +1821,110 @@ async def analyse_order_post_conference(
             horus_items_list = raw_items
     except Exception as e:
         print(f"[analyse-post-conference] Erro ao buscar itens do pedido no Horus: {e}")
+    finally:
+        await horus_orders.close()
 
-    # Monta mapa de itens do Horus por ISBN
+    # Monta mapa de itens do Horus por todos os campos possíveis de código de barras / ISBN
     horus_items_map: Dict[str, dict] = {}
     for h_it in horus_items_list:
-        isbn_key = str(h_it.get("BARRAS_ISBN") or h_it.get("COD_BARRA_ITEM") or "").strip()
-        if isbn_key:
-            horus_items_map[isbn_key] = h_it
+        if not isinstance(h_it, dict) or h_it.get("Falha"):
+            continue
+        for key_field in ("BARRAS_ISBN", "COD_BARRA_ITEM", "COD_BARRA_ITEM_ALT", "COD_ISBN_ITEM"):
+            val = str(h_it.get(key_field) or "").strip()
+            if val and val not in ("0", "0000000000", "None"):
+                horus_items_map[val] = h_it
 
     now = dt.utcnow()
     results = []
     summary: Dict[str, int] = {}
+    non_stock_cut_situations = {
+        "fora_catalogo",
+        "esgotado",
+        "item_nao_comercializado",
+        "sem_cadastro_erp",
+        "item_rejeitado",
+        "sem_estoque",
+    }
 
     for item in local_order.items:
         isbn = (item.ean_isbn or item.sku or "").strip()
         h_match = horus_items_map.get(isbn)
+        req_qty = int(item.quantity_requested or item.quantity or 0)
+        prev_sit = (item.partner_situation or "").strip().lower()
 
         if h_match:
-            has_erp_reg = True
-            # Quantidade faturada/atendida no Horus
-            fulfilled_qty = int(h_match.get("QTD_ATENDIDA") or h_match.get("QTD_FATURADA") or h_match.get("QTD_PEDIDA") or 0)
-            item.quantity_fulfilled = fulfilled_qty
             item.has_erp_registration = True
+            # Extrai quantidade efetivamente conferida/atendida no Horus (NUNCA faz fallback para QT_PEDIDA quando QTD_ATENDIDA == 0)
+            raw_atendida = h_match.get("QTD_ATENDIDA")
+            if raw_atendida is None:
+                raw_atendida = h_match.get("QTD_FATURADA")
+            try:
+                fulfilled_qty = int(float(str(raw_atendida if raw_atendida is not None else 0).replace(",", ".")))
+            except (ValueError, TypeError):
+                fulfilled_qty = 0
+        else:
+            fulfilled_qty = 0
 
-            if not item.sit_manual_change:
-                if fulfilled_qty >= item.quantity_requested:
+        item.quantity_fulfilled = fulfilled_qty
+        item.quantity = fulfilled_qty
+
+        if not item.sit_manual_change:
+            if fulfilled_qty > 0 and req_qty > 0:
+                # Foi conferido e atendido no retorno do Hórus: atualiza a situação mesmo que antes fosse fora_catalogo/esgotado/sem_estoque
+                if fulfilled_qty >= req_qty:
                     item.partner_situation = "reservado_total"
                     item.situation_detail  = f"Faturado e conferido integralmente ({fulfilled_qty} un)"
-                elif fulfilled_qty > 0:
+                else:
                     item.partner_situation = "atendimento_parcial_sem_reserva"
-                    item.situation_detail  = f"Conferido e faturado parcialmente ({fulfilled_qty}/{item.quantity_requested} un)"
+                    item.situation_detail  = f"Conferido e faturado parcialmente ({fulfilled_qty}/{req_qty} un)"
+            else:
+                # Não foi conferido/atendido no retorno (fulfilled_qty == 0):
+                # Se já possuía uma classificação de corte da pré-análise (ex: fora_catalogo, esgotado, sem_estoque, sem_cadastro_erp),
+                # preserva essa classificação original! Caso estivesse como reservado_total/atendimento_parcial, muda para sem_estoque.
+                if prev_sit in non_stock_cut_situations:
+                    item.partner_situation = prev_sit
+                    if prev_sit == "fora_catalogo":
+                        item.situation_detail = "Fora de catálogo (não atendido na conferência)"
+                    elif prev_sit == "esgotado":
+                        item.situation_detail = "Esgotado (não atendido na conferência)"
+                    elif prev_sit == "sem_cadastro_erp":
+                        item.situation_detail = "Item não localizado no catálogo do ERP Hórus"
+                    elif prev_sit == "item_nao_comercializado":
+                        item.situation_detail = "Item não comercializado (não atendido na conferência)"
+                    elif prev_sit == "sem_estoque":
+                        item.situation_detail = "Sem estoque / não atendido na conferência física"
+                elif not getattr(item, "has_erp_registration", True) and not h_match:
+                    item.partner_situation = "sem_cadastro_erp"
+                    item.situation_detail  = "Item não localizado no catálogo do ERP Hórus"
                 else:
                     item.partner_situation = "sem_estoque"
                     item.situation_detail  = "Item cortado na conferência física / faturamento do ERP"
-        else:
-            # Item não localizado no retorno do Horus
-            has_erp_reg = False
-            item.has_erp_registration = False
-            item.quantity_fulfilled = 0
-            if not item.sit_manual_change:
-                item.partner_situation = "sem_cadastro_erp"
-                item.situation_detail  = "Item não localizado no catálogo do ERP Hórus"
 
         item.analysed_at = now
         sit = item.partner_situation or "sem_estoque"
         summary[sit] = summary.get(sit, 0) + 1
 
         results.append({
+            "id": item.id,
+            "ean_isbn": item.ean_isbn,
             "isbn13": item.ean_isbn,
             "name": item.name,
             "brand": item.brand,
-            "qty_requested": item.quantity_requested,
+            "qty_requested": req_qty,
+            "quantity_requested": req_qty,
+            "quantity": item.quantity,
+            "quantity_fulfilled": item.quantity_fulfilled,
             "qty_fulfilled": item.quantity_fulfilled,
+            "available_qty": int(item.available_qty or 0),
+            "price_gross": float(item.price_gross or 0),
+            "unit_price": float(item.unit_price or 0),
+            "total_price": float(item.total_price or 0),
+            "discount_allowed": float(item.discount_allowed or 0),
+            "partner_discount": float(item.partner_discount or 0),
             "partner_situation": item.partner_situation,
             "situation_detail": item.situation_detail,
             "consigned_balance": int(getattr(item, "consigned_balance", 0) or 0),
-            "has_erp_registration": item.has_erp_registration,
+            "has_erp_registration": getattr(item, "has_erp_registration", True),
             "sit_manual_change": item.sit_manual_change,
             "analysed_at": now.isoformat()
         })
@@ -1859,6 +1943,7 @@ async def analyse_order_post_conference(
 
     return {
         "error": False,
+        "analysed": len(results),
         "message": "Análise pós-conferência concluída com sucesso.",
         "order_id": order_id,
         "horus_pedido_venda": local_order.horus_pedido_venda,
@@ -3052,7 +3137,10 @@ async def _auto_analyse_items(order: Order, settings: CompanySettings, db: Sessi
                     details_list.append("divergência de desconto")
 
                 effective_stock = max(0, avail_qty - min_buffer)
-                if is_consign and block_consign_low and avail_qty <= consign_threshold:
+                if req_qty <= 0:
+                    auto_situation = "sem_estoque"
+                    details_list.append("quantidade pedida zerada (0 un)")
+                elif is_consign and block_consign_low and avail_qty <= consign_threshold:
                     auto_situation = "sem_estoque"
                     details_list.append(f"consignação retida (estoque crítico {avail_qty} un)")
                 elif effective_stock >= req_qty:
@@ -3169,6 +3257,14 @@ async def _auto_confront_and_submit_post_conference(order: Order, settings: Comp
     from datetime import datetime as dt
     from app.integrators.horus_orders import HorusOrders
 
+    # Garante que os itens tenham a pré-análise de catálogo (preços, descontos e classificações originais como fora_catalogo/esgotado)
+    if not order.items or any(it.partner_situation is None or float(it.price_gross or 0) == 0 for it in order.items):
+        try:
+            await _auto_analyse_items(order, settings, db)
+            db.refresh(order)
+        except Exception as _pre_err:
+            print(f"[_auto_confront_and_submit_post_conference] Aviso ao pré-analisar itens: {_pre_err}")
+
     horus_orders = HorusOrders(db=db, company_id=order.company_id)
     raw_items = await horus_orders.get_order_items(order.horus_pedido_venda, limit=5000)
     await horus_orders.close()
@@ -3176,34 +3272,71 @@ async def _auto_confront_and_submit_post_conference(order: Order, settings: Comp
     horus_items_map = {}
     if raw_items and isinstance(raw_items, list):
         for h_it in raw_items:
-            k = str(h_it.get("BARRAS_ISBN") or h_it.get("COD_BARRA_ITEM") or "").strip()
-            if k:
-                horus_items_map[k] = h_it
+            if not isinstance(h_it, dict) or h_it.get("Falha"):
+                continue
+            for key_field in ("BARRAS_ISBN", "COD_BARRA_ITEM", "COD_BARRA_ITEM_ALT", "COD_ISBN_ITEM"):
+                k = str(h_it.get(key_field) or "").strip()
+                if k and k not in ("0", "0000000000", "None"):
+                    horus_items_map[k] = h_it
 
     now = dt.utcnow()
+    non_stock_cut_situations = {
+        "fora_catalogo",
+        "esgotado",
+        "item_nao_comercializado",
+        "sem_cadastro_erp",
+        "item_rejeitado",
+        "sem_estoque",
+    }
     items_db = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
     for item in items_db:
         isbn = (item.ean_isbn or item.sku or "").strip()
         h_match = horus_items_map.get(isbn)
+        req_qty = int(item.quantity_requested or item.quantity or 0)
+        prev_sit = (item.partner_situation or "").strip().lower()
+
         if h_match:
-            fulfilled_qty = int(h_match.get("QTD_ATENDIDA") or h_match.get("QTD_FATURADA") or h_match.get("QTD_PEDIDA") or 0)
-            item.quantity_fulfilled = fulfilled_qty
             item.has_erp_registration = True
-            if not item.sit_manual_change:
-                if fulfilled_qty >= item.quantity_requested:
+            raw_atendida = h_match.get("QTD_ATENDIDA")
+            if raw_atendida is None:
+                raw_atendida = h_match.get("QTD_FATURADA")
+            try:
+                fulfilled_qty = int(float(str(raw_atendida if raw_atendida is not None else 0).replace(",", ".")))
+            except (ValueError, TypeError):
+                fulfilled_qty = 0
+        else:
+            fulfilled_qty = 0
+
+        item.quantity_fulfilled = fulfilled_qty
+        item.quantity = fulfilled_qty
+
+        if not item.sit_manual_change:
+            if fulfilled_qty > 0 and req_qty > 0:
+                if fulfilled_qty >= req_qty:
                     item.partner_situation = "reservado_total"
                     item.situation_detail = f"Faturado e conferido integralmente ({fulfilled_qty} un)"
-                elif fulfilled_qty > 0:
+                else:
                     item.partner_situation = "atendimento_parcial_sem_reserva"
-                    item.situation_detail = f"Conferido e faturado parcialmente ({fulfilled_qty}/{item.quantity_requested} un)"
+                    item.situation_detail = f"Conferido e faturado parcialmente ({fulfilled_qty}/{req_qty} un)"
+            else:
+                if prev_sit in non_stock_cut_situations:
+                    item.partner_situation = prev_sit
+                    if prev_sit == "fora_catalogo":
+                        item.situation_detail = "Fora de catálogo (não atendido na conferência)"
+                    elif prev_sit == "esgotado":
+                        item.situation_detail = "Esgotado (não atendido na conferência)"
+                    elif prev_sit == "sem_cadastro_erp":
+                        item.situation_detail = "Item não localizado no catálogo do ERP Hórus"
+                    elif prev_sit == "item_nao_comercializado":
+                        item.situation_detail = "Item não comercializado (não atendido na conferência)"
+                    elif prev_sit == "sem_estoque":
+                        item.situation_detail = "Sem estoque / não atendido na conferência física"
+                elif not getattr(item, "has_erp_registration", True) and not h_match:
+                    item.partner_situation = "sem_cadastro_erp"
+                    item.situation_detail = "Item não localizado no faturamento do ERP"
                 else:
                     item.partner_situation = "sem_estoque"
                     item.situation_detail = "Item cortado na conferência física do ERP"
-        else:
-            item.quantity_fulfilled = 0
-            if not item.sit_manual_change:
-                item.partner_situation = "sem_cadastro_erp"
-                item.situation_detail = "Item não localizado no faturamento do ERP"
         item.analysed_at = now
 
     order.validated_items_erp = True
@@ -3339,8 +3472,14 @@ async def advance_bookinfo_order_auto(
     # ──────────────────────────────────────────────────────────────────
     if not order.horus_pedido_venda:
         # Se for PÓS-CONFERÊNCIA:
-        # Deve ser transmitido integralmente ao Horus para separação no depósito
+        # Executa pré-análise de catálogo (para registrar classificações iniciais de fora_catalogo/esgotado/etc.)
+        # e transmite TODOS os itens integralmente ao Horus para separação no depósito.
         if is_after_conference:
+            if not order.items or not any(it.partner_situation for it in order.items):
+                try:
+                    await _auto_analyse_items(order, settings, db)
+                except Exception as _an_err:
+                    print(f"[advance_bookinfo_order_auto] Aviso pré-análise: {_an_err}")
             res_horus = await send_order_to_horus(order, db)
             if not res_horus.get("success"):
                 raise HTTPException(
@@ -3352,7 +3491,7 @@ async def advance_bookinfo_order_auto(
             return {
                 "step": "SENT_TO_HORUS",
                 "status": order.status,
-                "message": f"Pedido enviado ao Hórus (#{order.horus_pedido_venda}) para separação e conferência física no depósito.",
+                "message": f"Pedido enviado na íntegra ao Hórus (#{order.horus_pedido_venda}) para separação e conferência física no depósito.",
                 "order_id": order.id,
                 "horus_pedido_venda": order.horus_pedido_venda,
                 "can_advance": True
