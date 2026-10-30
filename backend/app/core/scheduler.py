@@ -217,7 +217,7 @@ def send_nfe_to_bookinfo():
 
             payload = {
                 "base64": order.invoice_xml,
-                "tipo_arquivo": "XML",
+                "tipo_arquivo": "application/xml",
                 "nome_arquivo": f"NFe_{order.invoice_number or 'Autorizada'}.xml"
             }
             
