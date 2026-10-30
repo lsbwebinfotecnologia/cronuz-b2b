@@ -544,7 +544,7 @@ async def get_order_detail(
                 ).first()
 
                 horus_status = None
-                horus_invoice = False
+                horus_invoice = local_order.invoice_number or None
                 if local_order.horus_pedido_venda:
                     try:
                         from app.integrators.horus_orders import HorusOrders
@@ -563,7 +563,26 @@ async def get_order_detail(
                             h_data = h_order[0] if isinstance(h_order, list) else h_order
                             if isinstance(h_data, dict):
                                 horus_status = (h_data.get("STATUS_PEDIDO_VENDA") or h_data.get("STATUS_PEDIDO") or "").strip().upper()
-                                horus_invoice = bool(h_data.get("NOTA_FISCAL"))
+                                nf_data = h_data.get("NOTA_FISCAL")
+                                if isinstance(nf_data, dict):
+                                    nro_nf = str(nf_data.get("NRO_NOTA_FISCAL") or "").strip()
+                                    chave_nfe = str(nf_data.get("CHAVE_ACESSO_NFE") or "").strip()
+                                    xml_b64 = nf_data.get("XML_Base64")
+                                    dirty_nf = False
+                                    if nro_nf and local_order.invoice_number != nro_nf:
+                                        local_order.invoice_number = nro_nf
+                                        dirty_nf = True
+                                    if chave_nfe and local_order.invoice_key != chave_nfe:
+                                        local_order.invoice_key = chave_nfe
+                                        dirty_nf = True
+                                    if xml_b64 and not local_order.invoice_xml:
+                                        local_order.invoice_xml = xml_b64
+                                        dirty_nf = True
+                                    if dirty_nf:
+                                        db.commit()
+                                    horus_invoice = nro_nf or local_order.invoice_number or ("Emitida" if xml_b64 else None)
+                                elif nf_data:
+                                    horus_invoice = local_order.invoice_number or str(nf_data)
                     except Exception as e:
                         print(f"[get_order_detail] Erro ao consultar status Horus #{local_order.horus_pedido_venda}: {e}")
 
@@ -574,8 +593,11 @@ async def get_order_detail(
                     "horus_pedido_venda": local_order.horus_pedido_venda,
                     "horus_status": horus_status,
                     "horus_invoice": horus_invoice,
+                    "invoice_number": local_order.invoice_number,
+                    "invoice_key": local_order.invoice_key,
+                    "has_invoice_xml": bool(local_order.invoice_xml),
                     "created_at": local_order.created_at.isoformat() if local_order.created_at else None,
-                    "bookinfo_nfe_sent": local_order.bookinfo_nfe_sent,
+                    "bookinfo_nfe_sent": bool(local_order.bookinfo_nfe_sent),
                     "validated_items_erp": local_order.validated_items_erp,
                     "validated_items_partner": local_order.validated_items_partner,
                     "analysed_items": analysed_items_list,
@@ -1324,6 +1346,220 @@ async def send_bookinfo_order_to_horus(
         "horus_pedido_venda": local_order.horus_pedido_venda,
         "message": f"Pedido enviado ao Hórus com sucesso (#{local_order.horus_pedido_venda})!"
     }
+
+
+@router.get("/orders/{order_id}/invoice-xml")
+async def get_bookinfo_order_invoice_xml(
+    order_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Retorna o XML da NF-e (em Base64), número e chave de acesso do pedido Bookinfo.
+    Se ainda não estiver salvo localmente, consulta no Hórus ERP.
+    """
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+
+    local_order = db.query(Order).filter(
+        Order.company_id == current_user.company_id,
+        Order.external_id == order_id,
+        Order.origin == "bookinfo"
+    ).first()
+
+    if not local_order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+
+    if not local_order.invoice_xml and local_order.horus_pedido_venda:
+        try:
+            from app.integrators.horus_orders import HorusOrders
+            company = db.query(Company).filter(Company.id == local_order.company_id).first()
+            customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
+            cmp_settings = db.query(CompanySettings).filter(CompanySettings.company_id == local_order.company_id).first()
+            cnpj_dest = (company.document if company and company.document else None) or (cmp_settings.horus_branch if cmp_settings else None)
+            horus_client = HorusOrders(db, local_order.company_id)
+            h_order = await horus_client.get_order(
+                id_doc=customer.document if customer else None,
+                id_guid=customer.id_guid if customer else None,
+                cnpj_destino=cnpj_dest,
+                cod_pedido_origem=None,
+                cod_ped_venda=local_order.horus_pedido_venda,
+                ignore_customer_context=True
+            )
+            await horus_client.close()
+            if h_order:
+                h_data = h_order[0] if isinstance(h_order, list) else h_order
+                if isinstance(h_data, dict):
+                    nf_data = h_data.get("NOTA_FISCAL")
+                    if isinstance(nf_data, dict):
+                        if nf_data.get("NRO_NOTA_FISCAL"):
+                            local_order.invoice_number = str(nf_data.get("NRO_NOTA_FISCAL")).strip()
+                        if nf_data.get("CHAVE_ACESSO_NFE"):
+                            local_order.invoice_key = str(nf_data.get("CHAVE_ACESSO_NFE")).strip()
+                        if nf_data.get("XML_Base64"):
+                            local_order.invoice_xml = nf_data.get("XML_Base64")
+                        db.commit()
+        except Exception as e:
+            print(f"[get_bookinfo_order_invoice_xml] Erro ao buscar XML no Hórus: {e}")
+
+    if not local_order.invoice_xml:
+        raise HTTPException(status_code=404, detail="XML da Nota Fiscal não localizado no Hórus para este pedido.")
+
+    return {
+        "invoice_number": local_order.invoice_number,
+        "invoice_key": local_order.invoice_key,
+        "invoice_xml": local_order.invoice_xml
+    }
+
+
+@router.post("/orders/{order_id}/send-nfe-and-complete")
+async def send_bookinfo_nfe_and_complete(
+    order_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Transmite o XML da Nota Fiscal (Base64) obtido no Hórus ERP para a Bookinfo
+    e em seguida finaliza o pedido (status CONCLUIDO) na Bookinfo.
+    Acessível ao Seller e ao Master na tela de detalhes do pedido.
+    """
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER]:
+        raise HTTPException(status_code=403, detail="Acesso restrito.")
+
+    local_order = db.query(Order).filter(
+        Order.company_id == current_user.company_id,
+        Order.external_id == order_id,
+        Order.origin == "bookinfo"
+    ).first()
+
+    if not local_order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado na base local.")
+
+    if not local_order.horus_pedido_venda:
+        raise HTTPException(
+            status_code=400,
+            detail="Este pedido ainda não possui número de pedido integrado no Hórus ERP."
+        )
+
+    # 1. Busca dados atualizados da Nota Fiscal no Hórus se necessário
+    try:
+        from app.integrators.horus_orders import HorusOrders
+        company = db.query(Company).filter(Company.id == local_order.company_id).first()
+        customer = db.query(Customer).filter(Customer.id == local_order.customer_id).first()
+        cmp_settings = db.query(CompanySettings).filter(CompanySettings.company_id == local_order.company_id).first()
+        cnpj_dest = (company.document if company and company.document else None) or (cmp_settings.horus_branch if cmp_settings else None)
+
+        horus_client = HorusOrders(db, local_order.company_id)
+        h_order = await horus_client.get_order(
+            id_doc=customer.document if customer else None,
+            id_guid=customer.id_guid if customer else None,
+            cnpj_destino=cnpj_dest,
+            cod_pedido_origem=None,
+            cod_ped_venda=local_order.horus_pedido_venda,
+            ignore_customer_context=True
+        )
+        await horus_client.close()
+
+        if h_order:
+            h_data = h_order[0] if isinstance(h_order, list) else h_order
+            if isinstance(h_data, dict):
+                nf_data = h_data.get("NOTA_FISCAL")
+                if isinstance(nf_data, dict):
+                    nro_nf = str(nf_data.get("NRO_NOTA_FISCAL") or "").strip()
+                    chave_nfe = str(nf_data.get("CHAVE_ACESSO_NFE") or "").strip()
+                    xml_b64 = nf_data.get("XML_Base64")
+                    if nro_nf:
+                        local_order.invoice_number = nro_nf
+                    if chave_nfe:
+                        local_order.invoice_key = chave_nfe
+                    if xml_b64:
+                        local_order.invoice_xml = xml_b64
+                    db.commit()
+    except Exception as e:
+        print(f"[send_bookinfo_nfe_and_complete] Aviso ao consultar NF no Hórus #{local_order.horus_pedido_venda}: {e}")
+
+    xml_base64 = local_order.invoice_xml
+    nro_nf = local_order.invoice_number or ""
+    chave_nfe = local_order.invoice_key or ""
+
+    if not xml_base64:
+        raise HTTPException(
+            status_code=400,
+            detail="Nota Fiscal com XML ainda não disponível no Hórus ERP para este pedido. Verifique se o pedido já está Faturado (FAT) com NF-e autorizada."
+        )
+
+    # 2. Envia o XML Base64 para a Bookinfo e finaliza o pedido (CONCLUIDO)
+    async with get_bookinfo_client(local_order.company_id, db) as client:
+        # Verifica status atual na Bookinfo
+        bk_status = ""
+        try:
+            get_resp = await client.get(f"/pedido/{order_id}")
+            if get_resp.status_code == 200:
+                bk_status = str(get_resp.json().get("status") or "").strip().upper()
+        except Exception:
+            pass
+
+        # Etapa A: Transmitir XML NF-e (se ainda não estiver FATURADO/CONCLUIDO ou se bookinfo_nfe_sent for False)
+        if bk_status != "CONCLUIDO":
+            resp_nf = await client.post(
+                f"/pedido/{order_id}/nota-fiscal/base64",
+                content=xml_base64,
+                headers={"Content-Type": "text/plain"}
+            )
+            if 200 <= resp_nf.status_code < 300:
+                local_order.bookinfo_nfe_sent = True
+                if local_order.status not in ["INVOICED", "CONCLUIDO"]:
+                    local_order.status = "INVOICED"
+                db.commit()
+            else:
+                # Se a Bookinfo já estava com status FATURADO (XML já enviado antes), prossegue para CONCLUIDO
+                if bk_status == "FATURADO" or local_order.bookinfo_nfe_sent:
+                    local_order.bookinfo_nfe_sent = True
+                    db.commit()
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Bookinfo recusou o XML da NF-e (HTTP {resp_nf.status_code}): {resp_nf.text}"
+                    )
+
+        # Etapa B: Finalizar pedido na Bookinfo (CONCLUIDO)
+        resp_conc = await client.put(f"/pedido/{order_id}/avaliacao/CONCLUIDO")
+        if 200 <= resp_conc.status_code < 300 or bk_status == "CONCLUIDO":
+            old_st = local_order.status
+            local_order.status = "CONCLUIDO"
+            local_order.bookinfo_nfe_sent = True
+            db.add(OrderLog(
+                order_id=local_order.id,
+                old_status=old_st,
+                new_status="CONCLUIDO",
+                note=f"XML da NF-e #{nro_nf} transmitido e pedido finalizado (CONCLUIDO) na Bookinfo."
+            ))
+            db.commit()
+            return {
+                "status": "success",
+                "nfe_sent": True,
+                "completed": True,
+                "invoice_number": nro_nf,
+                "invoice_key": chave_nfe,
+                "message": f"XML da NF-e #{nro_nf} transmitido e pedido finalizado (CONCLUÍDO) na Bookinfo com sucesso!"
+            }
+        else:
+            # XML foi enviado com sucesso, mas a transição para CONCLUIDO ainda aguarda processamento na Bookinfo
+            db.add(OrderLog(
+                order_id=local_order.id,
+                old_status=local_order.status,
+                new_status="INVOICED",
+                note=f"XML da NF-e #{nro_nf} transmitido para a Bookinfo. Conclusão retornou HTTP {resp_conc.status_code}: {resp_conc.text}"
+            ))
+            db.commit()
+            return {
+                "status": "partial_success",
+                "nfe_sent": True,
+                "completed": False,
+                "invoice_number": nro_nf,
+                "invoice_key": chave_nfe,
+                "message": f"XML da NF-e #{nro_nf} enviado com sucesso! A conclusão final na Bookinfo retornou: {resp_conc.text or resp_conc.status_code}"
+            }
 
 # ---------------------------------------------------------------------------
 # ANALYSE ITEMS — persiste resultado da análise Horus no banco local

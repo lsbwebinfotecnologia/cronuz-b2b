@@ -8,7 +8,7 @@ import {
   AlertCircle, ShoppingCart, DollarSign, Wallet, CreditCard, Package,
   Sparkles, RefreshCw, Lock, Clock, ArrowUpDown,
   Search, ArrowUp, ArrowDown, SlidersHorizontal, FileSpreadsheet,
-  Send, Check, X, ExternalLink, RotateCcw, XCircle
+  Send, Check, X, ExternalLink, RotateCcw, XCircle, FileText, Download
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -140,6 +140,8 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const [isAcknowledging,     setIsAcknowledging]     = useState(false);
   const [isSubmitting,        setIsSubmitting]        = useState(false);
   const [isSendingHorus,      setIsSendingHorus]      = useState(false);
+  const [isSendingNfe,        setIsSendingNfe]        = useState(false);
+  const [isDownloadingXml,    setIsDownloadingXml]    = useState(false);
   const [isRefreshingStatus,  setIsRefreshingStatus]  = useState(false);
   const [updatingItem,        setUpdatingItem]        = useState<number | null>(null);
   const [isRevalidated,       setIsRevalidated]       = useState(false);
@@ -419,6 +421,62 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
     }
   };
 
+  // ── Enviar XML NF-e e Finalizar Pedido na Bookinfo ────────────────────────
+  const sendNfeAndComplete = async () => {
+    setIsSendingNfe(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/bookinfo/orders/${params.id}/send-nfe-and-complete`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Falha ao enviar XML NF-e e concluir pedido na Bookinfo');
+      if (data.status === 'partial_success') {
+        toast.info(data.message);
+      } else {
+        toast.success(data.message || 'XML da NF-e enviado e pedido finalizado com sucesso!');
+      }
+      await fetchOrderDetails(true);
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setIsSendingNfe(false);
+    }
+  };
+
+  // ── Baixar XML da NF-e ────────────────────────────────────────────────────
+  const downloadInvoiceXml = async () => {
+    setIsDownloadingXml(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/bookinfo/orders/${params.id}/invoice-xml`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'XML não localizado.');
+      if (data.invoice_xml) {
+        const xmlData = atob(data.invoice_xml);
+        const blob = new Blob([xmlData], { type: 'application/xml' });
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', `NFe_${data.invoice_number || params.id}.xml`);
+        document.body.appendChild(link);
+        link.click();
+        link.parentNode?.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        toast.success('XML da NF-e baixado com sucesso!');
+      } else {
+        toast.error('XML não disponível para este pedido.');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao baixar XML.');
+    } finally {
+      setIsDownloadingXml(false);
+    }
+  };
+
   // ── Exportação Excel ──────────────────────────────────────────────────────
   const handleExportExcel = () => {
     try {
@@ -525,19 +583,24 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
   const orderSettings = orderData.settings || {};
   const bookinfoItems = order.itens || [];
 
-  const orderStatus        = (order.status || '').toUpperCase().trim();
-  const isPostConference   = orderSettings.bookinfo_analysis_timing === 'AFTER_CONFERENCE';
-  const horusPedidoVenda   = orderInternal.horus_pedido_venda;
-  const horusStatus        = (orderInternal.horus_status || '').toUpperCase().trim();
-  const horusInvoice       = orderInternal.horus_invoice;
-  const isHorusConferred   = horusStatus === 'LFT' || horusStatus === 'FAT';
-  const hasAnalysedItems   = analysedItems.length > 0;
+  const orderStatus           = (order.status || '').toUpperCase().trim();
+  const internalStatus        = (orderInternal.status || '').toUpperCase().trim();
+  const isPostConference      = orderSettings.bookinfo_analysis_timing === 'AFTER_CONFERENCE';
+  const horusPedidoVenda      = orderInternal.horus_pedido_venda;
+  const horusStatus           = (orderInternal.horus_status || '').toUpperCase().trim();
+  const horusInvoice          = orderInternal.horus_invoice || orderInternal.invoice_number;
+  const hasInvoiceXml         = !!orderInternal.has_invoice_xml;
+  const isNfeSent             = !!orderInternal.bookinfo_nfe_sent;
+  const isHorusConferred      = horusStatus === 'LFT' || horusStatus === 'FAT';
+  const isHorusInvoiced       = horusStatus === 'FAT' || hasInvoiceXml || !!horusInvoice;
+  const isOrderFullyConcluded = orderStatus === 'CONCLUIDO' || internalStatus === 'CONCLUIDO';
+  const hasAnalysedItems      = analysedItems.length > 0;
 
   // No fluxo de pré-conferência, se o usuário revalidou os itens e ainda não enviou ao Hórus,
   // permitimos reprocessar na Bookinfo com as novas quantidades/situações!
   const isReanalysisPendingSubmit = !isPostConference && !horusPedidoVenda && (isRevalidated || (orderInternal.validated_items_partner === false && hasAnalysedItems));
 
-  // Pedidos concluídos / finalizados na Bookinfo (somente leitura)
+  // Pedidos já avaliados / processados na Bookinfo
   const isCompletedOnBookinfo = !isReanalysisPendingSubmit && (
     ['FATURADO', 'CONCLUIDO', 'CANCELADO', 'FINALIZADO', 'ENTREGUE'].includes(orderStatus) ||
     (orderStatus === 'PROCESSADO' && !!orderInternal.validated_items_partner)
@@ -554,9 +617,17 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
       canSendHorus = true;
       workflowStepTitle = 'Pedido Processado na Bookinfo — Pronto para Envio ao Hórus';
       workflowStepDescription = 'As situações e quantidades foram consolidadas na Bookinfo. Agora você pode enviar o pedido ao Hórus com os dados processados para iniciar o faturamento no ERP.';
+    } else if (!isOrderFullyConcluded) {
+      if (isHorusInvoiced) {
+        workflowStepTitle = `Nota Fiscal Emitida no Hórus${horusInvoice && horusInvoice !== 'Emitida' ? ` (NF-e #${horusInvoice})` : ''} — Pronto para Enviar XML e Finalizar`;
+        workflowStepDescription = `O pedido #${horusPedidoVenda} está faturado no Hórus ERP. Clique em "Enviar XML NF-e & Finalizar Pedido" para transmitir o XML da Nota Fiscal à Bookinfo e concluir o pedido.`;
+      } else {
+        workflowStepTitle = `Pedido Processado na Bookinfo — Aguardando Faturamento (NF-e) no Hórus (#${horusPedidoVenda})`;
+        workflowStepDescription = 'O pedido já foi processado na Bookinfo e enviado ao Hórus. Assim que a Nota Fiscal (status FAT com XML) for emitida no ERP, atualize o status e envie o XML para finalizar o pedido.';
+      }
     } else {
-      workflowStepTitle = 'Pedido Concluído e Integrado ao ERP';
-      workflowStepDescription = `Pedido integrado ao Hórus (#${horusPedidoVenda}) e processado na Bookinfo com sucesso.`;
+      workflowStepTitle = 'Pedido Finalizado e Concluído na Bookinfo';
+      workflowStepDescription = `Ciclo completo! Pedido integrado ao Hórus (#${horusPedidoVenda})${horusInvoice && horusInvoice !== 'Emitida' ? `, NF-e #${horusInvoice} transmitida` : ''} e finalizado na Bookinfo com sucesso.`;
     }
   } else if (isPostConference) {
     // Modo PÓS-CONFERÊNCIA:
@@ -851,10 +922,36 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
               </div>
             )}
           </div>
-          {horusInvoice && (
-            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center justify-between">
-              <span>Nota Fiscal:</span>
-              <span>NF-e #{horusInvoice}</span>
+          {(horusInvoice || hasInvoiceXml) && (
+            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+              <div className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center justify-between">
+                <span>Nota Fiscal:</span>
+                <span>{horusInvoice && horusInvoice !== 'Emitida' ? `NF-e #${horusInvoice}` : 'NF-e Emitida'}</span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${
+                  isNfeSent
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                    : hasInvoiceXml
+                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800'
+                    : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
+                }`}>
+                  <FileText className="w-3 h-3" />
+                  {isNfeSent ? 'XML Enviado ✓' : hasInvoiceXml ? 'XML Disponível' : 'Sem XML'}
+                </span>
+                {hasInvoiceXml && (
+                  <button
+                    type="button"
+                    onClick={downloadInvoiceXml}
+                    disabled={isDownloadingXml}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 transition cursor-pointer disabled:opacity-50"
+                    title="Baixar arquivo XML da NF-e"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>{isDownloadingXml ? 'Baixando...' : 'Baixar XML'}</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -1027,9 +1124,46 @@ export default function BookinfoOrderDetailPage({ params: paramsPromise }: { par
               </span>
             </button>
           ) : (
-            <span className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-xs font-bold">
-              <CheckCircle2 className="w-4 h-4" /> Processado na Bookinfo
-            </span>
+            <>
+              {/* BOTÃO 6A: VERIFICAR FATURAMENTO NO HÓRUS (quando processado, integrado ao Hórus, mas ainda sem NF-e) */}
+              {horusPedidoVenda && !isOrderFullyConcluded && !isHorusInvoiced && (
+                <button
+                  type="button"
+                  onClick={refreshHorusStatus}
+                  disabled={isRefreshingStatus}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white text-xs font-bold transition shadow-sm disabled:opacity-50 cursor-pointer"
+                  title="Consultar no Hórus se o pedido já foi faturado (FAT) com Nota Fiscal"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isRefreshingStatus ? 'animate-spin' : ''}`} />
+                  <span>{isRefreshingStatus ? 'Checando NF-e...' : 'Verificar Faturamento no Hórus'}</span>
+                </button>
+              )}
+
+              {/* BOTÃO 6B: ENVIAR XML NF-e & FINALIZAR PEDIDO NA BOOKINFO */}
+              {horusPedidoVenda && !isOrderFullyConcluded && isHorusInvoiced && (
+                <button
+                  type="button"
+                  onClick={sendNfeAndComplete}
+                  disabled={isSendingNfe}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold transition shadow-md disabled:opacity-50 cursor-pointer"
+                  title="Transmitir o XML da Nota Fiscal do Hórus para a Bookinfo e alterar o status do pedido para CONCLUÍDO"
+                >
+                  <FileText className="w-4 h-4" />
+                  <span>
+                    {isSendingNfe
+                      ? 'Enviando XML & Concluindo...'
+                      : isNfeSent
+                      ? 'Concluir Pedido na Bookinfo'
+                      : 'Enviar XML NF-e & Finalizar Pedido'}
+                  </span>
+                </button>
+              )}
+
+              <span className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-xs font-bold">
+                <CheckCircle2 className="w-4 h-4" />
+                {isOrderFullyConcluded ? 'NF-e Enviada & Concluído na Bookinfo' : 'Processado na Bookinfo'}
+              </span>
+            </>
           )}
 
         </div>
