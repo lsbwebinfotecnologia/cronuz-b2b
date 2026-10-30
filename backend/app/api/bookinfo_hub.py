@@ -1501,10 +1501,14 @@ async def send_bookinfo_nfe_and_complete(
 
         # Etapa A: Transmitir XML NF-e (se ainda não estiver FATURADO/CONCLUIDO ou se bookinfo_nfe_sent for False)
         if bk_status != "CONCLUIDO":
+            nf_payload = {
+                "base64": xml_base64,
+                "tipo_arquivo": "XML",
+                "nome_arquivo": f"NFe_{nro_nf or 'Autorizada'}.xml"
+            }
             resp_nf = await client.post(
                 f"/pedido/{order_id}/nota-fiscal/base64",
-                content=xml_base64,
-                headers={"Content-Type": "text/plain"}
+                json=nf_payload
             )
             if 200 <= resp_nf.status_code < 300:
                 local_order.bookinfo_nfe_sent = True
@@ -2831,7 +2835,7 @@ async def sync_bookinfo_queue_item(
     
     payload = {
         "base64": order.invoice_xml,
-        "tipo_arquivo": "application/xml",
+        "tipo_arquivo": "XML",
         "nome_arquivo": f"NFe_{order.invoice_number or 'Autorizada'}.xml"
     }
     
@@ -3623,7 +3627,7 @@ async def _auto_sync_nfe_and_complete(order: Order, h_data: dict, db: Session) -
 
             payload = {
                 "base64": order.invoice_xml,
-                "tipo_arquivo": "application/xml",
+                "tipo_arquivo": "XML",
                 "nome_arquivo": f"NFe_{order.invoice_number or 'Autorizada'}.xml"
             }
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
