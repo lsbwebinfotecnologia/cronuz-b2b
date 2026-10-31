@@ -210,6 +210,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [horusSqlVindiBaixa, setHorusSqlVindiBaixa] = useState(false);
   const [horusSqlPedidos, setHorusSqlPedidos] = useState(true);
   const [horusSqlDbm, setHorusSqlDbm] = useState(false);
+  const [paymentProvidersEnabled, setPaymentProvidersEnabled] = useState<string[]>([]);
   const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
   const [hasInventoryModule, setHasInventoryModule] = useState(false);
   const [moduleEditorial, setModuleEditorial] = useState(false);
@@ -246,6 +247,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        if (pathname.startsWith('/schools')) initialOpen['Escolas & Eventos'] = true;
        if (pathname.startsWith('/cafeteria')) initialOpen['Cafeteria'] = true;
        if (pathname.startsWith('/product-search') || pathname.startsWith('/addressing')) initialOpen['Busca Preço'] = true;
+       if (pathname.startsWith('/b2c-storefront')) initialOpen['B2C'] = true;
        setOpenMenus(initialOpen);
        
        const fetchSettings = async () => {
@@ -277,6 +279,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setHorusSqlVindiBaixa(data.horus_sql_feature_vindi_baixa || false);
                setHorusSqlPedidos(data.horus_sql_feature_pedidos ?? true);
                setHorusSqlDbm(data.horus_sql_feature_dbm || false);
+               setPaymentProvidersEnabled(Array.isArray(data.payment_providers_enabled) ? data.payment_providers_enabled : []);
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
                setHasInventoryModule(data.has_inventory_module || false);
                setModuleEditorial(data.module_editorial || false);
@@ -371,6 +374,12 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     });
   }
 
+  const coraEnabled = paymentProvidersEnabled.includes('CORA');
+  const coraSubItems = [
+    { name: 'Financeiro Cora', href: '/financial/cora', icon: Landmark },
+    { name: 'Boletos Cora', href: '/financial/cora/boletos', icon: Receipt },
+  ];
+
   if (moduleFinancial) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
@@ -381,9 +390,23 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        subItems: [
          { name: 'Lançamentos', href: '/financial', icon: Wallet },
          { name: 'Boletos Emitidos', href: '/financial/bank-slips', icon: Receipt },
+         ...(coraEnabled ? coraSubItems : []),
          { name: 'Bancos & Cartões', href: '/financial/accounts', icon: Building2 },
          { name: 'Categorias', href: '/financial/categories', icon: FolderTree },
          { name: 'Relatórios & DRE', href: '/financial/reports', icon: BarChart3 }
+       ]
+    });
+  } else if (coraEnabled) {
+    // Seller sem o módulo Financeiro completo, mas com o Banco Cora habilitado pelo Master
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+       name: 'Financeiro Cora',
+       href: '/financial/cora',
+       icon: Landmark,
+       subItems: [
+         { name: 'Painel', href: '/financial/cora', icon: BarChart3 },
+         { name: 'Boletos', href: '/financial/cora/boletos', icon: Receipt },
        ]
     });
   }
@@ -553,12 +576,21 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
 
 
   if (moduleB2cStorefront) {
-    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
-    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    const ordersIndex = filteredSellerNavigation.findIndex(n => n.name === 'Pedidos' || n.name === 'Mesa de Pedidos');
+    const targetIndex = ordersIndex !== -1 ? ordersIndex + 1 : 0;
     filteredSellerNavigation.splice(targetIndex, 0, {
-      name: 'Storefront B2C & Vouchers',
+      name: 'B2C',
       href: '/b2c-storefront',
-      icon: Ticket,
+      icon: Store,
+      subItems: [
+        { name: 'Cupons de Desconto', href: '/b2c-storefront', icon: Ticket },
+        { name: 'Promoções e Descontos', href: '/b2c-storefront/promotions', icon: Tag },
+        { name: 'Pedidos e Carrinhos', href: '/b2c-storefront/orders', icon: ShoppingBag },
+        { name: 'Banners e Aparência', href: '/b2c-storefront/banners', icon: Globe },
+        { name: 'Vitrines e Destaques', href: '/b2c-storefront/showcases', icon: Sparkles },
+        { name: 'Categorias e Menu', href: '/b2c-storefront/categories', icon: FolderTree },
+        { name: 'Frete e Checkout', href: '/b2c-storefront/settings', icon: SlidersHorizontal },
+      ]
     });
   }
 

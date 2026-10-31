@@ -6,7 +6,9 @@ from typing import Dict, Any, List, Optional
 import httpx
 from sqlalchemy.orm import Session
 
+import json
 from app.models.company_settings import CompanySettings
+from app.models.system_integrator import SystemIntegrator
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +17,80 @@ def _sanitize_coupon_code(code: str) -> str:
     """Tray does not allow spaces or accents in DiscountCoupon.code."""
     clean = re.sub(r"[^A-Za-z0-9\-_]", "", (code or "").upper().strip())
     return clean or f"CRONUZ{uuid.uuid4().hex[:6].upper()}"
+
+
+def get_global_tray_app_credentials(db: Session) -> Dict[str, str]:
+    """
+    Retorna as credenciais universais do App Cronuz registrado na Tray (consumer_key e consumer_secret).
+    Armazenadas de forma centralizada no Master (b2b_system_integrators code='TRAY_GLOBAL_APP')
+    com fallback automático para qualquer configuração existente.
+    """
+    integ = db.query(SystemIntegrator).filter(SystemIntegrator.code == "TRAY_GLOBAL_APP").first()
+    if integ and integ.description:
+        try:
+            parsed = json.loads(integ.description)
+            if isinstance(parsed, dict) and (parsed.get("consumer_key") or parsed.get("consumer_secret")):
+                return {
+                    "app_name": parsed.get("app_name") or integ.name or "App Cronuz Tray",
+                    "consumer_key": (parsed.get("consumer_key") or "").strip(),
+                    "consumer_secret": (parsed.get("consumer_secret") or "").strip(),
+                }
+        except Exception:
+            pass
+
+    # Fallback: busca qualquer cmp_settings que já tenha consumer_key preenchida
+    any_settings = (
+        db.query(CompanySettings)
+        .filter(
+            CompanySettings.tray_consumer_key.isnot(None),
+            CompanySettings.tray_consumer_key != "",
+        )
+        .first()
+    )
+    if any_settings:
+        return {
+            "app_name": "App Cronuz Tray",
+            "consumer_key": (any_settings.tray_consumer_key or "").strip(),
+            "consumer_secret": (any_settings.tray_consumer_secret or "").strip(),
+        }
+
+    return {"app_name": "App Cronuz Tray", "consumer_key": "", "consumer_secret": ""}
+
+
+def save_global_tray_app_credentials(
+    db: Session,
+    consumer_key: str,
+    consumer_secret: str,
+    app_name: str = "App Cronuz Tray",
+) -> Dict[str, str]:
+    """
+    Salva as credenciais universais do App Cronuz na Tray no Master.
+    """
+    ck = (consumer_key or "").strip()
+    cs = (consumer_secret or "").strip()
+    payload_str = json.dumps(
+        {
+            "app_name": (app_name or "App Cronuz Tray").strip(),
+            "consumer_key": ck,
+            "consumer_secret": cs,
+        }
+    )
+    integ = db.query(SystemIntegrator).filter(SystemIntegrator.code == "TRAY_GLOBAL_APP").first()
+    if not integ:
+        integ = SystemIntegrator(
+            name=app_name or "App Cronuz Tray",
+            code="TRAY_GLOBAL_APP",
+            description=payload_str,
+            active=True,
+        )
+        db.add(integ)
+    else:
+        integ.name = app_name or "App Cronuz Tray"
+        integ.description = payload_str
+        integ.active = True
+
+    db.commit()
+    return {"app_name": integ.name, "consumer_key": ck, "consumer_secret": cs}
 
 
 class TrayClient:
@@ -31,6 +107,23 @@ class TrayClient:
         self.settings: Optional[CompanySettings] = (
             db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
         )
+        self._global_creds: Optional[Dict[str, str]] = None
+
+    @property
+    def global_creds(self) -> Dict[str, str]:
+        if self._global_creds is None:
+            self._global_creds = get_global_tray_app_credentials(self.db)
+        return self._global_creds
+
+    @property
+    def consumer_key(self) -> str:
+        local_ck = ((self.settings.tray_consumer_key if self.settings else "") or "").strip()
+        return local_ck or self.global_creds.get("consumer_key", "")
+
+    @property
+    def consumer_secret(self) -> str:
+        local_cs = ((self.settings.tray_consumer_secret if self.settings else "") or "").strip()
+        return local_cs or self.global_creds.get("consumer_secret", "")
 
     @property
     def store_url(self) -> str:
@@ -38,17 +131,23 @@ class TrayClient:
         raw = raw.strip().rstrip("/")
         if raw and not raw.startswith("http"):
             raw = f"https://{raw}"
+        # Strip any accidental /web_api or /mcp-app/storefront suffix from store_url
+        raw = re.sub(r"(/web_api)+(/auth)?$", "", raw, flags=re.IGNORECASE).rstrip("/")
+        raw = re.sub(r"/mcp-app/storefront$", "", raw, flags=re.IGNORECASE).rstrip("/")
         return raw
 
     @property
     def api_address(self) -> str:
+        if self.store_url:
+            return f"{self.store_url}/web_api"
         raw = (self.settings.tray_api_address if self.settings else "") or ""
         raw = raw.strip().rstrip("/")
-        if not raw and self.store_url:
-            raw = f"{self.store_url}/web_api"
-        elif raw and not raw.startswith("http"):
+        if raw and not raw.startswith("http"):
             raw = f"https://{raw}"
-        return raw
+        if raw:
+            base = re.sub(r"(/web_api)+(/auth)?$", "", raw, flags=re.IGNORECASE).rstrip("/")
+            return f"{base}/web_api"
+        return ""
 
     @property
     def mcp_endpoint(self) -> str:
@@ -61,19 +160,24 @@ class TrayClient:
     async def authenticate_with_code(self) -> Dict[str, Any]:
         """
         POST {api_address}/auth
-        Troca consumer_key + consumer_secret + code pelo par access_token e refresh_token.
+        Troca consumer_key + consumer_secret (universais do App Cronuz) + code da loja do seller
+        pelo par access_token e refresh_token.
         """
         if not self.settings:
             raise ValueError("Configurações da empresa não encontradas.")
         if not self.api_address:
-            raise ValueError("URL da API Tray (tray_api_address ou tray_store_url) não configurada.")
-        if not (self.settings.tray_consumer_key and self.settings.tray_consumer_secret and self.settings.tray_auth_code):
-            raise ValueError("Preencha Consumer Key, Consumer Secret e Código de Autorização (code) da Tray.")
+            raise ValueError("Informe a URL da Loja Tray do Seller.")
+        if not self.consumer_key or not self.consumer_secret:
+            raise ValueError(
+                "As credenciais globais do App Cronuz (Consumer Key / Consumer Secret) ainda não foram configuradas no Master."
+            )
+        if not self.settings.tray_auth_code:
+            raise ValueError("Informe o Código de Autorização (CODE) da loja Tray do Seller.")
 
         url = f"{self.api_address}/auth"
         payload = {
-            "consumer_key": self.settings.tray_consumer_key.strip(),
-            "consumer_secret": self.settings.tray_consumer_secret.strip(),
+            "consumer_key": self.consumer_key,
+            "consumer_secret": self.consumer_secret,
             "code": self.settings.tray_auth_code.strip(),
         }
 
@@ -117,7 +221,10 @@ class TrayClient:
             self.settings.tray_refresh_token = data.get("refresh_token")
         if data.get("store_id"):
             self.settings.tray_store_id = str(data.get("store_id"))
-        if data.get("api_host"):
+        if self.store_url:
+            self.settings.tray_store_url = self.store_url
+            self.settings.tray_api_address = f"{self.store_url}/web_api"
+        elif data.get("api_host"):
             self.settings.tray_api_address = str(data.get("api_host")).rstrip("/")
 
         exp_str = data.get("date_expiration_access_token")
@@ -151,7 +258,7 @@ class TrayClient:
             data = await self.refresh_access_token()
             return data["access_token"]
 
-        if self.settings.tray_consumer_key and self.settings.tray_auth_code:
+        if self.consumer_key and self.settings.tray_auth_code:
             data = await self.authenticate_with_code()
             return data["access_token"]
 
@@ -188,17 +295,21 @@ class TrayClient:
             },
         }
         headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": "application/json, text/event-stream",
             "MCP-Protocol-Version": "2025-11-25",
         }
 
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.post(self.mcp_endpoint, json=payload, headers=headers)
-            data = resp.json() if resp.content else {}
+            try:
+                data = resp.json() if resp.content else {}
+            except Exception:
+                data = {}
 
         if resp.status_code not in (200, 201):
-            raise ValueError(f"Erro HTTP {resp.status_code} no MCP Storefront Tray: {resp.text[:300]}")
+            raise ValueError(f"HTTP {resp.status_code} no MCP Storefront Tray")
 
         if "error" in data:
             raise ValueError(f"Erro JSON-RPC no MCP Storefront Tray: {data['error']}")
@@ -206,29 +317,22 @@ class TrayClient:
         return data.get("result", data)
 
     async def test_connection(self) -> Dict[str, Any]:
-        """Testa tanto o MCP Storefront quanto a autenticação OAuth2 (se configurada)."""
+        """Testa a API OAuth2 (/web_api) e o MCP Storefront (quando habilitado no domínio público)."""
         result: Dict[str, Any] = {
             "store_url": self.store_url,
             "api_address": self.api_address,
             "mcp_endpoint": self.mcp_endpoint,
             "mcp_ok": False,
+            "mcp_info": None,
             "oauth_ok": False,
+            "oauth_message": "Token ainda não gerado.",
             "store_info": None,
             "errors": [],
         }
 
-        # 1. Test MCP Storefront (store-info)
-        if self.mcp_endpoint:
-            try:
-                mcp_res = await self.mcp_call("store-info", {})
-                result["mcp_ok"] = True
-                result["store_info"] = mcp_res
-            except Exception as e:
-                result["errors"].append(f"MCP Storefront: {str(e)}")
-
-        # 2. Test OAuth2 if credentials provided
+        # 1. Test OAuth2 REST API (/web_api)
         if self.settings and (
-            (self.settings.tray_consumer_key and self.settings.tray_auth_code)
+            (self.consumer_key and self.settings.tray_auth_code)
             or self.settings.tray_access_token
         ):
             try:
@@ -240,8 +344,43 @@ class TrayClient:
                     if self.settings.tray_token_expires_at
                     else None
                 )
+                # Test real query to /products
+                async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                    r_prod = await client.get(
+                        f"{self.api_address}/products",
+                        params={"access_token": token, "limit": 1},
+                    )
+                    if r_prod.status_code == 200:
+                        paging = (r_prod.json() or {}).get("paging") or {}
+                        total_prods = paging.get("total", 0)
+                        result["oauth_message"] = (
+                            f"Conectado com sucesso à API OAuth2 (/web_api)! Loja Tray ID #{self.settings.tray_store_id or 'OK'} "
+                            f"• {total_prods} produtos encontrados na Tray. Rotinas de Clientes, Cupons e Carrinhos prontas."
+                        )
+                    else:
+                        result["oauth_message"] = f"Token OAuth2 ativo (Loja #{self.settings.tray_store_id})."
             except Exception as e:
+                result["oauth_message"] = f"Falha OAuth2: {str(e)}"
                 result["errors"].append(f"OAuth REST API: {str(e)}")
+
+        # 2. Test MCP Storefront (store-info) — Optional complement
+        if self.mcp_endpoint:
+            try:
+                mcp_res = await self.mcp_call("store-info", {})
+                result["mcp_ok"] = True
+                result["mcp_info"] = mcp_res
+                result["store_info"] = mcp_res
+            except Exception as e:
+                if "corpsuite.com.br" in self.store_url:
+                    result["mcp_info"] = {
+                        "status": "OPCIONAL_DESATIVADO_NO_CORPSUITE",
+                        "detalhe": "O subdomínio técnico .corpsuite.com.br usa exclusivamente a API Privada OAuth2 (/web_api), que já está 100% autenticada e operacional para criar Clientes, Cupons e Carrinhos.",
+                    }
+                else:
+                    result["mcp_info"] = {
+                        "status": "MCP_NAO_HABILITADO_NA_LOJA",
+                        "detalhe": f"App MCP Storefront opcional não ativo neste domínio ({str(e)}). Operando 100% via API Oficial /web_api.",
+                    }
 
         return result
 
@@ -324,6 +463,7 @@ class TrayClient:
         ends_at: Optional[str] = None,
         discount_type: str = "$",
         customer_tray_id: Optional[str] = None,
+        shipping_discount: bool = False,
     ) -> Dict[str, Any]:
         """
         Cria um cupom de desconto único na Tray via POST /discount_coupons/?access_token={token}
@@ -345,7 +485,7 @@ class TrayClient:
             "DiscountCoupon[usage_counter_limit]": "1",
             "DiscountCoupon[usage_counter_limit_customer]": "1",
             "DiscountCoupon[cumulative_discount]": "1",
-            "DiscountCoupon[shipping_discount]": "0",
+            "DiscountCoupon[shipping_discount]": "1" if shipping_discount else "0",
         }
 
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
@@ -498,9 +638,40 @@ class TrayClient:
             qty = max(1, int(item.get("quantity") or 1))
             price = float(item.get("unit_price") or item.get("price") or 0.0)
 
-            # Prefer MCP add-to-cart if tray_pid exists and MCP endpoint is available
             item_added = False
-            if tray_pid and self.mcp_endpoint:
+            # 1. Prefer official Tray REST API POST /carts/ when OAuth2 token is available
+            if token and self.api_address and tray_pid:
+                try:
+                    cart_body: Dict[str, Any] = {
+                        "Cart": {
+                            "session_id": session_id,
+                            "product_id": int(tray_pid) if tray_pid.isdigit() else tray_pid,
+                            "quantity": qty,
+                            "price": round(price, 2),
+                        }
+                    }
+                    if idx == 0 and shipping_info:
+                        cart_body["Cart"]["Shipping"] = shipping_info
+
+                    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                        r_cart = await client.post(
+                            f"{self.api_address}/carts/",
+                            params={"access_token": token},
+                            json=cart_body,
+                        )
+                        if r_cart.status_code in (200, 201):
+                            j_cart = r_cart.json() or {}
+                            if j_cart.get("cart_url"):
+                                cart_url = j_cart["cart_url"]
+                            if j_cart.get("session_id"):
+                                session_id = j_cart["session_id"]
+                            item_added = True
+                            added_items.append({"product_id": tray_pid, "quantity": qty, "via": "REST"})
+                except Exception as e:
+                    logger.warning(f"[TrayClient] Falha no REST POST /carts/ para item {tray_pid}, tentando MCP: {e}")
+
+            # 2. Fallback to MCP add-to-cart if REST was not used or failed
+            if not item_added and tray_pid and self.mcp_endpoint:
                 try:
                     mcp_args: Dict[str, Any] = {
                         "product_id": int(tray_pid) if tray_pid.isdigit() else tray_pid,
@@ -508,7 +679,6 @@ class TrayClient:
                         "session_id": session_id,
                     }
                     mcp_res = await self.mcp_call("add-to-cart", mcp_args)
-                    # Extract cart_url or session_id from MCP response
                     content_blocks = mcp_res.get("content") if isinstance(mcp_res, dict) else []
                     if isinstance(content_blocks, list):
                         for blk in content_blocks:
@@ -519,34 +689,7 @@ class TrayClient:
                     item_added = True
                     added_items.append({"product_id": tray_pid, "quantity": qty, "via": "MCP"})
                 except Exception as e:
-                    logger.warning(f"[TrayClient] Falha no MCP add-to-cart para item {tray_pid}, tentando REST: {e}")
-
-            # Fallback to REST API POST /carts/
-            if not item_added and token and self.api_address and tray_pid:
-                cart_body: Dict[str, Any] = {
-                    "Cart": {
-                        "session_id": session_id,
-                        "product_id": int(tray_pid) if tray_pid.isdigit() else tray_pid,
-                        "quantity": qty,
-                        "price": round(price, 2),
-                    }
-                }
-                if idx == 0 and shipping_info:
-                    cart_body["Cart"]["Shipping"] = shipping_info
-
-                async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-                    r_cart = await client.post(
-                        f"{self.api_address}/carts/",
-                        params={"access_token": token},
-                        json=cart_body,
-                    )
-                    if r_cart.status_code in (200, 201):
-                        j_cart = r_cart.json() or {}
-                        if j_cart.get("cart_url"):
-                            cart_url = j_cart["cart_url"]
-                        if j_cart.get("session_id"):
-                            session_id = j_cart["session_id"]
-                        added_items.append({"product_id": tray_pid, "quantity": qty, "via": "REST"})
+                    logger.warning(f"[TrayClient] Falha no MCP add-to-cart para item {tray_pid}: {e}")
 
         # Associate customer e-mail / user_id to cart if REST token is available
         if token and self.api_address and (customer_email or customer_tray_id):

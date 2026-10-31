@@ -50,6 +50,9 @@ class ModuleUpdate(BaseModel):
     module_cafeteria: Optional[bool] = None
     module_encomendas: Optional[bool] = None
     module_order_intake: Optional[bool] = None
+    module_b2c_storefront: Optional[bool] = None
+    module_horus_api_bridge: Optional[bool] = None
+
 
 class HorusTestRequest(BaseModel):
     url: str
@@ -230,6 +233,7 @@ def update_company_modules(
             "module_logistica_horus",
             "module_dropship",
             "module_horus_sql",
+            "module_horus_api_bridge",
             "module_cora",
             "modulo_autores_ativo",
             "has_inventory_module",

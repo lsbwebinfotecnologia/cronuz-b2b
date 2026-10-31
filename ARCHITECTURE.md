@@ -412,6 +412,67 @@ O módulo de Cafeteria foi projetado com arquitetura multi-tenant híbrida e esc
 
 ---
 
+## 🌉 API HORUS COMPLEMENTAR & AGENTE BRIDGE DESKTOP (`HorusAPIBridge.exe`)
+
+Arquitetura de **Túnel Reverso e API Paralela Padronizada** desenvolvida para sellers/clientes cujo ambiente de rede possui restrições de firewall, CGNAT ou políticas de segurança que impedem a abertura de portas de entrada para a API nativa do Horus (`8060`) e/ou para o banco SQL Server (`1433`).
+
+### 1. Obrigatoriedades e Regras Mandatórias do Aplicativo (`.exe`)
+1. **Diretório Oficial do Projeto**: `tools/horus-api-bridge-windows/` (`horus_api_bridge_app.py`, `HorusAPIBridge.exe`).
+2. **Identidade Visual Oficial**:
+   - Obrigatório o uso da **Logo Roxa Oficial do Horus B2B** (`horus_icon.ico` e `HORUS_ICON_B64` embutido no código para barras de título e bandeja do Windows).
+   - Interface Desktop inspirada na tela administrativa do `API HORUS S.I.G.A`, contendo abas de **Serviços & Conexões**, **Funcionalidades**, **Credenciais & Doc. API** e **Logs em Tempo Real**.
+3. **Licenciamento Criptográfico & Habilitação pelo Painel Master**:
+   - O uso da API Horus Paralela é controlado individualmente por Seller no Painel Master (`cmp_company.module_horus_api_bridge` e `cmp_settings.horus_bridge_enabled`).
+   - O executável exige uma **Chave de Licença Assinada com HMAC-SHA256** (`HBRI1.<payload_b64>.<signature>`) vinculada ao `company_id`, CNPJ e data de validade (`horus_bridge_expires_at`), idêntico ao padrão de segurança do PDV Offline.
+   - Se a licença estiver expirada ou desativada pelo Master, tanto o Gateway na nuvem quanto o `.exe` local bloqueiam imediatamente o tráfego da API.
+4. **Zero Abertura de Portas de Entrada (Conexão Reversa Outbound)**:
+   - O `.exe` roda na máquina/servidor Windows do cliente (na mesma rede local do `API HORUS S.I.G.A` e do SQL Server `HORUS_SIGA`) e inicia a comunicação **de dentro para fora** via HTTPS/WSS (`porta 443`).
+   - Internamente na LAN (`localhost` / `OPEN-SERVER`), o `.exe` consome:
+     - **API Local Horus (`http://localhost:8060/Horus/api/TServerB2B/`)**: Repassa todos os métodos oficiais (`GET`, `POST`, `PUT`, `DELETE`) mantendo 100% do contrato JSON original do Horus.
+     - **SQL Server Local (`porta 1433` via `pytds` puro Python)**: Executa exclusivamente rotinas parametrizadas dos **Endpoints Complementares Financeiros e Operacionais** (sem necessidade de expor a porta `1433` na internet e sem depender de driver ODBC externo no Windows).
+5. **Governança, Paginação e Performance**:
+   - **Compressão GZIP Obrigatória**: Respostas acima de 2 KB trafegadas entre o `.exe` e a nuvem são comprimidas em GZIP (`Content-Encoding: gzip`), reduzindo o consumo de banda e RAM da hospedagem em até 85%.
+   - **Regra de Paginação (`OFFSET`/`LIMIT`)**: Respeito estrito à flag `horus_legacy_pagination` do Seller, além dos parâmetros `SD_*` (cálculo de saldo disponível por empresa/filial/local) e `AC_*` (filtro de acervo com saldo).
+   - **Rate Limiting por Seller**: Limite configurável de requisições por minuto (`horus_bridge_rate_limit_per_min`, padrão `120 req/min`) para proteger tanto o Droplet quanto o servidor local do cliente.
+   - **Proibição de SQL Arbitrário**: A nuvem NUNCA envia strings SQL abertas pelo túnel; apenas aciona endpoints homologados (`Busca_TitulosFinanceiros`, `Busca_ResumoFinanceiroCliente`, `Busca_PedidosDBM`, `Busca_NotasFiscaisSQL`) cujas queries parametrizadas residem compiladas dentro do `.exe`.
+6. **Execução como Serviço do Windows (`.bat`)**:
+   - Deve acompanhar scripts padronizados:
+     - `GERAR_EXECUTAVEL_HORUS_BRIDGE.bat` (compilação PyInstaller `--onefile` com ícone roxo oficial).
+     - `INSTALAR_SERVICO_WINDOWS.bat` (instala o `HorusAPIBridge.exe --service` para iniciar automaticamente com o Windows em background sem exigir sessão de usuário aberta, com auto-restart em caso de falha).
+     - `INICIAR_HORUS_API_BRIDGE.bat` (abre a janela administrativa do agente).
+
+### 2. Espelhamento da Documentação Oficial Horus + Endpoints Complementares
+O Gateway expõe a rota padrão compatível com qualquer integrador Horus:
+- **Base URL Direta**: `https://<host-gateway>/Horus/api/TServerB2B/<Endpoint>` (identifica o Seller automaticamente via `Authorization: Basic base64(usuario:senha)` ou `Authorization: Bearer <token>` / header `X-API-Key`).
+- **Base URL Explícita por Seller**: `https://<host-gateway>/horus-api-bridge/public/<company_id>/Horus/api/TServerB2B/<Endpoint>`.
+- **Catálogo de Endpoints Espelhados (`TServerB2B`)**:
+  - **Produtos**: `Busca_Acervo`, `Busca_AcervoB2B`, `Busca_Acervo_kit`, `Autores_item`, `Estoque`, `Busca_preco_item`, `Arvore_generos`, `Busca_prazo_entrega`, `Busca_Preco_promocional`, `Busca_Caracteristicas`.
+  - **Clientes**: `Busca_Cliente`, `Busca_TipoCliente`, `Busca_EndCliente`, `Busca_TipoEndCliente`, `Busca_Contrato_Cliente_Sintetico`, `InsAltCliente`, `InsAltTipoCliente`, `InsAltEndCliente`, `InsGeneroCliente`, `ExcGeneroCliente`.
+  - **Pedidos de Venda & Expedição**: `Busca_FormaPagto`, `Busca_MetodoVenda`, `Busca_Transportadora`, `Busca_PedidosVenda`, `Busca_ItensPedidosVenda`, `InsPedidoVenda`, `InsItensPedidoVenda`, `LimpaItensPedidoVenda`, `InsVencPedidoVenda`, `LimpaVencPedidoVenda`, `Busca_NotaFiscal`, `Busca_RastreioPedido`, `AltStatus_Pedido`, `Pular_expedicao`, `ConfereItem_Pedido`, `InsVolume_Pedido`.
+  - **Minuta & B.I.**: `Busca_MinutaDespacho`, `bi_vendas_parametros`, `bi_vendas`.
+  - **Complementares Financeiros & SQL Seguro (Exclusivos Cronuz Bridge)**: `Busca_TitulosFinanceiros`, `Busca_ResumoFinanceiroCliente`, `Busca_PedidosDBM`, `Busca_NotasFiscaisSQL`, `Status_ConexaoLocal`.
+
+### 3. Arquitetura de Hospedagem: Modo Unificado vs. Droplet Dedicado (`SERVER_ROLE`)
+Para garantir que alto volume de requisições de API externas não impacte o painel B2B principal, o backend suporta isolamento de infraestrutura via variável de ambiente `SERVER_ROLE` no `.env`:
+
+| Variável `.env` | Comportamento | Onde Usar |
+|---|---|---|
+| `SERVER_ROLE=all` *(padrão)* | Sobe todos os módulos do Cronuz B2B + APScheduler + Gateway Horus API Bridge no mesmo processo. | Servidor único ou ambiente de homologação. |
+| `SERVER_ROLE=horus_api_only` | **Modo Droplet Dedicado de API**: Desativa o APScheduler (jobs em background) e monta **exclusivamente** os routers do Gateway Horus API Bridge (`/Horus/api/TServerB2B/*`, `/horus-api-bridge/*`, documentação e `/health`). Não requer build/execução do Next.js (PM2) caso deseje operar 100% headless. | Droplet dedicado na DigitalOcean focado apenas em tráfego de APIs Horus e túneis de `.exe`. |
+
+**Como provisionar um Droplet Dedicado para a API Horus quando necessário:**
+1. Criar um Droplet Ubuntu na DigitalOcean (na mesma região/VPC do Droplet principal para comunicação rápida em rede privada com o PostgreSQL, ou validação stateless via chave HMAC).
+2. Clonar `/var/www/cronuz/backend`, configurar no `.env`:
+   ```env
+   SERVER_ROLE=horus_api_only
+   DATABASE_URL=postgresql://cronuz_admin:senha@<IP_PRIVADO_BANCO>:5432/cronuz_b2b
+   SECRET_KEY=...
+   ```
+3. Subir apenas o serviço `cronuz-backend` (Nginx fazendo proxy reverso da porta `80`/`443` direto para `127.0.0.1:8000`).
+4. No Painel Master do Seller (ou na tela do `HorusAPIBridge.exe`), apontar o campo **URL do Gateway Cloud** para o domínio/IP do Droplet dedicado (ex: `https://api-horus.cronuz.com.br`).
+
+---
+
 ## 🚀 DEPLOY
 
 Ver arquivos em `deploy/` para instruções de cada feature.  
@@ -445,4 +506,5 @@ Após deploy executado com sucesso, mover para `deploy/processed/`.
 - Traceback em responses de erro
 - ForeignKeys ambíguas sem `foreign_keys=` explícito nos relationships SQLAlchemy
 - `<input type="number">` cru para valores monetários ou percentuais de desconto (obrigatório uso de `CurrencyInput` com máscara automática em tempo real)
+
 

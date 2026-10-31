@@ -25,7 +25,11 @@ from app.models.b2c_storefront import (
     B2CCouponRedemption,
     B2CLgpdConsent,
 )
-from app.integrators.tray_client import TrayClient
+from app.integrators.tray_client import (
+    TrayClient,
+    get_global_tray_app_credentials,
+    save_global_tray_app_credentials,
+)
 from app.api.storefront import _fetch_from_horus_storefront, calculate_product_availability
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,12 @@ def _generate_unique_code(prefix: str = "VOUCHER") -> str:
 # SCHEMAS
 # ══════════════════════════════════════════════════════════════════════════════
 
+class GlobalTrayAppRequest(BaseModel):
+    app_name: Optional[str] = "App Cronuz Tray"
+    consumer_key: str
+    consumer_secret: str
+
+
 class EmployeeRecipientItem(BaseModel):
     name: Optional[str] = None
     cpf: Optional[str] = None
@@ -63,7 +73,7 @@ class CouponBatchCreateRequest(BaseModel):
     quantity: int = Field(default=10, ge=1, le=5000)
     coupon_value: float = Field(..., gt=0)
     discount_type: str = "FIXED_BRL"  # FIXED_BRL or PERCENTAGE
-    allows_freight_discount: bool = False
+    allows_freight_discount: bool = True
     allow_residual_balance: bool = True
     min_order_value: float = 0.0
     valid_from: Optional[date] = None
@@ -76,7 +86,8 @@ class SingleCouponCreateRequest(BaseModel):
     code: Optional[str] = None
     initial_value: float = Field(..., gt=0)
     discount_type: str = "FIXED_BRL"
-    allows_freight_discount: bool = False
+    max_uses: int = Field(default=1, ge=1, le=10000)
+    allows_freight_discount: bool = True
     allow_residual_balance: bool = True
     min_order_value: float = 0.0
     assigned_name: Optional[str] = None
@@ -93,6 +104,30 @@ class B2CSettingsUpdateRequest(BaseModel):
     b2c_lgpd_terms_text: Optional[str] = None
     b2c_default_freight_value: Optional[float] = None
     b2c_free_shipping_min_value: Optional[float] = None
+    b2c_showcases_config: Optional[Dict[str, Any]] = None
+    tray_enabled: Optional[bool] = None
+    tray_store_url: Optional[str] = None
+    tray_auth_code: Optional[str] = None
+
+
+class B2CAppearanceUpdateRequest(BaseModel):
+    branding: Optional[Dict[str, Any]] = None
+    banners: Optional[List[Dict[str, Any]]] = None
+    showcases: Optional[List[Dict[str, Any]]] = None
+    categories: Optional[List[Dict[str, Any]]] = None
+    promotions: Optional[List[Dict[str, Any]]] = None
+    footer_info: Optional[Dict[str, Any]] = None
+    b2c_custom_domain: Optional[str] = None
+
+
+class B2CContactMessageRequest(BaseModel):
+    company_id: int
+    name: str
+    email: str
+    phone: Optional[str] = None
+    subject: Optional[str] = "Atendimento Loja Virtual"
+    message: str
+
 
 
 class CouponValidateRequest(BaseModel):
@@ -148,6 +183,36 @@ class B2CCheckoutRequest(BaseModel):
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. TRAY E-COMMERCE CONNECTION & WEBHOOK ENDPOINTS (MASTER & SELLER)
 # ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/tray/global-app")
+def get_master_global_tray_app(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.type != "MASTER":
+        raise HTTPException(status_code=403, detail="Apenas usuários Master podem consultar as credenciais universais do App Tray.")
+    return get_global_tray_app_credentials(db)
+
+
+@router.put("/tray/global-app")
+def update_master_global_tray_app(
+    data: GlobalTrayAppRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.type != "MASTER":
+        raise HTTPException(status_code=403, detail="Apenas usuários Master podem alterar as credenciais universais do App Tray.")
+    saved = save_global_tray_app_credentials(
+        db=db,
+        consumer_key=data.consumer_key,
+        consumer_secret=data.consumer_secret,
+        app_name=data.app_name or "App Cronuz Tray",
+    )
+    return {
+        "message": "Credenciais universais do App Cronuz na Tray salvas com sucesso!",
+        **saved,
+    }
+
 
 @router.post("/tray/test-connection/{company_id}")
 async def test_tray_connection(
@@ -273,6 +338,13 @@ def get_b2c_coupons_summary(
         db.query(func.count(B2CLgpdConsent.id)).filter(B2CLgpdConsent.company_id == cid).scalar() or 0
     )
 
+    total_b2c_orders = (
+        db.query(func.count(Order.id))
+        .filter(Order.company_id == cid, Order.origin == "b2c_storefront")
+        .scalar()
+        or 0
+    )
+
     company = db.query(Company).filter(Company.id == cid).first()
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
 
@@ -287,6 +359,7 @@ def get_b2c_coupons_summary(
         "total_used_value": round(total_used_value, 2),
         "total_remaining_balance": round(total_remaining_balance, 2),
         "total_redemptions": total_redemptions,
+        "total_b2c_orders": total_b2c_orders,
         "total_lgpd_consents": total_lgpd_consents,
         "settings": {
             "b2c_custom_domain": getattr(company, "b2c_custom_domain", None) if company else None,
@@ -300,6 +373,9 @@ def get_b2c_coupons_summary(
             "b2c_free_shipping_min_value": float(getattr(settings, "b2c_free_shipping_min_value", 0) or 0) if settings else 0.0,
             "tray_enabled": bool(getattr(settings, "tray_enabled", False)) if settings else False,
             "tray_store_url": getattr(settings, "tray_store_url", None) if settings else None,
+            "tray_auth_code": getattr(settings, "tray_auth_code", None) if settings else None,
+            "tray_store_id": getattr(settings, "tray_store_id", None) if settings else None,
+            "payment_gateway_active": getattr(settings, "payment_gateway_active", "EFI") if settings else "EFI",
         },
     }
 
@@ -333,9 +409,684 @@ def update_b2c_seller_settings(
         settings.b2c_default_freight_value = Decimal(str(round(data.b2c_default_freight_value, 2)))
     if data.b2c_free_shipping_min_value is not None:
         settings.b2c_free_shipping_min_value = Decimal(str(round(data.b2c_free_shipping_min_value, 2)))
+    if data.b2c_showcases_config is not None:
+        settings.b2c_showcases_config = data.b2c_showcases_config
+    if data.tray_enabled is not None:
+        settings.tray_enabled = data.tray_enabled
+    if data.tray_store_url is not None:
+        clean_tray_url = data.tray_store_url.strip().rstrip("/")
+        if clean_tray_url and not clean_tray_url.startswith("http"):
+            clean_tray_url = f"https://{clean_tray_url}"
+        settings.tray_store_url = clean_tray_url or None
+        if clean_tray_url and not settings.tray_api_address:
+            settings.tray_api_address = f"{clean_tray_url}/web_api"
+    if data.tray_auth_code is not None:
+        settings.tray_auth_code = data.tray_auth_code.strip() or None
 
     db.commit()
+    _b2c_cache_clear(cid)
     return {"message": "Configurações do Storefront B2C atualizadas com sucesso!"}
+
+
+def _slugify_store_name(name: Optional[str], company_id: int) -> str:
+    import unicodedata
+    raw = str(name or f"loja-{company_id}").strip().lower()
+    norm = unicodedata.normalize("NFKD", raw).encode("ASCII", "ignore").decode("ASCII")
+    slug = re.sub(r"[^a-z0-9]+", "-", norm).strip("-")
+    return slug or f"loja-{company_id}"
+
+
+import time as _time
+import json as _json
+
+# ==============================================================================
+# MOTOR DE CACHE DE ALTA PERFORMANCE DA LOJA B2C (GERENCIADO PELO SELLER)
+# ==============================================================================
+_B2C_STORE_CACHE: Dict[int, Dict[str, Dict[str, Any]]] = {}
+_B2C_CACHE_STATS: Dict[int, Dict[str, Any]] = {}
+
+
+def _get_b2c_cache_settings(settings: Optional[CompanySettings]) -> Dict[str, Any]:
+    raw_cfg = getattr(settings, "b2c_showcases_config", None) if settings else None
+    cache_cfg = (
+        raw_cfg.get("cache_config")
+        if isinstance(raw_cfg, dict) and isinstance(raw_cfg.get("cache_config"), dict)
+        else {}
+    )
+    return {
+        "enabled": bool(cache_cfg.get("enabled", True)),
+        "ttl_seconds": int(cache_cfg.get("ttl_seconds", 1800) or 1800),
+    }
+
+
+def _ensure_company_cache_stats(company_id: int) -> Dict[str, Any]:
+    if company_id not in _B2C_CACHE_STATS:
+        _B2C_CACHE_STATS[company_id] = {
+            "hits": 0,
+            "misses": 0,
+            "last_cleared_at": None,
+            "last_warmup_at": None,
+        }
+    return _B2C_CACHE_STATS[company_id]
+
+
+def _b2c_cache_get(
+    company_id: int, cache_key: str, settings: Optional[CompanySettings]
+) -> Optional[Any]:
+    cfg = _get_b2c_cache_settings(settings)
+    stats = _ensure_company_cache_stats(company_id)
+    if not cfg["enabled"]:
+        return None
+    bucket = _B2C_STORE_CACHE.get(company_id)
+    if not bucket or cache_key not in bucket:
+        stats["misses"] = stats.get("misses", 0) + 1
+        return None
+    entry = bucket[cache_key]
+    if _time.time() > float(entry.get("expires_at", 0)):
+        bucket.pop(cache_key, None)
+        stats["misses"] = stats.get("misses", 0) + 1
+        return None
+    stats["hits"] = stats.get("hits", 0) + 1
+    entry["hits"] = int(entry.get("hits", 0)) + 1
+    return entry.get("data")
+
+
+def _b2c_cache_set(
+    company_id: int,
+    cache_key: str,
+    data: Any,
+    settings: Optional[CompanySettings],
+    label: str = "",
+) -> None:
+    cfg = _get_b2c_cache_settings(settings)
+    if not cfg["enabled"]:
+        return
+    if company_id not in _B2C_STORE_CACHE:
+        _B2C_STORE_CACHE[company_id] = {}
+    bucket = _B2C_STORE_CACHE[company_id]
+    # Limit max keys per company to 250 to protect server RAM
+    if len(bucket) >= 250 and cache_key not in bucket:
+        oldest_key = min(bucket.keys(), key=lambda k: bucket[k].get("expires_at", 0))
+        bucket.pop(oldest_key, None)
+    now_ts = _time.time()
+    bucket[cache_key] = {
+        "data": data,
+        "label": label or cache_key,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": now_ts + max(60, cfg["ttl_seconds"]),
+        "hits": 0,
+    }
+
+
+def _b2c_cache_clear(company_id: int) -> int:
+    bucket = _B2C_STORE_CACHE.pop(company_id, {})
+    removed = len(bucket)
+    stats = _ensure_company_cache_stats(company_id)
+    stats["last_cleared_at"] = datetime.now(timezone.utc).isoformat()
+    return removed
+
+
+def _apply_b2c_promotions_to_items(
+    items: List[Dict[str, Any]], promotions: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Aplica regras de preço promocional B2C (De/Por) com validade por Categoria, Editora, Produtos (SKU/ISBN) ou Todo o Catálogo,
+    e garante que `allow_purchase=True` nos itens da vitrine aberta B2C.
+    """
+    if not items:
+        return []
+
+    today_str = date.today().isoformat()
+    active_rules: List[Dict[str, Any]] = []
+    for p in (promotions or []):
+        if not isinstance(p, dict) or p.get("active") is False:
+            continue
+        vf = (p.get("valid_from") or "").strip()
+        vu = (p.get("valid_until") or "").strip()
+        if vf and today_str < vf:
+            continue
+        if vu and today_str > vu:
+            continue
+        val = float(p.get("discount_value") or 0)
+        if val <= 0:
+            continue
+        active_rules.append(p)
+
+    result = []
+    for raw_item in items:
+        item = dict(raw_item)
+        # Na loja aberta B2C, habilitar o botão Comprar para todos os itens exibidos
+        item["allow_purchase"] = True
+
+        base_price = float(item.get("base_price") or 0)
+        if base_price <= 0 or not active_rules:
+            result.append(item)
+            continue
+
+        existing_promo = float(item.get("promotional_price") or 0)
+        best_price = existing_promo if (0 < existing_promo < base_price) else base_price
+        best_rule: Optional[Dict[str, Any]] = None
+
+        item_sku = str(item.get("sku") or "").strip().upper()
+        item_isbn = str(item.get("ean_gtin") or "").strip().upper()
+        item_brand = str(item.get("brand") or "").strip().upper()
+        cat_obj = item.get("category")
+        item_cat = (
+            str(cat_obj.get("name") if isinstance(cat_obj, dict) else (cat_obj or "")).strip().upper()
+        )
+
+        for rule in active_rules:
+            t_type = str(rule.get("target_type") or "ALL").upper()
+            t_val = str(rule.get("target_value") or "").strip().upper()
+            p_codes = [
+                str(c).strip().upper()
+                for c in (rule.get("product_codes") or [])
+                if str(c).strip()
+            ]
+            if t_val and t_type == "PRODUCTS":
+                p_codes.extend([c.strip().upper() for c in re.split(r"[,;\s\n]+", t_val) if c.strip()])
+
+            matched = False
+            if t_type == "ALL":
+                matched = True
+            elif t_type == "CATEGORY" and t_val:
+                if t_val in item_cat or (item_cat and item_cat in t_val):
+                    matched = True
+            elif t_type == "BRAND" and t_val:
+                if t_val in item_brand or (item_brand and item_brand in t_val):
+                    matched = True
+            elif t_type == "PRODUCTS" and p_codes:
+                if (item_sku and item_sku in p_codes) or (item_isbn and item_isbn in p_codes):
+                    matched = True
+
+            if matched:
+                d_type = str(rule.get("discount_type") or "PERCENTAGE").upper()
+                d_val = float(rule.get("discount_value") or 0)
+                if d_type == "PERCENTAGE":
+                    cand_price = round(base_price * (1.0 - min(d_val, 95.0) / 100.0), 2)
+                else:
+                    cand_price = round(max(0.50, base_price - d_val), 2)
+
+                if 0 < cand_price < best_price:
+                    best_price = cand_price
+                    best_rule = rule
+
+        if best_price < base_price:
+            item["promotional_price"] = best_price
+            item["discount_percent"] = max(1, int(round(((base_price - best_price) / base_price) * 100)))
+            if best_rule:
+                item["promotion_name"] = best_rule.get("name") or "Oferta Especial"
+                item["promotion_valid_until"] = best_rule.get("valid_until") or None
+        result.append(item)
+
+    return result
+
+
+def _format_cnpj_display(doc: Optional[str]) -> str:
+    digits = re.sub(r"\D", "", str(doc or ""))
+    if len(digits) == 14:
+        return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"
+    return str(doc or "")
+
+
+def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySettings], db: Session) -> Dict[str, Any]:
+    raw_cfg = getattr(settings, "b2c_showcases_config", None) if settings else None
+    if not isinstance(raw_cfg, dict):
+        raw_cfg = {}
+
+    default_slug = (
+        (company.custom_domain or "").split(".")[0].strip().lower()
+        if company.custom_domain and "." not in (company.custom_domain or "")
+        else _slugify_store_name(company.name, company.id)
+    )
+
+    raw_branding = raw_cfg.get("branding") if isinstance(raw_cfg.get("branding"), dict) else {}
+    branding = {
+        "store_slug": raw_branding.get("store_slug") or default_slug,
+        "primary_color": raw_branding.get("primary_color") or "#4f46e5",
+        "secondary_color": raw_branding.get("secondary_color") or "#0f172a",
+        "logo_url": raw_branding.get("logo_url") or company.logo or "",
+        "hero_badge_text": (raw_branding.get("hero_badge_text") or "Destaques e Lançamentos").replace("&", "e"),
+        "hero_title": raw_branding.get("hero_title") or f"Bem-vindo à {company.name}",
+        "hero_subtitle": raw_branding.get("hero_subtitle") or "Explore nosso catálogo completo com entrega rápida e segura para todo o Brasil.",
+        "hero_banner_url": raw_branding.get("hero_banner_url") or company.login_background_url or "",
+        "show_voucher_simulator": False,
+    }
+
+    banners = raw_cfg.get("banners") if isinstance(raw_cfg.get("banners"), list) else []
+    promotions = raw_cfg.get("promotions") if isinstance(raw_cfg.get("promotions"), list) else []
+    raw_showcases = raw_cfg.get("showcases") if isinstance(raw_cfg.get("showcases"), list) else []
+    showcases = []
+    for sc in raw_showcases:
+        if isinstance(sc, dict):
+            sc_copy = dict(sc)
+            sc_items = sc_copy.get("items") if isinstance(sc_copy.get("items"), list) else []
+            sc_copy["items"] = _apply_b2c_promotions_to_items(sc_items, promotions)
+            showcases.append(sc_copy)
+
+    categories = raw_cfg.get("categories") if isinstance(raw_cfg.get("categories"), list) else []
+
+    # Fallback: if no B2C categories configured yet, pull from Seller's NavigationMenuItem
+    if not categories:
+        try:
+            from app.models.marketing_navigation import NavigationMenuItem
+            nav_items = (
+                db.query(NavigationMenuItem)
+                .filter(NavigationMenuItem.company_id == company.id, NavigationMenuItem.is_active == True)
+                .order_by(NavigationMenuItem.position.asc())
+                .all()
+            )
+            for nav in nav_items:
+                item_type_str = nav.item_type.value if hasattr(nav.item_type, "value") else str(nav.item_type)
+                categories.append({
+                    "id": f"nav-{nav.id}",
+                    "label": nav.label,
+                    "code": nav.external_id,
+                    "filter_type": "NOM_EDITORA" if item_type_str == "BRAND" else "COD_GENERO",
+                    "active": True,
+                })
+        except Exception:
+            pass
+
+    # Build Footer & Contact Info (Mandatory E-commerce Legal Details: CNPJ, Address, Contact)
+    raw_footer = raw_cfg.get("footer_info") if isinstance(raw_cfg.get("footer_info"), dict) else {}
+    addr_parts = []
+    if getattr(company, "street", None):
+        st = f"{company.street}, {company.number or 'S/N'}"
+        if getattr(company, "complement", None):
+            st += f" - {company.complement}"
+        addr_parts.append(st)
+    if getattr(company, "neighborhood", None):
+        addr_parts.append(company.neighborhood)
+    if getattr(company, "city", None) and getattr(company, "state", None):
+        addr_parts.append(f"{company.city}/{company.state}")
+    if getattr(company, "zip_code", None):
+        addr_parts.append(f"CEP {company.zip_code}")
+    default_address = " • ".join(addr_parts)
+
+    footer_info = {
+        "legal_name": raw_footer.get("legal_name") or getattr(company, "razao_social", None) or company.name,
+        "cnpj": raw_footer.get("cnpj") or _format_cnpj_display(company.document),
+        "address_line": raw_footer.get("address_line") or default_address or "Endereço cadastrado na sede da empresa",
+        "zip_code": raw_footer.get("zip_code") or getattr(company, "zip_code", None) or "",
+        "city_state": raw_footer.get("city_state") or (f"{company.city}/{company.state}" if getattr(company, "city", None) and getattr(company, "state", None) else ""),
+        "contact_email": raw_footer.get("contact_email") or "",
+        "contact_phone": raw_footer.get("contact_phone") or "",
+        "whatsapp": raw_footer.get("whatsapp") or "",
+        "business_hours": raw_footer.get("business_hours") or "Segunda a Sexta, das 09h às 18h",
+        "about_text": raw_footer.get("about_text") or f"Loja oficial {company.name}. Catálogo editorial completo com entrega rápida e segura para todo o Brasil.",
+    }
+
+    return {
+        "branding": branding,
+        "banners": banners,
+        "showcases": showcases,
+        "categories": categories,
+        "promotions": promotions,
+        "footer_info": footer_info,
+    }
+
+
+@router.get("/appearance")
+def get_b2c_appearance(
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cid = _resolve_seller_company_id(current_user, company_id)
+    company = db.query(Company).filter(Company.id == cid).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    cfg = _build_b2c_appearance_config(company, settings, db)
+    return {
+        "company_id": company.id,
+        "company_name": company.name,
+        "company_logo": company.logo,
+        "b2c_custom_domain": getattr(company, "b2c_custom_domain", None),
+        "uses_horus": bool(settings.horus_enabled) if settings else False,
+        "tray_enabled": bool(getattr(settings, "tray_enabled", False)) if settings else False,
+        **cfg,
+    }
+
+
+@router.put("/appearance")
+def update_b2c_appearance(
+    data: B2CAppearanceUpdateRequest,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cid = _resolve_seller_company_id(current_user, company_id)
+    company = db.query(Company).filter(Company.id == cid).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    if not settings:
+        settings = CompanySettings(company_id=cid)
+        db.add(settings)
+
+    current_cfg = _build_b2c_appearance_config(company, settings, db)
+
+    if data.branding is not None:
+        merged_branding = {**current_cfg["branding"], **data.branding}
+        if merged_branding.get("store_slug"):
+            merged_branding["store_slug"] = _slugify_store_name(merged_branding["store_slug"], company.id)
+        current_cfg["branding"] = merged_branding
+        # Sync logo to company.logo when updated or cleared
+        if "logo_url" in data.branding:
+            company.logo = merged_branding.get("logo_url") or None
+
+    if data.banners is not None:
+        current_cfg["banners"] = data.banners
+    if data.showcases is not None:
+        current_cfg["showcases"] = data.showcases
+    if data.categories is not None:
+        current_cfg["categories"] = data.categories
+    if data.promotions is not None:
+        current_cfg["promotions"] = data.promotions
+    if data.footer_info is not None:
+        current_cfg["footer_info"] = {**current_cfg.get("footer_info", {}), **data.footer_info}
+
+    if data.b2c_custom_domain is not None:
+        clean_dom = data.b2c_custom_domain.strip().lower()
+        clean_dom = re.sub(r"^https?://", "", clean_dom).rstrip("/")
+        company.b2c_custom_domain = clean_dom or None
+
+    # Preserve existing cache_config and contact_messages inside b2c_showcases_config
+    existing_raw = getattr(settings, "b2c_showcases_config", None)
+    if isinstance(existing_raw, dict):
+        if "cache_config" in existing_raw:
+            current_cfg["cache_config"] = existing_raw["cache_config"]
+        if "contact_messages" in existing_raw:
+            current_cfg["contact_messages"] = existing_raw["contact_messages"]
+
+    from sqlalchemy.orm.attributes import flag_modified
+    settings.b2c_showcases_config = current_cfg
+    flag_modified(settings, "b2c_showcases_config")
+    db.commit()
+
+    # Automatically clear B2C cache for this seller so changes appear immediately
+    _b2c_cache_clear(cid)
+
+    return {
+        "message": "Configurações da Loja B2C salvas e cache atualizado com sucesso!",
+        **_build_b2c_appearance_config(company, settings, db),
+    }
+
+
+class B2CCacheConfigUpdateRequest(BaseModel):
+    enabled: bool = True
+    ttl_seconds: int = 1800
+
+
+@router.get("/cache/status")
+def get_b2c_cache_status(
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cid = _resolve_seller_company_id(current_user, company_id)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    cfg = _get_b2c_cache_settings(settings)
+    stats = _ensure_company_cache_stats(cid)
+
+    now_ts = _time.time()
+    bucket = _B2C_STORE_CACHE.get(cid, {})
+    # Prune expired entries first
+    expired_keys = [k for k, v in bucket.items() if now_ts > float(v.get("expires_at", 0))]
+    for k in expired_keys:
+        bucket.pop(k, None)
+
+    entries_summary = []
+    approx_bytes = 0
+    for k, v in bucket.items():
+        try:
+            approx_bytes += len(_json.dumps(v.get("data"), default=str))
+        except Exception:
+            approx_bytes += 2048
+        rem_sec = max(0, int(float(v.get("expires_at", 0)) - now_ts))
+        entries_summary.append({
+            "key": k,
+            "label": v.get("label") or k,
+            "hits": int(v.get("hits", 0)),
+            "created_at": v.get("created_at"),
+            "expires_in_seconds": rem_sec,
+        })
+
+    hits = int(stats.get("hits", 0))
+    misses = int(stats.get("misses", 0))
+    total_req = hits + misses
+    hit_rate = round((hits / total_req) * 100, 1) if total_req > 0 else 0.0
+
+    return {
+        "company_id": cid,
+        "enabled": cfg["enabled"],
+        "ttl_seconds": cfg["ttl_seconds"],
+        "cached_entries_count": len(bucket),
+        "cache_hits": hits,
+        "cache_misses": misses,
+        "hit_rate_percent": hit_rate,
+        "estimated_size_kb": round(approx_bytes / 1024.0, 2),
+        "last_cleared_at": stats.get("last_cleared_at"),
+        "last_warmup_at": stats.get("last_warmup_at"),
+        "entries": entries_summary[:30],
+    }
+
+
+@router.put("/cache/config")
+def update_b2c_cache_config(
+    data: B2CCacheConfigUpdateRequest,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cid = _resolve_seller_company_id(current_user, company_id)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    if not settings:
+        settings = CompanySettings(company_id=cid)
+        db.add(settings)
+
+    raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+    raw_cfg["cache_config"] = {
+        "enabled": bool(data.enabled),
+        "ttl_seconds": max(60, min(86400 * 7, int(data.ttl_seconds or 1800))),
+    }
+    from sqlalchemy.orm.attributes import flag_modified
+    settings.b2c_showcases_config = raw_cfg
+    flag_modified(settings, "b2c_showcases_config")
+    db.commit()
+
+    if not data.enabled:
+        _b2c_cache_clear(cid)
+
+    return {
+        "message": (
+            "Cache de alta performance ativado e configurado!"
+            if data.enabled
+            else "Cache desativado e limpo para esta loja."
+        ),
+        **get_b2c_cache_status(company_id=cid, db=db, current_user=current_user),
+    }
+
+
+@router.post("/cache/clear")
+def clear_seller_b2c_cache(
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cid = _resolve_seller_company_id(current_user, company_id)
+    removed = _b2c_cache_clear(cid)
+    return {
+        "message": f"Cache da loja limpo com sucesso! ({removed} página(s)/consulta(s) renovada(s)).",
+        "removed_entries": removed,
+        **get_b2c_cache_status(company_id=cid, db=db, current_user=current_user),
+    }
+
+
+@router.post("/cache/warmup")
+async def warmup_seller_b2c_cache(
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cid = _resolve_seller_company_id(current_user, company_id)
+    _b2c_cache_clear(cid)
+    # 1. Warm up Store Info & Showcases
+    get_public_b2c_storefront_info(company_id=cid, db=db)
+    # 2. Warm up Initial Catalog Page (Page 1)
+    await get_public_b2c_catalog(
+        company_id=cid,
+        q="",
+        filter="default",
+        only_promo=False,
+        skip=0,
+        limit=24,
+        db=db,
+        current_user=None,
+    )
+    stats = _ensure_company_cache_stats(cid)
+    stats["last_warmup_at"] = datetime.now(timezone.utc).isoformat()
+    return {
+        "message": "Cache da vitrine e página inicial pré-aquecido com sucesso para atender picos de acesso!",
+        **get_b2c_cache_status(company_id=cid, db=db, current_user=current_user),
+    }
+
+
+@router.get("/appearance/available-categories")
+async def get_b2c_available_categories(
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Busca categorias e editoras disponíveis no Horus ERP, na Tray (se ativa) e no banco local do Seller
+    para facilitar a montagem do menu de filtros da Loja B2C com 1 clique.
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+
+    categories: List[Dict[str, Any]] = []
+    brands: List[Dict[str, Any]] = []
+    tray_categories: List[Dict[str, Any]] = []
+
+    if settings and settings.horus_enabled:
+        try:
+            from app.integrators.horus_products import HorusProducts
+            client = HorusProducts(db=db, company_id=cid)
+            id_doc = "0"
+            if settings.horus_company and settings.horus_branch:
+                id_doc = f"{settings.horus_company}{settings.horus_branch}"
+
+            horus_generos = await client.arvore_generos(id_doc=id_doc)
+            if isinstance(horus_generos, list) and len(horus_generos) > 0 and not horus_generos[0].get("Falha"):
+                for gen in horus_generos:
+                    cat_id = gen.get("COD_SECAO") or gen.get("COD_GENERO") or gen.get("ID_GENERO") or gen.get("ID")
+                    cat_nome = gen.get("DESCRICAO") or gen.get("NOM_SECAO") or gen.get("NOM_GENERO") or gen.get("NOME")
+                    if cat_id and cat_nome:
+                        categories.append({
+                            "code": str(cat_nome).strip(),
+                            "raw_id": str(cat_id).strip(),
+                            "label": str(cat_nome).strip().title(),
+                            "filter_type": "COD_GENERO",
+                            "source": "HORUS_ERP",
+                        })
+
+            horus_editoras = await client.busca_editoras(id_doc=id_doc)
+            if isinstance(horus_editoras, list) and len(horus_editoras) > 0 and not horus_editoras[0].get("Falha"):
+                for ed in horus_editoras[:150]:
+                    ed_nome = ed.get("NOM_FANTASIA") or ed.get("NOM_EDITORA") or ed.get("NOME")
+                    if ed_nome:
+                        brands.append({
+                            "code": str(ed_nome).strip(),
+                            "label": str(ed_nome).strip().title(),
+                            "filter_type": "NOM_EDITORA",
+                            "source": "HORUS_ERP",
+                        })
+        except Exception as e:
+            logger.warning(f"[B2C Categories] Aviso ao consultar gêneros/editoras no Horus: {e}")
+
+    if settings and getattr(settings, "tray_enabled", False):
+        try:
+            import httpx
+            tray_client = TrayClient(db, cid)
+            token = await tray_client.get_valid_token()
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as http_cli:
+                r_cat = await http_cli.get(
+                    f"{tray_client.api_address}/categories/tree",
+                    params={"access_token": token},
+                )
+                res = r_cat.json() if r_cat.status_code == 200 else {}
+            raw_cats = res.get("Category") if isinstance(res, dict) else []
+            if isinstance(raw_cats, list):
+                for item in raw_cats:
+                    cat_obj = item.get("Category", item) if isinstance(item, dict) else {}
+                    c_name = cat_obj.get("name")
+                    if c_name:
+                        tray_categories.append({
+                            "code": str(c_name).strip(),
+                            "label": str(c_name).strip(),
+                            "filter_type": "COD_GENERO",
+                            "source": "TRAY",
+                        })
+        except Exception as e:
+            logger.warning(f"[B2C Categories] Aviso ao consultar categorias na Tray: {e}")
+
+    if not categories:
+        try:
+            from app.models.catalog_support import Category, Brand
+            local_cats = db.query(Category).filter(Category.company_id == cid).all()
+            for c in local_cats:
+                categories.append({
+                    "code": c.name,
+                    "label": c.name,
+                    "filter_type": "COD_GENERO",
+                    "source": "CRONUZ",
+                })
+            local_brands = db.query(Brand).filter(Brand.company_id == cid).all()
+            for b in local_brands:
+                brands.append({
+                    "code": b.name,
+                    "label": b.name,
+                    "filter_type": "NOM_EDITORA",
+                    "source": "CRONUZ",
+                })
+        except Exception:
+            pass
+
+    return {
+        "categories": categories,
+        "brands": brands,
+        "tray_categories": tray_categories,
+    }
+
+
+@router.get("/appearance/search-products")
+async def search_b2c_products_for_showcase(
+    q: str = Query("", description="Busca por Título, ISBN, Autor ou Editora"),
+    limit: int = Query(16, ge=1, le=50),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Busca rápida de produtos (Horus ERP respeitando OFFSET/LIMIT e SD_* ou Catálogo Local)
+    para que o Seller adicione livros nas Vitrines e Destaques da Home B2C com 1 clique.
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    res = await get_public_b2c_catalog(
+        company_id=cid,
+        q=q,
+        filter="default",
+        skip=0,
+        limit=limit,
+        db=db,
+        current_user=current_user,
+    )
+    return res
+
 
 
 @router.get("/coupons/batches")
@@ -615,8 +1366,40 @@ def create_single_b2c_coupon(
         .filter(B2CCoupon.company_id == cid, B2CCoupon.code == code, B2CCoupon.status != "CANCELLED")
         .first()
     )
-    if existing:
+    existing_batch = (
+        db.query(B2CCouponBatch)
+        .filter(B2CCouponBatch.company_id == cid, B2CCouponBatch.shared_code == code, B2CCouponBatch.active == True)
+        .first()
+    )
+    if existing or existing_batch:
         raise HTTPException(status_code=400, detail=f"Já existe um cupom ativo com o código {code}.")
+
+    max_uses = max(1, int(data.max_uses or 1))
+    if max_uses > 1:
+        batch = B2CCouponBatch(
+            company_id=cid,
+            name=data.assigned_name.strip() if data.assigned_name else f"Cupom Múltiplos Usos ({code})",
+            batch_mode="SHARED_CPF_LIMIT",
+            shared_code=code,
+            coupon_value=Decimal(str(round(data.initial_value, 2))),
+            discount_type=data.discount_type,
+            allows_freight_discount=data.allows_freight_discount,
+            allow_residual_balance=data.allow_residual_balance,
+            min_order_value=Decimal(str(round(data.min_order_value or 0.0, 2))),
+            max_uses_total=max_uses,
+            valid_from=data.valid_from,
+            valid_until=data.valid_until,
+            active=True,
+        )
+        db.add(batch)
+        db.commit()
+        db.refresh(batch)
+        return {
+            "message": f"Cupom {code} criado para até {max_uses} utilizações!",
+            "batch_id": batch.id,
+            "code": code,
+            "max_uses": max_uses,
+        }
 
     coupon = B2CCoupon(
         company_id=cid,
@@ -714,6 +1497,90 @@ def list_coupon_redemptions(
     ]
 
 
+@router.get("/orders")
+def list_b2c_orders(
+    search: Optional[str] = Query(None),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cid = _resolve_seller_company_id(current_user, company_id)
+    q = db.query(Order).filter(Order.company_id == cid, Order.origin == "b2c_storefront")
+    orders = q.order_by(Order.created_at.desc()).limit(300).all()
+
+    redemptions_by_order: Dict[int, B2CCouponRedemption] = {}
+    order_ids = [o.id for o in orders]
+    if order_ids:
+        reds = (
+            db.query(B2CCouponRedemption)
+            .filter(B2CCouponRedemption.company_id == cid, B2CCouponRedemption.order_id.in_(order_ids))
+            .all()
+        )
+        for r in reds:
+            if r.order_id:
+                redemptions_by_order[r.order_id] = r
+
+    results = []
+    for o in orders:
+        cust = o.customer
+        red = redemptions_by_order.get(o.id)
+        cust_name = (red.customer_name if red else None) or (cust.name if cust else "Cliente B2C")
+        cust_cpf = (red.customer_cpf if red else None) or (getattr(cust, "document", "") if cust else "")
+        cust_email = (red.customer_email if red else None) or (cust.email if cust else "")
+        coupon_code = (red.coupon_code if red else None) or (
+            o.customer_order_ref if o.customer_order_ref and o.customer_order_ref != "B2C_DIRECT" else None
+        )
+        residual_code = red.residual_coupon_code if red else None
+
+        if search:
+            term = search.strip().lower()
+            haystack = f"{o.id} {cust_name} {cust_cpf} {cust_email} {coupon_code or ''} {residual_code or ''} {o.external_id or ''}".lower()
+            if term not in haystack:
+                continue
+
+        items_list = [
+            {
+                "id": it.id,
+                "sku": it.sku,
+                "ean_isbn": it.ean_isbn,
+                "name": it.name,
+                "brand": it.brand,
+                "quantity": it.quantity,
+                "unit_price": float(it.unit_price or 0),
+                "total_price": float(it.total_price or 0),
+            }
+            for it in (o.items or [])
+        ]
+
+        results.append(
+            {
+                "id": o.id,
+                "status": o.status,
+                "checkout_mode": o.payment_condition or (red.checkout_mode if red else "NATIVE_GATEWAY"),
+                "external_id": o.external_id,
+                "customer_name": cust_name,
+                "customer_cpf": cust_cpf,
+                "customer_email": cust_email,
+                "subtotal": float(o.subtotal or 0),
+                "freight": float(red.order_freight or 0) if red else 0.0,
+                "discount_applied": float(o.discount or 0),
+                "difference_paid": float(o.total or 0),
+                "coupon_code": coupon_code,
+                "previous_balance": float(red.previous_balance or 0) if red else 0.0,
+                "remaining_balance": float(red.remaining_balance or 0) if red else 0.0,
+                "residual_coupon_code": residual_code,
+                "tray_cart_url": red.tray_cart_url if red else None,
+                "tray_coupon_code": red.tray_coupon_code if red else None,
+                "redemption_status": red.status if red else None,
+                "items_count": sum(i["quantity"] for i in items_list),
+                "items": items_list,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+            }
+        )
+
+    return results
+
+
 @router.get("/lgpd/consents")
 def list_lgpd_consents(
     company_id: Optional[int] = Query(None),
@@ -759,6 +1626,11 @@ def get_public_b2c_storefront_info(
         raise HTTPException(status_code=404, detail="Loja não encontrada.")
 
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
+    cached = _b2c_cache_get(company.id, "store_info", settings)
+    if cached is not None:
+        return cached
+
+    appearance = _build_b2c_appearance_config(company, settings, db)
 
     default_lgpd = (
         f"Ao prosseguir com seu cadastro e pedido na loja {company.name}, você concorda com o tratamento "
@@ -767,11 +1639,11 @@ def get_public_b2c_storefront_info(
         f"obrigações legais, em conformidade com a Lei Geral de Proteção de Dados (Lei nº 13.709/2018 - LGPD)."
     )
 
-    return {
+    payload = {
         "company_id": company.id,
         "name": company.name,
         "document": company.document,
-        "logo": company.logo,
+        "logo": appearance["branding"].get("logo_url") or company.logo,
         "favicon_url": company.favicon_url,
         "seo_title": company.seo_title or company.name,
         "seo_description": company.seo_description or f"Loja Oficial {company.name}",
@@ -784,7 +1656,56 @@ def get_public_b2c_storefront_info(
         "b2c_free_shipping_min_value": float(getattr(settings, "b2c_free_shipping_min_value", 0) or 0) if settings else 0.0,
         "b2c_lgpd_terms_text": (getattr(settings, "b2c_lgpd_terms_text", None) if settings else None) or default_lgpd,
         "payment_gateway_active": getattr(settings, "payment_gateway_active", "EFI") if settings else "EFI",
+        "appearance": appearance,
     }
+    _b2c_cache_set(company.id, "store_info", payload, settings, label="Dados da Loja, Vitrines & Banners")
+    return payload
+
+
+@router.get("/public/resolve-slug")
+def resolve_public_b2c_store_slug(
+    slug: str = Query(..., description="Slug amigável, domínio ou ID da loja B2C"),
+    db: Session = Depends(get_db),
+):
+    clean = slug.strip().lower()
+    if not clean:
+        raise HTTPException(status_code=404, detail="Loja não encontrada.")
+
+    # 1. If numeric ID
+    if clean.isdigit():
+        comp = db.query(Company).filter(Company.id == int(clean), Company.active == True).first()
+        if comp:
+            return get_public_b2c_storefront_info(company_id=comp.id, db=db)
+
+    # 2. Match by b2c_custom_domain, custom_domain, or domain
+    comp = (
+        db.query(Company)
+        .filter(
+            Company.active == True,
+            or_(
+                func.lower(Company.b2c_custom_domain) == clean,
+                func.lower(Company.custom_domain) == clean,
+                func.lower(Company.domain) == clean,
+                func.lower(Company.custom_domain).like(f"{clean}.%"),
+            ),
+        )
+        .first()
+    )
+    if comp:
+        return get_public_b2c_storefront_info(company_id=comp.id, db=db)
+
+    # 3. Match by store_slug inside b2c_showcases_config or slugified company name
+    active_companies = db.query(Company).filter(Company.active == True).all()
+    for c in active_companies:
+        s = db.query(CompanySettings).filter(CompanySettings.company_id == c.id).first()
+        cfg = _build_b2c_appearance_config(c, s, db)
+        cfg_slug = (cfg.get("branding", {}).get("store_slug") or "").strip().lower()
+        name_slug = _slugify_store_name(c.name, c.id)
+        if clean in (cfg_slug, name_slug):
+            return get_public_b2c_storefront_info(company_id=c.id, db=db)
+
+    raise HTTPException(status_code=404, detail="Loja não encontrada para esta URL amigável.")
+
 
 
 @router.get("/public/catalog")
@@ -792,6 +1713,7 @@ async def get_public_b2c_catalog(
     company_id: int = Query(..., description="ID do Seller"),
     q: str = Query("", description="Termo de busca (Título, Autor, ISBN ou Editora)"),
     filter: str = Query("default", description="default, NOM_AUTOR, NOM_EDITORA, COD_GENERO"),
+    only_promo: bool = Query(False, description="Filtrar apenas itens em promoção B2C"),
     skip: int = Query(0, ge=0),
     limit: int = Query(24, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -799,10 +1721,23 @@ async def get_public_b2c_catalog(
 ):
     """
     Catálogo aberto B2C integrado ao Horus ERP (respeitando OFFSET/LIMIT `horus_legacy_pagination`,
-    `SD_*` e `AC_*` quando `horus_hide_zero_balance=True`) ou catálogo local quando Horus está desativado.
+    `SD_*` e `AC_*` quando `horus_hide_zero_balance=True`) ou catálogo local quando Horus está desativado,
+    com camada de Cache gerenciada pelo Seller para suportar alto volume de acessos.
     """
+    company = db.query(Company).filter(Company.id == company_id).first()
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+
     search_term = q.strip() if q else ""
+    cache_key = f"catalog:{search_term.lower()}:{filter}:{int(only_promo)}:{skip}:{limit}"
+    cached_catalog = _b2c_cache_get(company_id, cache_key, settings)
+    if cached_catalog is not None:
+        return cached_catalog
+
+    promotions = []
+    if company and settings:
+        raw_cfg = getattr(settings, "b2c_showcases_config", None)
+        if isinstance(raw_cfg, dict) and isinstance(raw_cfg.get("promotions"), list):
+            promotions = raw_cfg.get("promotions", [])
 
     if settings and settings.horus_enabled:
         # Se a busca inicial estiver vazia, usamos "A" para trazer vitrine inicial do acervo Horus com saldo
@@ -818,13 +1753,26 @@ async def get_public_b2c_catalog(
             settings=settings,
             search_filter=filter,
         )
-        return {
+        items = _apply_b2c_promotions_to_items(items, promotions)
+        if only_promo:
+            items = [
+                it for it in items
+                if it.get("promotional_price") is not None
+                and float(it.get("promotional_price") or 0) < float(it.get("base_price") or 0)
+            ]
+        current_page = (skip // limit) + 1
+        estimated_pages = current_page if len(items) < limit else max(5, current_page + 3)
+        res_payload = {
             "items": items,
             "total": skip + len(items),
-            "page": (skip // limit) + 1,
-            "pages": ((skip // limit) + 1) if len(items) < limit else ((skip // limit) + 2),
+            "page": current_page,
+            "pages": estimated_pages,
             "source": "HORUS_ERP",
         }
+        if len(items) > 0:
+            label_str = f"Catálogo Pág {current_page} ({search_term or 'Vitrine Inicial'})"
+            _b2c_cache_set(company_id, cache_key, res_payload, settings, label=label_str)
+        return res_payload
 
     # Fallback: Catálogo Local PostgreSQL
     query = db.query(Product).filter(
@@ -879,18 +1827,68 @@ async def get_public_b2c_catalog(
                     if getattr(p, "category", None)
                     else {"id": 0, "name": "Geral"}
                 ),
-                "allow_purchase": allow,
+                "allow_purchase": True,
                 "stock_status_label": label,
                 "cover_url": getattr(p, "image_url", None) or getattr(p, "cover_url", None),
             }
         )
 
-    return {
+    mapped = _apply_b2c_promotions_to_items(mapped, promotions)
+    if only_promo:
+        mapped = [
+            it for it in mapped
+            if it.get("promotional_price") is not None
+            and float(it.get("promotional_price") or 0) < float(it.get("base_price") or 0)
+        ]
+
+    current_page = (skip // limit) + 1
+    res_payload = {
         "items": mapped,
         "total": total,
-        "page": (skip // limit) + 1,
+        "page": current_page,
         "pages": max(1, (total + limit - 1) // limit),
         "source": "LOCAL_DB",
+    }
+    if len(mapped) > 0:
+        label_str = f"Catálogo Pág {current_page} ({search_term or 'Vitrine Inicial'})"
+        _b2c_cache_set(company_id, cache_key, res_payload, settings, label=label_str)
+    return res_payload
+
+
+@router.post("/public/contact")
+def submit_b2c_contact_message(
+    data: B2CContactMessageRequest,
+    db: Session = Depends(get_db),
+):
+    company = db.query(Company).filter(Company.id == data.company_id, Company.active == True).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Loja não encontrada.")
+    if not data.name.strip() or not data.email.strip() or not data.message.strip():
+        raise HTTPException(status_code=400, detail="Preencha nome, e-mail e mensagem.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
+    if settings:
+        current_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+        msgs = current_cfg.get("contact_messages", [])
+        if not isinstance(msgs, list):
+            msgs = []
+        msgs.insert(0, {
+            "id": uuid.uuid4().hex[:10],
+            "name": data.name.strip(),
+            "email": data.email.strip(),
+            "phone": (data.phone or "").strip(),
+            "subject": (data.subject or "Atendimento B2C").strip(),
+            "message": data.message.strip(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        current_cfg["contact_messages"] = msgs[:100]
+        settings.b2c_showcases_config = current_cfg
+        flag_modified(settings, "b2c_showcases_config")
+        db.commit()
+
+    return {
+        "status": "OK",
+        "message": "Mensagem enviada com sucesso! Nosso atendimento retornará em breve pelo seu e-mail ou WhatsApp.",
     }
 
 
@@ -971,25 +1969,30 @@ def _find_or_prepare_coupon(
             .first()
         )
         if batch:
-            if not cpf_digits:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Este é um cupom corporativo por CPF. Informe seu CPF para validar seu saldo.",
-                )
-
             # Check if batch restricts to an eligible CPF list
             if batch.eligible_cpfs_json and isinstance(batch.eligible_cpfs_json, list):
                 allowed_cpfs = {_clean_digits(x.get("cpf")) for x in batch.eligible_cpfs_json if x.get("cpf")}
-                if allowed_cpfs and cpf_digits not in allowed_cpfs:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Seu CPF não consta na lista de colaboradores elegíveis para este lote corporativo.",
-                    )
+                if allowed_cpfs:
+                    if not cpf_digits:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Este cupom possui lista restrita de CPFs. Informe seu CPF abaixo do cupom para validar.",
+                        )
+                    if cpf_digits not in allowed_cpfs:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Seu CPF não consta na lista de beneficiários elegíveis para este cupom.",
+                        )
+            elif create_wallet_if_shared and not cpf_digits:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Informe seu CPF para finalizar a compra com este cupom.",
+                )
 
             # Check max uses on batch
             issued_count = db.query(func.count(B2CCoupon.id)).filter(B2CCoupon.batch_id == batch.id).scalar() or 0
             if issued_count >= (batch.max_uses_total or 999999):
-                raise HTTPException(status_code=400, detail="O limite total de utilizações deste lote corporativo foi atingido.")
+                raise HTTPException(status_code=400, detail="O limite máximo de utilizações deste cupom já foi atingido.")
 
             target_coupon = B2CCoupon(
                 company_id=company_id,
@@ -1004,7 +2007,7 @@ def _find_or_prepare_coupon(
                 allow_residual_balance=batch.allow_residual_balance,
                 min_order_value=batch.min_order_value,
                 assigned_name=customer_name,
-                assigned_cpf=cpf_digits,
+                assigned_cpf=cpf_digits or None,
                 assigned_email=customer_email,
                 status="AVAILABLE",
                 valid_from=batch.valid_from,
@@ -1065,8 +2068,10 @@ def validate_b2c_coupon(
         )
 
     balance = float(coupon.current_balance or 0)
-    eligible_base = data.subtotal + (data.freight if coupon.allows_freight_discount else 0.0)
-    total_cart = round(data.subtotal + data.freight, 2)
+    # When allows_freight_discount is True, the coupon grants Free Shipping (freight = 0.00)
+    effective_freight = 0.0 if coupon.allows_freight_discount else round(max(0.0, float(data.freight or 0.0)), 2)
+    eligible_base = round(float(data.subtotal or 0.0), 2)
+    total_cart = round(eligible_base + effective_freight, 2)
 
     if coupon.discount_type == "PERCENTAGE":
         discount_applied = round(eligible_base * (balance / 100.0), 2)
@@ -1092,13 +2097,14 @@ def validate_b2c_coupon(
         "coupon_mode": coupon.coupon_mode,
         "discount_type": coupon.discount_type,
         "allows_freight_discount": coupon.allows_freight_discount,
+        "free_shipping_granted": bool(coupon.allows_freight_discount),
         "allow_residual_balance": coupon.allow_residual_balance,
         "coupon_balance": round(balance, 2),
         "discount_applied": discount_applied,
         "remaining_coupon_balance": remaining_balance,
         "will_generate_residual_coupon": will_generate_residual,
         "subtotal": round(data.subtotal, 2),
-        "freight": round(data.freight, 2),
+        "freight": effective_freight,
         "total_cart": total_cart,
         "difference_to_pay": difference_to_pay,
         "fully_covered": fully_covered,
@@ -1211,7 +2217,6 @@ async def process_b2c_checkout(
     # 3. Calculate Cart Subtotal & Validate Coupon (if provided)
     subtotal = round(sum(float(i.unit_price) * int(i.quantity) for i in data.items), 2)
     freight = round(max(0.0, float(data.freight_value or 0.0)), 2)
-    total_before_discount = round(subtotal + freight, 2)
 
     coupon: Optional[B2CCoupon] = None
     discount_applied = 0.0
@@ -1229,8 +2234,10 @@ async def process_b2c_checkout(
             customer_name=customer.name,
             customer_email=customer.email,
         )
+        if coupon.allows_freight_discount:
+            freight = 0.0
         previous_balance = float(coupon.current_balance or 0)
-        eligible_base = subtotal + (freight if coupon.allows_freight_discount else 0.0)
+        eligible_base = subtotal
 
         if coupon.discount_type == "PERCENTAGE":
             discount_applied = round(eligible_base * (previous_balance / 100.0), 2)
@@ -1284,6 +2291,7 @@ async def process_b2c_checkout(
             coupon.current_balance = Decimal(str(remaining_balance))
             coupon.status = "EXHAUSTED" if remaining_balance <= 0.009 else "PARTIALLY_USED"
 
+    total_before_discount = round(subtotal + freight, 2)
     difference_to_pay = round(max(0.0, total_before_discount - discount_applied), 2)
     fully_covered = difference_to_pay <= 0.009
 
@@ -1361,6 +2369,7 @@ async def process_b2c_checkout(
                     description=f"Abatimento Voucher Cronuz Pedido #{order.id}",
                     discount_type="$",
                     customer_tray_id=tray_customer_id,
+                    shipping_discount=bool(coupon and coupon.allows_freight_discount),
                 )
                 tray_coupon_code = tray_coupon_res.get("code")
                 if coupon and tray_coupon_res.get("tray_coupon_id"):

@@ -235,7 +235,7 @@ class HorusClients(HorusClient):
         result = await self.post("Conf_Contrato_ClienteB2B", params=params, json_data=items)
         return result
 
-    async def get_customer_invoices(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, data_ini: str, data_fim: str, xml_base64: str = "N", cod_pedido_origem: Optional[str] = None) -> Any:
+    async def get_customer_invoices(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, data_ini: str, data_fim: str, xml_base64: str = "N", cod_pedido_origem: Optional[str] = None, limit: int = 100) -> Any:
         cnpj_destino = re.sub(r'\D', '', cnpj_destino)
         cnpj_cliente = re.sub(r'\D', '', cnpj_cliente)
         params = {
@@ -248,11 +248,14 @@ class HorusClients(HorusClient):
         }
         if cod_pedido_origem:
             params["COD_PEDIDO_ORIGEM"] = cod_pedido_origem
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = 0
+            params["LIMIT"] = limit
             
         result = await self.get("Busca_notafiscal", params=params)
         return result
 
-    async def get_customer_debits(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, arq_base64: str = "N") -> Any:
+    async def get_customer_debits(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, arq_base64: str = "N", limit: int = 200) -> Any:
         cnpj_destino = re.sub(r'\D', '', cnpj_destino)
         cnpj_cliente = re.sub(r'\D', '', cnpj_cliente)
         params = {
@@ -261,6 +264,9 @@ class HorusClients(HorusClient):
             "ID_DOC": cnpj_cliente,
             "ARQ_BASE64": arq_base64
         }
+        if not getattr(self._settings, 'horus_legacy_pagination', False):
+            params["OFFSET"] = 0
+            params["LIMIT"] = limit
         
         result = await self.get("Busca_debitos", params=params)
         return result

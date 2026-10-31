@@ -166,6 +166,7 @@ class CompanySettings(Base):
     b2c_lgpd_terms_text        = Column(String, nullable=True)
     b2c_default_freight_value  = Column(Numeric(10, 2), default=0.00, nullable=False, server_default="0")
     b2c_free_shipping_min_value = Column(Numeric(10, 2), default=0.00, nullable=False, server_default="0")
+    b2c_showcases_config       = Column(JSON, nullable=True)
 
     tray_enabled               = Column(Boolean, default=False, nullable=False, server_default="false")
     tray_store_url             = Column(String(255), nullable=True)
@@ -178,6 +179,18 @@ class CompanySettings(Base):
     tray_refresh_token         = Column(String(500), nullable=True)
     tray_token_expires_at      = Column(DateTime(timezone=True), nullable=True)
 
+    # ── API Horus Complementar & Agente Bridge Desktop (.EXE) ───────────────
+    horus_bridge_enabled              = Column(Boolean, default=False, nullable=False, server_default="false")
+    horus_bridge_expires_at           = Column(DateTime(timezone=True), nullable=True)
+    horus_bridge_license_key          = Column(String(512), nullable=True)
+    horus_bridge_api_username         = Column(String(100), nullable=True)
+    horus_bridge_api_password         = Column(String(255), nullable=True)
+    horus_bridge_api_token            = Column(String(255), nullable=True, index=True)
+    horus_bridge_rate_limit_per_min   = Column(Integer, default=120, nullable=False, server_default="120")
+    horus_bridge_allow_financial_sql  = Column(Boolean, default=True, nullable=False, server_default="true")
+    horus_bridge_custom_gateway_url   = Column(String(255), nullable=True)
+
     # ────────────────────────────────────────────────────────────────────────────
 
     company = relationship("Company")
+

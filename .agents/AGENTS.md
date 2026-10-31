@@ -243,3 +243,24 @@ git push origin --delete feature/nome-da-funcionalidade
    - Instruem o Horus a **restringir o acervo retornado** apenas aos itens que possuem saldo disponível naquela Empresa/Filial/Local.
    - **NÃO devem ser enviados globalmente** para todos os módulos internos em `busca_acervo_b2b`, pois rotinas como Dropship Sync, Bookinfo Hub, Order Intake e consulta direta de produto precisam enxergar o item mesmo quando o saldo for `0` (para apontar falta ou zerar vitrine).
    - **DEVEM ser enviados EXCLUSIVAMENTE na Pesquisa da Storefront** ([`_fetch_from_horus_storefront`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/api/storefront.py) quando `search_type == "SEARCH"` e `settings.horus_hide_zero_balance == True`), **em conjunto** com os parâmetros `SD_*`, acompanhados da trava defensiva que ignora itens com `SALDO_DISPONIVEL <= 0` na listagem da busca.
+
+---
+
+## 🌉 10. API Horus Complementar & Agente Bridge (`HorusAPIBridge.exe`) + Droplet Dedicado
+
+> [!IMPORTANT]
+> **O Agente Bridge (`tools/horus-api-bridge-windows/`) é a solução oficial para sellers que não conseguem liberar portas de firewall (`8060` da API Horus ou `1433` do SQL Server) e para disponibilizar uma API Horus B2B pública/paralela padronizada.**
+
+### Diretrizes Arquiteturais Mandatórias:
+1. **Identidade e Licenciamento (Padrão PDV Offline)**:
+   - O executável (`HorusAPIBridge.exe`) utiliza obrigatoriamente a **Logo Roxa Oficial do Horus B2B** (`horus_icon.ico` + Base64 embutido).
+   - Habilitação controlada no Painel Master (`module_horus_api_bridge` / `horus_bridge_enabled`) com **Chave de Licença Criptográfica HMAC-SHA256 (`HBRI1.<payload>.<sig>`)** e data de validade (`horus_bridge_expires_at`).
+2. **Comunicação Reversa (Zero Portas Abertas no Firewall do Cliente)**:
+   - O `.exe` abre conexão de saída (HTTPS/443) com o Gateway Cloud e conversa internamente na rede local com `http://localhost:8060/Horus/api/TServerB2B/` e com o SQL Server local (`1433` via `pytds` puro Python, sem depender de ODBC).
+   - **Compressão GZIP** em payloads de retorno e respeito rigoroso a `OFFSET`/`LIMIT` (`horus_legacy_pagination`), `SD_*` e `AC_*`.
+   - **Segurança SQL**: O `.exe` nunca executa strings SQL abertas vindas da internet; apenas responde aos endpoints complementares homologados (`Busca_TitulosFinanceiros`, `Busca_ResumoFinanceiroCliente`, `Busca_PedidosDBM`, `Busca_NotasFiscaisSQL`).
+3. **Execução como Serviço do Windows (`.bat`)**:
+   - Deve manter os scripts `GERAR_EXECUTAVEL_HORUS_BRIDGE.bat`, `INSTALAR_SERVICO_WINDOWS.bat` (modo `--service` em background no boot do Windows) e `INICIAR_HORUS_API_BRIDGE.bat`.
+4. **Suporte a Droplet Dedicado (`SERVER_ROLE=horus_api_only`)**:
+   - Quando configurado `SERVER_ROLE=horus_api_only` no `.env` de um Droplet dedicado na DigitalOcean, o backend desativa o APScheduler e sobe exclusivamente as rotas do Gateway da API Horus Complementar (`/Horus/api/TServerB2B/*`, `/horus-api-bridge/*` e `/health`), isolando 100% a carga de API externa do servidor principal.
+

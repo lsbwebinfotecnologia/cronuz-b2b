@@ -250,6 +250,37 @@ class CoraClient:
         """DELETE /v2/invoices/{id} — cancela boleto ainda não pago."""
         return self._request("DELETE", f"/v2/invoices/{invoice_id}")
 
+    def list_invoices(
+        self,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        state: Optional[str] = None,
+        search: Optional[str] = None,
+        page: int = 1,
+        per_page: int = 200,
+    ) -> Dict[str, Any]:
+        """
+        GET /v2/invoices — consulta em lote (conciliação).
+        Período por vencimento; com state=PAID o período é pela data de pagamento. perPage máx. 200.
+        Retorno: {"totalItems": int, "items": [InvoiceSummary]}
+        """
+        params = {"page": max(1, page), "perPage": max(1, min(per_page, 200))}
+        if start:
+            params["start"] = start
+        if end:
+            params["end"] = end
+        if state:
+            params["state"] = state
+        if search:
+            params["search"] = search
+        return self._request("GET", "/v2/invoices", params=params)
+
+    def stage_pay_invoice(self, invoice_id: str) -> Dict[str, Any]:
+        """POST /v2/invoices/pay — SOMENTE STAGE: simula o pagamento (não paga boleto da própria conta: REC-0007)."""
+        if not self.sandbox:
+            raise CoraConfigError("Pagamento simulado só é permitido no ambiente Stage.")
+        return self._request("POST", "/v2/invoices/pay", json_body={"id": invoice_id}, idempotency_key=str(uuid.uuid4()))
+
     # ── Webhooks (endpoints) ─────────────────────────────────────────────────
     def list_endpoints(self) -> Any:
         return self._request("GET", "/endpoints/")

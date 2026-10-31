@@ -90,6 +90,8 @@ from app.api import horus_sql as horus_sql_api
 from app.api import horus_financial
 from app.api import horus_orders
 from app.api import cora as cora_api
+from app.api import payments_hub as payments_hub_api
+from app.api import payments as payments_api
 from app.api import authors_admin
 from app.api import author_portal
 from app.api import inventory as inventory_api
@@ -112,6 +114,7 @@ from app.api import horus_bi as horus_bi_api
 from app.api import order_intake as order_intake_api
 from app.api import ebook_pearson as ebook_pearson_api
 from app.api import b2c_storefront as b2c_storefront_api
+from app.api import horus_api_bridge as horus_api_bridge_api
 from app.models import backorder as backorder_models
 from app.models import encomenda as encomenda_models
 from app.models import product_address as product_address_models
@@ -170,6 +173,12 @@ encomenda_models.Base.metadata.create_all(bind=engine)
 product_address_models.Base.metadata.create_all(bind=engine)
 horus_bi_sale_models.Base.metadata.create_all(bind=engine)
 b2c_storefront_models.Base.metadata.create_all(bind=engine)
+try:
+    from sqlalchemy import text as _sql_text
+    with engine.begin() as _conn:
+        _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS b2c_showcases_config JSON"))
+except Exception as _ddl_err:
+    _main_logger.warning("Auto-DDL warning: %s", _ddl_err)
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
@@ -229,88 +238,103 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, tags=["authentication"])
-app.include_router(companies.router)
-app.include_router(users.router)
-app.include_router(horus.router, tags=["inventory"])
-app.include_router(horus_logistics.router, prefix="/logistics", tags=["logistics"])
-app.include_router(customers.router, tags=["customers"])
-app.include_router(products.router, tags=["products"])
-app.include_router(catalog_support.router, tags=["catalog-metadata"])
-app.include_router(promotions.router, tags=["promotions"])
-app.include_router(marketing_showcases.router, tags=["marketing"])
-app.include_router(dynamic_showcases.router, tags=["dynamic-showcases"])
-app.include_router(marketing_navigation.router, prefix="/marketing-navigation", tags=["marketing-navigation"])
-app.include_router(storefront.router, tags=["storefront"])
-app.include_router(upload.router, tags=["upload"])
-app.include_router(dashboard.router, tags=["dashboard"])
-app.include_router(orders.router, tags=["orders"])
-app.include_router(subscriptions.router, tags=["subscriptions"])
-app.include_router(leads.router, tags=["leads"])
-app.include_router(company_notes.router, prefix="/company-notes", tags=["company-notes"])
-app.include_router(integrators.router, prefix="/integrators", tags=["integrators"])
-app.include_router(system_integrators.router, prefix="/system-integrators", tags=["system-integrators"])
-app.include_router(bookinfo_hub.router, tags=["bookinfo"])
-app.include_router(bookinfo_purchases.router, tags=["bookinfo_purchases"])
-app.include_router(bookinfo_purchase_logs.router, tags=["bookinfo_purchase_logs"])
-app.include_router(services.router, tags=["services"])
-app.include_router(proposals.router, tags=["proposals"])
-app.include_router(print_points.router, prefix="/print-points", tags=["print-points"])
-app.include_router(bank_slips.router, tags=["financial"])
-app.include_router(commercial_policies.router, tags=["commercial-policies"])
-app.include_router(financial.router, tags=["financial"])
-app.include_router(email_templates.router, prefix="/settings/email-templates", tags=["settings"])
-app.include_router(customer_portal.router)
-app.include_router(customer_auth.router)
-app.include_router(mobile.router, prefix="/seller", tags=["mobile"])
-app.include_router(mobile_pdv.router, tags=["mobile-pdv"])
+_SERVER_ROLE = os.environ.get("SERVER_ROLE", "all").strip().lower()
 
-app.include_router(brand.router, tags=["app-brand"])
-app.include_router(dropship.router, prefix="/dropship", tags=["dropship"])
-app.include_router(sefaz_download.router)
-app.include_router(alerts_api.router)
-app.include_router(product_search.router, prefix="/product-search", tags=["product-search"])
-app.include_router(distributors_api.router, tags=["distributors"])
-app.include_router(hosted_sites_api.router)
-app.include_router(horus_sql_api.router, tags=["horus-sql"])
-app.include_router(horus_financial.router, tags=["horus-financial"])
-app.include_router(cora_api.router, tags=["banco-cora"])
-app.include_router(horus_orders.router, tags=["horus-orders"])
-app.include_router(authors_admin.router)
-app.include_router(author_portal.router)
-app.include_router(inventory_api.router)
-app.include_router(inventory_api.public_router)
-app.include_router(logistics_api.router, tags=["logistics-wms"])
-app.include_router(pos_api.router, tags=["pos-omnichannel"])
-app.include_router(editorial_api.router)
-app.include_router(schools_api.router)
-app.include_router(events_api.router)
-app.include_router(school_storefront_api.router)
-app.include_router(master_sessions.router)
-app.include_router(dbm_api.router)
-app.include_router(cafeteria_api.router)
-app.include_router(cafeteria_api.public_router)
-app.include_router(bookinfo_metadata.router)
-app.include_router(backorders_api.router)
-app.include_router(encomendas_api.router)
-app.include_router(addressing_api.router)
-app.include_router(horus_bi_api.router)
-app.include_router(order_intake_api.router)
-app.include_router(ebook_pearson_api.router)
-app.include_router(b2c_storefront_api.router)
+# Gateway da API Horus Complementar & Agente Bridge (.EXE) sempre disponível
+app.include_router(horus_api_bridge_api.router)
 
-# Mount static files directory
-os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+if _SERVER_ROLE != "horus_api_only":
+    app.include_router(auth.router, tags=["authentication"])
+    app.include_router(companies.router)
+    app.include_router(users.router)
+    app.include_router(horus.router, tags=["inventory"])
+    app.include_router(horus_logistics.router, prefix="/logistics", tags=["logistics"])
+    app.include_router(customers.router, tags=["customers"])
+    app.include_router(products.router, tags=["products"])
+    app.include_router(catalog_support.router, tags=["catalog-metadata"])
+    app.include_router(promotions.router, tags=["promotions"])
+    app.include_router(marketing_showcases.router, tags=["marketing"])
+    app.include_router(dynamic_showcases.router, tags=["dynamic-showcases"])
+    app.include_router(marketing_navigation.router, prefix="/marketing-navigation", tags=["marketing-navigation"])
+    app.include_router(storefront.router, tags=["storefront"])
+    app.include_router(upload.router, tags=["upload"])
+    app.include_router(dashboard.router, tags=["dashboard"])
+    app.include_router(orders.router, tags=["orders"])
+    app.include_router(subscriptions.router, tags=["subscriptions"])
+    app.include_router(leads.router, tags=["leads"])
+    app.include_router(company_notes.router, prefix="/company-notes", tags=["company-notes"])
+    app.include_router(integrators.router, prefix="/integrators", tags=["integrators"])
+    app.include_router(system_integrators.router, prefix="/system-integrators", tags=["system-integrators"])
+    app.include_router(bookinfo_hub.router, tags=["bookinfo"])
+    app.include_router(bookinfo_purchases.router, tags=["bookinfo_purchases"])
+    app.include_router(bookinfo_purchase_logs.router, tags=["bookinfo_purchase_logs"])
+    app.include_router(services.router, tags=["services"])
+    app.include_router(proposals.router, tags=["proposals"])
+    app.include_router(print_points.router, prefix="/print-points", tags=["print-points"])
+    app.include_router(bank_slips.router, tags=["financial"])
+    app.include_router(commercial_policies.router, tags=["commercial-policies"])
+    app.include_router(financial.router, tags=["financial"])
+    app.include_router(email_templates.router, prefix="/settings/email-templates", tags=["settings"])
+    app.include_router(customer_portal.router)
+    app.include_router(customer_auth.router)
+    app.include_router(mobile.router, prefix="/seller", tags=["mobile"])
+    app.include_router(mobile_pdv.router, tags=["mobile-pdv"])
 
-os.makedirs("uploads", exist_ok=True)
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+    app.include_router(brand.router, tags=["app-brand"])
+    app.include_router(dropship.router, prefix="/dropship", tags=["dropship"])
+    app.include_router(sefaz_download.router)
+    app.include_router(alerts_api.router)
+    app.include_router(product_search.router, prefix="/product-search", tags=["product-search"])
+    app.include_router(distributors_api.router, tags=["distributors"])
+    app.include_router(hosted_sites_api.router)
+    app.include_router(horus_sql_api.router, tags=["horus-sql"])
+    app.include_router(horus_financial.router, tags=["horus-financial"])
+    app.include_router(cora_api.router, tags=["banco-cora"])
+    app.include_router(payments_hub_api.router, tags=["payments-hub"])
+    app.include_router(payments_api.router, tags=["payments"])
+    app.include_router(horus_orders.router, tags=["horus-orders"])
+    app.include_router(authors_admin.router)
+    app.include_router(author_portal.router)
+    app.include_router(inventory_api.router)
+    app.include_router(inventory_api.public_router)
+    app.include_router(logistics_api.router, tags=["logistics-wms"])
+    app.include_router(pos_api.router, tags=["pos-omnichannel"])
+    app.include_router(editorial_api.router)
+    app.include_router(schools_api.router)
+    app.include_router(events_api.router)
+    app.include_router(school_storefront_api.router)
+    app.include_router(master_sessions.router)
+    app.include_router(dbm_api.router)
+    app.include_router(cafeteria_api.router)
+    app.include_router(cafeteria_api.public_router)
+    app.include_router(bookinfo_metadata.router)
+    app.include_router(backorders_api.router)
+    app.include_router(encomendas_api.router)
+    app.include_router(addressing_api.router)
+    app.include_router(horus_bi_api.router)
+    app.include_router(order_intake_api.router)
+    app.include_router(ebook_pearson_api.router)
+    app.include_router(b2c_storefront_api.router)
 
-os.makedirs("storage", exist_ok=True)
-app.mount("/storage", StaticFiles(directory="storage"), name="storage")
+# Mount static files directory using absolute path relative to backend/main.py
+from pathlib import Path as _MainPath
+_BACKEND_DIR = _MainPath(__file__).resolve().parent
+
+(_BACKEND_DIR / "static").mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(_BACKEND_DIR / "static")), name="static")
+
+(_BACKEND_DIR / "uploads").mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(_BACKEND_DIR / "uploads")), name="uploads")
+
+(_BACKEND_DIR / "storage").mkdir(parents=True, exist_ok=True)
+app.mount("/storage", StaticFiles(directory=str(_BACKEND_DIR / "storage")), name="storage")
 
 @app.on_event("startup")
 def seed_master_user():
+    if _SERVER_ROLE == "horus_api_only":
+        _main_logger.info("[Startup] Modo Droplet Dedicado (SERVER_ROLE=horus_api_only) ativo — APScheduler desabilitado.")
+        return
+
     db = SessionLocal()
     try:
         master_email = "system@cronuz.com.br"
@@ -360,4 +384,9 @@ def seed_master_user():
 
 @app.get("/")
 def read_root():
-    return {"message": "Cronuz B2B API is running."}
+    return {"message": "Cronuz B2B API is running.", "server_role": _SERVER_ROLE}
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "server_role": _SERVER_ROLE}
+

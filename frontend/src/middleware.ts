@@ -130,6 +130,7 @@ export function middleware(request: NextRequest) {
   const isUploads = url.pathname.startsWith('/uploads');
   const isPublicPage = 
     url.pathname.startsWith('/domain/') ||
+    url.pathname.startsWith('/loja') ||
     url.pathname.startsWith('/h/') || 
     url.pathname.startsWith('/marketing') || 
     url.pathname.startsWith('/public/') || 
@@ -138,6 +139,7 @@ export function middleware(request: NextRequest) {
     url.pathname.startsWith('/eventos') || 
     url.pathname.startsWith('/vitrine') || 
     url.pathname.startsWith('/portal-autor') || 
+    url.pathname.startsWith('/horus-api-docs') ||
     url.pathname.startsWith('/inventory/op/');
 
   // Skip auth checks for public routes hitting the app domain directly

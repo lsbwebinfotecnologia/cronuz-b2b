@@ -10,29 +10,41 @@ import {
   Download,
   Copy,
   CheckCircle2,
-  Clock,
-  Ban,
   ShieldCheck,
   ExternalLink,
   ShoppingBag,
-  Sparkles,
-  Loader2,
+  Settings,
+  Database,
   RefreshCw,
-  Globe,
-  FileSpreadsheet,
-  ArrowRight,
+  Flame,
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { CurrencyInput } from '@/components/CurrencyInput';
 
-export default function SellerB2CStorefrontManagementPage() {
-  const [activeTab, setActiveTab] = useState<'batches' | 'coupons' | 'redemptions' | 'lgpd'>('batches');
+export default function SellerB2CStorefrontManagementPage({
+  viewMode = 'coupons',
+  initialTab,
+}: {
+  viewMode?: 'coupons' | 'orders' | 'settings';
+  initialTab?: string;
+} = {}) {
+  // Determine effective section based on Left Sidebar route
+  const effectiveSection: 'coupons' | 'orders' | 'settings' =
+    initialTab === 'orders'
+      ? 'orders'
+      : initialTab === 'lgpd'
+      ? 'settings'
+      : viewMode;
+
+  // Sub-filter inside the Coupons page only (Cupons Individuais vs Lotes/Campanhas vs Histórico de Uso)
+  const [couponSubView, setCouponSubView] = useState<'list' | 'batches' | 'history'>('list');
   const [loading, setLoading] = useState(true);
 
   const [summary, setSummary] = useState<any>(null);
   const [batches, setBatches] = useState<any[]>([]);
   const [coupons, setCoupons] = useState<any[]>([]);
+  const [b2cOrders, setB2cOrders] = useState<any[]>([]);
   const [redemptions, setRedemptions] = useState<any[]>([]);
   const [lgpdConsents, setLgpdConsents] = useState<any[]>([]);
 
@@ -41,8 +53,9 @@ export default function SellerB2CStorefrontManagementPage() {
   const [couponStatusFilter, setCouponStatusFilter] = useState('');
   const [selectedBatchFilter, setSelectedBatchFilter] = useState('');
   const [redemptionSearch, setRedemptionSearch] = useState('');
+  const [orderSearch, setOrderSearch] = useState('');
 
-  // Modals
+  // Modals for Coupon Creation
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [showSingleModal, setShowSingleModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -52,12 +65,12 @@ export default function SellerB2CStorefrontManagementPage() {
     partner_company_name: '',
     partner_document: '',
     batch_mode: 'INDIVIDUAL_CODES', // INDIVIDUAL_CODES or SHARED_CPF_LIMIT
-    code_prefix: 'VOUCHER',
+    code_prefix: 'CUPOM',
     shared_code: '',
     quantity: 20,
     coupon_value: 100.0,
     discount_type: 'FIXED_BRL', // FIXED_BRL or PERCENTAGE
-    allows_freight_discount: false,
+    allows_freight_discount: true,
     allow_residual_balance: true,
     min_order_value: 0.0,
     valid_from: '',
@@ -70,7 +83,8 @@ export default function SellerB2CStorefrontManagementPage() {
     code: '',
     initial_value: 100.0,
     discount_type: 'FIXED_BRL',
-    allows_freight_discount: false,
+    max_uses: 10,
+    allows_freight_discount: true,
     allow_residual_balance: true,
     min_order_value: 0.0,
     assigned_name: '',
@@ -81,13 +95,28 @@ export default function SellerB2CStorefrontManagementPage() {
 
   const [settingsForm, setSettingsForm] = useState({
     b2c_custom_domain: '',
-    b2c_storefront_open: false,
+    b2c_storefront_open: true,
     b2c_checkout_mode: 'NATIVE_GATEWAY',
     b2c_default_freight_value: 15.9,
     b2c_free_shipping_min_value: 150.0,
     b2c_lgpd_terms_text: '',
   });
   const [savingSettings, setSavingSettings] = useState(false);
+
+  // Storefront Cache Engine States (Managed by Seller)
+  const [cacheStatus, setCacheStatus] = useState<any>({
+    enabled: true,
+    ttl_seconds: 900,
+    cached_entries_count: 0,
+    estimated_size_kb: 0,
+    cache_hits: 0,
+    cache_misses: 0,
+    hit_rate_percent: 0,
+    last_cleared_at: null,
+  });
+  const [clearingCache, setClearingCache] = useState(false);
+  const [warmingCache, setWarmingCache] = useState(false);
+  const [savingCacheConfig, setSavingCacheConfig] = useState(false);
 
   const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -97,7 +126,7 @@ export default function SellerB2CStorefrontManagementPage() {
       const token = getToken();
       const headers = { Authorization: `Bearer ${token}` };
 
-      const [sumRes, batchRes, coupRes, redRes, lgpdRes] = await Promise.all([
+      const [sumRes, batchRes, coupRes, ordRes, redRes, lgpdRes, cacheRes] = await Promise.all([
         fetch(`${apiBase}/b2c/coupons/summary`, { headers }),
         fetch(`${apiBase}/b2c/coupons/batches`, { headers }),
         fetch(
@@ -109,6 +138,12 @@ export default function SellerB2CStorefrontManagementPage() {
           { headers }
         ),
         fetch(
+          `${apiBase}/b2c/orders?${new URLSearchParams({
+            ...(orderSearch ? { search: orderSearch } : {}),
+          }).toString()}`,
+          { headers }
+        ),
+        fetch(
           `${apiBase}/b2c/coupons/redemptions?${new URLSearchParams({
             ...(selectedBatchFilter ? { batch_id: selectedBatchFilter } : {}),
             ...(redemptionSearch ? { search: redemptionSearch } : {}),
@@ -116,6 +151,7 @@ export default function SellerB2CStorefrontManagementPage() {
           { headers }
         ),
         fetch(`${apiBase}/b2c/lgpd/consents`, { headers }),
+        fetch(`${apiBase}/b2c/cache/status`, { headers }),
       ]);
 
       if (sumRes.ok) {
@@ -134,8 +170,10 @@ export default function SellerB2CStorefrontManagementPage() {
       }
       if (batchRes.ok) setBatches(await batchRes.json());
       if (coupRes.ok) setCoupons(await coupRes.json());
+      if (ordRes.ok) setB2cOrders(await ordRes.json());
       if (redRes.ok) setRedemptions(await redRes.json());
       if (lgpdRes.ok) setLgpdConsents(await lgpdRes.json());
+      if (cacheRes.ok) setCacheStatus(await cacheRes.json());
     } catch (e) {
       console.error(e);
     } finally {
@@ -150,11 +188,11 @@ export default function SellerB2CStorefrontManagementPage() {
   const handleCreateBatch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!batchForm.name.trim()) {
-      toast.error('Informe o nome do lote corporativo.');
+      toast.error('Informe o nome da campanha / lote.');
       return;
     }
     if (batchForm.coupon_value <= 0) {
-      toast.error('Informe o valor de cada cupom.');
+      toast.error('Informe o valor ou percentual do cupom.');
       return;
     }
 
@@ -192,7 +230,7 @@ export default function SellerB2CStorefrontManagementPage() {
           partner_company_name: batchForm.partner_company_name || null,
           partner_document: batchForm.partner_document || null,
           batch_mode: batchForm.batch_mode,
-          code_prefix: batchForm.code_prefix || 'VOUCHER',
+          code_prefix: batchForm.code_prefix || 'CUPOM',
           shared_code: batchForm.shared_code || null,
           quantity: Number(batchForm.quantity) || 10,
           coupon_value: Number(batchForm.coupon_value),
@@ -207,12 +245,12 @@ export default function SellerB2CStorefrontManagementPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Erro ao criar lote.');
+      if (!res.ok) throw new Error(data.detail || 'Erro ao criar lote de cupons.');
 
-      toast.success(data.message || 'Lote criado com sucesso!');
+      toast.success(data.message || 'Lote de cupons criado com sucesso!');
       setShowBatchModal(false);
       loadAllData();
-      setActiveTab('coupons');
+      setCouponSubView('list');
     } catch (err: any) {
       toast.error(err.message || 'Falha ao criar lote.');
     } finally {
@@ -223,7 +261,7 @@ export default function SellerB2CStorefrontManagementPage() {
   const handleCreateSingleCoupon = async (e: React.FormEvent) => {
     e.preventDefault();
     if (singleForm.initial_value <= 0) {
-      toast.error('Informe o valor do cupom.');
+      toast.error('Informe o valor ou percentual do cupom.');
       return;
     }
     setSubmitting(true);
@@ -242,9 +280,10 @@ export default function SellerB2CStorefrontManagementPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erro ao criar cupom.');
-      toast.success(data.message || 'Cupom criado!');
+      toast.success(data.message || 'Cupom criado com sucesso!');
       setShowSingleModal(false);
       loadAllData();
+      setCouponSubView('list');
     } catch (err: any) {
       toast.error(err.message || 'Erro ao criar cupom.');
     } finally {
@@ -291,6 +330,68 @@ export default function SellerB2CStorefrontManagementPage() {
     }
   };
 
+  const handleClearCache = async () => {
+    setClearingCache(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/cache/clear`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao limpar cache.');
+      toast.success(data.message || 'Cache da loja B2C limpo com sucesso!');
+      loadAllData();
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao limpar cache.');
+    } finally {
+      setClearingCache(false);
+    }
+  };
+
+  const handleWarmupCache = async () => {
+    setWarmingCache(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/cache/warmup`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao pré-aquecer cache.');
+      toast.success(data.message || 'Cache da vitrine pré-aquecido com sucesso!');
+      loadAllData();
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao pré-aquecer cache.');
+    } finally {
+      setWarmingCache(false);
+    }
+  };
+
+  const handleUpdateCacheConfig = async (enabled: boolean, ttlSeconds: number) => {
+    setSavingCacheConfig(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/cache/config`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ enabled, ttl_seconds: ttlSeconds }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao atualizar configuração de cache.');
+      setCacheStatus((prev: any) => ({ ...prev, enabled: data.enabled, ttl_seconds: data.ttl_seconds }));
+      toast.success(data.message || 'Configuração de cache atualizada!');
+      loadAllData();
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao salvar configuração de cache.');
+    } finally {
+      setSavingCacheConfig(false);
+    }
+  };
+
   const exportCouponsCSV = () => {
     if (!coupons.length) {
       toast.error('Nenhum cupom na listagem para exportar.');
@@ -298,17 +399,17 @@ export default function SellerB2CStorefrontManagementPage() {
     }
     const headers = [
       'Codigo',
-      'Lote',
-      'Empresa_Parceira',
+      'Campanha_Lote',
+      'Parceiro',
       'Modo',
       'Tipo',
       'Valor_Inicial',
       'Valor_Usado',
       'Saldo_Atual',
       'Abate_Frete',
-      'Colaborador_Nome',
-      'Colaborador_CPF',
-      'Colaborador_Email',
+      'Beneficiario_Nome',
+      'Beneficiario_CPF',
+      'Beneficiario_Email',
       'Cupom_Residual_Gerado',
       'Status',
       'Validade',
@@ -336,7 +437,7 @@ export default function SellerB2CStorefrontManagementPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `cupons_corporativos_b2c_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `cupons_desconto_b2c_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -344,440 +445,577 @@ export default function SellerB2CStorefrontManagementPage() {
   const formatBRL = (val: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(val || 0));
 
-  const storefrontPreviewHostname =
-    summary?.settings?.b2c_custom_domain ||
-    summary?.settings?.custom_domain ||
-    summary?.settings?.domain ||
-    'localhost';
+  const storePublicUrl = `/loja/${getUser()?.company_id || 4}`;
 
   return (
     <div className="space-y-6">
-      {/* Header Banner */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div className="flex items-start sm:items-center gap-3.5">
-          <div className="p-3 rounded-2xl bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 border border-fuchsia-500/20 shrink-0">
-            <Ticket className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
-                Storefront Aberto B2C &amp; Vouchers Corporativos
-              </h1>
-              <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-950/60 dark:text-fuchsia-300">
-                Horus ERP + LGPD + {summary?.settings?.b2c_checkout_mode === 'TRAY_REDIRECT' ? 'Checkout Tray' : 'Gateway Nativo'}
-              </span>
-            </div>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-              Emita cupons para empresas parceiras distribuírem aos funcionários, acompanhe saldos residuais gerados e audite todas as compras.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5">
-          <a
-            href={`/domain/${storefrontPreviewHostname}?b2c=1`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 transition-colors"
-          >
-            <ExternalLink className="w-4 h-4 text-fuchsia-600" />
-            Abrir Vitrine B2C
-          </a>
-
-          <button
-            onClick={() => setShowSingleModal(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-fuchsia-200 dark:border-fuchsia-800 bg-fuchsia-50/70 dark:bg-fuchsia-950/30 hover:bg-fuchsia-100 text-xs sm:text-sm font-bold text-fuchsia-700 dark:text-fuchsia-300 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            Cupom Avulso
-          </button>
-
-          <button
-            onClick={() => setShowBatchModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-fuchsia-600 hover:bg-fuchsia-700 text-white text-xs sm:text-sm font-bold shadow-sm transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            Novo Lote Empresa Parceira
-          </button>
-        </div>
-      </div>
-
-      {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500">Orçamento Emitido em Vouchers</p>
-          <p className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
-            {formatBRL(summary?.total_issued_value || 0)}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            {summary?.total_batches || 0} lotes • {summary?.total_coupons || 0} cupons totais
-          </p>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500">Valor Já Consumido</p>
-          <p className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">
-            {formatBRL(summary?.total_used_value || 0)}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            {summary?.total_redemptions || 0} pedidos realizados com cupom
-          </p>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500">Saldo Residual Disponível</p>
-          <p className="text-xl font-extrabold text-amber-600 dark:text-amber-400 mt-1">
-            {formatBRL(summary?.total_remaining_balance || 0)}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            {summary?.residual_generated_coupons || 0} novos cupons de saldo gerados
-          </p>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500">Status de Utilização</p>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-xl font-extrabold text-indigo-600 dark:text-indigo-400">
-              {summary?.exhausted_coupons || 0}
-            </span>
-            <span className="text-xs text-slate-500">100% usados</span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            {summary?.available_coupons || 0} disponíveis • {summary?.partially_used_coupons || 0} parciais
-          </p>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500">Conformidade LGPD</p>
-          <p className="text-xl font-extrabold text-teal-600 dark:text-teal-400 mt-1">
-            {summary?.total_lgpd_consents || 0} Aceites
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Auditados com IP, Data/Hora e Navegador
-          </p>
-        </div>
-      </div>
-
-      {/* Navigation Tabs (Mobile Scrollable) */}
-      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar border-b border-slate-200 dark:border-slate-800 pb-2">
-        {[
-          { id: 'batches', label: '1. Lotes Corporativos (Empresas)', icon: Building2 },
-          { id: 'coupons', label: '2. Cupons Emitidos & Saldos', icon: Ticket },
-          { id: 'redemptions', label: '3. Relatório de Utilização (Quem Usou)', icon: Users },
-          { id: 'lgpd', label: '4. Domínio B2C, Frete & Auditoria LGPD', icon: ShieldCheck },
-        ].map((tab) => {
-          const Icon = tab.icon;
-          const active = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap transition-all ${
-                active
-                  ? 'bg-fuchsia-600 text-white shadow-sm'
-                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* TAB 1: LOTES CORPORATIVOS */}
-      {activeTab === 'batches' && (
-        <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
-                <th className="py-3.5 px-4">Lote / Campanha</th>
-                <th className="py-3.5 px-4">Empresa Parceira</th>
-                <th className="py-3.5 px-4">Modo de Distribuição</th>
-                <th className="py-3.5 px-4">Valor por Colaborador</th>
-                <th className="py-3.5 px-4">Regras de Saldo &amp; Frete</th>
-                <th className="py-3.5 px-4">Adesão / Consumo</th>
-                <th className="py-3.5 px-4 text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
-              {batches.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
-                    Nenhum lote corporativo cadastrado ainda. Clique em <strong>Novo Lote Empresa Parceira</strong> para gerar cupons.
-                  </td>
-                </tr>
-              ) : (
-                batches.map((b) => (
-                  <tr key={b.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                    <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">
-                      {b.name}
-                      {b.valid_until && (
-                        <span className="block text-[11px] font-normal text-slate-400">
-                          Válido até {b.valid_until.split('-').reverse().join('/')}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className="font-semibold text-slate-800 dark:text-slate-200">
-                        {b.partner_company_name || '—'}
-                      </span>
-                      {b.partner_document && (
-                        <span className="block text-[11px] font-mono text-slate-400">{b.partner_document}</span>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      {b.batch_mode === 'SHARED_CPF_LIMIT' ? (
-                        <div>
-                          <span className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 text-[11px] font-bold">
-                            Código Geral por CPF
-                          </span>
-                          <span className="block font-mono font-bold text-xs text-indigo-600 mt-1">
-                            {b.shared_code}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-md bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-950/60 dark:text-fuchsia-300 text-[11px] font-bold">
-                          Códigos Individuais ({b.coupons_count})
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">
-                      {b.discount_type === 'PERCENTAGE' ? `${b.coupon_value}%` : formatBRL(b.coupon_value)}
-                    </td>
-                    <td className="py-3.5 px-4 text-xs space-y-1">
-                      <span className="block text-slate-600 dark:text-slate-300">
-                        • Frete incluso: <strong>{b.allows_freight_discount ? 'Sim' : 'Não (Só Produtos)'}</strong>
-                      </span>
-                      <span className="block text-slate-600 dark:text-slate-300">
-                        • Gera cupom residual: <strong>{b.allow_residual_balance ? 'Sim (Automático)' : 'Não'}</strong>
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                        {b.coupons_used_count} / {b.coupons_count || b.max_uses_total} utilizados
-                      </div>
-                      <div className="text-[11px] text-emerald-600 font-semibold">
-                        Consumido: {formatBRL(b.consumed_batch_value)}
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <button
-                        onClick={() => {
-                          setSelectedBatchFilter(String(b.id));
-                          setActiveTab('coupons');
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-fuchsia-50 text-xs font-bold text-slate-700 dark:text-slate-200"
-                      >
-                        Ver Cupons →
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* TAB 2: CUPONS EMITIDOS & SALDOS */}
-      {activeTab === 'coupons' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-            <div className="flex flex-wrap items-center gap-2.5 flex-1">
-              <div className="relative flex-1 min-w-[220px]">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={couponSearch}
-                  onChange={(e) => setCouponSearch(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && loadAllData()}
-                  placeholder="Buscar por código, CPF, nome do colaborador ou cupom residual..."
-                  className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
-                />
+      {/* ===================================================================== */}
+      {/* VIEW 1: CUPONS DE DESCONTO (/b2c-storefront)                          */}
+      {/* ===================================================================== */}
+      {effectiveSection === 'coupons' && (
+        <>
+          {/* Clean, Precise Header */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 shrink-0">
+                <Ticket className="w-6 h-6" />
               </div>
+              <div>
+                <h1 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
+                  Cupons de Desconto &amp; Controle de Saldos
+                </h1>
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                  Crie cupons promocionais ou lotes por CPF, defina regras de saldo residual automático e acompanhe quem utilizou cada código.
+                </p>
+              </div>
+            </div>
 
-              <select
-                value={selectedBatchFilter}
-                onChange={(e) => setSelectedBatchFilter(e.target.value)}
-                className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+            <div className="flex flex-wrap items-center gap-2.5">
+              <a
+                href={storePublicUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 transition-colors"
               >
-                <option value="">Todos os Lotes</option>
-                {batches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                value={couponStatusFilter}
-                onChange={(e) => setCouponStatusFilter(e.target.value)}
-                className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
-              >
-                <option value="">Todos os Status</option>
-                <option value="AVAILABLE">Disponíveis</option>
-                <option value="PARTIALLY_USED">Parcialmente Usados</option>
-                <option value="EXHAUSTED">100% Utilizados / Esgotados</option>
-                <option value="CANCELLED">Cancelados</option>
-              </select>
+                <ExternalLink className="w-4 h-4 text-indigo-600" />
+                Ver Loja Online
+              </a>
 
               <button
-                onClick={loadAllData}
-                className="px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold"
+                onClick={() => setShowSingleModal(true)}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/80 dark:bg-indigo-950/40 hover:bg-indigo-100 text-xs sm:text-sm font-bold text-indigo-700 dark:text-indigo-300 transition-colors"
               >
-                Filtrar
+                <Plus className="w-4 h-4" />
+                Criar Cupom Individual
+              </button>
+
+              <button
+                onClick={() => setShowBatchModal(true)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm transition-all"
+              >
+                <Plus className="w-4 h-4" />
+                Gerar Lote de Cupons
+              </button>
+            </div>
+          </div>
+
+          {/* 4 Focused KPIs for Coupons */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <p className="text-xs font-semibold text-slate-500">Total Emitido em Cupons</p>
+              <p className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
+                {formatBRL(summary?.total_issued_value || 0)}
+              </p>
+              <p className="text-[11px] text-slate-400 mt-1">
+                {summary?.total_coupons || 0} cupons gerados ({summary?.total_batches || 0} campanhas)
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <p className="text-xs font-semibold text-slate-500">Valor Já Utilizado</p>
+              <p className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">
+                {formatBRL(summary?.total_used_value || 0)}
+              </p>
+              <p className="text-[11px] text-slate-400 mt-1">
+                {summary?.total_redemptions || 0} compras realizadas com cupom
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <p className="text-xs font-semibold text-slate-500">Saldo Disponível / Residual</p>
+              <p className="text-xl font-extrabold text-amber-600 dark:text-amber-400 mt-1">
+                {formatBRL(summary?.total_remaining_balance || 0)}
+              </p>
+              <p className="text-[11px] text-slate-400 mt-1">
+                {summary?.residual_generated_coupons || 0} cupons residuais automáticos
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <p className="text-xs font-semibold text-slate-500">Status dos Cupons</p>
+              <div className="flex items-baseline gap-2 mt-1">
+                <span className="text-xl font-extrabold text-indigo-600 dark:text-indigo-400">
+                  {summary?.available_coupons || 0}
+                </span>
+                <span className="text-xs text-slate-500">ativos para uso</span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                {summary?.exhausted_coupons || 0} esgotados • {summary?.partially_used_coupons || 0} parciais
+              </p>
+            </div>
+          </div>
+
+          {/* Sub-view Switcher & Filters */}
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-slate-800 self-start">
+                <button
+                  type="button"
+                  onClick={() => setCouponSubView('list')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    couponSubView === 'list'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  Todos os Cupons ({coupons.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCouponSubView('batches')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    couponSubView === 'batches'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  Campanhas / Lotes ({batches.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCouponSubView('history')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    couponSubView === 'history'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  Histórico de Utilização ({redemptions.length})
+                </button>
+              </div>
+
+              <button
+                onClick={exportCouponsCSV}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm self-start sm:self-auto"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Exportar Planilha CSV
               </button>
             </div>
 
-            <button
-              onClick={exportCouponsCSV}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm shrink-0"
-            >
-              <Download className="w-4 h-4" />
-              Exportar Planilha CSV (RH)
-            </button>
+            {couponSubView === 'list' && (
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="relative flex-1 min-w-[220px]">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={couponSearch}
+                    onChange={(e) => setCouponSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && loadAllData()}
+                    placeholder="Buscar por código do cupom, CPF, nome do cliente ou cupom residual..."
+                    className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
+                  />
+                </div>
+
+                <select
+                  value={selectedBatchFilter}
+                  onChange={(e) => setSelectedBatchFilter(e.target.value)}
+                  className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                >
+                  <option value="">Todas as Campanhas / Lotes</option>
+                  {batches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={couponStatusFilter}
+                  onChange={(e) => setCouponStatusFilter(e.target.value)}
+                  className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                >
+                  <option value="">Todos os Status</option>
+                  <option value="AVAILABLE">Disponíveis</option>
+                  <option value="PARTIALLY_USED">Uso Parcial</option>
+                  <option value="EXHAUSTED">100% Utilizados</option>
+                  <option value="CANCELLED">Cancelados</option>
+                </select>
+
+                <button
+                  onClick={loadAllData}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold"
+                >
+                  Filtrar
+                </button>
+              </div>
+            )}
+
+            {couponSubView === 'history' && (
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="relative flex-1 min-w-[220px]">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={redemptionSearch}
+                    onChange={(e) => setRedemptionSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && loadAllData()}
+                    placeholder="Filtrar histórico por nome do cliente, CPF, e-mail ou código usado..."
+                    className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
+                  />
+                </div>
+                <button
+                  onClick={loadAllData}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold"
+                >
+                  Buscar
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
-                  <th className="py-3.5 px-4">Código do Cupom</th>
-                  <th className="py-3.5 px-4">Empresa / Lote</th>
-                  <th className="py-3.5 px-4">Colaborador (CPF / Nome)</th>
-                  <th className="py-3.5 px-4">Valor Inicial</th>
-                  <th className="py-3.5 px-4">Consumido</th>
-                  <th className="py-3.5 px-4">Saldo Atual / Residual</th>
-                  <th className="py-3.5 px-4">Status</th>
-                  <th className="py-3.5 px-4 text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
-                {coupons.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="py-12 text-center text-slate-400">
-                      Nenhum cupom encontrado para os filtros selecionados.
-                    </td>
+          {/* SUB-VIEW 1: LISTA PRECISA DE CUPONS E SALDOS */}
+          {couponSubView === 'list' && (
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
+                    <th className="py-3.5 px-4">Código do Cupom</th>
+                    <th className="py-3.5 px-4">Campanha / Regra</th>
+                    <th className="py-3.5 px-4">Beneficiário (Nome / CPF)</th>
+                    <th className="py-3.5 px-4">Valor Inicial</th>
+                    <th className="py-3.5 px-4">Consumido</th>
+                    <th className="py-3.5 px-4">Saldo Atual / Residual</th>
+                    <th className="py-3.5 px-4">Validade &amp; Status</th>
+                    <th className="py-3.5 px-4 text-right">Ações</th>
                   </tr>
-                ) : (
-                  coupons.map((c) => (
-                    <tr key={c.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
-                            {c.code}
-                          </span>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(c.code);
-                              toast.success(`Código ${c.code} copiado!`);
-                            }}
-                            className="p-1 text-slate-400 hover:text-slate-700"
-                            title="Copiar código"
-                          >
-                            <Copy className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                        {c.coupon_mode === 'RESIDUAL' && (
-                          <span className="inline-block mt-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded">
-                            Saldo Residual Automático
-                          </span>
-                        )}
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
+                  {coupons.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center text-slate-400">
+                        Nenhum cupom encontrado. Clique em <strong>Criar Cupom Individual</strong> ou <strong>Gerar Lote de Cupons</strong> acima.
                       </td>
-                      <td className="py-3 px-4">
-                        <span className="font-semibold text-slate-800 dark:text-slate-200">
-                          {c.partner_company_name || c.batch_name || 'Avulso'}
-                        </span>
-                        <span className="block text-[11px] text-slate-400">
-                          {c.allows_freight_discount ? 'Produtos + Frete' : 'Somente Produtos'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        {c.assigned_name || c.assigned_cpf ? (
-                          <div>
-                            <span className="font-semibold text-slate-800 dark:text-slate-200">
-                              {c.assigned_name || 'Colaborador'}
+                    </tr>
+                  ) : (
+                    coupons.map((c) => (
+                      <tr key={c.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-bold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
+                              {c.code}
                             </span>
-                            {c.assigned_cpf && (
-                              <span className="block font-mono text-[11px] text-slate-500">
-                                CPF: {c.assigned_cpf}
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(c.code);
+                                toast.success(`Código ${c.code} copiado!`);
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-700"
+                              title="Copiar código"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          {c.coupon_mode === 'RESIDUAL' && (
+                            <span className="inline-block mt-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded">
+                              Cupom de Saldo Residual
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="font-semibold text-slate-800 dark:text-slate-200">
+                            {c.partner_company_name || c.batch_name || 'Cupom Avulso'}
+                          </span>
+                          <span className="block text-[11px] text-slate-400">
+                            {c.allows_freight_discount ? 'Abate Produtos + Frete' : 'Abate Produtos'} •{' '}
+                            {c.allow_residual_balance !== false ? 'Gera Residual' : 'Uso Único'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          {c.assigned_name || c.assigned_cpf ? (
+                            <div>
+                              <span className="font-semibold text-slate-800 dark:text-slate-200">
+                                {c.assigned_name || 'Cliente Vinculado'}
+                              </span>
+                              {c.assigned_cpf && (
+                                <span className="block font-mono text-[11px] text-slate-500">
+                                  CPF: {c.assigned_cpf}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-xs">Livre (Qualquer cliente / 1º uso)</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
+                          {c.discount_type === 'PERCENTAGE' ? `${c.initial_value}%` : formatBRL(c.initial_value)}
+                        </td>
+                        <td className="py-3 px-4 font-semibold text-emerald-600">
+                          {formatBRL(c.used_amount)}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            {c.discount_type === 'PERCENTAGE' ? '—' : formatBRL(c.current_balance)}
+                          </span>
+                          {c.generated_child_code && (
+                            <div className="text-[11px] text-amber-600 font-semibold mt-0.5">
+                              Gerou saldo: <code className="font-mono font-bold">{c.generated_child_code}</code>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="space-y-1">
+                            {c.status === 'AVAILABLE' && (
+                              <span className="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 text-[11px] font-bold">
+                                Disponível
+                              </span>
+                            )}
+                            {c.status === 'PARTIALLY_USED' && (
+                              <span className="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 text-[11px] font-bold">
+                                Uso Parcial
+                              </span>
+                            )}
+                            {c.status === 'EXHAUSTED' && (
+                              <span className="inline-block px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 text-[11px] font-bold">
+                                100% Utilizado
+                              </span>
+                            )}
+                            {c.status === 'CANCELLED' && (
+                              <span className="inline-block px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 text-[11px] font-bold">
+                                Cancelado
+                              </span>
+                            )}
+                            {c.valid_until && (
+                              <span className="block text-[10px] text-slate-400">
+                                Até {c.valid_until.split('-').reverse().join('/')}
                               </span>
                             )}
                           </div>
-                        ) : (
-                          <span className="text-slate-400 text-xs">Livre (Vincula no 1º uso)</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
-                        {c.discount_type === 'PERCENTAGE' ? `${c.initial_value}%` : formatBRL(c.initial_value)}
-                      </td>
-                      <td className="py-3 px-4 font-semibold text-emerald-600">
-                        {formatBRL(c.used_amount)}
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="font-bold text-slate-900 dark:text-white">
-                          {formatBRL(c.current_balance)}
-                        </span>
-                        {c.generated_child_code && (
-                          <div className="text-[11px] text-amber-600 font-semibold mt-0.5">
-                            Novo cupom gerado: <code className="font-mono font-bold">{c.generated_child_code}</code>
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 px-4">
-                        {c.status === 'AVAILABLE' && (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 text-[11px] font-bold">
-                            Disponível
-                          </span>
-                        )}
-                        {c.status === 'PARTIALLY_USED' && (
-                          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 text-[11px] font-bold">
-                            Uso Parcial
-                          </span>
-                        )}
-                        {c.status === 'EXHAUSTED' && (
-                          <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 text-[11px] font-bold">
-                            Utilizado
-                          </span>
-                        )}
-                        {c.status === 'CANCELLED' && (
-                          <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 text-[11px] font-bold">
-                            Cancelado
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-right">
-                        {c.status === 'AVAILABLE' && (
-                          <button
-                            onClick={() => handleCancelCoupon(c.id, c.code)}
-                            className="text-xs font-semibold text-rose-600 hover:underline"
-                          >
-                            Cancelar
-                          </button>
-                        )}
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          {c.status === 'AVAILABLE' && (
+                            <button
+                              onClick={() => handleCancelCoupon(c.id, c.code)}
+                              className="text-xs font-semibold text-rose-600 hover:underline"
+                            >
+                              Cancelar
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* SUB-VIEW 2: CAMPANHAS / LOTES */}
+          {couponSubView === 'batches' && (
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
+                    <th className="py-3.5 px-4">Campanha / Lote</th>
+                    <th className="py-3.5 px-4">Empresa / Parceiro</th>
+                    <th className="py-3.5 px-4">Modo</th>
+                    <th className="py-3.5 px-4">Valor por Cupom</th>
+                    <th className="py-3.5 px-4">Regras</th>
+                    <th className="py-3.5 px-4">Consumo</th>
+                    <th className="py-3.5 px-4 text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
+                  {batches.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-400">
+                        Nenhum lote cadastrado ainda.
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                  ) : (
+                    batches.map((b) => (
+                      <tr key={b.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">
+                          {b.name}
+                          {b.valid_until && (
+                            <span className="block text-[11px] font-normal text-slate-400">
+                              Válido até {b.valid_until.split('-').reverse().join('/')}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className="font-semibold text-slate-800 dark:text-slate-200">
+                            {b.partner_company_name || '—'}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {b.batch_mode === 'SHARED_CPF_LIMIT' ? (
+                            <div>
+                              <span className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 text-[11px] font-bold">
+                                Código Único por CPF ({b.shared_code})
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 text-[11px] font-bold">
+                              {b.coupons_count} Códigos Individuais
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">
+                          {b.discount_type === 'PERCENTAGE' ? `${b.coupon_value}%` : formatBRL(b.coupon_value)}
+                        </td>
+                        <td className="py-3.5 px-4 text-xs text-slate-600 dark:text-slate-300">
+                          Frete: <strong>{b.allows_freight_discount ? 'Sim' : 'Não'}</strong> • Residual:{' '}
+                          <strong>{b.allow_residual_balance ? 'Sim' : 'Não'}</strong>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                            {b.coupons_used_count} / {b.coupons_count || b.max_uses_total} usados
+                          </div>
+                          <div className="text-[11px] text-emerald-600 font-semibold">
+                            {formatBRL(b.consumed_batch_value)}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-right">
+                          <button
+                            onClick={() => {
+                              setSelectedBatchFilter(String(b.id));
+                              setCouponSubView('list');
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 text-xs font-bold text-slate-700 dark:text-slate-200"
+                          >
+                            Filtrar Cupons →
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* SUB-VIEW 3: HISTÓRICO DE USO (QUEM USOU CADA CUPOM) */}
+          {couponSubView === 'history' && (
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
+                    <th className="py-3.5 px-4">Data / Pedido</th>
+                    <th className="py-3.5 px-4">Cliente (Nome / CPF)</th>
+                    <th className="py-3.5 px-4">Cupom Aplicado</th>
+                    <th className="py-3.5 px-4">Valor da Compra</th>
+                    <th className="py-3.5 px-4">Desconto Abatido</th>
+                    <th className="py-3.5 px-4">Saldo Restante</th>
+                    <th className="py-3.5 px-4">Diferença Paga</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
+                  {redemptions.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-400">
+                        Nenhuma utilização de cupom registrada até o momento.
+                      </td>
+                    </tr>
+                  ) : (
+                    redemptions.map((r) => (
+                      <tr key={r.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="py-3.5 px-4">
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            Pedido #{r.order_id || '—'}
+                          </span>
+                          <span className="block text-[11px] text-slate-400">
+                            {r.created_at ? new Date(r.created_at).toLocaleString('pt-BR') : ''}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className="font-bold text-slate-800 dark:text-slate-200">
+                            {r.customer_name}
+                          </span>
+                          <span className="block font-mono text-[11px] text-slate-500">
+                            CPF: {r.customer_cpf} • {r.customer_email}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className="font-mono font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded">
+                            {r.coupon_code}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className="font-semibold text-slate-900 dark:text-white">
+                            {formatBRL(Number(r.order_subtotal || 0) + Number(r.order_freight || 0))}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 font-bold text-emerald-600">
+                          - {formatBRL(r.discount_applied)}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {r.used_full_balance ? (
+                            <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 text-[11px] font-bold">
+                              100% Utilizado
+                            </span>
+                          ) : (
+                            <div>
+                              <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 text-[11px] font-bold">
+                                Sobrou {formatBRL(r.remaining_balance)}
+                              </span>
+                              {r.residual_coupon_code && (
+                                <span className="block text-[11px] text-amber-700 dark:text-amber-400 font-mono mt-0.5">
+                                  Novo: <strong>{r.residual_coupon_code}</strong>
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {Number(r.difference_paid || 0) <= 0.009 ? (
+                            <span className="text-xs font-bold text-emerald-600">R$ 0,00</span>
+                          ) : (
+                            <span className="font-bold text-slate-900 dark:text-white">
+                              {formatBRL(r.difference_paid)}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
 
-      {/* TAB 3: RELATÓRIO DE UTILIZAÇÃO (AUDITORIA RH / QUEM USOU) */}
-      {activeTab === 'redemptions' && (
+      {/* ===================================================================== */}
+      {/* VIEW 2: PEDIDOS & CARRINHOS (/b2c-storefront/orders)                  */}
+      {/* ===================================================================== */}
+      {effectiveSection === 'orders' && (
         <div className="space-y-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                <ShoppingBag className="w-6 h-6" />
+              </div>
+              <div>
+                <h1 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
+                  Pedidos &amp; Carrinhos da Loja B2C
+                </h1>
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                  Acompanhe todas as vendas concluídas na loja virtual, cupons aplicados e carrinhos enviados para finalização.
+                </p>
+              </div>
+            </div>
+
+            <a
+              href={storePublicUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 transition-colors self-start sm:self-auto"
+            >
+              <ExternalLink className="w-4 h-4 text-indigo-600" />
+              Ver Loja Online
+            </a>
+          </div>
+
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                value={redemptionSearch}
-                onChange={(e) => setRedemptionSearch(e.target.value)}
+                value={orderSearch}
+                onChange={(e) => setOrderSearch(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && loadAllData()}
-                placeholder="Buscar utilização por colaborador, CPF, e-mail ou código do cupom..."
+                placeholder="Buscar pedido por cliente, CPF, e-mail, cupom ou sessão Tray..."
                 className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
               />
             </div>
@@ -785,7 +1023,7 @@ export default function SellerB2CStorefrontManagementPage() {
               onClick={loadAllData}
               className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold"
             >
-              Atualizar Relatório
+              Atualizar Lista
             </button>
           </div>
 
@@ -793,94 +1031,123 @@ export default function SellerB2CStorefrontManagementPage() {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
-                  <th className="py-3.5 px-4">Data / Pedido</th>
-                  <th className="py-3.5 px-4">Colaborador / Cliente</th>
-                  <th className="py-3.5 px-4">Cupom Usado</th>
-                  <th className="py-3.5 px-4">Total Compra (Prod+Frete)</th>
-                  <th className="py-3.5 px-4">Abatido no Cupom</th>
-                  <th className="py-3.5 px-4">Usou Tudo ou Sobrou?</th>
-                  <th className="py-3.5 px-4">Diferença Paga &amp; Canal</th>
+                  <th className="py-3.5 px-4">Pedido / Data</th>
+                  <th className="py-3.5 px-4">Cliente</th>
+                  <th className="py-3.5 px-4">Itens</th>
+                  <th className="py-3.5 px-4">Subtotal &amp; Frete</th>
+                  <th className="py-3.5 px-4">Cupom &amp; Desconto</th>
+                  <th className="py-3.5 px-4">Total Pago</th>
+                  <th className="py-3.5 px-4">Canal de Checkout</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
-                {redemptions.length === 0 ? (
+                {b2cOrders.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-12 text-center text-slate-400">
-                      Nenhuma utilização de cupom registrada até o momento.
+                      Nenhum pedido registrado até o momento.
                     </td>
                   </tr>
                 ) : (
-                  redemptions.map((r) => (
-                    <tr key={r.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                  b2cOrders.map((o) => (
+                    <tr key={o.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
                       <td className="py-3.5 px-4">
                         <span className="font-bold text-slate-900 dark:text-white">
-                          Pedido #{r.order_id || '—'}
+                          Pedido #{o.id}
                         </span>
                         <span className="block text-[11px] text-slate-400">
-                          {r.created_at ? new Date(r.created_at).toLocaleString('pt-BR') : ''}
+                          {o.created_at ? new Date(o.created_at).toLocaleString('pt-BR') : ''}
                         </span>
                       </td>
                       <td className="py-3.5 px-4">
                         <span className="font-bold text-slate-800 dark:text-slate-200">
-                          {r.customer_name}
+                          {o.customer_name}
                         </span>
                         <span className="block font-mono text-[11px] text-slate-500">
-                          CPF: {r.customer_cpf} • {r.customer_email}
+                          CPF: {o.customer_cpf} • {o.customer_email}
                         </span>
                       </td>
-                      <td className="py-3.5 px-4">
-                        <span className="font-mono font-bold text-fuchsia-700 dark:text-fuchsia-300 bg-fuchsia-50 dark:bg-fuchsia-950/40 px-2 py-0.5 rounded">
-                          {r.coupon_code}
+                      <td className="py-3.5 px-4 max-w-xs">
+                        <span className="font-semibold text-slate-800 dark:text-slate-200">
+                          {o.items_count} {o.items_count === 1 ? 'item' : 'itens'}
                         </span>
-                        {r.partner_company_name && (
-                          <span className="block text-[11px] text-slate-400 mt-0.5">
-                            {r.partner_company_name}
-                          </span>
+                        {o.items && o.items.length > 0 && (
+                          <div
+                            className="text-[11px] text-slate-500 truncate"
+                            title={o.items.map((i: any) => `${i.quantity}x ${i.name}`).join(', ')}
+                          >
+                            {o.items
+                              .slice(0, 2)
+                              .map((i: any) => `${i.quantity}x ${i.name}`)
+                              .join(', ')}
+                            {o.items.length > 2 ? ` +${o.items.length - 2}` : ''}
+                          </div>
                         )}
                       </td>
                       <td className="py-3.5 px-4">
                         <span className="font-semibold text-slate-900 dark:text-white">
-                          {formatBRL(Number(r.order_subtotal || 0) + Number(r.order_freight || 0))}
+                          Prod: {formatBRL(o.subtotal)}
                         </span>
                         <span className="block text-[11px] text-slate-400">
-                          Prod: {formatBRL(r.order_subtotal)} | Frete: {formatBRL(r.order_freight)}
+                          Frete: {formatBRL(o.freight)}
                         </span>
                       </td>
-                      <td className="py-3.5 px-4 font-bold text-emerald-600">
-                        - {formatBRL(r.discount_applied)}
-                      </td>
                       <td className="py-3.5 px-4">
-                        {r.used_full_balance ? (
-                          <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 text-[11px] font-bold">
-                            Usou 100% do Cupom
-                          </span>
-                        ) : (
+                        {o.coupon_code ? (
                           <div>
-                            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 text-[11px] font-bold">
-                              Sobrou {formatBRL(r.remaining_balance)}
+                            <span className="font-mono font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded">
+                              {o.coupon_code}
                             </span>
-                            {r.residual_coupon_code && (
-                              <span className="block text-[11px] text-amber-700 dark:text-amber-400 font-mono mt-1">
-                                Novo Cupom: <strong>{r.residual_coupon_code}</strong>
+                            <span className="block text-[11px] text-emerald-600 font-bold mt-0.5">
+                              -{formatBRL(o.discount_applied)}
+                            </span>
+                            {o.residual_coupon_code && (
+                              <span className="block text-[11px] text-amber-600 font-mono">
+                                Residual: <strong>{o.residual_coupon_code}</strong> ({formatBRL(o.remaining_balance)})
                               </span>
                             )}
                           </div>
+                        ) : (
+                          <span className="text-slate-400 text-xs">Sem cupom</span>
                         )}
                       </td>
                       <td className="py-3.5 px-4">
-                        {Number(r.difference_paid || 0) <= 0.009 ? (
-                          <span className="text-xs font-bold text-emerald-600">
-                            R$ 0,00 (100% Coberto)
+                        {Number(o.difference_paid || 0) <= 0.009 ? (
+                          <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 text-[11px] font-bold">
+                            R$ 0,00 (100% Cupom)
                           </span>
                         ) : (
-                          <div>
-                            <span className="font-bold text-slate-900 dark:text-white">
-                              Pagou Dif.: {formatBRL(r.difference_paid)}
+                          <span className="font-extrabold text-slate-900 dark:text-white">
+                            {formatBRL(o.difference_paid)}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {o.checkout_mode === 'FREE_VOUCHER' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-bold">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Concluído (Cupom Integral)
+                          </span>
+                        )}
+                        {o.checkout_mode === 'TRAY_REDIRECT' && (
+                          <div className="space-y-1">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-bold">
+                              <ShoppingBag className="w-3.5 h-3.5" /> Checkout Tray
                             </span>
-                            <span className="block text-[11px] text-slate-500">
-                              Via: {r.checkout_mode === 'TRAY_REDIRECT' ? 'Carrinho Tray' : 'Gateway Nativo'}
-                            </span>
+                            {o.tray_cart_url && (
+                              <a
+                                href={o.tray_cart_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block text-[11px] font-bold text-indigo-600 hover:underline"
+                              >
+                                Abrir Carrinho Tray →
+                              </a>
+                            )}
                           </div>
+                        )}
+                        {o.checkout_mode !== 'FREE_VOUCHER' && o.checkout_mode !== 'TRAY_REDIRECT' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-xs font-bold">
+                            Gateway Nativo ({o.status})
+                          </span>
                         )}
                       </td>
                     </tr>
@@ -892,37 +1159,90 @@ export default function SellerB2CStorefrontManagementPage() {
         </div>
       )}
 
-      {/* TAB 4: DOMÍNIO B2C, FRETE & AUDITORIA LGPD */}
-      {activeTab === 'lgpd' && (
+      {/* ===================================================================== */}
+      {/* VIEW 3: FRETE, CHECKOUT & LGPD (/b2c-storefront/settings)             */}
+      {/* ===================================================================== */}
+      {effectiveSection === 'settings' && (
         <div className="space-y-6">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-4 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  Configurações do Storefront B2C &amp; Termo LGPD
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Personalize o domínio aberto B2C, regras de frete e o texto de consentimento LGPD apresentado aos clientes.
-                </p>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div>
+                  <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                    Frete, Checkout &amp; Privacidade (LGPD)
+                  </h1>
+                  <p className="text-xs text-slate-500">
+                    Defina o valor de frete da loja, escolha o modo de pagamento (Gateway Nativo ou Checkout Tray) e configure o termo LGPD.
+                  </p>
+                </div>
               </div>
               <button
                 onClick={handleSaveB2CSettings}
                 disabled={savingSettings}
-                className="px-4 py-2.5 rounded-xl bg-fuchsia-600 hover:bg-fuchsia-700 text-white text-xs sm:text-sm font-bold shadow-sm disabled:opacity-50"
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm disabled:opacity-50 shrink-0"
               >
-                {savingSettings ? 'Salvando...' : 'Salvar Configurações B2C'}
+                {savingSettings ? 'Salvando...' : 'Salvar Configurações'}
               </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label className="flex items-start gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.b2c_storefront_open}
+                  onChange={(e) =>
+                    setSettingsForm({ ...settingsForm, b2c_storefront_open: e.target.checked })
+                  }
+                  className="mt-1 w-4 h-4 rounded text-indigo-600"
+                />
+                <div>
+                  <span className="block text-sm font-bold text-slate-900 dark:text-white">
+                    Loja Virtual Aberta ao Público
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    Permite navegar pelo catálogo, adicionar itens à sacola, aplicar cupom de desconto e concluir o cadastro no checkout.
+                  </span>
+                </div>
+              </label>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Modo de Pagamento no Checkout
+                </label>
+                <select
+                  value={settingsForm.b2c_checkout_mode}
+                  onChange={(e) =>
+                    setSettingsForm({ ...settingsForm, b2c_checkout_mode: e.target.value })
+                  }
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold text-slate-900 dark:text-white"
+                >
+                  <option value="NATIVE_GATEWAY">
+                    Intermediador de Pagamento Nativo ({summary?.settings?.payment_gateway_active || 'PIX / Cartão'})
+                  </option>
+                  <option value="TRAY_REDIRECT">
+                    Enviar Carrinho Pronto + Desconto para Finalizar na Loja Tray
+                  </option>
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Quando o cupom cobre 100% do pedido, o sistema conclui o pedido imediatamente sem cobrança adicional.
+                </p>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Domínio Próprio B2C (Ex: loja.suaeditora.com.br)
+                  Domínio Próprio da Loja (Ex: loja.suaeditora.com.br)
                 </label>
                 <input
                   type="text"
                   value={settingsForm.b2c_custom_domain}
-                  onChange={(e) => setSettingsForm({ ...settingsForm, b2c_custom_domain: e.target.value })}
+                  onChange={(e) =>
+                    setSettingsForm({ ...settingsForm, b2c_custom_domain: e.target.value })
+                  }
                   placeholder="loja.suaeditora.com.br"
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
                 />
@@ -930,12 +1250,14 @@ export default function SellerB2CStorefrontManagementPage() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Frete Econômico Padrão (R$)
+                  Valor de Frete Padrão (R$)
                 </label>
                 <CurrencyInput
                   prefixStr="R$ "
                   value={settingsForm.b2c_default_freight_value}
-                  onChangeValue={(val) => setSettingsForm({ ...settingsForm, b2c_default_freight_value: val })}
+                  onChangeValue={(val) =>
+                    setSettingsForm({ ...settingsForm, b2c_default_freight_value: val })
+                  }
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold"
                 />
               </div>
@@ -947,7 +1269,9 @@ export default function SellerB2CStorefrontManagementPage() {
                 <CurrencyInput
                   prefixStr="R$ "
                   value={settingsForm.b2c_free_shipping_min_value}
-                  onChangeValue={(val) => setSettingsForm({ ...settingsForm, b2c_free_shipping_min_value: val })}
+                  onChangeValue={(val) =>
+                    setSettingsForm({ ...settingsForm, b2c_free_shipping_min_value: val })
+                  }
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold"
                 />
               </div>
@@ -960,10 +1284,169 @@ export default function SellerB2CStorefrontManagementPage() {
               <textarea
                 rows={3}
                 value={settingsForm.b2c_lgpd_terms_text}
-                onChange={(e) => setSettingsForm({ ...settingsForm, b2c_lgpd_terms_text: e.target.value })}
+                onChange={(e) =>
+                  setSettingsForm({ ...settingsForm, b2c_lgpd_terms_text: e.target.value })
+                }
                 placeholder="Ao finalizar seu cadastro e pedido, você autoriza o tratamento dos seus dados pessoais conforme a LGPD..."
                 className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
               />
+            </div>
+          </div>
+
+          {/* =================================================================== */}
+          {/* MOTOR DE CACHE & ALTA PERFORMANCE DA VITRINE B2C (SELLER CONTROL)   */}
+          {/* =================================================================== */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                      Cache de Alta Performance da Vitrine B2C
+                    </h2>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                        cacheStatus?.enabled !== false
+                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                          : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                      }`}
+                    >
+                      {cacheStatus?.enabled !== false ? '● Cache Ativo' : '○ Cache Desativado'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Acumula em memória as consultas de catálogo, categorias e vitrines para atender milhares de acessos simultâneos sem sobrecarregar o ERP Horus ou o banco de dados.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleWarmupCache}
+                  disabled={warmingCache}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  <Flame className={`w-4 h-4 ${warmingCache ? 'animate-pulse' : ''}`} />
+                  {warmingCache ? 'Aquecendo...' : 'Pré-Aquecer Vitrine'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleClearCache}
+                  disabled={clearingCache}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${clearingCache ? 'animate-spin' : ''}`} />
+                  {clearingCache ? 'Limpando...' : 'Limpar Cache Agora'}
+                </button>
+              </div>
+            </div>
+
+            {/* Live Cache Metrics */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
+                <span className="text-[11px] font-semibold text-slate-500 block">
+                  Páginas / Consultas em Cache
+                </span>
+                <span className="text-lg font-extrabold text-slate-900 dark:text-white mt-0.5 block">
+                  {cacheStatus?.cached_entries_count || 0} páginas
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  ~{cacheStatus?.estimated_size_kb || 0} KB em memória
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
+                <span className="text-[11px] font-semibold text-slate-500 block">
+                  Acessos Atendidos pelo Cache
+                </span>
+                <span className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400 mt-0.5 block">
+                  {cacheStatus?.cache_hits || 0} hits
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Consultas poupadas do ERP
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
+                <span className="text-[11px] font-semibold text-slate-500 block">
+                  Taxa de Eficiência (Hit Rate)
+                </span>
+                <span className="text-lg font-extrabold text-indigo-600 dark:text-indigo-400 mt-0.5 block">
+                  {cacheStatus?.hit_rate_percent || 0}%
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  {cacheStatus?.cache_misses || 0} leituras de origem
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
+                <span className="text-[11px] font-semibold text-slate-500 block">
+                  Última Limpeza Manual / Auto
+                </span>
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-1 block">
+                  {cacheStatus?.last_cleared_at
+                    ? new Date(cacheStatus.last_cleared_at).toLocaleString('pt-BR')
+                    : 'Automático por expiração'}
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Expira a cada {Math.round(Number(cacheStatus?.ttl_seconds || 900) / 60)} min
+                </span>
+              </div>
+            </div>
+
+            {/* Seller Cache Controls (Enable/Disable & TTL) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+              <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cacheStatus?.enabled !== false}
+                  disabled={savingCacheConfig}
+                  onChange={(e) =>
+                    handleUpdateCacheConfig(
+                      e.target.checked,
+                      Number(cacheStatus?.ttl_seconds || 900)
+                    )
+                  }
+                  className="mt-1 w-4 h-4 rounded text-emerald-600"
+                />
+                <div>
+                  <span className="block text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                    Acumular Cache Automaticamente na Vitrine B2C (Recomendado)
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Mantém as vitrines e páginas de livros em memória rápida. Sempre que você salvar alterações em Banners, Vitrines ou Promoções, o cache é atualizado automaticamente.
+                  </span>
+                </div>
+              </label>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Tempo de Retenção do Cache (Renovação Automática)
+                </label>
+                <select
+                  value={Number(cacheStatus?.ttl_seconds || 900)}
+                  disabled={savingCacheConfig}
+                  onChange={(e) =>
+                    handleUpdateCacheConfig(
+                      cacheStatus?.enabled !== false,
+                      Number(e.target.value)
+                    )
+                  }
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm font-semibold text-slate-900 dark:text-white"
+                >
+                  <option value={300}>5 minutos (Atualização frequente)</option>
+                  <option value={900}>15 minutos (Recomendado — Equilíbrio ideal)</option>
+                  <option value={1800}>30 minutos (Alta performance)</option>
+                  <option value={3600}>1 hora (Campanhas de alto tráfego)</option>
+                  <option value={21600}>6 horas (Máxima proteção do ERP)</option>
+                  <option value={86400}>24 horas (Catálogo estático)</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -973,26 +1456,24 @@ export default function SellerB2CStorefrontManagementPage() {
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-5 h-5 text-teal-600" />
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Trilha de Auditoria de Consentimento LGPD (Clientes B2C)
+                  Registro de Consentimento LGPD dos Clientes ({lgpdConsents.length})
                 </h3>
               </div>
-              <span className="text-xs text-slate-500">{lgpdConsents.length} registros</span>
             </div>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
-                  <th className="py-3 px-4">Data / Hora do Aceite</th>
-                  <th className="py-3 px-4">Titular dos Dados (Nome / CPF)</th>
+                  <th className="py-3 px-4">Data / Hora</th>
+                  <th className="py-3 px-4">Cliente (Nome / CPF)</th>
                   <th className="py-3 px-4">E-mail</th>
-                  <th className="py-3 px-4">Endereço IP</th>
-                  <th className="py-3 px-4">Versão Termo / Opt-in</th>
-                  <th className="py-3 px-4">Dispositivo (User-Agent)</th>
+                  <th className="py-3 px-4">IP</th>
+                  <th className="py-3 px-4">Versão</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
                 {lgpdConsents.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-10 text-center text-slate-400">
+                    <td colSpan={5} className="py-10 text-center text-slate-400">
                       Nenhum registro de aceite LGPD ainda.
                     </td>
                   </tr>
@@ -1009,17 +1490,13 @@ export default function SellerB2CStorefrontManagementPage() {
                         </span>
                       </td>
                       <td className="py-3 px-4">{c.customer_email}</td>
-                      <td className="py-3 px-4 font-mono text-slate-600 dark:text-slate-300">{c.ip_address}</td>
+                      <td className="py-3 px-4 font-mono text-slate-600 dark:text-slate-300">
+                        {c.ip_address}
+                      </td>
                       <td className="py-3 px-4">
                         <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300 font-bold">
                           {c.terms_version}
                         </span>
-                        <span className="block text-[10px] text-slate-400 mt-0.5">
-                          Mkt: {c.marketing_opt_in ? 'Aceito' : 'Apenas Transacional'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 max-w-xs truncate text-slate-400" title={c.user_agent}>
-                        {c.user_agent}
                       </td>
                     </tr>
                   ))
@@ -1030,14 +1507,16 @@ export default function SellerB2CStorefrontManagementPage() {
         </div>
       )}
 
-      {/* MODAL: NOVO LOTE CORPORATIVO */}
+      {/* ===================================================================== */}
+      {/* MODAL 1: GERAR LOTE DE CUPONS                                         */}
+      {/* ===================================================================== */}
       {showBatchModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-2xl w-full p-4 sm:p-6 space-y-5 shadow-2xl max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-fuchsia-600" />
-                Criar Lote de Cupons para Empresa Parceira
+                <Ticket className="w-5 h-5 text-indigo-600" />
+                Gerar Lote de Cupons de Desconto
               </h3>
               <button
                 onClick={() => setShowBatchModal(false)}
@@ -1051,35 +1530,37 @@ export default function SellerB2CStorefrontManagementPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Nome do Lote / Campanha *
+                    Nome da Campanha / Lote *
                   </label>
                   <input
                     type="text"
                     required
                     value={batchForm.name}
                     onChange={(e) => setBatchForm({ ...batchForm, name: e.target.value })}
-                    placeholder="Ex: Vale-Livro Natal Empresa X"
+                    placeholder="Ex: Campanha Leitura 2026"
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Razão Social / Nome da Empresa Parceira
+                    Empresa / Parceiro (Opcional)
                   </label>
                   <input
                     type="text"
                     value={batchForm.partner_company_name}
-                    onChange={(e) => setBatchForm({ ...batchForm, partner_company_name: e.target.value })}
-                    placeholder="Ex: TechCorp Brasil Ltda"
+                    onChange={(e) =>
+                      setBatchForm({ ...batchForm, partner_company_name: e.target.value })
+                    }
+                    placeholder="Ex: Empresa Parceira Ltda"
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
                   />
                 </div>
               </div>
 
-              {/* Modo de Distribuição */}
+              {/* Modo de Geração */}
               <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
-                  Modo de Distribuição para os Funcionários
+                  Formato dos Códigos
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <button
@@ -1087,15 +1568,15 @@ export default function SellerB2CStorefrontManagementPage() {
                     onClick={() => setBatchForm({ ...batchForm, batch_mode: 'INDIVIDUAL_CODES' })}
                     className={`p-3 rounded-xl border text-left transition-all ${
                       batchForm.batch_mode === 'INDIVIDUAL_CODES'
-                        ? 'border-fuchsia-600 bg-fuchsia-50/60 dark:bg-fuchsia-950/30'
+                        ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/30'
                         : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'
                     }`}
                   >
                     <p className="text-xs font-bold text-slate-900 dark:text-white">
-                      1. Lote de Códigos Individuais
+                      Vários Códigos Individuais
                     </p>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Gera N códigos únicos (1 por funcionário) para exportar em CSV.
+                      Gera N códigos únicos para distribuir individualmente ou exportar em planilha.
                     </p>
                   </button>
 
@@ -1109,10 +1590,10 @@ export default function SellerB2CStorefrontManagementPage() {
                     }`}
                   >
                     <p className="text-xs font-bold text-slate-900 dark:text-white">
-                      2. Cupom Geral da Empresa por CPF
+                      Código Único Controlado por CPF
                     </p>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Um único código (ex: EMPRESAX100) controlado individualmente pelo CPF do funcionário.
+                      Um único código promocional onde cada CPF possui seu próprio saldo individual.
                     </p>
                   </button>
                 </div>
@@ -1126,21 +1607,25 @@ export default function SellerB2CStorefrontManagementPage() {
                       <input
                         type="text"
                         value={batchForm.code_prefix}
-                        onChange={(e) => setBatchForm({ ...batchForm, code_prefix: e.target.value.toUpperCase() })}
-                        placeholder="Ex: TECHCORP"
+                        onChange={(e) =>
+                          setBatchForm({ ...batchForm, code_prefix: e.target.value.toUpperCase() })
+                        }
+                        placeholder="Ex: PROMO"
                         className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
                       />
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        Quantidade de Vouchers a Gerar
+                        Quantidade de Cupons
                       </label>
                       <input
                         type="number"
                         min={1}
                         max={5000}
                         value={batchForm.quantity}
-                        onChange={(e) => setBatchForm({ ...batchForm, quantity: Number(e.target.value) })}
+                        onChange={(e) =>
+                          setBatchForm({ ...batchForm, quantity: Number(e.target.value) })
+                        }
                         className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
                       />
                     </div>
@@ -1154,21 +1639,25 @@ export default function SellerB2CStorefrontManagementPage() {
                       <input
                         type="text"
                         value={batchForm.shared_code}
-                        onChange={(e) => setBatchForm({ ...batchForm, shared_code: e.target.value.toUpperCase() })}
-                        placeholder="Ex: TECHCORP100"
+                        onChange={(e) =>
+                          setBatchForm({ ...batchForm, shared_code: e.target.value.toUpperCase() })
+                        }
+                        placeholder="Ex: LEITURA100"
                         className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold"
                       />
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        Limite Máximo de Funcionários (CPFs)
+                        Limite Máximo de Usos (CPFs)
                       </label>
                       <input
                         type="number"
                         min={1}
                         max={10000}
                         value={batchForm.quantity}
-                        onChange={(e) => setBatchForm({ ...batchForm, quantity: Number(e.target.value) })}
+                        onChange={(e) =>
+                          setBatchForm({ ...batchForm, quantity: Number(e.target.value) })
+                        }
                         className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
                       />
                     </div>
@@ -1180,7 +1669,7 @@ export default function SellerB2CStorefrontManagementPage() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Tipo de Benefício
+                    Tipo de Desconto
                   </label>
                   <div className="flex rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
                     <button
@@ -1188,7 +1677,7 @@ export default function SellerB2CStorefrontManagementPage() {
                       onClick={() => setBatchForm({ ...batchForm, discount_type: 'FIXED_BRL' })}
                       className={`flex-1 py-2 text-xs font-bold ${
                         batchForm.discount_type === 'FIXED_BRL'
-                          ? 'bg-fuchsia-600 text-white'
+                          ? 'bg-indigo-600 text-white'
                           : 'bg-slate-50 dark:bg-slate-800 text-slate-600'
                       }`}
                     >
@@ -1196,21 +1685,25 @@ export default function SellerB2CStorefrontManagementPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setBatchForm({ ...batchForm, discount_type: 'PERCENTAGE', coupon_value: 20 })}
+                      onClick={() =>
+                        setBatchForm({ ...batchForm, discount_type: 'PERCENTAGE', coupon_value: 20 })
+                      }
                       className={`flex-1 py-2 text-xs font-bold ${
                         batchForm.discount_type === 'PERCENTAGE'
-                          ? 'bg-fuchsia-600 text-white'
+                          ? 'bg-indigo-600 text-white'
                           : 'bg-slate-50 dark:bg-slate-800 text-slate-600'
                       }`}
                     >
-                      Desconto (%)
+                      Percentual (%)
                     </button>
                   </div>
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    {batchForm.discount_type === 'PERCENTAGE' ? 'Percentual (%)' : 'Valor de Cada Voucher (R$)'}
+                    {batchForm.discount_type === 'PERCENTAGE'
+                      ? 'Percentual (%)'
+                      : 'Valor de Cada Cupom (R$)'}
                   </label>
                   <CurrencyInput
                     prefixStr={batchForm.discount_type === 'FIXED_BRL' ? 'R$ ' : ''}
@@ -1241,15 +1734,17 @@ export default function SellerB2CStorefrontManagementPage() {
                   <input
                     type="checkbox"
                     checked={batchForm.allows_freight_discount}
-                    onChange={(e) => setBatchForm({ ...batchForm, allows_freight_discount: e.target.checked })}
-                    className="mt-0.5 rounded text-fuchsia-600"
+                    onChange={(e) =>
+                      setBatchForm({ ...batchForm, allows_freight_discount: e.target.checked })
+                    }
+                    className="mt-0.5 rounded text-indigo-600"
                   />
                   <div>
                     <span className="block text-xs font-bold text-slate-800 dark:text-slate-200">
-                      Permitir abater o Frete no saldo do cupom
+                      Não cobrar frete (Frete Grátis com este cupom)
                     </span>
                     <span className="block text-[11px] text-slate-500">
-                      Se desmarcado, o cupom abate apenas os livros e o cliente paga o frete.
+                      Marcado: isenta 100% do frete ao aplicar o cupom. Desmarcado: cobra o frete normalmente.
                     </span>
                   </div>
                 </label>
@@ -1258,30 +1753,32 @@ export default function SellerB2CStorefrontManagementPage() {
                   <input
                     type="checkbox"
                     checked={batchForm.allow_residual_balance}
-                    onChange={(e) => setBatchForm({ ...batchForm, allow_residual_balance: e.target.checked })}
-                    className="mt-0.5 rounded text-fuchsia-600"
+                    onChange={(e) =>
+                      setBatchForm({ ...batchForm, allow_residual_balance: e.target.checked })
+                    }
+                    className="mt-0.5 rounded text-indigo-600"
                   />
                   <div>
                     <span className="block text-xs font-bold text-slate-800 dark:text-slate-200">
-                      Gerar novo cupom com Saldo Residual
+                      Gerar novo cupom se sobrar saldo
                     </span>
                     <span className="block text-[11px] text-slate-500">
-                      Se sobrar valor na compra, cria um novo código automático com a diferença.
+                      Se a compra for menor que o cupom, cria um novo código com a diferença.
                     </span>
                   </div>
                 </label>
               </div>
 
-              {/* Lista Opcional de Funcionários */}
+              {/* Lista Opcional de Beneficiários */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Lista Nominal de Funcionários (Opcional — 1 por linha: <code>Nome;CPF;Email</code>)
+                  Lista de CPFs / Beneficiários (Opcional — 1 por linha: <code>Nome;CPF;Email</code>)
                 </label>
                 <textarea
                   rows={3}
                   value={batchForm.employees_raw}
                   onChange={(e) => setBatchForm({ ...batchForm, employees_raw: e.target.value })}
-                  placeholder={'João Silva;12345678901;joao@empresa.com.br\nMaria Souza;98765432100;maria@empresa.com.br'}
+                  placeholder={'João Silva;12345678901;joao@email.com\nMaria Souza;98765432100;maria@email.com'}
                   className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
                 />
               </div>
@@ -1297,9 +1794,9 @@ export default function SellerB2CStorefrontManagementPage() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-5 py-2.5 rounded-xl bg-fuchsia-600 hover:bg-fuchsia-700 text-white text-xs sm:text-sm font-bold shadow-sm disabled:opacity-50"
+                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm disabled:opacity-50"
                 >
-                  {submitting ? 'Gerando Cupons...' : 'Criar Lote & Gerar Vouchers'}
+                  {submitting ? 'Gerando...' : 'Gerar Lote de Cupons'}
                 </button>
               </div>
             </form>
@@ -1307,88 +1804,176 @@ export default function SellerB2CStorefrontManagementPage() {
         </div>
       )}
 
-      {/* MODAL: CUPOM AVULSO */}
+      {/* ===================================================================== */}
+      {/* MODAL 2: CRIAR CUPOM INDIVIDUAL PRECISO                               */}
+      {/* ===================================================================== */}
       {showSingleModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-5 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Emitir Cupom Individual Avulso
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Ticket className="w-4 h-4 text-indigo-600" />
+                Criar Cupom de Desconto
               </h3>
               <button onClick={() => setShowSingleModal(false)} className="text-slate-400">
                 ✕
               </button>
             </div>
             <form onSubmit={handleCreateSingleCoupon} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Código do Cupom (Deixe em branco para gerar automático)
-                </label>
-                <input
-                  type="text"
-                  value={singleForm.code}
-                  onChange={(e) => setSingleForm({ ...singleForm, code: e.target.value.toUpperCase() })}
-                  placeholder="Ex: PRESENTE100"
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-mono uppercase"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Valor do Cupom (R$)
-                </label>
-                <CurrencyInput
-                  prefixStr="R$ "
-                  value={singleForm.initial_value}
-                  onChangeValue={(val) => setSingleForm({ ...singleForm, initial_value: val })}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-bold"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Código do Cupom (Em branco = automático)
+                  </label>
+                  <input
+                    type="text"
+                    value={singleForm.code}
+                    onChange={(e) =>
+                      setSingleForm({ ...singleForm, code: e.target.value.toUpperCase() })
+                    }
+                    placeholder="Ex: LEITURA100"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-mono uppercase font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Limite de Usos *
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    required
+                    value={singleForm.max_uses}
+                    onChange={(e) =>
+                      setSingleForm({ ...singleForm, max_uses: Math.max(1, Number(e.target.value)) })
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-bold"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Nome do Beneficiário
+                    Tipo de Desconto
+                  </label>
+                  <div className="flex rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setSingleForm({ ...singleForm, discount_type: 'FIXED_BRL' })}
+                      className={`flex-1 py-2 text-xs font-bold ${
+                        singleForm.discount_type === 'FIXED_BRL'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-600'
+                      }`}
+                    >
+                      R$ (Valor)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSingleForm({
+                          ...singleForm,
+                          discount_type: 'PERCENTAGE',
+                          initial_value: 15,
+                        })
+                      }
+                      className={`flex-1 py-2 text-xs font-bold ${
+                        singleForm.discount_type === 'PERCENTAGE'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-600'
+                      }`}
+                    >
+                      % (Percentual)
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    {singleForm.discount_type === 'PERCENTAGE'
+                      ? 'Percentual de Desconto (%)'
+                      : 'Valor do Cupom (R$)'}
+                  </label>
+                  <CurrencyInput
+                    prefixStr={singleForm.discount_type === 'FIXED_BRL' ? 'R$ ' : ''}
+                    suffixStr={singleForm.discount_type === 'PERCENTAGE' ? '%' : ''}
+                    max={singleForm.discount_type === 'PERCENTAGE' ? 100 : undefined}
+                    value={singleForm.initial_value}
+                    onChangeValue={(val) => setSingleForm({ ...singleForm, initial_value: val })}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Campanha / Nome (Opcional)
                   </label>
                   <input
                     type="text"
                     value={singleForm.assigned_name}
                     onChange={(e) => setSingleForm({ ...singleForm, assigned_name: e.target.value })}
+                    placeholder="Ex: Campanha VIP"
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    CPF (Opcional)
+                    Restringir a 1 CPF (Opcional)
                   </label>
                   <input
                     type="text"
                     value={singleForm.assigned_cpf}
                     onChange={(e) => setSingleForm({ ...singleForm, assigned_cpf: e.target.value })}
+                    placeholder="Livre para vários CPFs"
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Validade (Opcional)
+                  </label>
+                  <input
+                    type="date"
+                    value={singleForm.valid_until}
+                    onChange={(e) => setSingleForm({ ...singleForm, valid_until: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                   />
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={singleForm.allows_freight_discount}
-                  onChange={(e) => setSingleForm({ ...singleForm, allows_freight_discount: e.target.checked })}
-                />
-                Permitir abater o valor do frete neste cupom
-              </label>
+              <div className="space-y-2 pt-1">
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={singleForm.allows_freight_discount}
+                    onChange={(e) =>
+                      setSingleForm({ ...singleForm, allows_freight_discount: e.target.checked })
+                    }
+                    className="rounded text-indigo-600"
+                  />
+                  Não cobrar frete (Frete Grátis automático ao aplicar este cupom)
+                </label>
 
-              <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={singleForm.allow_residual_balance}
-                  onChange={(e) => setSingleForm({ ...singleForm, allow_residual_balance: e.target.checked })}
-                />
-                Gerar novo cupom com saldo residual se sobrar valor
-              </label>
+                {singleForm.discount_type === 'FIXED_BRL' && (
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={singleForm.allow_residual_balance}
+                      onChange={(e) =>
+                        setSingleForm({ ...singleForm, allow_residual_balance: e.target.checked })
+                      }
+                      className="rounded text-indigo-600"
+                    />
+                    Se sobrar valor na compra, gerar novo cupom automático com o saldo restante
+                  </label>
+                )}
+              </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setShowSingleModal(false)}
@@ -1399,9 +1984,9 @@ export default function SellerB2CStorefrontManagementPage() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-4 py-2 rounded-xl bg-fuchsia-600 text-white text-xs font-bold"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
                 >
-                  Criar Cupom
+                  {submitting ? 'Criando...' : 'Criar Cupom'}
                 </button>
               </div>
             </form>

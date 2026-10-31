@@ -16,6 +16,7 @@ import { DropshipTab } from './DropshipTab';
 import { LogisticsTab } from './LogisticsTab';
 import { useCompany } from './context';
 import { CurrencyInput } from '@/components/CurrencyInput';
+import CoraSettingsPanel from '@/components/payments/CoraSettingsPanel';
 
 export default function SettingsPage() {
   const { company } = useCompany();
@@ -26,6 +27,11 @@ export default function SettingsPage() {
   const companyId = currentUser?.company_id;
 
   const [activeTab, setActiveTab] = useState('geral');
+  useEffect(() => {
+    // Atalho de outras telas: /settings?tab=pagamentos
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t) setActiveTab(t);
+  }, []);
   const [testEmail, setTestEmail] = useState('');
   const [testingSmtp, setTestingSmtp] = useState(false);
 
@@ -894,6 +900,11 @@ export default function SettingsPage() {
               {/* Tab: PAGAMENTOS */}
               {activeTab === 'pagamentos' && (
                 <div className="space-y-8 animate-in fade-in">
+                  {companyId && (
+                    <div className="rounded-2xl border border-pink-200 dark:border-pink-900/40 p-3 md:p-5 empty:hidden">
+                      <CoraSettingsPanel companyId={companyId} hideWhenUnavailable embedded />
+                    </div>
+                  )}
                   <div className="space-y-4">
                     <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">
                       <div className="p-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-lg">

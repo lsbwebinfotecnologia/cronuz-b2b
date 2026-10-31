@@ -49,6 +49,11 @@ class CoraConfig(Base):
     notify_enabled = Column(Boolean, nullable=False, default=False)  # Cora envia notificações ao pagador
     notify_rules = Column(String(500), nullable=True)                # regras CORA_NOTIFY_RULES (csv)
 
+    # Webhook (notificação de pagamento/cancelamento/vencimento enviada pelo Cora)
+    webhook_secret = Column(String(64), nullable=True)               # segredo na URL pública (anti-spam)
+    webhook_endpoint_ids = Column(String(500), nullable=True)        # ids dos endpoints criados no Cora (csv)
+    webhook_environment = Column(String(20), nullable=True)          # ambiente em que o webhook foi registrado
+
     updated_by_user_id = Column(Integer, ForeignKey("usr_user.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

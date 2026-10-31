@@ -8,6 +8,8 @@ import { Loader2, Globe, Box, Boxes, Users, Megaphone, MonitorSmartphone, Layers
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { useCompany } from '../context';
+import HorusApiBridgeMasterPanel from '@/components/horus/HorusApiBridgeMasterPanel';
+
 
 interface MobileModules {
   app_enabled: boolean;
@@ -287,6 +289,7 @@ export default function CompanyModulesPage() {
       module_cafeteria: company.module_cafeteria ?? false,
       module_encomendas: company.module_encomendas ?? false,
       module_order_intake: company.module_order_intake ?? false,
+      module_b2c_storefront: company.module_b2c_storefront ?? false,
       [moduleName]: !currentValue
     };
 
@@ -1072,7 +1075,7 @@ export default function CompanyModulesPage() {
                 </div>
               </div>
 
-              {/* Storefront Aberto B2C (Cupons Corporativos, LGPD & Tray) */}
+              {/* B2C */}
               <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
                 <div className="flex items-center gap-4">
                   <div className={`p-2 rounded-xl border ${company.module_b2c_storefront ? 'bg-fuchsia-500/10 border-fuchsia-500/20 text-fuchsia-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
@@ -1080,10 +1083,10 @@ export default function CompanyModulesPage() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Storefront Aberto B2C (Cupons Corporativos, LGPD &amp; Tray)</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">B2C</p>
                       <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-fuchsia-100 text-fuchsia-800 rounded dark:bg-fuchsia-900/30 dark:text-fuchsia-400">Novo</span>
                     </div>
-                    <p className="text-xs text-slate-500">Habilita vitrine aberta B2C em domínio próprio integrada ao acervo Horus, emissão de lotes de cupons corporativos para empresas/colaboradores (com geração automática de saldo residual), auditoria LGPD e checkout via Intermediador ou Tray (REST + MCP).</p>
+                    <p className="text-xs text-slate-500">Habilita a loja virtual B2C integrada ao acervo Horus, emissão de cupons de desconto (com geração automática de saldo residual), promoções, cache de alta performance e checkout.</p>
                   </div>
                 </div>
                 <div className="shrink-0 pl-4">
@@ -1348,7 +1351,11 @@ export default function CompanyModulesPage() {
           )}
         </section>
 
+        {/* ─── API Horus B2B Complementar & Agente Bridge (.EXE) ────────── */}
+        <HorusApiBridgeMasterPanel companyId={companyId} onCompanyRefresh={refreshCompany} />
+
       </div>
     </motion.div>
   );
 }
+

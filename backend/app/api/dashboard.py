@@ -72,7 +72,15 @@ def get_dashboard_metrics(
     module_notifications = getattr(company, "module_notifications", False) if company else False
     module_busca_preco = getattr(company, "module_busca_preco", False) if company else False
     module_horus_sql = bool(getattr(company, "module_horus_sql", False) or (settings and getattr(settings, "horus_sql_enabled", False)))
-    module_cora = getattr(company, "module_cora", False) if company else False
+    # Hub de Pagamentos: intermediadores habilitados pelo Master (fonte única)
+    payment_providers_enabled = []
+    if company:
+        from app.models.payments import PayProviderEnablement
+        payment_providers_enabled = [
+            p for (p,) in db.query(PayProviderEnablement.provider).filter(
+                PayProviderEnablement.company_id == company.id, PayProviderEnablement.enabled.is_(True)
+            ).all()
+        ]
     modulo_autores_ativo = getattr(company, "modulo_autores_ativo", False) if company else False
     has_inventory_module = getattr(company, "has_inventory_module", False) if company else False
     module_editorial = getattr(company, "module_editorial", False) if company else False
@@ -80,7 +88,11 @@ def get_dashboard_metrics(
     module_cafeteria = getattr(company, "module_cafeteria", False) if company else False
     module_encomendas = getattr(company, "module_encomendas", False) if company else False
     module_order_intake = False if is_master_global else (getattr(company, "module_order_intake", False) if company else False)
-    module_b2c_storefront = False if is_master_global else (getattr(company, "module_b2c_storefront", False) if company else False)
+    module_b2c_storefront = False if is_master_global else bool(
+        (getattr(company, "module_b2c_storefront", False) if company else False)
+        or (getattr(settings, "tray_enabled", False) if settings else False)
+        or (getattr(settings, "b2c_storefront_open", False) if settings else False)
+    )
     horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
     horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
@@ -366,7 +378,7 @@ def get_dashboard_metrics(
         "module_notifications": module_notifications,
         "module_busca_preco": module_busca_preco,
         "module_horus_sql": module_horus_sql,
-        "module_cora": module_cora,
+        "payment_providers_enabled": payment_providers_enabled,
         "modulo_autores_ativo": modulo_autores_ativo,
         "has_inventory_module": has_inventory_module,
         "module_editorial": module_editorial,

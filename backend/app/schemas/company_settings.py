@@ -121,6 +121,7 @@ class CompanySettingsBase(BaseModel):
     b2c_lgpd_terms_text: Optional[str] = None
     b2c_default_freight_value: Optional[float] = 0.00
     b2c_free_shipping_min_value: Optional[float] = 0.00
+    b2c_showcases_config: Optional[Dict[str, Any]] = None
 
     tray_enabled: Optional[bool] = False
     tray_store_url: Optional[str] = None
@@ -132,6 +133,16 @@ class CompanySettingsBase(BaseModel):
     tray_access_token: Optional[str] = None
     tray_refresh_token: Optional[str] = None
     tray_token_expires_at: Optional[datetime] = None
+
+    horus_bridge_enabled: Optional[bool] = False
+    horus_bridge_expires_at: Optional[datetime] = None
+    horus_bridge_license_key: Optional[str] = None
+    horus_bridge_api_username: Optional[str] = None
+    horus_bridge_api_password: Optional[str] = None
+    horus_bridge_api_token: Optional[str] = None
+    horus_bridge_rate_limit_per_min: Optional[int] = 120
+    horus_bridge_allow_financial_sql: Optional[bool] = True
+    horus_bridge_custom_gateway_url: Optional[str] = None
 
 
 class CompanySettingsUpdate(CompanySettingsBase):

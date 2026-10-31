@@ -1,16 +1,18 @@
 """
 cora.py
 -------
-Configuração do módulo Banco Cora por seller — exclusivo do usuário MASTER.
+Configuração do Banco Cora por seller.
+
+Acesso: o MASTER habilita o Cora no Hub de Pagamentos (payments_hub.py). Com o Cora habilitado,
+o SELLER configura credenciais e parâmetros; o MASTER mantém acesso total para suporte.
 
 Rotas:
-  GET    /companies/{id}/cora                          → módulo + configuração + credenciais (sem segredos)
+  GET    /companies/{id}/cora                          → habilitação + configuração + credenciais (sem segredos)
   PUT    /companies/{id}/cora/config                   → ambiente ativo, formas de pagamento, multa/juros/desconto, notificações
   PUT    /companies/{id}/cora/accounts/{environment}   → Client ID + importação do certificado (PEM ou PFX) [multipart]
   DELETE /companies/{id}/cora/accounts/{environment}   → remove as credenciais do ambiente
   POST   /companies/{id}/cora/accounts/{environment}/test → autenticação mTLS real no Cora (token)
-
-A habilitação do módulo usa o endpoint padrão PATCH /companies/{id}/modules  {"module_cora": true|false}.
+  POST   /companies/{id}/cora/webhook                  → registra no Cora os webhooks (pago, cancelado, vencido)
 """
 import logging
 from datetime import datetime, timezone
@@ -21,7 +23,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import require_master_user
+from app.core.dependencies import get_current_user
+from app.core.utils import assert_company_ownership
+from app.payments.registry import is_enabled
 from app.core.upload_security import read_file_safely, validate_file_size_and_extension
 from app.db.session import get_db
 from app.integrators.cora.certificates import CoraCertificateError, load_pem_pair, load_pfx
@@ -39,6 +43,22 @@ MAX_CERT_FILE_BYTES = 1 * 1024 * 1024  # certificados reais têm poucos KB; teto
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _is_master(user) -> bool:
+    t = getattr(user, "type", None)
+    return str(getattr(t, "value", t) or "").upper() == "MASTER"
+
+
+def cora_access(company_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """
+    MASTER: acesso total (suporte).
+    SELLER: somente a própria empresa e apenas se o Banco Cora estiver habilitado no Hub de Pagamentos.
+    """
+    assert_company_ownership(current_user, company_id)
+    if not _is_master(current_user) and not is_enabled(db, company_id, "CORA"):
+        raise HTTPException(status_code=403, detail="Banco Cora não está habilitado para esta empresa.")
+    return current_user
+
 
 def _company_or_404(db: Session, company_id: int) -> Company:
     company = db.query(Company).filter(Company.id == company_id).first()
@@ -109,7 +129,11 @@ def _overview(db: Session, company: Company) -> dict:
     config = db.query(CoraConfig).filter(CoraConfig.company_id == company.id).first()
     accounts = {a.environment: a for a in db.query(CoraAccount).filter(CoraAccount.company_id == company.id).all()}
     return {
-        "module_enabled": bool(getattr(company, "module_cora", False)),
+        "enabled": is_enabled(db, company.id, "CORA"),
+        "webhook": {
+            "registered": bool(config and config.webhook_endpoint_ids),
+            "environment": config.webhook_environment if config else None,
+        },
         "config": _serialize_config(config),
         "accounts": {env: _serialize_account(accounts.get(env), env) for env in CORA_ENVIRONMENTS},
         "options": {
@@ -125,7 +149,7 @@ def _overview(db: Session, company: Company) -> dict:
 # ── Leitura ──────────────────────────────────────────────────────────────────
 
 @router.get("/companies/{company_id}/cora")
-def get_cora_overview(company_id: int, db: Session = Depends(get_db), current_user=Depends(require_master_user)):
+def get_cora_overview(company_id: int, db: Session = Depends(get_db), current_user=Depends(cora_access)):
     company = _company_or_404(db, company_id)
     return _overview(db, company)
 
@@ -179,7 +203,7 @@ def update_cora_config(
     company_id: int,
     payload: CoraConfigPayload,
     db: Session = Depends(get_db),
-    current_user=Depends(require_master_user),
+    current_user=Depends(cora_access),
 ):
     company = _company_or_404(db, company_id)
     config = _get_or_create_config(db, company_id)
@@ -228,7 +252,7 @@ async def upsert_cora_account(
     pfx_file: Optional[UploadFile] = File(None),      # PFX: arquivo .pfx / .p12
     password: Optional[str] = Form(None, max_length=255),  # senha do PFX (ou da chave PEM, se protegida)
     db: Session = Depends(get_db),
-    current_user=Depends(require_master_user),
+    current_user=Depends(cora_access),
 ):
     """
     Cria/atualiza as credenciais do ambiente. Os arquivos são opcionais quando já existe certificado salvo
@@ -295,7 +319,7 @@ def delete_cora_account(
     company_id: int,
     environment: str,
     db: Session = Depends(get_db),
-    current_user=Depends(require_master_user),
+    current_user=Depends(cora_access),
 ):
     env = _validate_environment(environment)
     company = _company_or_404(db, company_id)
@@ -315,7 +339,7 @@ def test_cora_account(
     company_id: int,
     environment: str,
     db: Session = Depends(get_db),
-    current_user=Depends(require_master_user),
+    current_user=Depends(cora_access),
 ):
     env = _validate_environment(environment)
     _company_or_404(db, company_id)
@@ -339,3 +363,46 @@ def test_cora_account(
     account.last_test_message = message[:500]
     db.commit()
     return {"success": ok, "environment": env, "message": message, "tested_at": _iso(account.last_test_at)}
+
+
+class WebhookRegisterPayload(BaseModel):
+    public_base_url: str = Field(..., max_length=255)
+
+
+@router.post("/companies/{company_id}/cora/webhook")
+def register_cora_webhook(
+    company_id: int,
+    payload: WebhookRegisterPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(cora_access),
+):
+    """Registra no Cora (ambiente ativo) os webhooks de boleto pago, cancelado e vencido."""
+    import re
+    import secrets
+
+    from app.payments.base import PaymentProviderError
+    from app.payments.providers.cora import CoraProvider
+
+    company = _company_or_404(db, company_id)
+    base = payload.public_base_url.strip().rstrip("/")
+    if not re.match(r"^https://[^\s/]+", base):
+        raise HTTPException(status_code=400, detail="Informe a URL pública HTTPS da API (ex.: https://api.seudominio.com.br).")
+
+    config = _get_or_create_config(db, company_id)
+    if not config.webhook_secret:
+        config.webhook_secret = secrets.token_urlsafe(32)[:48]
+    url = f"{base}/payments/webhooks/cora/{company_id}/{config.webhook_secret}"
+    previous = [x for x in (config.webhook_endpoint_ids or "").split(",") if x]
+    try:
+        with CoraProvider(db, company_id) as provider:
+            created = provider.register_webhooks(url, previous if config.webhook_environment == provider.environment else [])
+            env = provider.environment
+    except PaymentProviderError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Falha ao registrar webhook: {e}")
+
+    config.webhook_endpoint_ids = ",".join(created)[:500] or None
+    config.webhook_environment = env
+    db.commit()
+    logger.info("[Cora] Webhook registrado company=%s env=%s endpoints=%s", company_id, env, len(created))
+    return {"message": f"Webhook registrado no Cora ({len(created)} gatilhos).", **_overview(db, company)}

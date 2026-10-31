@@ -71,6 +71,7 @@ class CompanyBase(BaseModel):
     module_encomendas: bool = False
     module_order_intake: bool = False
     module_b2c_storefront: bool = False
+    module_horus_api_bridge: bool = False
     active: bool = True
 
 
@@ -149,6 +150,7 @@ class CompanyUpdate(BaseModel):
     module_encomendas: Optional[bool] = None
     module_order_intake: Optional[bool] = None
     module_b2c_storefront: Optional[bool] = None
+    module_horus_api_bridge: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

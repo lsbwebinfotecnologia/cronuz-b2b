@@ -41,6 +41,16 @@
     color: hsl(var(--foreground));
     @apply antialiased font-sans selection:bg-[#01A9AF]/30;
   }
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  a,
+  select,
+  summary {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
   .theme-horus {
     --color-primary-base: #a4a1ff;
     --color-primary-hover: #908df7;

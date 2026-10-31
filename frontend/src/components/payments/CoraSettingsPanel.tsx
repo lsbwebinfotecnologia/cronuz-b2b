@@ -1,14 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Landmark, Loader2, ShieldCheck, Upload, CheckCircle2, XCircle, Trash2, Zap, Save,
-  AlertTriangle, KeyRound, FileKey2, CalendarClock, Settings2, BellRing,
+  AlertTriangle, KeyRound, FileKey2, CalendarClock, Settings2, BellRing, Link2, Clock,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 import { CurrencyInput } from '@/components/CurrencyInput';
-import { useCompany } from '../context';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const MAX_CERT_BYTES = 1 * 1024 * 1024; // 1 MB — certificados reais têm poucos KB
@@ -43,7 +42,8 @@ interface Config {
 }
 
 interface Overview {
-  module_enabled: boolean;
+  enabled: boolean;
+  webhook: { registered: boolean; environment: Env | null };
   config: Config;
   accounts: Record<Env, Account>;
   options: { notify_rules: string[] };
@@ -110,11 +110,18 @@ function FilePicker({ label, accept, file, onFile, icon: Icon }: {
   );
 }
 
-export default function CompanyCoraPage() {
-  const { company, refreshCompany } = useCompany();
+interface CoraSettingsPanelProps {
+  companyId: number | string;
+  /** Seller: quando o Cora não está habilitado (403), não renderiza nada. */
+  hideWhenUnavailable?: boolean;
+  /** Oculta o cabeçalho (quando embutido em outra tela, ex.: Hub do Master). */
+  embedded?: boolean;
+}
+
+export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = false, embedded = false }: CoraSettingsPanelProps) {
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
-  const [togglingModule, setTogglingModule] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
   const [envTab, setEnvTab] = useState<Env>('STAGE');
 
   // Formulário de credenciais (por aba de ambiente)
@@ -132,14 +139,21 @@ export default function CompanyCoraPage() {
   const [config, setConfig] = useState<Config | null>(null);
   const [savingConfig, setSavingConfig] = useState(false);
 
+  // Webhook
+  const [webhookBase, setWebhookBase] = useState(API.startsWith('https://') ? API : '');
+  const [registering, setRegistering] = useState(false);
+
+  const company = useMemo(() => (companyId ? { id: companyId } : null), [companyId]);
   const authHeaders = () => ({ Authorization: `Bearer ${getToken()}` });
 
   const load = useCallback(async () => {
     if (!company) return;
     try {
       const res = await fetch(`${API}/companies/${company.id}/cora`, { headers: authHeaders() });
-      const body = await res.json();
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 403) { setUnavailable(true); return; }
       if (!res.ok) throw new Error(body?.detail || 'Erro ao carregar configuração do Cora.');
+      setUnavailable(false);
       setData(body);
       setConfig(body.config);
     } catch (e: any) {
@@ -159,24 +173,24 @@ export default function CompanyCoraPage() {
     setCertFile(null); setKeyFile(null); setPfxFile(null); setPassword('');
   }, [envTab, data]);
 
-  const handleToggleModule = async (enabled: boolean) => {
+  const handleRegisterWebhook = async () => {
     if (!company) return;
-    setTogglingModule(true);
+    setRegistering(true);
     try {
-      const res = await fetch(`${API}/companies/${company.id}/modules`, {
-        method: 'PATCH',
+      const res = await fetch(`${API}/companies/${company.id}/cora/webhook`, {
+        method: 'POST',
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ module_cora: enabled }),
+        body: JSON.stringify({ public_base_url: webhookBase }),
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body?.detail || 'Erro ao atualizar o módulo.');
-      toast.success(enabled ? 'Banco Cora habilitado para o seller.' : 'Banco Cora desabilitado para o seller.');
-      refreshCompany();
-      await load();
+      if (!res.ok) throw new Error(typeof body?.detail === 'string' ? body.detail : 'Erro ao registrar webhook.');
+      setData(body);
+      setConfig(body.config);
+      toast.success(body.message || 'Webhook registrado.');
     } catch (e: any) {
       toast.error(e.message);
     } finally {
-      setTogglingModule(false);
+      setRegistering(false);
     }
   };
 
@@ -279,17 +293,25 @@ export default function CompanyCoraPage() {
 
   const setCfg = <K extends keyof Config>(k: K, v: Config[K]) => setConfig(prev => (prev ? { ...prev, [k]: v } : prev));
 
+  if (unavailable) {
+    if (hideWhenUnavailable) return null;
+    return (
+      <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
+        O Banco Cora não está habilitado para esta empresa. A habilitação é feita pelo Master no Hub de Pagamentos.
+      </div>
+    );
+  }
   if (loading || !data || !config) {
     return <div className="flex h-64 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-pink-600" /></div>;
   }
 
   const account = data.accounts[envTab];
   const activeAccount = data.accounts[data.config.active_environment];
-  const isOperational = data.module_enabled && activeAccount?.configured;
+  const isOperational = data.enabled && activeAccount?.configured;
   const certWarning = account.cert_days_left != null && account.cert_days_left <= 30;
 
   return (
-    <div className="p-3 md:p-6 space-y-5 overflow-y-auto max-h-full">
+    <div className={embedded ? 'space-y-5' : 'p-3 md:p-6 space-y-5 overflow-y-auto max-h-full'}>
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-center gap-3">
@@ -297,13 +319,13 @@ export default function CompanyCoraPage() {
             <Landmark className="h-5 w-5 text-pink-600 dark:text-pink-400" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-slate-900 dark:text-white">Banco Cora</h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Emissão de boletos e Pix via API do Cora (Integração Direta)</p>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Banco Cora</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Credenciais, certificado e parâmetros de cobrança (Integração Direta)</p>
           </div>
         </div>
         <div className={`self-start flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${isOperational ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'}`}>
           <span className={`h-1.5 w-1.5 rounded-full ${isOperational ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-          {isOperational ? `Ativo · ${ENV_LABEL[data.config.active_environment]}` : 'Módulo Inativo'}
+          {isOperational ? `Ativo · ${ENV_LABEL[data.config.active_environment]}` : data.enabled ? 'Habilitado · configurar credenciais' : 'Não habilitado'}
         </div>
       </div>
 
@@ -316,14 +338,11 @@ export default function CompanyCoraPage() {
         </p>
       </div>
 
-      {/* Habilitação */}
-      <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
-        <div>
-          <p className="text-sm font-semibold text-slate-800 dark:text-white">Habilitar Banco Cora para este seller</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">Libera o módulo de cobrança Cora no painel do seller.</p>
+      {!data.enabled && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
+          O Banco Cora está desabilitado no Hub de Pagamentos. As configurações podem ser preparadas, mas o seller só terá acesso após a habilitação.
         </div>
-        {togglingModule ? <Loader2 className="h-5 w-5 animate-spin text-slate-400" /> : <Toggle checked={data.module_enabled} onChange={handleToggleModule} />}
-      </div>
+      )}
 
       {/* Modalidade e ambiente ativo */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
@@ -434,13 +453,13 @@ export default function CompanyCoraPage() {
           )}
 
           <div className="flex flex-col sm:flex-row gap-2 pt-1">
-            <button onClick={handleSaveAccount} disabled={savingAccount} className={`${btnCls} bg-pink-600 hover:bg-pink-700 text-white sm:flex-1`}>
+            <button type="button" onClick={handleSaveAccount} disabled={savingAccount} className={`${btnCls} bg-pink-600 hover:bg-pink-700 text-white sm:flex-1`}>
               {savingAccount ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar credenciais
             </button>
-            <button onClick={handleTest} disabled={testing || !account.configured} className={`${btnCls} border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 sm:flex-1`}>
+            <button type="button" onClick={handleTest} disabled={testing || !account.configured} className={`${btnCls} border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 sm:flex-1`}>
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />} Testar conexão
             </button>
-            <button onClick={handleRemove} disabled={removing || !account.has_certificate} className={`${btnCls} border border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:hover:bg-rose-950/30`}>
+            <button type="button" onClick={handleRemove} disabled={removing || !account.has_certificate} className={`${btnCls} border border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:hover:bg-rose-950/30`}>
               {removing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} Remover
             </button>
           </div>
@@ -504,8 +523,33 @@ export default function CompanyCoraPage() {
           )}
 
           <div className="flex justify-end">
-            <button onClick={handleSaveConfig} disabled={savingConfig} className={`${btnCls} bg-pink-600 hover:bg-pink-700 text-white w-full sm:w-auto`}>
+            <button type="button" onClick={handleSaveConfig} disabled={savingConfig} className={`${btnCls} bg-pink-600 hover:bg-pink-700 text-white w-full sm:w-auto`}>
               {savingConfig ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar parâmetros
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Webhook */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+        <div className="bg-slate-50 dark:bg-slate-800/50 px-4 md:px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center gap-2">
+          <Link2 className="h-4 w-4 text-slate-500" />
+          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Aviso automático de pagamento (webhook)</h2>
+        </div>
+        <div className="p-4 md:p-5 space-y-3">
+          <p className="text-xs flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+            {data.webhook.registered
+              ? <><CheckCircle2 className="h-4 w-4 text-emerald-600" /> Registrado no Cora ({data.webhook.environment ? ENV_LABEL[data.webhook.environment] : '-'}).</>
+              : <><Clock className="h-4 w-4 text-slate-400" /> Não registrado. A conciliação automática roda a cada 30 minutos.</>}
+          </p>
+          {data.webhook.registered && data.webhook.environment !== data.config.active_environment && (
+            <p className="text-xs text-amber-700">O ambiente ativo mudou: registre o webhook novamente.</p>
+          )}
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input className={inputCls} value={webhookBase} onChange={e => setWebhookBase(e.target.value)} placeholder="URL pública HTTPS da API (ex.: https://api.seudominio.com.br)" />
+            <button type="button" onClick={handleRegisterWebhook} disabled={registering || !webhookBase || !activeAccount?.configured}
+              className={`${btnCls} border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 shrink-0`}>
+              {registering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />} Registrar webhook
             </button>
           </div>
         </div>

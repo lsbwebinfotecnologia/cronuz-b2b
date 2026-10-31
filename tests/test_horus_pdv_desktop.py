@@ -284,7 +284,7 @@ def run_tests() -> None:
         assert test_cart[1]["discount"] == 4.00
         print("  ✅ Rateio proporcional na venda e desconto em item único validados com sucesso!")
 
-        print("▶ [11/11] Testando identificação do último COD_ITEM integrado e coleta incremental de novos itens Horus...")
+        print("▶ [11/12] Testando identificação do último COD_ITEM integrado e coleta incremental de novos itens Horus...")
         # No catálogo temos COD_ITEM 10452 e 20881 -> último integrado na prática deve ser 20881
         last_real_code = storage.get_last_integrated_horus_code()
         assert last_real_code == 20881, f"Esperado último COD_ITEM 20881, obtido {last_real_code}"
@@ -315,10 +315,34 @@ def run_tests() -> None:
         assert len(storage.products) == 4
         print("  ✅ Detecção automática do último COD_ITEM (20881 ➔ 20889) e integração incremental validadas!")
 
+        print("▶ [12/12] Testando Cupom em Tempo Real (80mm), descoberta de impressoras e opção NÃO IMPRIMIR...")
+        printers, _ = pdv.list_installed_printers()
+        assert isinstance(printers, list) and len(printers) >= 1
+        assert printers[0] == pdv.NO_PRINTER_OPTION
+
+        preview_txt = pdv.format_thermal_receipt_text(sale, mock_cfg, is_preview=True)
+        assert "CUPOM EM CONSTRUCAO" in preview_txt
+        assert "1984 - GEORGE ORWELL" in preview_txt
+        assert "529.982.247-25" in preview_txt
+
+        final_txt = pdv.format_thermal_receipt_text(sale, mock_cfg, is_preview=False)
+        assert "Obrigado pela preferencia!" in final_txt
+        assert sale["sale_number"] in final_txt
+
+        # Quando configurado para NÃO IMPRIMIR, não deve imprimir nada nem abrir navegador
+        ok_prt_off, msg_prt_off = pdv.send_receipt_to_printer(final_txt, pdv.NO_PRINTER_OPTION, sale_number=sale["sale_number"])
+        assert ok_prt_off is False
+        assert "não imprimir" in msg_prt_off.lower()
+
+        ok_prt_empty, _ = pdv.send_receipt_to_printer(final_txt, "", sale_number=sale["sale_number"])
+        assert ok_prt_empty is False
+        print("  ✅ Cupom em tempo real, listagem de impressoras da máquina e trava 'NÃO IMPRIMIR' validados!")
+
 
 if __name__ == "__main__":
     run_tests()
-    print("\n🎉 TODOS OS 11 TESTES DO HORUS PDV WINDOWS PASSARAM 100%!")
+    print("\n🎉 TODOS OS 12 TESTES DO HORUS PDV WINDOWS PASSARAM 100%!")
+
 
 
 

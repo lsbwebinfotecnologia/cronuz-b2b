@@ -18,14 +18,39 @@ class HorusClient:
         settings = self.db.query(CompanySettings).filter(CompanySettings.company_id == self.company_id).first()
         if not settings:
             raise HorusConfigurationError(f"No settings found for company ID {self.company_id}.")
-        if not settings.horus_enabled:
+        bridge_active = bool(getattr(settings, "horus_bridge_enabled", False))
+        if not settings.horus_enabled and not bridge_active:
             raise HorusConfigurationError(f"Horus API is disabled for company ID {self.company_id}.")
-        if not all([settings.horus_url, settings.horus_username, settings.horus_password]):
+        if not bridge_active and not all([settings.horus_url, settings.horus_username, settings.horus_password]):
             raise HorusConfigurationError(f"Horus API configuration is incomplete for company ID {self.company_id}.")
         return settings
 
+    def _should_prefer_bridge(self) -> bool:
+        if not getattr(self._settings, "horus_bridge_enabled", False):
+            return False
+        try:
+            from app.api.horus_api_bridge import _get_agent_session
+            st = _get_agent_session(self.company_id)
+            if not st.is_online():
+                return False
+            raw_url = (self._settings.horus_url or "").strip().lower()
+            if not raw_url or "localhost" in raw_url or "127.0.0.1" in raw_url or "bridge" in raw_url or "open-server" in raw_url:
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _can_fallback_to_bridge(self) -> bool:
+        if not getattr(self._settings, "horus_bridge_enabled", False):
+            return False
+        try:
+            from app.api.horus_api_bridge import _get_agent_session
+            return _get_agent_session(self.company_id).is_online()
+        except Exception:
+            return False
+
     def _build_client(self) -> httpx.AsyncClient:
-        base_url = self._settings.horus_url.strip()
+        base_url = (self._settings.horus_url or "http://localhost:8060").strip()
         
         # Robustly inject port into the URL if provided
         if self._settings.horus_port:
@@ -56,7 +81,7 @@ class HorusClient:
              base_url += "Horus/api/TServerB2B/"
              
         import base64
-        auth_str = f"{self._settings.horus_username}:{self._settings.horus_password}"
+        auth_str = f"{self._settings.horus_username or ''}:{self._settings.horus_password or ''}"
         b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
         
         headers = {
@@ -83,6 +108,18 @@ class HorusClient:
     async def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
         import logging
         log = logging.getLogger(__name__)
+        if self._should_prefer_bridge():
+            from app.api.horus_api_bridge import dispatch_command_to_agent
+            status_code, data = await dispatch_command_to_agent(
+                company_id=self.company_id,
+                target_type="HORUS_HTTP",
+                method="GET",
+                endpoint=endpoint,
+                params=params or {},
+            )
+            log.info(f"[HorusClient.get via Bridge.exe] {endpoint} | HTTP {status_code}")
+            return data
+
         try:
             response = await self._client.get(endpoint, params=params)
             full_url = str(response.url)
@@ -112,6 +149,17 @@ class HorusClient:
             raise Exception(f"Hórus HTTP {e.response.status_code} em [{full_url}]: {err_msg}")
 
         except httpx.RequestError as e:
+            if self._can_fallback_to_bridge():
+                from app.api.horus_api_bridge import dispatch_command_to_agent
+                log.info(f"[HorusClient.get] Fallback automático para HorusAPIBridge.exe em {endpoint}")
+                _, data = await dispatch_command_to_agent(
+                    company_id=self.company_id,
+                    target_type="HORUS_HTTP",
+                    method="GET",
+                    endpoint=endpoint,
+                    params=params or {},
+                )
+                return data
             # Falha de conexão TCP/DNS — endpoint nunca foi alcançado
             req_url = str(e.request.url) if e.request else f"{self._client.base_url}{endpoint}"
             log.error(f"[HorusClient.get] Falha de conexão em {req_url}: {e}")
@@ -120,6 +168,19 @@ class HorusClient:
     async def post(self, endpoint: str, json_data: Any, params: Optional[Dict[str, Any]] = None) -> Any:
         import logging
         log = logging.getLogger(__name__)
+        if self._should_prefer_bridge():
+            from app.api.horus_api_bridge import dispatch_command_to_agent
+            status_code, data = await dispatch_command_to_agent(
+                company_id=self.company_id,
+                target_type="HORUS_HTTP",
+                method="POST",
+                endpoint=endpoint,
+                params=params or {},
+                body=json_data,
+            )
+            log.info(f"[HorusClient.post via Bridge.exe] {endpoint} | HTTP {status_code}")
+            return data
+
         try:
             response = await self._client.post(endpoint, json=json_data, params=params)
             full_url = str(response.url)
@@ -149,6 +210,18 @@ class HorusClient:
             raise Exception(f"Hórus HTTP {e.response.status_code} em [{full_url}]: {err_msg}")
 
         except httpx.RequestError as e:
+            if self._can_fallback_to_bridge():
+                from app.api.horus_api_bridge import dispatch_command_to_agent
+                log.info(f"[HorusClient.post] Fallback automático para HorusAPIBridge.exe em {endpoint}")
+                _, data = await dispatch_command_to_agent(
+                    company_id=self.company_id,
+                    target_type="HORUS_HTTP",
+                    method="POST",
+                    endpoint=endpoint,
+                    params=params or {},
+                    body=json_data,
+                )
+                return data
             req_url = str(e.request.url) if e.request else f"{self._client.base_url}{endpoint}"
             log.error(f"[HorusClient.post] Falha de conexão em {req_url}: {e}")
             raise Exception(f"Hórus sem conexão [{req_url}]: {e}")
@@ -159,6 +232,16 @@ class HorusClient:
         Tests if the Horus API is active and responding correctly using the 'Teste1' endpoint.
         Returns a dict with status and message.
         """
+        if self._should_prefer_bridge() or self._can_fallback_to_bridge():
+            try:
+                data = await self.get("Teste1")
+                if isinstance(data, list) and len(data) > 0 and data[0].get("ATIVA") == "S":
+                    return {
+                        "status": "connected",
+                        "message": "Integração Horus operando via Agente Local (HorusAPIBridge.exe)."
+                    }
+            except Exception:
+                pass
         try:
             # Utilizing a lightweight endpoint to test connectivity
             response = await self._client.get("Teste1")

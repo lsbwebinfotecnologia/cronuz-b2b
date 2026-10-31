@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -57,7 +58,7 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────────────
 # Diretórios e Arquivos de Persistência Local (Zero Dependências Externas)
 # ──────────────────────────────────────────────────────────────────────────────
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 APP_TITLE = f"Horus PDV — Frente de Caixa Omnichannel (Online & Offline) v{APP_VERSION}"
 
 if getattr(sys, "frozen", False):
@@ -204,6 +205,8 @@ HORUS_ICO_B64 = (
     "EH+Qto0mA58td0r13x6eZ5maf5yg0X9rbqZ/WaE6pGunOuSsMHUySACamKFqhVDKdWh/AFevj6sWqPbuAAAAAElFTkSuQmCC"
 )
 
+NO_PRINTER_OPTION = "🚫 NÃO IMPRIMIR (Desativado)"
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "api_base_url": "https://cronuzb2b.com.br/api",
     "email": "",
@@ -223,6 +226,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_sync_enabled": True,
     "auto_sync_new_horus_items": True,
     "auto_print_receipt": False,
+    "printer_name": NO_PRINTER_OPTION,
     "license_key": "",
     "last_seen_date": "",
 }
@@ -481,6 +485,18 @@ def validate_cpf_or_cnpj(raw_doc: str) -> Tuple[bool, str, str, str]:
         "INVALIDO",
         f"Documento com {len(digits)} dígito(s). Informe CPF (11), CNPJ (14) ou 99999999999.",
     )
+
+
+def format_cpf_cnpj(raw_doc: str) -> str:
+    digits = "".join(ch for ch in str(raw_doc or "") if ch.isdigit())
+    if digits == DEFAULT_CONSUMER_DOC:
+        return DEFAULT_CONSUMER_DOC
+    if len(digits) == 11:
+        return f"{digits[:3]}.{digits[3:6]}.{digits[6:9]}-{digits[9:]}"
+    if len(digits) == 14:
+        return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"
+    return str(raw_doc or "").strip() or DEFAULT_CONSUMER_DOC
+
 
 
 def apply_cart_discount(
@@ -1476,6 +1492,302 @@ class CronuzPOSApiClient:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Descoberta de Impressoras da Máquina, Bobina Dinâmica 80mm e Impressão Direta
+# ──────────────────────────────────────────────────────────────────────────────
+def list_installed_printers() -> Tuple[List[str], Optional[str]]:
+    """
+    Busca todas as impressoras instaladas na máquina (Windows via winreg/PowerShell
+    sem abrir janela preta, ou macOS/Linux via lpstat) e retorna:
+    `(lista_com_opcao_nao_imprimir_no_topo, impressora_padrao_do_sistema)`.
+    """
+    found: List[str] = []
+    default_printer: Optional[str] = None
+
+    if os.name == "nt":
+        try:
+            import winreg  # type: ignore
+
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows NT\CurrentVersion\Windows",
+                ) as key_def:
+                    dev_val, _ = winreg.QueryValueEx(key_def, "Device")
+                    if dev_val and isinstance(dev_val, str):
+                        default_printer = dev_val.split(",")[0].strip()
+            except Exception:
+                pass
+
+            for root_hkey, subkey in (
+                (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows NT\CurrentVersion\Devices"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Print\Printers"),
+            ):
+                try:
+                    with winreg.OpenKey(root_hkey, subkey) as k:
+                        num_vals = winreg.QueryInfoKey(k)[1]
+                        for i in range(num_vals):
+                            v_name = winreg.EnumValue(k, i)[0].strip()
+                            if v_name and v_name not in found:
+                                found.append(v_name)
+                        num_sub = winreg.QueryInfoKey(k)[0]
+                        for i in range(num_sub):
+                            s_name = winreg.EnumKey(k, i).strip()
+                            if s_name and s_name not in found:
+                                found.append(s_name)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        if not found:
+            try:
+                flags = 0x08000000  # CREATE_NO_WINDOW
+                res = subprocess.run(
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-WindowStyle",
+                        "Hidden",
+                        "-Command",
+                        "Get-Printer | Select-Object -ExpandProperty Name",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5.0,
+                    creationflags=flags,
+                )
+                for line in (res.stdout or "").splitlines():
+                    p = line.strip()
+                    if p and p not in found:
+                        found.append(p)
+            except Exception:
+                pass
+    else:
+        try:
+            res_def = subprocess.run(["lpstat", "-d"], capture_output=True, text=True, timeout=3.0)
+            out_def = (res_def.stdout or "").strip()
+            if ":" in out_def:
+                cand = out_def.split(":", 1)[1].strip()
+                if cand and "no system default" not in cand.lower():
+                    default_printer = cand
+        except Exception:
+            pass
+
+        try:
+            res_p = subprocess.run(["lpstat", "-a"], capture_output=True, text=True, timeout=3.0)
+            for line in (res_p.stdout or "").splitlines():
+                parts = line.strip().split()
+                if parts:
+                    p = parts[0].strip()
+                    if p and p not in found:
+                        found.append(p)
+        except Exception:
+            pass
+
+    ordered: List[str] = [NO_PRINTER_OPTION]
+    if default_printer and default_printer in found:
+        ordered.append(default_printer)
+    for p in sorted(found):
+        if p not in ordered:
+            ordered.append(p)
+    return ordered, default_printer
+
+
+def format_thermal_receipt_text(
+    sale_or_draft: Dict[str, Any],
+    cfg: Dict[str, Any],
+    is_preview: bool = False,
+) -> str:
+    """
+    Formata o Cupom Não-Fiscal (bobina 80mm / 42 colunas) tanto para a visualização
+    dinâmica em tempo real na esquerda do PDV quanto para o envio direto à impressora.
+    """
+    W = 42
+    sep_double = "=" * W
+    sep_dash = "-" * W
+
+    def center(txt: str) -> str:
+        return txt[:W].center(W)
+
+    def lr(left_txt: str, right_txt: str) -> str:
+        space = W - len(left_txt) - len(right_txt)
+        if space >= 1:
+            return f"{left_txt}{' ' * space}{right_txt}"
+        max_l = max(1, W - len(right_txt) - 1)
+        return f"{left_txt[:max_l]} {right_txt}"
+
+    company = (cfg.get("company_name") or "HORUS PDV B2B").upper()
+    cnpj = cfg.get("company_document") or "---"
+    sess_id = sale_or_draft.get("session_id") or cfg.get("active_session_id") or "OFFLINE"
+    sess_title = sale_or_draft.get("session_title") or cfg.get("active_session_title") or "PDV"
+    op_name = sale_or_draft.get("user_name") or cfg.get("user_name") or cfg.get("email") or "Operador"
+    dt_str = (sale_or_draft.get("created_at") or datetime.now().isoformat())[:19].replace("T", " ")
+    sale_num = sale_or_draft.get("sale_number") or ("EM ABERTO (CAIXA)" if is_preview else "PDV")
+
+    cust_name = (sale_or_draft.get("customer_name") or DEFAULT_CONSUMER_NAME).strip()
+    cust_doc = format_cpf_cnpj((sale_or_draft.get("customer_document") or DEFAULT_CONSUMER_DOC).strip())
+
+    lines: List[str] = [
+        sep_double,
+        center(company),
+        center(f"CNPJ: {cnpj}"),
+        center(f"Sessao #{sess_id} - {sess_title[:24]}"),
+        sep_dash,
+        center("CUPOM NAO-FISCAL (80mm)"),
+        lr(f"Venda: {sale_num}", dt_str[11:] if len(dt_str) >= 16 else dt_str),
+        f"Data : {dt_str[:10]}  |  Op: {str(op_name)[:16]}",
+        sep_dash,
+        f"CLIENTE : {cust_name[:32]}",
+        f"CPF/CNPJ: {cust_doc}",
+        sep_dash,
+        "ITEM COD/ISBN      DESCRICAO",
+        lr("     QTD x UNIT", "DESC       TOTAL"),
+        sep_dash,
+    ]
+
+    items = sale_or_draft.get("items") or []
+    if not items:
+        lines.append(center("(Aguardando leitura de itens...)"))
+        lines.append(center("Bipe o codigo de barras ou F2"))
+    else:
+        for idx, it in enumerate(items, start=1):
+            code = str(it.get("isbn") or it.get("sku") or "")[:13]
+            name = str(it.get("name") or "")[:22]
+            qty = int(it.get("quantity") or 1)
+            unit_p = float(it.get("unit_price") or 0.0)
+            disc_i = float(it.get("discount") or 0.0)
+            gross_i = round(unit_p * qty, 2)
+            net_i = round(max(0.0, gross_i - disc_i), 2)
+
+            lines.append(f"{idx:02d}   {code:<13} {name}")
+            left_part = f"     {qty}x {format_brl(unit_p, False)}"
+            disc_part = f"-{format_brl(disc_i, False)}" if disc_i > 0 else ""
+            right_part = f"{disc_part:>9} {format_brl(net_i, False):>10}".strip()
+            lines.append(lr(left_part, right_part))
+
+    subtotal = float(sale_or_draft.get("subtotal") or 0.0)
+    disc_tot = float(sale_or_draft.get("discount_amount") or 0.0)
+    total = float(sale_or_draft.get("total_amount") or 0.0)
+    pay_method = str(sale_or_draft.get("payment_method") or "DINHEIRO")
+    installments = int(sale_or_draft.get("installments") or 1)
+    cash_rec = sale_or_draft.get("cash_received")
+    change_amt = sale_or_draft.get("change_amount")
+
+    lines.append(sep_dash)
+    lines.append(lr("SUBTOTAL:", format_brl(subtotal)))
+    if disc_tot > 0:
+        lines.append(lr("DESCONTO APLICADO:", f"- {format_brl(disc_tot)}"))
+    lines.append(sep_double)
+    lines.append(lr("TOTAL A PAGAR:", format_brl(total)))
+    lines.append(sep_double)
+
+    inst_label = f"{installments}x"
+    if installments > 1 and total > 0:
+        inst_label = f"{installments}x de {format_brl(round(total / installments, 2))}"
+    lines.append(lr("PAGAMENTO:", f"{pay_method} ({inst_label})"))
+
+    if cash_rec is not None and float(cash_rec or 0.0) > 0:
+        lines.append(lr("VALOR RECEBIDO:", format_brl(float(cash_rec))))
+    if change_amt is not None and float(change_amt or 0.0) > 0:
+        lines.append(lr("TROCO:", format_brl(float(change_amt))))
+
+    lines.append(sep_dash)
+    if is_preview:
+        lines.append(center("*** CUPOM EM CONSTRUCAO (F12 FINALIZAR) ***"))
+    else:
+        c_uuid = str(sale_or_draft.get("client_sale_uuid") or "")[:18]
+        st_lbl = "SINCRONIZADO ONLINE" if sale_or_draft.get("synced") else "GRAVADO NO CAIXA PDV"
+        lines.append(center(st_lbl))
+        if c_uuid:
+            lines.append(center(f"Protocolo: {c_uuid}"))
+        lines.append(center("Obrigado pela preferencia!"))
+    lines.append(sep_double)
+    return "\n".join(lines) + "\n\n\n"
+
+
+def send_receipt_to_printer(
+    receipt_text: str,
+    printer_name: str,
+    sale_number: str = "CUPOM",
+) -> Tuple[bool, str]:
+    """
+    Envia o cupom diretamente da tela do PDV para a impressora selecionada na máquina,
+    sem abrir navegador web ou janelas externas.
+    Se estiver configurado como `NÃO IMPRIMIR (Desativado)`, não imprime nada.
+    """
+    clean_printer = (printer_name or "").strip()
+    if not clean_printer or clean_printer == NO_PRINTER_OPTION or clean_printer.startswith("🚫"):
+        return False, "Impressão desativada (configurada para não imprimir)."
+
+    safe_num = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(sale_number))
+    txt_path = RECEIPTS_DIR / f"cupom_{safe_num}_{int(time.time())}.txt"
+    try:
+        txt_path.write_text(receipt_text, encoding="utf-8")
+    except Exception as exc:
+        return False, f"Erro ao gravar arquivo temporário de impressão: {exc}"
+
+    if os.name == "nt":
+        flags = 0x08000000  # CREATE_NO_WINDOW
+        escaped_path = str(txt_path).replace("'", "''")
+        escaped_printer = clean_printer.replace("'", "''")
+        ps_cmd = (
+            f"Get-Content -LiteralPath '{escaped_path}' -Encoding UTF8 | "
+            f"Out-Printer -Name '{escaped_printer}'"
+        )
+        try:
+            res = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    ps_cmd,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=12.0,
+                creationflags=flags,
+            )
+            if res.returncode == 0:
+                return True, f"Cupom enviado direto para a impressora '{clean_printer}'!"
+        except Exception as exc:
+            logger.warning("Aviso no Out-Printer PowerShell: %s", exc)
+
+        # Fallback silencioso nativo do Windows (notepad /pt <arquivo> <impressora>)
+        try:
+            res2 = subprocess.run(
+                ["notepad.exe", "/pt", str(txt_path), clean_printer],
+                capture_output=True,
+                text=True,
+                timeout=12.0,
+                creationflags=flags,
+            )
+            if res2.returncode == 0:
+                return True, f"Cupom enviado para a impressora '{clean_printer}'!"
+            err_msg = (res2.stderr or res2.stdout or "").strip()
+            return False, f"Falha ao imprimir em '{clean_printer}': {err_msg}"
+        except Exception as exc:
+            return False, f"Não foi possível enviar para a impressora '{clean_printer}': {exc}"
+    else:
+        try:
+            res = subprocess.run(
+                ["lp", "-d", clean_printer, str(txt_path)],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+            )
+            if res.returncode == 0:
+                return True, f"Cupom enviado direto para a impressora '{clean_printer}'!"
+            err_msg = (res.stderr or res.stdout or "").strip()
+            return False, f"Falha ao imprimir em '{clean_printer}': {err_msg}"
+        except Exception as exc:
+            return False, f"Erro ao enviar para impressora '{clean_printer}': {exc}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Gerador de Cupom Não-Fiscal (80mm) e Relatório HTML de Fechamento de Caixa
 # ──────────────────────────────────────────────────────────────────────────────
 def generate_receipt_html(sale: Dict[str, Any], cfg: Dict[str, Any]) -> Path:
@@ -1687,6 +1999,16 @@ class HorusPDVWindow:
             value=bool(self.cfg.get("auto_sync_new_horus_items", True))
         )
 
+        self.installed_printers, self.default_system_printer = list_installed_printers()
+        saved_printer = str(self.cfg.get("printer_name") or NO_PRINTER_OPTION).strip()
+        if not saved_printer:
+            saved_printer = NO_PRINTER_OPTION
+        if saved_printer not in self.installed_printers:
+            self.installed_printers.append(saved_printer)
+        self.var_printer_name = tk.StringVar(value=saved_printer)
+        self.last_completed_sale: Optional[Dict[str, Any]] = None
+        self.checkout_modal: Optional["tk.Toplevel"] = None
+
         self.license_status: Dict[str, Any] = verify_pdv_desktop_license_key(
             self.cfg.get("license_key", ""),
             expected_company_id=self.cfg.get("company_id"),
@@ -1700,6 +2022,7 @@ class HorusPDVWindow:
         self._bind_shortcuts()
 
         self.refresh_license_ui()
+        self.refresh_printer_status_ui()
         self.refresh_cart_ui()
         self.refresh_sales_and_sync_ui()
         self.refresh_catalog_stats_ui()
@@ -1923,14 +2246,112 @@ class HorusPDVWindow:
     # ABA 1: FRENTE DE CAIXA (PDV ONLINE & OFFLINE)
     # ──────────────────────────────────────────────────────────────────────────
     def _build_tab_pos(self) -> None:
-        pane = tk.Frame(self.tab_pos, bg="#f1f5f9", padx=12, pady=10)
+        pane = tk.Frame(self.tab_pos, bg="#f1f5f9", padx=10, pady=8)
         pane.pack(fill="both", expand=True)
 
-        left_col = tk.Frame(pane, bg="#f1f5f9")
-        left_col.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        # ══════════════════════════════════════════════════════════════════════
+        # COLUNA ESQUERDA: CUPOM EM TEMPO REAL (BOBINA 80mm) + IMPRESSORA DIRETA
+        # ══════════════════════════════════════════════════════════════════════
+        receipt_col = tk.Frame(pane, bg="#ffffff", width=310, bd=1, relief="solid", padx=8, pady=8)
+        receipt_col.pack(side="left", fill="y", padx=(0, 8))
+        receipt_col.pack_propagate(False)
 
-        search_card = tk.Frame(left_col, bg="#ffffff", bd=1, relief="solid", padx=12, pady=10)
-        search_card.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            receipt_col,
+            text="🧾 CUPOM EM TEMPO REAL (80mm)",
+            font=("Segoe UI", 10, "bold"),
+            fg="#0f172a",
+            bg="#ffffff",
+        ).pack(anchor="w")
+
+        tk.Label(
+            receipt_col,
+            text="Visualização dinâmica — envia direto p/ impressora no F12",
+            font=("Segoe UI", 8),
+            fg="#64748b",
+            bg="#ffffff",
+        ).pack(anchor="w", pady=(0, 4))
+
+        bobina_frame = tk.Frame(receipt_col, bg="#fefce8", bd=1, relief="solid")
+        bobina_frame.pack(fill="both", expand=True, pady=(0, 6))
+
+        self.txt_live_receipt = tk.Text(
+            bobina_frame,
+            bg="#fefce8",
+            fg="#0f172a",
+            font=("Consolas", 8) if os.name == "nt" else ("Courier New", 9),
+            wrap="none",
+            relief="flat",
+            padx=6,
+            pady=6,
+            state="disabled",
+            width=42,
+        )
+        self.txt_live_receipt.pack(side="left", fill="both", expand=True)
+
+        sb_rec = ttk.Scrollbar(bobina_frame, orient="vertical", command=self.txt_live_receipt.yview)
+        self.txt_live_receipt.configure(yscrollcommand=sb_rec.set)
+        sb_rec.pack(side="right", fill="y")
+
+        # Configuração rápida de Impressora Direta logo abaixo da bobina
+        prt_box = tk.LabelFrame(
+            receipt_col,
+            text=" 🖨️ Impressora Direta (Na Máquina) ",
+            font=("Segoe UI", 8, "bold"),
+            bg="#f8fafc",
+            fg="#1e293b",
+            padx=6,
+            pady=4,
+        )
+        prt_box.pack(fill="x")
+
+        self.combo_printer_pos = ttk.Combobox(
+            prt_box,
+            textvariable=self.var_printer_name,
+            values=self.installed_printers,
+            state="readonly",
+            font=("Segoe UI", 8),
+        )
+        self.combo_printer_pos.pack(fill="x", pady=(0, 4))
+        self.combo_printer_pos.bind("<<ComboboxSelected>>", lambda e: self.on_printer_selection_changed())
+
+        prt_btns = tk.Frame(prt_box, bg="#f8fafc")
+        prt_btns.pack(fill="x")
+
+        tk.Button(
+            prt_btns,
+            text="🔄 Buscar Impressoras",
+            command=self.refresh_printers_list_clicked,
+            bg="#e2e8f0",
+            fg="#0f172a",
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=2,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="left", fill="x", expand=True, padx=(0, 2))
+
+        tk.Button(
+            prt_btns,
+            text="🖨️ Imprimir Cupom",
+            command=self.print_current_or_last_receipt_clicked,
+            bg="#0f172a",
+            fg="#ffffff",
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=2,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="left", fill="x", expand=True, padx=(2, 0))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # COLUNA CENTRAL: BUSCA INSTANTÂNEA + PRODUTOS + CARRINHO DA VENDA
+        # ══════════════════════════════════════════════════════════════════════
+        left_col = tk.Frame(pane, bg="#f1f5f9")
+        left_col.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        search_card = tk.Frame(left_col, bg="#ffffff", bd=1, relief="solid", padx=10, pady=8)
+        search_card.pack(fill="x", pady=(0, 6))
 
         tk.Label(
             search_card,
@@ -1941,19 +2362,19 @@ class HorusPDVWindow:
         ).pack(anchor="w")
 
         s_row = tk.Frame(search_card, bg="#ffffff")
-        s_row.pack(fill="x", pady=(6, 0))
+        s_row.pack(fill="x", pady=(4, 0))
 
         self.var_search = tk.StringVar()
         self.entry_search = tk.Entry(
             s_row,
             textvariable=self.var_search,
-            font=("Segoe UI", 13),
+            font=("Segoe UI", 12),
             bg="#f8fafc",
             fg="#0f172a",
             relief="solid",
             bd=1,
         )
-        self.entry_search.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
+        self.entry_search.pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 6))
         self.entry_search.bind("<Return>", lambda e: self.on_search_enter())
 
         tk.Button(
@@ -1962,22 +2383,22 @@ class HorusPDVWindow:
             command=self.on_search_enter,
             bg="#2563eb",
             fg="#ffffff",
-            font=("Segoe UI", 10, "bold"),
-            padx=14,
-            pady=6,
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=5,
             relief="flat",
             cursor="hand2",
-        ).pack(side="left", padx=(0, 6))
+        ).pack(side="left", padx=(0, 4))
 
         tk.Button(
             s_row,
-            text="🌐 Buscar no Horus (Online)",
+            text="🌐 Horus (Online)",
             command=lambda: self.on_search_enter(force_online=True),
             bg="#0f172a",
             fg="#ffffff",
-            font=("Segoe UI", 10, "bold"),
-            padx=12,
-            pady=6,
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=5,
             relief="flat",
             cursor="hand2",
         ).pack(side="left")
@@ -1985,11 +2406,11 @@ class HorusPDVWindow:
         self.lbl_search_feedback = tk.Label(
             search_card,
             text="Dica: Bipe o ISBN/Código de Barras para adicionar direto ao carrinho, ou digite parte do título.",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             fg="#64748b",
             bg="#ffffff",
         )
-        self.lbl_search_feedback.pack(anchor="w", pady=(4, 0))
+        self.lbl_search_feedback.pack(anchor="w", pady=(3, 0))
 
         res_card = tk.LabelFrame(
             left_col,
@@ -1997,10 +2418,10 @@ class HorusPDVWindow:
             font=("Segoe UI", 9, "bold"),
             bg="#ffffff",
             fg="#1e293b",
-            padx=8,
-            pady=6,
+            padx=6,
+            pady=4,
         )
-        res_card.pack(fill="x", pady=(0, 8))
+        res_card.pack(fill="x", pady=(0, 6))
 
         cols_res = ("isbn", "sku", "name", "brand", "stock", "price")
         self.tree_results = ttk.Treeview(res_card, columns=cols_res, show="headings", height=5)
@@ -2011,12 +2432,12 @@ class HorusPDVWindow:
         self.tree_results.heading("stock", text="Saldo")
         self.tree_results.heading("price", text="Preço Unit.")
 
-        self.tree_results.column("isbn", width=120, anchor="w")
-        self.tree_results.column("sku", width=85, anchor="w")
-        self.tree_results.column("name", width=290, anchor="w")
-        self.tree_results.column("brand", width=120, anchor="w")
-        self.tree_results.column("stock", width=60, anchor="center")
-        self.tree_results.column("price", width=95, anchor="e")
+        self.tree_results.column("isbn", width=110, anchor="w")
+        self.tree_results.column("sku", width=70, anchor="w")
+        self.tree_results.column("name", width=230, anchor="w")
+        self.tree_results.column("brand", width=105, anchor="w")
+        self.tree_results.column("stock", width=50, anchor="center")
+        self.tree_results.column("price", width=85, anchor="e")
         self.tree_results.pack(side="left", fill="x", expand=True)
         self.tree_results.bind("<Double-1>", lambda e: self.add_selected_result_to_cart())
 
@@ -2026,12 +2447,12 @@ class HorusPDVWindow:
 
         cart_card = tk.LabelFrame(
             left_col,
-            text=" 🛒 Itens no Carrinho da Venda Atual (Clique em ➖ ou ➕ ao lado da Qtd, ou selecione o item p/ aplicar desconto) ",
-            font=("Segoe UI", 10, "bold"),
+            text=" 🛒 Itens no Carrinho da Venda Atual (Clique em ➖ ou ➕ ao lado da Qtd, ou selecione o item p/ desconto) ",
+            font=("Segoe UI", 9, "bold"),
             bg="#ffffff",
             fg="#0f172a",
-            padx=8,
-            pady=8,
+            padx=6,
+            pady=6,
         )
         cart_card.pack(fill="both", expand=True)
 
@@ -2049,17 +2470,17 @@ class HorusPDVWindow:
         self.tree_cart.heading("subtotal", text="Total Líq.")
         self.tree_cart.heading("remove", text="Excluir")
 
-        self.tree_cart.column("seq", width=30, anchor="center")
-        self.tree_cart.column("isbn", width=100, anchor="w")
-        self.tree_cart.column("name", width=215, anchor="w")
-        self.tree_cart.column("stock", width=46, anchor="center")
-        self.tree_cart.column("minus", width=36, anchor="center")
-        self.tree_cart.column("qty", width=44, anchor="center")
-        self.tree_cart.column("plus", width=36, anchor="center")
-        self.tree_cart.column("unit_price", width=80, anchor="e")
-        self.tree_cart.column("discount", width=80, anchor="e")
-        self.tree_cart.column("subtotal", width=88, anchor="e")
-        self.tree_cart.column("remove", width=48, anchor="center")
+        self.tree_cart.column("seq", width=26, anchor="center")
+        self.tree_cart.column("isbn", width=92, anchor="w")
+        self.tree_cart.column("name", width=180, anchor="w")
+        self.tree_cart.column("stock", width=42, anchor="center")
+        self.tree_cart.column("minus", width=32, anchor="center")
+        self.tree_cart.column("qty", width=38, anchor="center")
+        self.tree_cart.column("plus", width=32, anchor="center")
+        self.tree_cart.column("unit_price", width=72, anchor="e")
+        self.tree_cart.column("discount", width=72, anchor="e")
+        self.tree_cart.column("subtotal", width=80, anchor="e")
+        self.tree_cart.column("remove", width=44, anchor="center")
         self.tree_cart.pack(fill="both", expand=True)
 
         # Clique inline direto nas colunas ➖, ➕ e 🗑️ do carrinho sem perder seleção!
@@ -2072,20 +2493,20 @@ class HorusPDVWindow:
         self.tree_cart.bind("<Delete>", lambda e: self.remove_cart_item())
         self.tree_cart.bind("<BackSpace>", lambda e: self.remove_cart_item())
 
-        cart_btns = tk.Frame(cart_card, bg="#ffffff", pady=6)
+        cart_btns = tk.Frame(cart_card, bg="#ffffff", pady=4)
         cart_btns.pack(fill="x")
 
         tk.Button(
             cart_btns,
-            text="➕ Adicionar da Busca",
+            text="➕ Adicionar",
             command=self.add_selected_result_to_cart,
             bg="#2563eb",
             fg="#ffffff",
-            font=("Segoe UI", 9, "bold"),
-            padx=10,
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
             pady=4,
             relief="flat",
-        ).pack(side="left", padx=(0, 6))
+        ).pack(side="left", padx=(0, 4))
 
         tk.Button(
             cart_btns,
@@ -2093,11 +2514,11 @@ class HorusPDVWindow:
             command=lambda: self.change_cart_qty(1),
             bg="#dcfce7",
             fg="#166534",
-            font=("Segoe UI", 9, "bold"),
-            padx=10,
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
             pady=4,
             relief="flat",
-        ).pack(side="left", padx=3)
+        ).pack(side="left", padx=2)
 
         tk.Button(
             cart_btns,
@@ -2105,11 +2526,11 @@ class HorusPDVWindow:
             command=lambda: self.change_cart_qty(-1),
             bg="#fef3c7",
             fg="#92400e",
-            font=("Segoe UI", 9, "bold"),
-            padx=10,
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
             pady=4,
             relief="flat",
-        ).pack(side="left", padx=3)
+        ).pack(side="left", padx=2)
 
         tk.Button(
             cart_btns,
@@ -2117,11 +2538,11 @@ class HorusPDVWindow:
             command=self.remove_cart_item,
             bg="#fee2e2",
             fg="#b91c1c",
-            font=("Segoe UI", 9, "bold"),
-            padx=10,
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
             pady=4,
             relief="flat",
-        ).pack(side="left", padx=6)
+        ).pack(side="left", padx=4)
 
         tk.Checkbutton(
             cart_btns,
@@ -2130,8 +2551,8 @@ class HorusPDVWindow:
             command=self.on_toggle_validate_stock_checkbox,
             bg="#ffffff",
             fg="#0f172a",
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="left", padx=6)
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="left", padx=4)
 
         tk.Button(
             cart_btns,
@@ -2139,20 +2560,23 @@ class HorusPDVWindow:
             command=self.clear_cart,
             bg="#f1f5f9",
             fg="#475569",
-            font=("Segoe UI", 9),
-            padx=10,
+            font=("Segoe UI", 8),
+            padx=8,
             pady=4,
             relief="flat",
         ).pack(side="right")
 
-        right_col = tk.Frame(pane, bg="#ffffff", width=405, bd=1, relief="solid", padx=12, pady=8)
+        # ══════════════════════════════════════════════════════════════════════
+        # COLUNA DIREITA: CLIENTE OBRIGATÓRIO, DESCONTO, TOTAIS & BOTÃO F12
+        # ══════════════════════════════════════════════════════════════════════
+        right_col = tk.Frame(pane, bg="#ffffff", width=365, bd=1, relief="solid", padx=10, pady=8)
         right_col.pack(side="right", fill="y")
         right_col.pack_propagate(False)
 
         tk.Label(
             right_col,
-            text="RESUMO, CLIENTE & PAGAMENTO",
-            font=("Segoe UI", 11, "bold"),
+            text="CLIENTE, DESCONTO & FECHAMENTO",
+            font=("Segoe UI", 10, "bold"),
             fg="#0f172a",
             bg="#ffffff",
         ).pack(anchor="w", pady=(0, 4))
@@ -2206,7 +2630,7 @@ class HorusPDVWindow:
             cust_frame,
             textvariable=self.var_customer_doc,
             font=("Segoe UI", 9, "bold"),
-            width=26,
+            width=24,
             bg="#f8fafc",
         )
         self.entry_customer_doc.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=2)
@@ -2219,10 +2643,11 @@ class HorusPDVWindow:
             cust_frame,
             textvariable=self.var_customer_name,
             font=("Segoe UI", 9),
-            width=26,
+            width=24,
             bg="#f8fafc",
         )
         self.entry_customer_name.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=2)
+        self.entry_customer_name.bind("<KeyRelease>", lambda e: self.update_live_receipt_preview())
 
         self.lbl_customer_doc_status = tk.Label(
             cust_frame,
@@ -2336,140 +2761,63 @@ class HorusPDVWindow:
         )
         self.lbl_discount_scope_info.pack(anchor="w")
 
-        # ── 3. FORMA DE PAGAMENTO & PARCELAS COM ATALHOS DE TECLADO ──────────
-        pay_frame = tk.LabelFrame(
+        # ── 3. VARIÁVEIS DE PAGAMENTO (ESCOLHIDAS NA MODAL DO F12 OU ATALHOS) ─
+        self.var_payment_method = tk.StringVar(value="DINHEIRO")
+        self.var_installments = tk.StringVar(value="1")
+        self.var_cash_received = tk.StringVar(value="R$ 0,00")
+
+        pay_summary_card = tk.LabelFrame(
             right_col,
-            text=" 💳 Pagamento (F7..F10) & Parcelas (F11 / Ctrl+1..9) ",
+            text=" 💳 Pagamento & Parcelas (Caixa de Fechamento F12) ",
             font=("Segoe UI", 9, "bold"),
-            bg="#ffffff",
+            bg="#f8fafc",
             fg="#334155",
             padx=8,
-            pady=4,
+            pady=6,
         )
-        pay_frame.pack(fill="x", pady=(0, 6))
-
-        self.var_payment_method = tk.StringVar(value="DINHEIRO")
-        methods = [
-            ("💵 Dinheiro (F7)", "DINHEIRO"),
-            ("⚡ PIX (F8)", "PIX"),
-            ("💳 Débito (F9)", "DEBITO"),
-            ("💳 Crédito (F10)", "CREDITO"),
-        ]
-        m_grid = tk.Frame(pay_frame, bg="#ffffff")
-        m_grid.pack(fill="x")
-        for idx, (label, val) in enumerate(methods):
-            rb = tk.Radiobutton(
-                m_grid,
-                text=label,
-                variable=self.var_payment_method,
-                value=val,
-                command=self._on_payment_method_change,
-                bg="#ffffff",
-                font=("Segoe UI", 9, "bold"),
-                anchor="w",
-            )
-            rb.grid(row=idx // 2, column=idx % 2, sticky="w", padx=2, pady=1)
-
-        inst_row = tk.Frame(pay_frame, bg="#ffffff", pady=2)
-        inst_row.pack(fill="x")
-
-        tk.Label(inst_row, text="Parcelas (F11):", bg="#ffffff", font=("Segoe UI", 9, "bold")).pack(side="left")
-        tk.Button(
-            inst_row,
-            text="➖",
-            command=lambda: self.cycle_installments_shortcut(-1),
-            bg="#f1f5f9",
-            fg="#0f172a",
-            font=("Segoe UI", 8, "bold"),
-            padx=5,
-            pady=1,
-            relief="flat",
-        ).pack(side="left", padx=(6, 2))
-
-        self.var_installments = tk.StringVar(value="1")
-        self.combo_installments = ttk.Combobox(
-            inst_row,
-            textvariable=self.var_installments,
-            values=[str(i) for i in range(1, 13)],
-            width=4,
-            state="readonly",
-        )
-        self.combo_installments.pack(side="left", padx=2)
-        self.combo_installments.bind("<<ComboboxSelected>>", lambda e: self._on_installments_combo_change())
-
-        tk.Button(
-            inst_row,
-            text="➕",
-            command=lambda: self.cycle_installments_shortcut(1),
-            bg="#f1f5f9",
-            fg="#0f172a",
-            font=("Segoe UI", 8, "bold"),
-            padx=5,
-            pady=1,
-            relief="flat",
-        ).pack(side="left", padx=(2, 6))
+        pay_summary_card.pack(fill="x", pady=(0, 6))
 
         self.lbl_installment_preview = tk.Label(
-            inst_row,
-            text="1x de R$ 0,00",
-            font=("Segoe UI", 8, "bold"),
-            fg="#2563eb",
-            bg="#ffffff",
-        )
-        self.lbl_installment_preview.pack(side="left")
-
-        quick_inst_row = tk.Frame(pay_frame, bg="#ffffff")
-        quick_inst_row.pack(fill="x", pady=(1, 3))
-        for q_inst in (1, 2, 3, 4, 6, 10, 12):
-            tk.Button(
-                quick_inst_row,
-                text=f"{q_inst}x",
-                command=lambda n=q_inst: self.set_installments_shortcut(n),
-                bg="#e2e8f0",
-                fg="#0f172a",
-                font=("Segoe UI", 8, "bold"),
-                padx=5,
-                pady=1,
-                relief="flat",
-                cursor="hand2",
-            ).pack(side="left", padx=2)
-
-        cash_row = tk.Frame(pay_frame, bg="#ffffff")
-        cash_row.pack(fill="x", pady=(2, 0))
-        tk.Label(cash_row, text="Recebido (Dinheiro):", bg="#ffffff", font=("Segoe UI", 9)).pack(side="left")
-        self.var_cash_received = tk.StringVar(value="R$ 0,00")
-        self.entry_cash_received = tk.Entry(
-            cash_row,
-            textvariable=self.var_cash_received,
-            font=("Segoe UI", 10, "bold"),
-            justify="right",
-            width=14,
+            pay_summary_card,
+            text="Pré-selecionado: DINHEIRO (1x de R$ 0,00)",
+            font=("Segoe UI", 9, "bold"),
+            fg="#1d4ed8",
             bg="#f8fafc",
         )
-        self.entry_cash_received.pack(side="right", fill="x", expand=True, padx=(6, 0))
-        self.entry_cash_received.bind("<KeyRelease>", self._on_cash_received_key)
+        self.lbl_installment_preview.pack(anchor="w")
 
-        tot_box = tk.Frame(right_col, bg="#0f172a", padx=12, pady=8)
+        tk.Label(
+            pay_summary_card,
+            text="Ao clicar em FINALIZAR VENDA (F12), abrirá o caixa para escolher a forma de pagamento, parcelas e troco.",
+            font=("Segoe UI", 8),
+            fg="#475569",
+            bg="#f8fafc",
+            wraplength=330,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
+        # ── 4. TOTAIS DA VENDA E BOTÃO FINALIZAR (F12) ──────────────────────
+        tot_box = tk.Frame(right_col, bg="#0f172a", padx=12, pady=10)
         tot_box.pack(fill="x", pady=(2, 6))
 
         self.lbl_subtotal = tk.Label(
-            tot_box, text="Subtotal: R$ 0,00", font=("Segoe UI", 9), fg="#cbd5e1", bg="#0f172a"
+            tot_box, text="Subtotal: R$ 0,00", font=("Segoe UI", 10), fg="#cbd5e1", bg="#0f172a"
         )
         self.lbl_subtotal.pack(anchor="e")
 
         self.lbl_discount_applied = tk.Label(
-            tot_box, text="Desconto: - R$ 0,00", font=("Segoe UI", 9), fg="#fca5a5", bg="#0f172a"
+            tot_box, text="Desconto Aplicado: - R$ 0,00", font=("Segoe UI", 10), fg="#fca5a5", bg="#0f172a"
         )
         self.lbl_discount_applied.pack(anchor="e")
 
         self.lbl_total_big = tk.Label(
             tot_box,
             text="R$ 0,00",
-            font=("Segoe UI", 20, "bold"),
+            font=("Segoe UI", 22, "bold"),
             fg="#4ade80",
             bg="#0f172a",
         )
-        self.lbl_total_big.pack(anchor="e", pady=(2, 1))
+        self.lbl_total_big.pack(anchor="e", pady=(4, 2))
 
         self.lbl_change = tk.Label(
             tot_box,
@@ -2480,23 +2828,23 @@ class HorusPDVWindow:
         )
         self.lbl_change.pack(anchor="e")
 
-        self.var_print_receipt = tk.BooleanVar(value=bool(self.cfg.get("auto_print_receipt", False)))
-        tk.Checkbutton(
+        self.lbl_pos_printer_status = tk.Label(
             right_col,
-            text="🖨️ Abrir Cupom Não-Fiscal (80mm) após venda",
-            variable=self.var_print_receipt,
+            text="🚫 Impressora: NÃO IMPRIMIR (Desativado)",
+            font=("Segoe UI", 8, "bold"),
+            fg="#64748b",
             bg="#ffffff",
-            font=("Segoe UI", 9),
-        ).pack(anchor="w", pady=(0, 4))
+        )
+        self.lbl_pos_printer_status.pack(anchor="w", pady=(0, 6))
 
         self.btn_finalize = tk.Button(
             right_col,
-            text="✅ FINALIZAR VENDA (F12)",
+            text="✅ FINALIZAR VENDA / PAGAMENTO (F12)",
             command=self.finalize_sale,
             bg="#16a34a",
             fg="#ffffff",
-            font=("Segoe UI", 12, "bold"),
-            pady=10,
+            font=("Segoe UI", 11, "bold"),
+            pady=12,
             relief="flat",
             cursor="hand2",
         )
@@ -3209,6 +3557,265 @@ class HorusPDVWindow:
             bg="#ffffff",
         ).pack(side="left", padx=12)
 
+        # Card 3: Configuração da Impressora de Cupom (Envio Direto para Impressoras Instaladas na Máquina)
+        prt_cfg_card = tk.LabelFrame(
+            pane,
+            text=" 🖨️ 3. Configuração da Impressora de Cupom (Envio Direto da Tela p/ Impressora da Máquina) ",
+            font=("Segoe UI", 10, "bold"),
+            bg="#ffffff",
+            fg="#0f172a",
+            padx=16,
+            pady=12,
+        )
+        prt_cfg_card.pack(fill="x", pady=(12, 0))
+
+        tk.Label(
+            prt_cfg_card,
+            text=(
+                "Selecione uma impressora instalada no computador para enviar o cupom direto ao finalizar a venda (sem abrir navegador),\n"
+                "ou selecione '🚫 NÃO IMPRIMIR (Desativado)' caso não deseje imprimir nada:"
+            ),
+            font=("Segoe UI", 9),
+            fg="#334155",
+            bg="#ffffff",
+            justify="left",
+        ).pack(anchor="w", pady=(0, 6))
+
+        p_row = tk.Frame(prt_cfg_card, bg="#ffffff")
+        p_row.pack(fill="x", pady=4)
+
+        tk.Label(p_row, text="Impressora Selecionada:", bg="#ffffff", font=("Segoe UI", 9, "bold")).pack(
+            side="left", padx=(0, 8)
+        )
+        self.combo_printer_cfg = ttk.Combobox(
+            p_row,
+            textvariable=self.var_printer_name,
+            values=self.installed_printers,
+            state="readonly",
+            font=("Segoe UI", 10),
+            width=45,
+        )
+        self.combo_printer_cfg.pack(side="left", padx=(0, 8))
+        self.combo_printer_cfg.bind("<<ComboboxSelected>>", lambda e: self.on_printer_selection_changed())
+
+        tk.Button(
+            p_row,
+            text="🔄 Buscar Impressoras da Máquina",
+            command=self.refresh_printers_list_clicked,
+            bg="#2563eb",
+            fg="#ffffff",
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=5,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            p_row,
+            text="🚫 Não Imprimir",
+            command=self.disable_printer_clicked,
+            bg="#fee2e2",
+            fg="#b91c1c",
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=5,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            p_row,
+            text="🖨️ Testar Impressão Direta",
+            command=self.print_test_receipt_clicked,
+            bg="#0f172a",
+            fg="#ffffff",
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=5,
+            relief="flat",
+            cursor="hand2",
+        ).pack(side="left")
+
+        self.lbl_cfg_printer_status = tk.Label(
+            prt_cfg_card,
+            text="Status da Impressora: ---",
+            font=("Segoe UI", 9, "bold"),
+            fg="#059669",
+            bg="#ffffff",
+        )
+        self.lbl_cfg_printer_status.pack(anchor="w", pady=(6, 0))
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Gestão de Impressora Direta e Cupom Dinâmico em Tempo Real
+    # ──────────────────────────────────────────────────────────────────────────
+    def is_printer_enabled(self) -> bool:
+        p = (self.var_printer_name.get() or "").strip()
+        return bool(p and p != NO_PRINTER_OPTION and not p.startswith("🚫"))
+
+    def refresh_printer_status_ui(self) -> None:
+        chosen = (self.var_printer_name.get() or NO_PRINTER_OPTION).strip()
+        if self.is_printer_enabled():
+            short_p = chosen[:34] + ("..." if len(chosen) > 34 else "")
+            if hasattr(self, "lbl_pos_printer_status"):
+                self.lbl_pos_printer_status.configure(
+                    text=f"🖨️ Impressão Direta Ativa: {short_p}",
+                    fg="#059669",
+                )
+            if hasattr(self, "lbl_cfg_printer_status"):
+                self.lbl_cfg_printer_status.configure(
+                    text=f"✅ Impressão Automática ATIVA na impressora: '{chosen}' (envia direto ao finalizar venda, sem abrir navegador).",
+                    fg="#059669",
+                )
+        else:
+            if hasattr(self, "lbl_pos_printer_status"):
+                self.lbl_pos_printer_status.configure(
+                    text="🚫 Impressora: NÃO IMPRIMIR (Não imprimirá nada ao finalizar)",
+                    fg="#64748b",
+                )
+            if hasattr(self, "lbl_cfg_printer_status"):
+                self.lbl_cfg_printer_status.configure(
+                    text="🚫 Configurado para NÃO IMPRIMIR: nenhuma impressão será disparada ao finalizar a venda.",
+                    fg="#64748b",
+                )
+
+    def on_printer_selection_changed(self) -> None:
+        chosen = (self.var_printer_name.get() or NO_PRINTER_OPTION).strip()
+        self.cfg["printer_name"] = chosen
+        self.cfg["auto_print_receipt"] = self.is_printer_enabled()
+        save_config(self.cfg)
+        self.refresh_printer_status_ui()
+
+    def disable_printer_clicked(self) -> None:
+        self.var_printer_name.set(NO_PRINTER_OPTION)
+        self.on_printer_selection_changed()
+
+    def refresh_printers_list_clicked(self) -> None:
+        printers, def_p = list_installed_printers()
+        self.installed_printers = printers
+        self.default_system_printer = def_p
+        cur = (self.var_printer_name.get() or NO_PRINTER_OPTION).strip()
+        if cur not in self.installed_printers:
+            self.installed_printers.append(cur)
+        if hasattr(self, "combo_printer_pos"):
+            self.combo_printer_pos.configure(values=self.installed_printers)
+        if hasattr(self, "combo_printer_cfg"):
+            self.combo_printer_cfg.configure(values=self.installed_printers)
+        count_real = max(0, len(printers) - 1)
+        def_txt = f" (Padrão do Sistema: {def_p})" if def_p else ""
+        messagebox.showinfo(
+            "Impressoras Encontradas na Máquina",
+            f"Foram localizadas {count_real} impressora(s) instalada(s) neste computador{def_txt}.\n\n"
+            "Selecione a impressora desejada na caixa ou escolha '🚫 NÃO IMPRIMIR (Desativado)'.",
+        )
+
+    def build_current_draft_sale_dict(self) -> Dict[str, Any]:
+        subtotal, disc, total, change = self.compute_totals()
+        pay_m = self.var_payment_method.get() or "DINHEIRO"
+        inst = int(self.var_installments.get() or 1)
+        cash_r = self.cash_received_value if (pay_m == "DINHEIRO" and self.cash_received_value > 0) else None
+        return {
+            "sale_number": "EM ABERTO",
+            "session_id": self.cfg.get("active_session_id"),
+            "session_title": self.cfg.get("active_session_title") or "PDV",
+            "user_name": self.cfg.get("user_name") or self.cfg.get("email") or "Operador",
+            "customer_name": (self.var_customer_name.get() if hasattr(self, "var_customer_name") else "") or DEFAULT_CONSUMER_NAME,
+            "customer_document": (self.var_customer_doc.get() if hasattr(self, "var_customer_doc") else "") or DEFAULT_CONSUMER_DOC,
+            "payment_method": pay_m,
+            "installments": inst,
+            "subtotal": subtotal,
+            "discount_amount": disc,
+            "total_amount": total,
+            "cash_received": cash_r,
+            "change_amount": change if cash_r else None,
+            "items": list(self.cart),
+            "created_at": datetime.now().isoformat(),
+        }
+
+    def update_live_receipt_preview(self, finalized_sale: Optional[Dict[str, Any]] = None) -> None:
+        if not hasattr(self, "txt_live_receipt"):
+            return
+        if finalized_sale is not None:
+            txt = format_thermal_receipt_text(finalized_sale, self.cfg, is_preview=False)
+        elif self.cart:
+            draft = self.build_current_draft_sale_dict()
+            txt = format_thermal_receipt_text(draft, self.cfg, is_preview=True)
+        elif self.last_completed_sale is not None:
+            txt = format_thermal_receipt_text(self.last_completed_sale, self.cfg, is_preview=False)
+        else:
+            draft = self.build_current_draft_sale_dict()
+            txt = format_thermal_receipt_text(draft, self.cfg, is_preview=True)
+
+        self.txt_live_receipt.configure(state="normal")
+        self.txt_live_receipt.delete("1.0", tk.END)
+        self.txt_live_receipt.insert("1.0", txt)
+        self.txt_live_receipt.see(tk.END if self.cart else "1.0")
+        self.txt_live_receipt.configure(state="disabled")
+
+    def print_current_or_last_receipt_clicked(self) -> None:
+        if not self.is_printer_enabled():
+            messagebox.showwarning(
+                "Impressora Desativada",
+                "A opção atual está configurada como '🚫 NÃO IMPRIMIR (Desativado)'.\n\n"
+                "Selecione uma impressora instalada na caixa logo acima para enviar o cupom diretamente para a impressora.",
+            )
+            return
+        target_sale = self.build_current_draft_sale_dict() if self.cart else (self.last_completed_sale or (self.storage.sales[-1] if self.storage.sales else None))
+        if not target_sale:
+            messagebox.showinfo("Sem Cupom", "Adicione itens ao carrinho ou realize uma venda para imprimir o cupom.")
+            return
+        is_prev = bool(self.cart)
+        receipt_txt = format_thermal_receipt_text(target_sale, self.cfg, is_preview=is_prev)
+        ok, msg = send_receipt_to_printer(
+            receipt_txt,
+            self.var_printer_name.get(),
+            sale_number=str(target_sale.get("sale_number") or "PDV"),
+        )
+        if ok:
+            self.lbl_search_feedback.configure(text=f"🖨️ {msg}", fg="#16a34a")
+        else:
+            messagebox.showerror("Erro na Impressora", msg)
+
+    def print_test_receipt_clicked(self) -> None:
+        if not self.is_printer_enabled():
+            messagebox.showwarning(
+                "Selecione uma Impressora",
+                "Escolha primeiro uma impressora instalada na máquina (diferente de '🚫 NÃO IMPRIMIR') para enviar o teste.",
+            )
+            return
+        test_sale = {
+            "sale_number": "TESTE-IMPRESSORA",
+            "session_id": self.cfg.get("active_session_id") or 1,
+            "session_title": self.cfg.get("active_session_title") or "Teste de Impressora",
+            "user_name": self.cfg.get("user_name") or "Operador",
+            "customer_name": DEFAULT_CONSUMER_NAME,
+            "customer_document": DEFAULT_CONSUMER_DOC,
+            "payment_method": "PIX",
+            "installments": 1,
+            "subtotal": 49.90,
+            "discount_amount": 0.0,
+            "total_amount": 49.90,
+            "items": [
+                {
+                    "isbn": "9788535914849",
+                    "sku": "1001",
+                    "name": "ITEM DE TESTE BOBINA 80MM",
+                    "quantity": 1,
+                    "unit_price": 49.90,
+                    "discount": 0.0,
+                }
+            ],
+            "client_sale_uuid": "TESTE-DIRETO-SEM-NAVEGADOR",
+            "synced": True,
+            "created_at": datetime.now().isoformat(),
+        }
+        receipt_txt = format_thermal_receipt_text(test_sale, self.cfg, is_preview=False)
+        ok, msg = send_receipt_to_printer(receipt_txt, self.var_printer_name.get(), sale_number="TESTE")
+        if ok:
+            messagebox.showinfo("Teste de Impressão Enviado", msg)
+        else:
+            messagebox.showerror("Falha no Teste de Impressão", msg)
+
     # ──────────────────────────────────────────────────────────────────────────
     # Atualização Visual de Licença e Travas de Segurança
     # ──────────────────────────────────────────────────────────────────────────
@@ -3615,12 +4222,14 @@ class HorusPDVWindow:
                 text="⚠️ Vazio: ao finalizar preencherá 99999999999 (Consumidor Final)",
                 fg="#d97706",
             )
+            self.update_live_receipt_preview()
             return
         ok, _, _, msg = validate_cpf_or_cnpj(raw)
         if ok:
             self.lbl_customer_doc_status.configure(text=f"✅ {msg}", fg="#16a34a")
         else:
             self.lbl_customer_doc_status.configure(text=f"❌ {msg}", fg="#dc2626")
+        self.update_live_receipt_preview()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Lógica de Máscaras Monetárias (R$ e %), Desconto (Venda vs Item) e Pagamento
@@ -3751,11 +4360,16 @@ class HorusPDVWindow:
         if method != "CREDITO":
             self.var_installments.set("1")
         self.refresh_cart_ui()
-        if method == "DINHEIRO":
-            self.entry_cash_received.focus_set()
-            self.entry_cash_received.icursor(tk.END)
+        self._refresh_checkout_modal_ui()
+        if method == "DINHEIRO" and hasattr(self, "entry_cash_received") and self.entry_cash_received is not None:
+            try:
+                if self.entry_cash_received.winfo_exists():
+                    self.entry_cash_received.focus_set()
+                    self.entry_cash_received.icursor(tk.END)
+            except Exception:
+                pass
         self.lbl_search_feedback.configure(
-            text=f"💳 Forma de pagamento selecionada via atalho: {method} ({self.var_installments.get()}x).",
+            text=f"💳 Forma de pagamento selecionada: {method} ({self.var_installments.get()}x).",
             fg="#2563eb",
         )
 
@@ -3765,8 +4379,9 @@ class HorusPDVWindow:
             self.var_payment_method.set("CREDITO")
         self.var_installments.set(str(n))
         self.refresh_cart_ui()
+        self._refresh_checkout_modal_ui()
         self.lbl_search_feedback.configure(
-            text=f"💳 Parcelamento definido via atalho: {self.var_payment_method.get()} em {n}x.",
+            text=f"💳 Parcelamento definido: {self.var_payment_method.get()} em {n}x.",
             fg="#2563eb",
         )
 
@@ -3783,6 +4398,7 @@ class HorusPDVWindow:
             nxt = 12
         self.var_installments.set(str(nxt))
         self.refresh_cart_ui()
+        self._refresh_checkout_modal_ui()
         self.lbl_search_feedback.configure(
             text=f"💳 Parcelamento alterado: CRÉDITO em {nxt}x.",
             fg="#2563eb",
@@ -3793,15 +4409,24 @@ class HorusPDVWindow:
         if n > 1 and self.var_payment_method.get() != "CREDITO":
             self.var_payment_method.set("CREDITO")
         self.refresh_cart_ui()
+        self._refresh_checkout_modal_ui()
 
     def _on_cash_received_key(self, event: Any) -> None:
+        if getattr(event, "keysym", "") in ("Return", "F12"):
+            return
         raw = self.var_cash_received.get()
         self.cash_received_digits = "".join(c for c in raw if c.isdigit())
         txt, val = format_atm_currency(self.cash_received_digits, mode="BRL")
         self.cash_received_value = val
         self.var_cash_received.set(txt)
-        self.entry_cash_received.icursor(tk.END)
+        if hasattr(self, "entry_cash_received") and self.entry_cash_received is not None:
+            try:
+                if self.entry_cash_received.winfo_exists():
+                    self.entry_cash_received.icursor(tk.END)
+            except Exception:
+                pass
         self.refresh_cart_ui()
+        self._refresh_checkout_modal_ui()
 
     def _on_initial_cash_key(self, event: Any) -> None:
         raw = self.var_initial_cash.get()
@@ -3814,6 +4439,7 @@ class HorusPDVWindow:
         if m != "CREDITO":
             self.var_installments.set("1")
         self.refresh_cart_ui()
+        self._refresh_checkout_modal_ui()
 
     def compute_totals(self) -> Tuple[float, float, float, float]:
         subtotal = round(sum(float(i["unit_price"]) * int(i["quantity"]) for i in self.cart), 2)
@@ -4113,9 +4739,29 @@ class HorusPDVWindow:
         if hasattr(self, "lbl_installment_preview"):
             inst_n = max(1, int(self.var_installments.get() or 1))
             per_inst = round(total / inst_n, 2) if inst_n > 0 else total
-            self.lbl_installment_preview.configure(text=f"{inst_n}x de {format_brl(per_inst)}")
+            pay_m = self.var_payment_method.get()
+            self.lbl_installment_preview.configure(
+                text=f"Pré-selecionado: {pay_m} ({inst_n}x de {format_brl(per_inst)})"
+            )
+
+        # Atualiza dinamicamente o Cupom em Tempo Real na coluna esquerda
+        self.update_live_receipt_preview()
 
     def finalize_sale(self) -> None:
+        """
+        Acionado ao pressionar F12 ou clicar em '✅ FINALIZAR VENDA / PAGAMENTO (F12)'.
+        - Se a Caixa de Pagamento (modal) já estiver aberta, confirma e executa a venda imediatamente.
+        - Caso contrário, valida licença, carrinho, cliente obrigatório (CPF/CNPJ) e estoque,
+          e abre a Caixa de Pagamento para escolher a forma de pagamento e finalizar.
+        """
+        if self.checkout_modal is not None:
+            try:
+                if self.checkout_modal.winfo_exists():
+                    self._confirm_and_execute_sale()
+                    return
+            except Exception:
+                self.checkout_modal = None
+
         # Sincroniza em tempo real com o servidor (se online) para detectar revogação/expiração imediata no Master
         if self.cfg.get("access_token") and self.cfg.get("company_id"):
             try:
@@ -4180,6 +4826,365 @@ class HorusPDVWindow:
                     )
                     return
 
+        # 4. Abre a Caixa de Pagamento e Fechamento da Venda (F12)
+        self._pending_checkout_customer = (cust_name, clean_doc_digits)
+        self.open_checkout_payment_modal(cust_name, clean_doc_digits)
+
+    def _refresh_checkout_modal_ui(self) -> None:
+        """
+        Atualiza em tempo real os botões de pagamento, parcelas, valor recebido e troco
+        dentro da Caixa de Pagamento (quando aberta), bem como o Cupom à esquerda.
+        """
+        if self.checkout_modal is None:
+            return
+        try:
+            if not self.checkout_modal.winfo_exists():
+                self.checkout_modal = None
+                return
+        except Exception:
+            self.checkout_modal = None
+            return
+
+        subtotal, disc, total, change = self.compute_totals()
+        cur_method = self.var_payment_method.get()
+        inst_n = max(1, int(self.var_installments.get() or 1))
+        per_inst = round(total / inst_n, 2) if inst_n > 0 else total
+
+        if hasattr(self, "_modal_pay_buttons"):
+            for m_code, btn in self._modal_pay_buttons.items():
+                if m_code == cur_method:
+                    btn.configure(bg="#2563eb", fg="#ffffff", relief="sunken")
+                else:
+                    btn.configure(bg="#f1f5f9", fg="#0f172a", relief="raised")
+
+        if hasattr(self, "_modal_lbl_installment_summary"):
+            self._modal_lbl_installment_summary.configure(
+                text=f"{cur_method}: {inst_n}x de {format_brl(per_inst)}"
+            )
+
+        if hasattr(self, "_modal_lbl_change"):
+            self._modal_lbl_change.configure(
+                text=f"Troco: {format_brl(change)}",
+                fg="#16a34a" if change > 0 else "#475569",
+            )
+
+        self.update_live_receipt_preview()
+
+    def open_checkout_payment_modal(self, cust_name: str, clean_doc_digits: str) -> None:
+        """
+        Abre a Caixa de Pagamento modal (F12) para escolher a forma de pagamento,
+        parcelas e troco, e confirmar a venda (enviando direto para a impressora se ativa).
+        """
+        if self.checkout_modal is not None:
+            try:
+                self.checkout_modal.destroy()
+            except Exception:
+                pass
+            self.checkout_modal = None
+
+        modal = tk.Toplevel(self.root)
+        self.checkout_modal = modal
+        modal.title("💳 Caixa de Pagamento e Fechamento da Venda (F12)")
+        modal.configure(bg="#0f172a")
+        modal.resizable(False, False)
+        modal.transient(self.root)
+        modal.grab_set()
+
+        w, h = 620, 560
+        sw = modal.winfo_screenwidth()
+        sh = modal.winfo_screenheight()
+        x = max(20, int((sw - w) / 2))
+        y = max(20, int((sh - h) / 2))
+        modal.geometry(f"{w}x{h}+{x}+{y}")
+
+        subtotal, disc, total, _ = self.compute_totals()
+
+        # Cabeçalho escuro do modal
+        header = tk.Frame(modal, bg="#0f172a", padx=18, pady=12)
+        header.pack(fill="x")
+        tk.Label(
+            header,
+            text="💳 ESCOLHA A FORMA DE PAGAMENTO PARA FINALIZAR",
+            font=("Segoe UI", 13, "bold"),
+            bg="#0f172a",
+            fg="#ffffff",
+        ).pack(anchor="w")
+        tk.Label(
+            header,
+            text=f"👤 Cliente: {cust_name} ({format_cpf_cnpj(clean_doc_digits)})   |   Itens: {sum(int(i.get('quantity') or 1) for i in self.cart)}",
+            font=("Segoe UI", 9, "bold"),
+            bg="#0f172a",
+            fg="#38bdf8",
+        ).pack(anchor="w", pady=(2, 0))
+
+        # Corpo claro
+        body = tk.Frame(modal, bg="#ffffff", padx=18, pady=14)
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        # Resumo de valores no topo
+        tot_box = tk.Frame(body, bg="#f0fdf4", padx=14, pady=10, highlightthickness=1, highlightbackground="#bbf7d0")
+        tot_box.pack(fill="x", pady=(0, 12))
+        top_tot_row = tk.Frame(tot_box, bg="#f0fdf4")
+        top_tot_row.pack(fill="x")
+        tk.Label(
+            top_tot_row,
+            text=f"Subtotal: {format_brl(subtotal)}   |   Desconto: - {format_brl(disc)}",
+            font=("Segoe UI", 9, "bold"),
+            bg="#f0fdf4",
+            fg="#166534",
+        ).pack(side="left")
+        tk.Label(
+            top_tot_row,
+            text="TOTAL A PAGAR",
+            font=("Segoe UI", 9, "bold"),
+            bg="#f0fdf4",
+            fg="#15803d",
+        ).pack(side="right")
+
+        bot_tot_row = tk.Frame(tot_box, bg="#f0fdf4")
+        bot_tot_row.pack(fill="x", pady=(2, 0))
+        self._modal_lbl_installment_summary = tk.Label(
+            bot_tot_row,
+            text="",
+            font=("Segoe UI", 10, "bold"),
+            bg="#f0fdf4",
+            fg="#2563eb",
+        )
+        self._modal_lbl_installment_summary.pack(side="left")
+        tk.Label(
+            bot_tot_row,
+            text=format_brl(total),
+            font=("Segoe UI", 22, "bold"),
+            bg="#f0fdf4",
+            fg="#15803d",
+        ).pack(side="right")
+
+        # 1. Seleção de Forma de Pagamento (Botões grandes com atalhos)
+        tk.Label(
+            body,
+            text="1. Forma de Pagamento (Atalhos: F7 / F8 / F9 / F10 ou Alt+1..4):",
+            font=("Segoe UI", 9, "bold"),
+            bg="#ffffff",
+            fg="#334155",
+        ).pack(anchor="w", pady=(0, 6))
+
+        pay_grid = tk.Frame(body, bg="#ffffff")
+        pay_grid.pack(fill="x", pady=(0, 12))
+        pay_grid.columnconfigure(0, weight=1)
+        pay_grid.columnconfigure(1, weight=1)
+
+        methods = [
+            ("💵 1. Dinheiro (F7)", "DINHEIRO", 0, 0),
+            ("⚡ 2. PIX (F8)", "PIX", 0, 1),
+            ("💳 3. Cartão Débito (F9)", "DEBITO", 1, 0),
+            ("💳 4. Cartão Crédito (F10)", "CREDITO", 1, 1),
+        ]
+        self._modal_pay_buttons: Dict[str, tk.Button] = {}
+        for label, val, r_idx, c_idx in methods:
+            btn = tk.Button(
+                pay_grid,
+                text=label,
+                command=lambda m=val: self.select_payment_shortcut(m),
+                font=("Segoe UI", 10, "bold"),
+                padx=10,
+                pady=8,
+                cursor="hand2",
+                bd=1,
+            )
+            btn.grid(row=r_idx, column=c_idx, sticky="ew", padx=4, pady=4)
+            self._modal_pay_buttons[val] = btn
+
+        # 2. Parcelamento (1x a 12x)
+        inst_box = tk.Frame(body, bg="#f8fafc", padx=10, pady=8, highlightthickness=1, highlightbackground="#e2e8f0")
+        inst_box.pack(fill="x", pady=(0, 10))
+
+        inst_row1 = tk.Frame(inst_box, bg="#f8fafc")
+        inst_row1.pack(fill="x")
+        tk.Label(
+            inst_row1,
+            text="2. Parcelas (F11 alterna | Ctrl+1..9):",
+            font=("Segoe UI", 9, "bold"),
+            bg="#f8fafc",
+            fg="#334155",
+        ).pack(side="left")
+
+        tk.Button(
+            inst_row1,
+            text="➖",
+            command=lambda: self.cycle_installments_shortcut(-1),
+            bg="#e2e8f0",
+            fg="#0f172a",
+            font=("Segoe UI", 8, "bold"),
+            relief="flat",
+            padx=6,
+            cursor="hand2",
+        ).pack(side="left", padx=(8, 2))
+
+        self.combo_installments = ttk.Combobox(
+            inst_row1,
+            textvariable=self.var_installments,
+            values=[str(i) for i in range(1, 13)],
+            width=4,
+            state="readonly",
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.combo_installments.pack(side="left", padx=2)
+        self.combo_installments.bind("<<ComboboxSelected>>", lambda e: self._on_installments_combo_change())
+
+        tk.Button(
+            inst_row1,
+            text="➕",
+            command=lambda: self.cycle_installments_shortcut(1),
+            bg="#e2e8f0",
+            fg="#0f172a",
+            font=("Segoe UI", 8, "bold"),
+            relief="flat",
+            padx=6,
+            cursor="hand2",
+        ).pack(side="left", padx=(2, 8))
+
+        for q_n in (1, 2, 3, 4, 6, 10, 12):
+            tk.Button(
+                inst_row1,
+                text=f"{q_n}x",
+                command=lambda n=q_n: self.set_installments_shortcut(n),
+                bg="#dbeafe" if q_n == 1 else "#e2e8f0",
+                fg="#1e40af" if q_n == 1 else "#334155",
+                font=("Segoe UI", 8, "bold"),
+                relief="flat",
+                padx=5,
+                pady=1,
+                cursor="hand2",
+            ).pack(side="left", padx=1)
+
+        # 3. Valor Recebido em Dinheiro & Cálculo de Troco
+        cash_box = tk.Frame(body, bg="#f8fafc", padx=10, pady=8, highlightthickness=1, highlightbackground="#e2e8f0")
+        cash_box.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            cash_box,
+            text="3. Valor Recebido em Dinheiro (para cálculo de Troco):",
+            font=("Segoe UI", 9, "bold"),
+            bg="#f8fafc",
+            fg="#334155",
+        ).pack(side="left")
+
+        self.entry_cash_received = tk.Entry(
+            cash_box,
+            textvariable=self.var_cash_received,
+            font=("Segoe UI", 11, "bold"),
+            width=13,
+            bd=1,
+            relief="solid",
+            justify="right",
+            bg="#ffffff",
+            fg="#0f172a",
+        )
+        self.entry_cash_received.pack(side="left", padx=10, ipady=3)
+        self.entry_cash_received.bind("<KeyRelease>", self._on_cash_received_key)
+
+        self._modal_lbl_change = tk.Label(
+            cash_box,
+            text="Troco: R$ 0,00",
+            font=("Segoe UI", 11, "bold"),
+            bg="#f8fafc",
+            fg="#475569",
+        )
+        self._modal_lbl_change.pack(side="right")
+
+        # 4. Status da Impressora no fechamento
+        prt_name = (self.var_printer_name.get() or "").strip() or NO_PRINTER_OPTION
+        prt_txt = (
+            f"🖨️ Ao confirmar, o cupom será enviado direto para: {prt_name}"
+            if self.is_printer_enabled()
+            else "🚫 Impressão desativada ('NÃO IMPRIMIR') — finalizará sem imprimir nada."
+        )
+        tk.Label(
+            body,
+            text=prt_txt,
+            font=("Segoe UI", 8, "bold"),
+            bg="#ffffff",
+            fg="#15803d" if self.is_printer_enabled() else "#64748b",
+        ).pack(anchor="w", pady=(0, 10))
+
+        # 5. Botões de Ação (Cancelar ESC / Confirmar e Finalizar ENTER ou F12)
+        btn_row = tk.Frame(body, bg="#ffffff")
+        btn_row.pack(fill="x", side="bottom")
+
+        tk.Button(
+            btn_row,
+            text="✖ Voltar ao Carrinho (ESC)",
+            command=self._close_checkout_modal,
+            bg="#e2e8f0",
+            fg="#334155",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            padx=14,
+            pady=10,
+            cursor="hand2",
+        ).pack(side="left")
+
+        btn_confirm = tk.Button(
+            btn_row,
+            text="✅ CONFIRMAR PAGAMENTO E CONCLUIR VENDA (ENTER / F12)",
+            command=self._confirm_and_execute_sale,
+            bg="#16a34a",
+            fg="#ffffff",
+            activebackground="#15803d",
+            activeforeground="#ffffff",
+            font=("Segoe UI", 11, "bold"),
+            relief="flat",
+            padx=18,
+            pady=10,
+            cursor="hand2",
+        )
+        btn_confirm.pack(side="right", fill="x", expand=True, padx=(10, 0))
+
+        # Atalhos dentro do modal
+        modal.bind("<Escape>", lambda e: self._close_checkout_modal())
+        modal.bind("<Return>", lambda e: self._confirm_and_execute_sale())
+        modal.bind("<F12>", lambda e: self._confirm_and_execute_sale())
+        modal.bind("<F7>", lambda e: self.select_payment_shortcut("DINHEIRO"))
+        modal.bind("<F8>", lambda e: self.select_payment_shortcut("PIX"))
+        modal.bind("<F9>", lambda e: self.select_payment_shortcut("DEBITO"))
+        modal.bind("<F10>", lambda e: self.select_payment_shortcut("CREDITO"))
+        modal.bind("<F11>", lambda e: self.cycle_installments_shortcut(1))
+        modal.bind("<Alt-Key-1>", lambda e: self.select_payment_shortcut("DINHEIRO"))
+        modal.bind("<Alt-Key-2>", lambda e: self.select_payment_shortcut("PIX"))
+        modal.bind("<Alt-Key-3>", lambda e: self.select_payment_shortcut("DEBITO"))
+        modal.bind("<Alt-Key-4>", lambda e: self.select_payment_shortcut("CREDITO"))
+
+        self._refresh_checkout_modal_ui()
+        if self.var_payment_method.get() == "DINHEIRO":
+            self.entry_cash_received.focus_set()
+            self.entry_cash_received.icursor(tk.END)
+        else:
+            btn_confirm.focus_set()
+
+    def _close_checkout_modal(self) -> None:
+        if self.checkout_modal is not None:
+            try:
+                self.checkout_modal.grab_release()
+                self.checkout_modal.destroy()
+            except Exception:
+                pass
+            self.checkout_modal = None
+        self.entry_search.focus_set()
+
+    def _confirm_and_execute_sale(self) -> None:
+        """
+        Executa a gravação definitiva da venda após confirmação na Caixa de Pagamento (F12 / Enter),
+        atualiza o cupom na tela esquerda e envia automaticamente direto para a impressora configurada
+        (ou não imprime nada se estiver configurado como 'NÃO IMPRIMIR').
+        """
+        if not self.cart:
+            self._close_checkout_modal()
+            return
+
+        cust_name, clean_doc_digits = getattr(
+            self, "_pending_checkout_customer", (DEFAULT_CONSUMER_NAME, DEFAULT_CONSUMER_DOC)
+        )
+        self._close_checkout_modal()
+
         subtotal, disc, total, change = self.compute_totals()
         pay_method = self.var_payment_method.get()
         installments = int(self.var_installments.get() or 1)
@@ -4197,28 +5202,46 @@ class HorusPDVWindow:
             customer_name=cust_name,
             customer_document=clean_doc_digits,
         )
+        self.last_completed_sale = sale
 
-        receipt_path = generate_receipt_html(sale, self.cfg)
-        if self.var_print_receipt.get():
-            try:
-                webbrowser.open(receipt_path.as_uri())
-            except Exception:
-                pass
+        # Salva arquivo HTML de backup na pasta receipts/ sem abrir navegador
+        try:
+            generate_receipt_html(sale, self.cfg)
+        except Exception:
+            pass
 
+        # Envio direto e silencioso para a impressora instalada (se ativa)
+        printer_target = (self.var_printer_name.get() or "").strip() or NO_PRINTER_OPTION
+        if self.is_printer_enabled():
+            receipt_txt = format_thermal_receipt_text(sale, self.cfg, is_preview=False)
+            threading.Thread(
+                target=self._silent_print_worker,
+                args=(receipt_txt, printer_target, str(sale.get("sale_number") or "PDV")),
+                daemon=True,
+            ).start()
+
+        # Limpa o carrinho para a próxima venda e exibe o cupom finalizado na bobina à esquerda
         self.clear_cart()
+        self.update_live_receipt_preview(finalized_sale=sale)
         self.refresh_sales_and_sync_ui()
 
+        prt_info = f" | 🖨️ Enviado para '{printer_target}'" if self.is_printer_enabled() else " | 🚫 Sem impressão"
         if self.cfg.get("access_token") and self.cfg.get("active_session_id"):
             threading.Thread(target=self._sync_worker, args=(False,), daemon=True).start()
             self.lbl_search_feedback.configure(
-                text=f"✅ Venda {sale['sale_number']} ({format_brl(total)}) registrada! Sincronizando com a Sessão #{self.cfg.get('active_session_id')}...",
+                text=f"✅ Venda {sale['sale_number']} ({format_brl(total)}) concluída{prt_info}! Sincronizando com Sessão #{self.cfg.get('active_session_id')}...",
                 fg="#16a34a",
             )
         else:
             self.lbl_search_feedback.configure(
-                text=f"💾 Venda {sale['sale_number']} ({format_brl(total)}) salva OFFLINE! Será sincronizada assim que vincular a Sessão/Internet.",
+                text=f"💾 Venda {sale['sale_number']} ({format_brl(total)}) salva OFFLINE{prt_info}!",
                 fg="#d97706",
             )
+
+    def _silent_print_worker(self, receipt_text: str, printer_name: str, sale_number: str) -> None:
+        ok, msg = send_receipt_to_printer(receipt_text, printer_name, sale_number=sale_number)
+        if not ok:
+            self.ui_queue.put(("PRINT_ERROR", msg))
 
     # ──────────────────────────────────────────────────────────────────────────
     # Sincronização Automática/Manual e Geração de Relatórios
@@ -4379,8 +5402,28 @@ class HorusPDVWindow:
         c_uuid = sel[0]
         for s in self.storage.sales:
             if s.get("client_sale_uuid") == c_uuid:
-                p = generate_receipt_html(s, self.cfg)
-                webbrowser.open(p.as_uri())
+                self.last_completed_sale = s
+                self.update_live_receipt_preview(finalized_sale=s)
+                if self.is_printer_enabled():
+                    receipt_txt = format_thermal_receipt_text(s, self.cfg, is_preview=False)
+                    ok, msg = send_receipt_to_printer(
+                        receipt_txt,
+                        self.var_printer_name.get(),
+                        sale_number=str(s.get("sale_number") or "REIMPRESSAO"),
+                    )
+                    if ok:
+                        messagebox.showinfo("Cupom Reimpresso", msg)
+                    else:
+                        messagebox.showerror("Erro ao Reimprimir Cupom", msg)
+                else:
+                    p = generate_receipt_html(s, self.cfg)
+                    if messagebox.askyesno(
+                        "Impressora Desativada ('NÃO IMPRIMIR')",
+                        f"O cupom da venda {s.get('sale_number')} foi carregado no visor esquerdo do PDV.\n\n"
+                        "Como a impressora está configurada como '🚫 NÃO IMPRIMIR', nada foi enviado para impressão.\n"
+                        "Deseja visualizar o arquivo de cupom salvo no computador?",
+                    ):
+                        webbrowser.open(p.as_uri())
                 break
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -4748,6 +5791,9 @@ class HorusPDVWindow:
 
                 elif ev == "SERVER_SALES_ERROR":
                     messagebox.showwarning("Servidor", str(payload))
+
+                elif ev == "PRINT_ERROR":
+                    messagebox.showwarning("Aviso de Impressora do Cupom", str(payload))
 
                 elif ev == "REPORT_DOWNLOADED":
                     ok, msg, path = payload
