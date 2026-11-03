@@ -355,8 +355,11 @@ export default function DbmProductsSearchPage() {
   const [horusEditoraFilter, setHorusEditoraFilter] = useState('');
   const [horusItems, setHorusItems] = useState<HorusEstoqueItem[]>([]);
   const [horusTotalCount, setHorusTotalCount] = useState(0);
+  const [horusStats, setHorusStats] = useState({ totalAll: 0, totalImported: 0, totalNotImported: 0 });
   const [horusOffset, setHorusOffset] = useState(0);
-  const [horusLimit] = useState(100);
+  const [horusLimit, setHorusLimit] = useState(5000);
+  const [horusFilterMode, setHorusFilterMode] = useState<'ALL' | 'ONLY_NEW' | 'ONLY_IMPORTED'>('ALL');
+  const [horusOnlyWithStock, setHorusOnlyWithStock] = useState(false);
   const [loadingHorusItems, setLoadingHorusItems] = useState(false);
   const [selectedHorusCodes, setSelectedHorusCodes] = useState<Record<string, boolean>>({});
   const [horusExtraIsbnsMap, setHorusExtraIsbnsMap] = useState<Record<string, string>>({});
@@ -463,7 +466,7 @@ export default function DbmProductsSearchPage() {
     try {
       const token = getToken();
       const params = new URLSearchParams();
-      params.append('limit', '500');
+      params.append('limit', '5000');
       params.append('source', 'dbm');
       if (targetCompanyId) params.append('company_id', String(targetCompanyId));
 
@@ -673,9 +676,10 @@ export default function DbmProductsSearchPage() {
   };
 
   // Busca no Horus SQL (Itens_estoque_geral)
-  const fetchHorusEstoqueGeral = async (customOffset = 0) => {
+  const fetchHorusEstoqueGeral = async (customOffset = 0, customLimit?: number) => {
     setLoadingHorusItems(true);
     setHorusSyncMessage(null);
+    const effectiveLimit = customLimit ?? horusLimit;
     try {
       const token = getToken();
       const params = new URLSearchParams();
@@ -684,7 +688,7 @@ export default function DbmProductsSearchPage() {
         params.append('q', horusSearchTerm.trim());
       }
       if (horusEditoraFilter.trim()) params.append('editora', horusEditoraFilter.trim());
-      params.append('limit', String(horusLimit));
+      params.append('limit', String(effectiveLimit));
       params.append('offset', String(customOffset));
 
       const res = await fetch(
@@ -698,7 +702,15 @@ export default function DbmProductsSearchPage() {
 
       const items: HorusEstoqueItem[] = data.items || [];
       setHorusItems(items);
-      setHorusTotalCount(data.total_count ?? data.total ?? items.length);
+      const totalAll = data.total_all ?? data.total_count ?? data.total ?? items.length;
+      const totalImp = data.total_imported ?? items.filter(i => i.already_imported).length;
+      const totalNotImp = data.total_not_imported ?? (totalAll - totalImp);
+      setHorusTotalCount(totalAll);
+      setHorusStats({
+        totalAll,
+        totalImported: totalImp,
+        totalNotImported: totalNotImp
+      });
       setHorusOffset(customOffset);
       if (data.message && items.length === 0) {
         setHorusSyncMessage({ type: 'error', text: data.message });
@@ -706,7 +718,9 @@ export default function DbmProductsSearchPage() {
 
       const extraMap: Record<string, string> = { ...horusExtraIsbnsMap };
       items.forEach(it => {
-        if (it.local_product_id) {
+        if (it.additional_isbns && !extraMap[it.cod_item]) {
+          extraMap[it.cod_item] = it.additional_isbns;
+        } else if (it.local_product_id) {
           const foundLocal = products.find(p => p.id === it.local_product_id);
           if (foundLocal?.additional_isbns && !extraMap[it.cod_item]) {
             extraMap[it.cod_item] = foundLocal.additional_isbns;
@@ -720,6 +734,16 @@ export default function DbmProductsSearchPage() {
       setLoadingHorusItems(false);
     }
   };
+
+  // Filtra os itens exibidos no modal de sincronização conforme as opções marcadas
+  const visibleHorusItems = useMemo(() => {
+    return horusItems.filter(it => {
+      if (horusFilterMode === 'ONLY_NEW' && it.already_imported) return false;
+      if (horusFilterMode === 'ONLY_IMPORTED' && !it.already_imported) return false;
+      if (horusOnlyWithStock && Number(it.estoque || 0) <= 0) return false;
+      return true;
+    });
+  }, [horusItems, horusFilterMode, horusOnlyWithStock]);
 
   const handleOpenHorusSyncModal = () => {
     setShowHorusSyncModal(true);
@@ -735,12 +759,23 @@ export default function DbmProductsSearchPage() {
   };
 
   const toggleSelectAllHorusPage = () => {
-    const allSelected = horusItems.length > 0 && horusItems.every(i => selectedHorusCodes[i.cod_item]);
+    const allSelected =
+      visibleHorusItems.length > 0 && visibleHorusItems.every(i => selectedHorusCodes[i.cod_item]);
     const next = { ...selectedHorusCodes };
-    horusItems.forEach(i => {
+    visibleHorusItems.forEach(i => {
       if (allSelected) {
         delete next[i.cod_item];
       } else {
+        next[i.cod_item] = true;
+      }
+    });
+    setSelectedHorusCodes(next);
+  };
+
+  const handleSelectAllNotImportedHorus = () => {
+    const next = { ...selectedHorusCodes };
+    horusItems.forEach(i => {
+      if (!i.already_imported) {
         next[i.cod_item] = true;
       }
     });
@@ -2681,44 +2716,106 @@ export default function DbmProductsSearchPage() {
                 </button>
               </div>
 
-              {/* Barra de Busca SQL */}
+              {/* Barra de Busca SQL e Filtros Opcionais */}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
                   fetchHorusEstoqueGeral(0);
                 }}
-                className="p-3.5 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-end gap-2.5"
+                className="p-3.5 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 space-y-2.5"
               >
-                <div className="flex-1 min-w-[220px]">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    Buscar por Código Horus, ISBN ou Nome do Livro
-                  </label>
-                  <input
-                    type="text"
-                    value={horusSearchTerm}
-                    onChange={(e) => setHorusSearchTerm(e.target.value)}
-                    placeholder="Ex: 9786560920071, Eu sei desenhar, Bordar..."
-                    className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-indigo-500"
-                  />
+                <div className="flex flex-wrap items-end gap-2.5">
+                  <div className="flex-1 min-w-[220px]">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                      Buscar por Código Horus, ISBN ou Nome do Livro
+                    </label>
+                    <input
+                      type="text"
+                      value={horusSearchTerm}
+                      onChange={(e) => setHorusSearchTerm(e.target.value)}
+                      placeholder="Ex: 9786560920071, Eu sei desenhar, Bordar..."
+                      className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="w-48">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Editora</label>
+                    <input
+                      type="text"
+                      value={horusEditoraFilter}
+                      onChange={(e) => setHorusEditoraFilter(e.target.value)}
+                      placeholder="Filtrar editora..."
+                      className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="w-40">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Quantidade</label>
+                    <select
+                      value={horusLimit}
+                      onChange={(e) => {
+                        const newLim = Number(e.target.value);
+                        setHorusLimit(newLim);
+                        fetchHorusEstoqueGeral(0, newLim);
+                      }}
+                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-indigo-500 font-semibold"
+                    >
+                      <option value={5000}>Todos (até 5.000)</option>
+                      <option value={1000}>1.000 itens</option>
+                      <option value={500}>500 itens</option>
+                      <option value={100}>100 itens</option>
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={loadingHorusItems}
+                    className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {loadingHorusItems ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                    Consultar Horus SQL
+                  </button>
                 </div>
-                <div className="w-52">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Editora</label>
-                  <input
-                    type="text"
-                    value={horusEditoraFilter}
-                    onChange={(e) => setHorusEditoraFilter(e.target.value)}
-                    placeholder="Filtrar editora..."
-                    className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:border-indigo-500"
-                  />
+
+                {/* Linha de Filtros Opcionais de Exibição */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80 text-xs">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-1.5 text-slate-700 font-semibold cursor-pointer select-none bg-white px-2.5 py-1 rounded-md border border-slate-200 hover:border-indigo-300">
+                      <input
+                        type="checkbox"
+                        checked={horusFilterMode === 'ONLY_NEW'}
+                        onChange={(e) => setHorusFilterMode(e.target.checked ? 'ONLY_NEW' : 'ALL')}
+                        className="rounded border-slate-300 text-indigo-600"
+                      />
+                      <span>Ocultar itens já cadastrados no DBM ({horusStats.totalNotImported} pendentes)</span>
+                    </label>
+
+                    <label className="inline-flex items-center gap-1.5 text-slate-700 font-semibold cursor-pointer select-none bg-white px-2.5 py-1 rounded-md border border-slate-200 hover:border-indigo-300">
+                      <input
+                        type="checkbox"
+                        checked={horusFilterMode === 'ONLY_IMPORTED'}
+                        onChange={(e) => setHorusFilterMode(e.target.checked ? 'ONLY_IMPORTED' : 'ALL')}
+                        className="rounded border-slate-300 text-indigo-600"
+                      />
+                      <span>Ocultar itens não cadastrados ({horusStats.totalImported} já no DBM)</span>
+                    </label>
+
+                    <label className="inline-flex items-center gap-1.5 text-slate-600 cursor-pointer select-none bg-white px-2.5 py-1 rounded-md border border-slate-200 hover:border-indigo-300">
+                      <input
+                        type="checkbox"
+                        checked={horusOnlyWithStock}
+                        onChange={(e) => setHorusOnlyWithStock(e.target.checked)}
+                        className="rounded border-slate-300 text-indigo-600"
+                      />
+                      <span>Apenas com Saldo &gt; 0</span>
+                    </label>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-[11px] font-mono text-slate-500">
+                    <span>Total Horus: <strong className="text-slate-800">{horusStats.totalAll}</strong></span>
+                    <span>•</span>
+                    <span>Já no DBM: <strong className="text-emerald-700">{horusStats.totalImported}</strong></span>
+                    <span>•</span>
+                    <span>Não cadastrados: <strong className="text-amber-700">{horusStats.totalNotImported}</strong></span>
+                  </div>
                 </div>
-                <button
-                  type="submit"
-                  disabled={loadingHorusItems}
-                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 cursor-pointer"
-                >
-                  {loadingHorusItems ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                  Consultar Horus SQL
-                </button>
               </form>
 
               {horusSyncMessage && (
@@ -2741,8 +2838,9 @@ export default function DbmProductsSearchPage() {
                       <th className="py-2 px-2.5 w-8 text-center">
                         <input
                           type="checkbox"
-                          checked={horusItems.length > 0 && horusItems.every(i => selectedHorusCodes[i.cod_item])}
+                          checked={visibleHorusItems.length > 0 && visibleHorusItems.every(i => selectedHorusCodes[i.cod_item])}
                           onChange={toggleSelectAllHorusPage}
+                          title="Selecionar/desmarcar todos os itens visíveis na lista"
                         />
                       </th>
                       <th className="py-2 px-2.5 w-20">Cód Horus</th>
@@ -2766,14 +2864,14 @@ export default function DbmProductsSearchPage() {
                           Consultando view Itens_estoque_geral no SQL Server do Horus...
                         </td>
                       </tr>
-                    ) : horusItems.length === 0 ? (
+                    ) : visibleHorusItems.length === 0 ? (
                       <tr>
                         <td colSpan={10} className="py-12 text-center text-slate-500">
-                          Nenhum item retornado do Horus SQL para este filtro.
+                          Nenhum item para exibir com o filtro atual.
                         </td>
                       </tr>
                     ) : (
-                      horusItems.map(it => {
+                      visibleHorusItems.map(it => {
                         const isChecked = Boolean(selectedHorusCodes[it.cod_item]);
                         return (
                           <tr
@@ -2836,8 +2934,19 @@ export default function DbmProductsSearchPage() {
 
               {/* Rodapé do Modal de Sincronização */}
               <div className="p-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
-                <div className="text-xs text-slate-600 font-semibold">
-                  Selecionados: <strong className="text-indigo-700">{Object.values(selectedHorusCodes).filter(Boolean).length}</strong> item(ns) • Exibindo {horusItems.length} de {horusTotalCount}
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 font-semibold">
+                  <span>
+                    Selecionados: <strong className="text-indigo-700">{Object.values(selectedHorusCodes).filter(Boolean).length}</strong> item(ns) • Exibindo {visibleHorusItems.length} de {horusTotalCount}
+                  </span>
+                  {horusStats.totalNotImported > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleSelectAllNotImportedHorus}
+                      className="px-2.5 py-1 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-[11px] font-bold cursor-pointer transition"
+                    >
+                      Selecionar Todos Não Cadastrados ({horusStats.totalNotImported})
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <button

@@ -421,16 +421,18 @@ def get_items_estoque_geral(
     search: Optional[str] = None,
     q: Optional[str] = None,
     editora: Optional[str] = None,
-    limit: int = 500,
+    only_not_imported: bool = False,
+    only_imported: bool = False,
+    limit: int = 5000,
     offset: int = 0,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Consulta o acervo de produtos no SQL Server do Horus a partir da tabela
+    Consulta o acervo completo de produtos no SQL Server do Horus a partir da tabela
     Itens_estoque_geral com relacionamento em EDITORAS.
     Respeita a configuração de OFFSET/LIMIT e cruza com a base local para indicar
-    se o item já foi cadastrado no Cronuz.
+    se o item já foi cadastrado no Cronuz DBM.
     """
     _assert_ownership(current_user, company_id)
     settings = _get_settings_or_404(db, company_id)
@@ -438,7 +440,7 @@ def get_items_estoque_geral(
     from app.integrators.horus_sql_client import HorusSQLClient, HorusSQLConfigError
     from app.models.product import Product
 
-    limit = min(max(1, limit), 500)
+    limit = min(max(1, limit), 10000)
     offset = max(0, offset)
 
     try:
@@ -497,8 +499,17 @@ def get_items_estoque_geral(
             FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
             LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
             LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
-            LEFT JOIN ITENS_ESTPRECO_ATUAL PA WITH (NOLOCK) ON PA.COD_ITEM = I.COD_ITEM
-            LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = I.COD_ITEM AND S.cod_filial = {cod_filial}
+            LEFT JOIN (
+                SELECT COD_ITEM, MAX(VLR_CAPA) AS VLR_CAPA
+                FROM ITENS_ESTPRECO_ATUAL WITH (NOLOCK)
+                GROUP BY COD_ITEM
+            ) PA ON PA.COD_ITEM = I.COD_ITEM
+            LEFT JOIN (
+                SELECT cod_item, SUM(ISNULL(saldo_disponivel, 0)) AS saldo_disponivel
+                FROM VW_SALDO_ITENS WITH (NOLOCK)
+                WHERE cod_filial = {cod_filial}
+                GROUP BY cod_item
+            ) S ON S.cod_item = I.COD_ITEM
             WHERE {where_sql}
             ORDER BY I.COD_ITEM ASC
         """
@@ -518,8 +529,17 @@ def get_items_estoque_geral(
             FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
             LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
             LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
-            LEFT JOIN ITENS_ESTPRECO_ATUAL PA WITH (NOLOCK) ON PA.COD_ITEM = I.COD_ITEM
-            LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = I.COD_ITEM AND S.cod_filial = {cod_filial}
+            LEFT JOIN (
+                SELECT COD_ITEM, MAX(VLR_CAPA) AS VLR_CAPA
+                FROM ITENS_ESTPRECO_ATUAL WITH (NOLOCK)
+                GROUP BY COD_ITEM
+            ) PA ON PA.COD_ITEM = I.COD_ITEM
+            LEFT JOIN (
+                SELECT cod_item, SUM(ISNULL(saldo_disponivel, 0)) AS saldo_disponivel
+                FROM VW_SALDO_ITENS WITH (NOLOCK)
+                WHERE cod_filial = {cod_filial}
+                GROUP BY cod_item
+            ) S ON S.cod_item = I.COD_ITEM
             WHERE {where_sql}
             ORDER BY I.COD_ITEM ASC
             OFFSET {offset} ROWS
@@ -533,6 +553,10 @@ def get_items_estoque_geral(
         return {
             "items": [],
             "total": 0,
+            "total_count": 0,
+            "total_all": 0,
+            "total_imported": 0,
+            "total_not_imported": 0,
             "offset": offset,
             "limit": limit,
             "error_detail": str(e),
@@ -540,19 +564,31 @@ def get_items_estoque_geral(
         }
 
     # Busca SKUs locais para sinalizar itens já importados
-    local_products = db.query(Product.id, Product.sku, Product.ean_gtin, Product.horus_cod_item).filter(
+    local_products = db.query(
+        Product.id,
+        Product.sku,
+        Product.ean_gtin,
+        Product.horus_cod_item,
+        Product.additional_isbns
+    ).filter(
         Product.company_id == company_id
     ).all()
     local_skus = {str(p.sku): p.id for p in local_products if p.sku}
     local_eans = {str(p.ean_gtin): p.id for p in local_products if p.ean_gtin}
     local_horus_codes = {int(p.horus_cod_item): p.id for p in local_products if p.horus_cod_item}
+    local_extra_isbns = {p.id: (p.additional_isbns or "") for p in local_products}
 
     enriched_items = []
+    seen_cods = set()
     for r in rows:
         raw_cod = r.get("cod_item")
-        cod_str = str(raw_cod or "")
-        cod_int = int(raw_cod) if str(raw_cod).isdigit() else None
-        isbn_str = str(r.get("isbn") or "")
+        cod_str = str(raw_cod or "").strip()
+        if not cod_str or cod_str in seen_cods:
+            continue
+        seen_cods.add(cod_str)
+
+        cod_int = int(raw_cod) if cod_str.isdigit() else None
+        isbn_str = str(r.get("isbn") or "").strip()
         already_imported = False
         local_id = None
 
@@ -582,11 +618,27 @@ def get_items_estoque_geral(
             "data_lancamento": dt_iso,
             "already_imported": already_imported,
             "local_product_id": local_id,
+            "additional_isbns": local_extra_isbns.get(local_id, "") if local_id else "",
         })
 
+    total_all = len(enriched_items)
+    total_imported = sum(1 for x in enriched_items if x["already_imported"])
+    total_not_imported = total_all - total_imported
+
+    if only_not_imported:
+        filtered_items = [x for x in enriched_items if not x["already_imported"]]
+    elif only_imported:
+        filtered_items = [x for x in enriched_items if x["already_imported"]]
+    else:
+        filtered_items = enriched_items
+
     return {
-        "items": enriched_items,
-        "total": len(enriched_items),
+        "items": filtered_items,
+        "total": len(filtered_items),
+        "total_count": len(filtered_items),
+        "total_all": total_all,
+        "total_imported": total_imported,
+        "total_not_imported": total_not_imported,
         "offset": offset,
         "limit": limit,
     }
