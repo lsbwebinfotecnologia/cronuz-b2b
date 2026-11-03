@@ -1564,6 +1564,130 @@ def cancel_inventory_session(
     return {"message": f"Abertura da prateleira '{loc}' foi marcada como CANCELADA. O histórico foi preservado para auditoria."}
 
 
+# Restaurar / Reativar Abertura de Prateleira Cancelada
+@router.put("/{inventory_id}/sessions/{session_id}/restore")
+def restore_inventory_session(
+    company_id: int,
+    inventory_id: int,
+    session_id: int,
+    payload: Optional[inv_schemas.SessionCancelRequest] = None,
+    pin: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    inv = db.query(Inventory).filter(Inventory.id == inventory_id, Inventory.company_id == company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventário não encontrado.")
+
+    if payload and payload.pin_or_password:
+        _verify_supervisor_pin_or_password(inv, current_user, payload.pin_or_password)
+    elif pin:
+        _verify_supervisor_pin_or_password(inv, current_user, pin)
+
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inventory_id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+
+    loc = sess.location
+    sess.status = SessionStatus.CONCLUIDA.value
+    if not sess.closed_at:
+        sess.closed_at = func.now()
+
+    sess_scans = db.query(func.coalesce(func.sum(InventoryScan.quantity), 0)).filter(InventoryScan.session_id == sess.id).scalar()
+    sess.total_scans = int(sess_scans or 0)
+    db.commit()
+
+    new_total = (
+        db.query(func.coalesce(func.sum(InventoryScan.quantity), 0))
+        .join(InventorySession, InventoryScan.session_id == InventorySession.id)
+        .filter(
+            InventoryScan.inventory_id == inventory_id,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .scalar()
+    )
+    inv.total_scanned_items = int(new_total or 0)
+    db.commit()
+
+    return {
+        "message": f"Prateleira '{loc}' (Sessão #{sess.id}) reativada como CONCLUÍDA com {sess.total_scans} peças!"
+    }
+
+
+# Exportar Relatório Excel de uma Sessão / Prateleira Específica (mesmo se CANCELADA)
+@router.get("/{inventory_id}/sessions/{session_id}/export-excel")
+def export_session_excel(
+    company_id: int,
+    inventory_id: int,
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    _assert_inventory_access(current_user, company_id, db)
+    sess = db.query(InventorySession).filter(InventorySession.id == session_id, InventorySession.inventory_id == inventory_id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet(title="Itens da Prateleira")
+    ws.append([
+        "ID Sessão",
+        "Prateleira / Localização",
+        "Status da Sessão",
+        "Operador",
+        "Rodada",
+        "ISBN / Código de Barras",
+        "Título",
+        "Editora / Marca",
+        "Quantidade Conferida"
+    ])
+
+    rows = db.execute(
+        text("""
+            SELECT 
+                sc.isbn,
+                COALESCE(MAX(it.title), 'Item Avulso') as title,
+                COALESCE(MAX(it.publisher), MAX(it.category), 'N/A') as publisher,
+                SUM(sc.quantity) as qty
+            FROM inv_inventory_scan sc
+            LEFT JOIN inv_inventory_item it ON (it.inventory_id = sc.inventory_id AND it.isbn = sc.isbn)
+            WHERE sc.inventory_id = :inv_id AND sc.session_id = :sess_id
+            GROUP BY sc.isbn
+            ORDER BY COALESCE(MAX(it.title), 'Item Avulso')
+        """),
+        {"inv_id": inventory_id, "sess_id": session_id}
+    ).fetchall()
+
+    for r in rows:
+        ws.append([
+            sess.id,
+            sess.location,
+            sess.status,
+            sess.operator_name or f"Operador #{sess.id}",
+            sess.round_number,
+            r[0],
+            r[1],
+            r[2],
+            int(r[3] or 0)
+        ])
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    file_bytes = buffer.getvalue()
+    safe_loc = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in (sess.location or "PRATELEIRA"))
+    filename = f"Prateleira_{safe_loc}_Sessao_{sess.id}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(file_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(file_bytes)),
+            "Access-Control-Expose-Headers": "Content-Length, Content-Disposition"
+        }
+    )
+
+
 # Cancelar Todas as Aberturas Zeradas (Soft Cancel em Lote com Senha/PIN)
 @router.post("/{inventory_id}/sessions/empty/cancel")
 @router.delete("/{inventory_id}/sessions/empty/clear")
@@ -1601,7 +1725,7 @@ def cancel_empty_sessions(
     return {"message": f"{canceled_count} abertura(s) zerada(s) foram marcadas como CANCELADAS!", "canceled_count": canceled_count}
 
 
-# Cancelar Bipagens de um SKU (Soft Cancel de Sessões do Produto)
+# Cancelar Bipagens de um SKU Específico (Cancela APENAS o item sem cancelar os demais itens da prateleira!)
 @router.post("/{inventory_id}/sku/{isbn}/cancel-scans")
 @router.delete("/{inventory_id}/sku/{isbn}")
 def cancel_sku_scans(
@@ -1622,19 +1746,67 @@ def cancel_sku_scans(
     _verify_supervisor_pin_or_password(inv, current_user, auth_token)
     clean_isbn = isbn.strip()
     
-    session_ids = [
-        row[0] for row in db.query(InventoryScan.session_id)
-        .filter(InventoryScan.inventory_id == inventory_id, InventoryScan.isbn == clean_isbn)
-        .distinct().all()
-    ]
+    # Busca apenas as sessões ativas (não canceladas) que possuem este ISBN
+    active_sessions = (
+        db.query(InventorySession)
+        .join(InventoryScan, InventoryScan.session_id == InventorySession.id)
+        .filter(
+            InventoryScan.inventory_id == inventory_id,
+            InventoryScan.isbn == clean_isbn,
+            InventorySession.status != SessionStatus.CANCELADA.value
+        )
+        .distinct()
+        .all()
+    )
     
-    canceled_sessions = 0
-    for sid in session_ids:
-        sess = db.query(InventorySession).filter(InventorySession.id == sid, InventorySession.inventory_id == inventory_id).first()
-        if sess and sess.status != SessionStatus.CANCELADA.value:
-            sess.status = SessionStatus.CANCELADA.value
-            sess.closed_at = func.now()
-            canceled_sessions += 1
+    canceled_items_qty = 0
+    affected_locations = []
+    
+    for sess in active_sessions:
+        scans_of_sku = (
+            db.query(InventoryScan)
+            .filter(
+                InventoryScan.inventory_id == inventory_id,
+                InventoryScan.session_id == sess.id,
+                InventoryScan.isbn == clean_isbn
+            )
+            .all()
+        )
+        if not scans_of_sku:
+            continue
+            
+        sku_qty = sum(int(sc.quantity or 0) for sc in scans_of_sku)
+        canceled_items_qty += sku_qty
+        affected_locations.append(sess.location)
+        
+        # Cria um registro de sessão CANCELADA isolado apenas para preservar o histórico deste item cancelado,
+        # mantendo a sessão original da prateleira 100% ativa com os demais livros intactos!
+        audit_canceled_sess = InventorySession(
+            inventory_id=inventory_id,
+            company_id=company_id,
+            user_id=sess.user_id or current_user.id,
+            operator_name=f"{sess.operator_name or 'Operador'} [Item {clean_isbn} Cancelado]",
+            location=sess.location,
+            session_type=sess.session_type,
+            round_number=sess.round_number,
+            status=SessionStatus.CANCELADA.value,
+            total_scans=sku_qty,
+            started_at=sess.started_at,
+            closed_at=func.now()
+        )
+        db.add(audit_canceled_sess)
+        db.flush()
+        
+        for sc in scans_of_sku:
+            sc.session_id = audit_canceled_sess.id
+            
+        db.flush()
+        remaining_qty = (
+            db.query(func.coalesce(func.sum(InventoryScan.quantity), 0))
+            .filter(InventoryScan.session_id == sess.id)
+            .scalar()
+        )
+        sess.total_scans = int(remaining_qty or 0)
             
     new_total = (
         db.query(func.coalesce(func.sum(InventoryScan.quantity), 0))
@@ -1648,9 +1820,10 @@ def cancel_sku_scans(
     inv.total_scanned_items = int(new_total or 0)
     db.commit()
     
+    locs_str = ", ".join(sorted(list(set(affected_locations)))) if affected_locations else "nenhuma prateleira"
     return {
-        "message": f"Contagens do SKU {clean_isbn} foram marcadas como CANCELADAS. Histórico mantido para auditoria!",
-        "canceled_sessions_count": canceled_sessions
+        "message": f"Apenas o item {clean_isbn} ({canceled_items_qty} un) foi cancelado nas prateleiras ({locs_str}). Os demais itens dessas prateleiras permanecem ativos!",
+        "canceled_items_qty": canceled_items_qty
     }
 
 

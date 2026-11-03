@@ -247,9 +247,9 @@ export default function InventoryDetailPage() {
   const [skuAdjustLocation, setSkuAdjustLocation] = useState<string>('');
   const [submittingSkuAdjust, setSubmittingSkuAdjust] = useState(false);
 
-  // Modal de Confirmacao de Cancelamento com Senha/PIN
+  // Modal de Confirmacao de Cancelamento / Reativacao com Senha/PIN
   const [cancelModal, setCancelModal] = useState<{
-    type: 'session' | 'empty_sessions' | 'sku' | 'shelf_item';
+    type: 'session' | 'restore_session' | 'empty_sessions' | 'sku' | 'shelf_item';
     title: string;
     description: string;
     targetId?: number;
@@ -258,6 +258,33 @@ export default function InventoryDetailPage() {
   } | null>(null);
   const [cancelPasswordInput, setCancelPasswordInput] = useState('');
   const [submittingCancel, setSubmittingCancel] = useState(false);
+
+  async function handleExportSessionExcel(sessionId: number, location: string) {
+    if (!companyId || !inventoryId) return;
+    try {
+      const token = getToken();
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      toast.info(`Gerando Excel da prateleira "${location}"...`);
+      const res = await fetch(
+        `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/${sessionId}/export-excel`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) throw new Error('Falha ao exportar planilha da prateleira.');
+      const blob = await res.blob();
+      const safeLoc = (location || 'PRATELEIRA').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Prateleira_${safeLoc}_Sessao_${sessionId}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success(`Excel da prateleira "${location}" baixado com sucesso!`);
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao baixar Excel da prateleira.');
+    }
+  }
 
   async function handleConfirmCancelWithPassword(e: React.FormEvent) {
     e.preventDefault();
@@ -282,6 +309,9 @@ export default function InventoryDetailPage() {
 
       if (cancelModal.type === 'session' && cancelModal.targetId) {
         url = `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/${cancelModal.targetId}/cancel`;
+        method = 'PUT';
+      } else if (cancelModal.type === 'restore_session' && cancelModal.targetId) {
+        url = `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/${cancelModal.targetId}/restore`;
         method = 'PUT';
       } else if (cancelModal.type === 'empty_sessions') {
         url = `${baseUrl}/companies/${companyId}/inventory/${inventoryId}/sessions/empty/cancel`;
@@ -308,16 +338,16 @@ export default function InventoryDetailPage() {
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.detail || 'Erro ao processar cancelamento.');
+        throw new Error(err.detail || 'Erro ao processar solicitação.');
       }
 
       const data = await res.json();
-      toast.success(data.message || 'Cancelamento realizado com sucesso! O histórico foi preservado para auditoria.');
+      toast.success(data.message || 'Operação realizada com sucesso!');
       setCancelModal(null);
       setCancelPasswordInput('');
       loadData();
     } catch (err: any) {
-      toast.error(err.message || 'Falha ao processar cancelamento.');
+      toast.error(err.message || 'Falha ao processar solicitação.');
     } finally {
       setSubmittingCancel(false);
     }
@@ -1152,6 +1182,15 @@ export default function InventoryDetailPage() {
                         <div className="inline-flex items-center justify-end gap-1.5">
                           <button
                             type="button"
+                            onClick={() => handleExportSessionExcel(sess.id, sess.location)}
+                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-slate-600 hover:text-emerald-600 dark:text-slate-400 transition-colors inline-flex items-center gap-1 text-xs"
+                            title="Baixar Excel com todos os itens conferidos nesta prateleira"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Excel</span>
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => {
                               setRenameLocationModal({
                                 oldLocation: sess.location,
@@ -1168,7 +1207,24 @@ export default function InventoryDetailPage() {
                             <span className="hidden sm:inline">Renomear</span>
                           </button>
                           {sess.status === 'CANCELADA' ? (
-                            <span className="text-xs text-rose-500 font-semibold italic">Cancelada</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCancelModal({
+                                  type: 'restore_session',
+                                  title: `Reativar Prateleira: ${sess.location}`,
+                                  description: `Deseja reativar a prateleira '${sess.location}' (${sess.total_scans} un.)? Todas as bipagens desta sessão voltarão a ser contabilizadas no saldo consolidado do inventário.`,
+                                  targetId: sess.id,
+                                  location: sess.location
+                                });
+                                setCancelPasswordInput('');
+                              }}
+                              className="p-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400 font-semibold transition-colors inline-flex items-center gap-1 text-xs"
+                              title="Reverter cancelamento e reativar esta prateleira"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                              <span>Reativar</span>
+                            </button>
                           ) : (
                             <button
                               type="button"
@@ -1496,20 +1552,20 @@ export default function InventoryDetailPage() {
                                   <Pencil className="h-3.5 w-3.5" />
                                 </button>
 
-                                {/* Cancelar bips do SKU */}
+                                {/* Cancelar bips apenas deste SKU */}
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setCancelModal({
                                       type: 'sku',
-                                      title: `Cancelar Bips do Produto`,
-                                      description: `Deseja cancelar todas as bipagens do produto "${s.title}" (ISBN: ${s.isbn})? O histórico completo será preservado para auditoria.`,
+                                      title: `Cancelar Apenas Este Item`,
+                                      description: `Deseja cancelar SOMENTE as bipagens do produto "${s.title}" (ISBN: ${s.isbn})? As prateleiras onde ele foi bipado (${s.locations_list.join(', ')}) continuarão ATIVAS com todos os demais produtos intactos.`,
                                       isbn: s.isbn
                                     });
                                     setCancelPasswordInput('');
                                   }}
                                   className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 hover:text-rose-600 dark:text-slate-400 transition-colors"
-                                  title="Cancelar todas as contagens deste produto (Preserva Histórico)"
+                                  title="Cancelar apenas as contagens deste item (mantém as prateleiras ativas)"
                                 >
                                   <Ban className="h-3.5 w-3.5" />
                                 </button>
@@ -2012,7 +2068,7 @@ export default function InventoryDetailPage() {
         </div>
       )}
 
-      {/* Modal de Confirmação de Cancelamento com Senha */}
+      {/* Modal de Confirmação de Cancelamento / Reativação com Senha */}
       {cancelModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -2022,15 +2078,15 @@ export default function InventoryDetailPage() {
           >
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <div className="p-3 rounded-2xl bg-rose-500/10 text-rose-600">
-                  <ShieldCheck className="h-6 w-6" />
+                <div className={`p-3 rounded-2xl ${cancelModal.type === 'restore_session' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-600'}`}>
+                  {cancelModal.type === 'restore_session' ? <RefreshCw className="h-6 w-6" /> : <ShieldCheck className="h-6 w-6" />}
                 </div>
                 <div>
                   <h3 className="font-bold text-slate-900 dark:text-white text-base">
                     {cancelModal.title}
                   </h3>
-                  <p className="text-xs text-rose-600 dark:text-rose-400 font-semibold">
-                    Confirmação de Segurança
+                  <p className={`text-xs font-semibold ${cancelModal.type === 'restore_session' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                    {cancelModal.type === 'restore_session' ? 'Reverter Cancelamento de Prateleira' : 'Confirmação de Segurança'}
                   </p>
                 </div>
               </div>
@@ -2064,7 +2120,7 @@ export default function InventoryDetailPage() {
                     placeholder="Digite a senha do usuário ou PIN (ex: 1234)"
                     value={cancelPasswordInput}
                     onChange={(e) => setCancelPasswordInput(e.target.value)}
-                    className="w-full pl-3.5 pr-10 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+                    className={`w-full pl-3.5 pr-10 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 ${cancelModal.type === 'restore_session' ? 'focus:ring-emerald-500' : 'focus:ring-rose-500'}`}
                   />
                   <button
                     type="button"
@@ -2090,10 +2146,20 @@ export default function InventoryDetailPage() {
                 <button
                   type="submit"
                   disabled={submittingCancel}
-                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors disabled:opacity-50 shadow-sm"
+                  className={`inline-flex items-center gap-2 px-5 py-2 rounded-xl text-white text-xs font-bold transition-colors disabled:opacity-50 shadow-sm ${
+                    cancelModal.type === 'restore_session'
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : 'bg-rose-600 hover:bg-rose-700'
+                  }`}
                 >
-                  {submittingCancel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
-                  Confirmar Cancelamento
+                  {submittingCancel ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : cancelModal.type === 'restore_session' ? (
+                    <RefreshCw className="h-4 w-4" />
+                  ) : (
+                    <Ban className="h-4 w-4" />
+                  )}
+                  {cancelModal.type === 'restore_session' ? 'Confirmar Reativação' : 'Confirmar Cancelamento'}
                 </button>
               </div>
             </form>
