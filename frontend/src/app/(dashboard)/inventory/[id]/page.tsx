@@ -1081,7 +1081,6 @@ export default function InventoryDetailPage() {
           return (
             sess.location.toLowerCase().includes(q) ||
             (sess.operator_name && sess.operator_name.toLowerCase().includes(q)) ||
-            (sess.user_name && sess.user_name.toLowerCase().includes(q)) ||
             String(sess.id).includes(q)
           );
         });
