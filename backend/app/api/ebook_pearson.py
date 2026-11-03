@@ -14,7 +14,9 @@ Regras e Diretrizes:
 """
 
 import io
+import os
 import re
+import csv
 import math
 import asyncio
 import logging
@@ -89,6 +91,7 @@ class PearsonItemPreview(BaseModel):
 class PearsonPreviewResponse(BaseModel):
     success: bool
     filename: str
+    report_model: str = "PEARSON"
     period: Optional[str] = None
     receipt_month: Optional[str] = None
     receipt_number: Optional[str] = None
@@ -150,8 +153,9 @@ class CreateEbookOrderItem(BaseModel):
 
 class CreateEbookOrderRequest(BaseModel):
     customer_id: int
-    reference: str = Field(..., description="Cód. Pedido Origem (ex: BV-407-10/2026)")
+    reference: str = Field(..., description="Cód. Pedido Origem (ex: BV-407-10/2026 ou BW-A-231309-08/2026)")
     target_received_total: float
+    report_model: Optional[str] = "PEARSON"
     payment_condition: Optional[str] = "30 DDL"
     payment_method: Optional[str] = "Boleto"
     cod_forma: Optional[Any] = None
@@ -303,12 +307,262 @@ def _parse_pearson_workbook(file_bytes: bytes, filename: str) -> Dict[str, Any]:
     suggested_ref = f"BV-{ref_suffix}".replace(" ", "-")
 
     return {
+        "report_model": "PEARSON",
         "period": period,
         "receipt_month": receipt_month,
         "receipt_number": receipt_number,
         "suggested_reference": suggested_ref,
         "total_items": len(raw_items),
         "total_original_value": round(total_val, 2),
+        "items": raw_items,
+    }
+
+
+def _read_tabular_rows(file_bytes: bytes, filename: str) -> List[List[Any]]:
+    """Lê todas as linhas de um arquivo .csv ou .xlsx como matriz de células."""
+    ext = os.path.splitext(filename or "")[1].lower()
+    is_zip_xlsx = file_bytes[:4] == b"PK\x03\x04"
+
+    if ext in (".xlsx", ".xlsm") or is_zip_xlsx:
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+            sheet = wb.active
+            if not sheet:
+                return []
+            rows = []
+            for r in range(1, sheet.max_row + 1):
+                rows.append([sheet.cell(row=r, column=c).value for c in range(1, sheet.max_column + 1)])
+            return rows
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Não foi possível abrir a planilha Excel informada: {str(e)}"
+            )
+
+    # Leitura CSV resiliente (UTF-8-sig, UTF-8, CP1252, Latin-1) e delimitador (; ou , ou \t)
+    decoded_text = None
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            decoded_text = file_bytes.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+
+    if decoded_text is None:
+        decoded_text = file_bytes.decode("utf-8", errors="replace")
+
+    sample_lines = [line for line in decoded_text.splitlines()[:5] if line.strip()]
+    first_line = sample_lines[0] if sample_lines else ""
+    if first_line.count(";") >= first_line.count(",") and first_line.count(";") > 0:
+        delimiter = ";"
+    elif "\t" in first_line and first_line.count("\t") > first_line.count(","):
+        delimiter = "\t"
+    else:
+        delimiter = ","
+
+    reader = csv.reader(io.StringIO(decoded_text), delimiter=delimiter)
+    return [row for row in reader]
+
+
+def _parse_bookwire_file(file_bytes: bytes, filename: str) -> Dict[str, Any]:
+    """
+    Lê o relatório de repasse de E-books da Bookwire (.csv ou .xlsx),
+    agrupa lançamentos (sales e retours) por ISBN, extrai período/fatura
+    e retorna os itens consolidados prontos para consulta no Horus ERP e rateio.
+    """
+    rows = _read_tabular_rows(file_bytes, filename)
+    if not rows:
+        raise HTTPException(status_code=400, detail="O arquivo da Bookwire informado está vazio.")
+
+    header_row_idx = None
+    col_map: Dict[str, int] = {}
+
+    for r_idx, row in enumerate(rows[:20]):
+        row_vals = [str(c or "").strip().lower() for c in row]
+        has_isbn = any(v == "isbn" or "isbn" in v for v in row_vals)
+        has_bw_val = any(
+            "payment amount publisher" in v
+            or "bookwire income" in v
+            or "share publisher" in v
+            or "valor" in v
+            or "repasse" in v
+            for v in row_vals
+        )
+        if has_isbn and has_bw_val:
+            header_row_idx = r_idx
+            for c_idx, val in enumerate(row_vals):
+                clean_h = val.strip()
+                if clean_h == "isbn" or ("isbn" in clean_h and "isbn" not in col_map):
+                    col_map["isbn"] = c_idx
+                elif clean_h in ("title", "título", "titulo") or ("title" in clean_h and "title" not in col_map):
+                    col_map["title"] = c_idx
+                elif clean_h in ("units", "unidades", "qtd", "quantidade"):
+                    col_map["units"] = c_idx
+                elif "share publisher" in clean_h or "porcentagem" in clean_h:
+                    col_map["percentage"] = c_idx
+                elif "payment amount publisher" in clean_h:
+                    col_map["valor"] = c_idx
+                elif ("bookwire income (payment currency)" in clean_h or "valor" in clean_h or "repasse" in clean_h) and "valor" not in col_map:
+                    col_map["valor"] = c_idx
+                elif "period start date" in clean_h or ("report start date" in clean_h and "period_start" not in col_map):
+                    col_map["period_start"] = c_idx
+                elif "period end date" in clean_h or ("report end date" in clean_h and "period_end" not in col_map):
+                    col_map["period_end"] = c_idx
+                elif "account number" in clean_h:
+                    col_map["account_number"] = c_idx
+            break
+
+    if header_row_idx is None or "isbn" not in col_map or "valor" not in col_map:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Estrutura da planilha Bookwire não reconhecida. "
+                "Certifique-se de que o arquivo possui as colunas 'ISBN' e 'Payment Amount Publisher'."
+            )
+        )
+
+    period_start = ""
+    period_end = ""
+    account_number = ""
+
+    # Tenta extrair código da fatura Bookwire do nome do arquivo (ex: A-231309)
+    m_doc = re.search(r'\b(A-\d+)\b', filename or "", re.IGNORECASE)
+    receipt_number = m_doc.group(1).upper() if m_doc else ""
+
+    # Agrupamento por ISBN preservando a ordem de aparição (soma unidades e valores líquidos de sale/retour)
+    grouped: Dict[str, Dict[str, Any]] = {}
+    total_sheet_net = 0.0
+
+    for r_idx in range(header_row_idx + 1, len(rows)):
+        row = rows[r_idx]
+        if not row or all(not str(c or "").strip() for c in row):
+            continue
+
+        def _get_col(key: str, default: Any = "") -> Any:
+            idx = col_map.get(key)
+            if idx is None or idx >= len(row):
+                return default
+            return row[idx]
+
+        raw_isbn = _get_col("isbn", "")
+        raw_val = _get_col("valor", None)
+        titulo = str(_get_col("title", "") or "").strip()
+
+        if str(titulo).lower() == "total" or str(raw_isbn or "").strip().lower() == "total":
+            continue
+
+        clean_isbn = _clean_isbn(raw_isbn)
+        if not clean_isbn or len(clean_isbn) < 9:
+            continue
+
+        if not period_start and "period_start" in col_map:
+            ps = str(_get_col("period_start", "") or "").strip()
+            if ps:
+                period_start = ps.replace(".", "/")
+        if not period_end and "period_end" in col_map:
+            pe = str(_get_col("period_end", "") or "").strip()
+            if pe:
+                period_end = pe.replace(".", "/")
+        if not account_number and "account_number" in col_map:
+            acc = str(_get_col("account_number", "") or "").strip()
+            if acc:
+                account_number = acc
+
+        units = _safe_int(_get_col("units", 0)) if "units" in col_map else 1
+        pct = 0.0
+        if "percentage" in col_map:
+            try:
+                raw_pct = str(_get_col("percentage", "") or "").replace("%", "").strip()
+                pct = round(parse_horus_price(raw_pct), 4)
+            except Exception:
+                pct = 0.0
+
+        val_float = round(parse_horus_price(raw_val), 2)
+        total_sheet_net = round(total_sheet_net + val_float, 2)
+
+        if clean_isbn not in grouped:
+            grouped[clean_isbn] = {
+                "first_row": r_idx + 1,
+                "isbn": clean_isbn,
+                "title_pearson": titulo or f"E-book {clean_isbn}",
+                "pageviews": units,
+                "percentage": pct,
+                "original_value": val_float,
+            }
+        else:
+            grouped[clean_isbn]["pageviews"] += units
+            grouped[clean_isbn]["original_value"] = round(grouped[clean_isbn]["original_value"] + val_float, 2)
+            if not grouped[clean_isbn]["title_pearson"] and titulo:
+                grouped[clean_isbn]["title_pearson"] = titulo
+            if pct > 0 and grouped[clean_isbn]["percentage"] <= 0:
+                grouped[clean_isbn]["percentage"] = pct
+
+    # Filtra itens com saldo positivo após compensação de retours (devoluções/estornos)
+    raw_items = []
+    positive_sum = 0.0
+    for idx_item, (isbn_key, g) in enumerate(grouped.items(), start=1):
+        val_net = round(g["original_value"], 2)
+        if val_net <= 0.0:
+            # Item 100% estornado (ex: 1 sale e 1 retour de mesmo valor que zeram no mês)
+            continue
+        positive_sum = round(positive_sum + val_net, 2)
+        raw_items.append({
+            "id": f"bookwire-{idx_item}",
+            "row": g["first_row"],
+            "isbn": isbn_key,
+            "title_pearson": g["title_pearson"],
+            "pageviews": max(1, int(g["pageviews"])) if g["pageviews"] > 0 else 1,
+            "percentage": g["percentage"],
+            "original_value": val_net,
+            "quantity": 1,
+            "liquid_value": val_net,
+            "subtotal": val_net,
+            "selected_for_rateio": True,
+        })
+
+    # Se houve algum ISBN que ficou líquido negativo no mês (retour isolado sem venda do mesmo ISBN),
+    # ajusta proporcionalmente o original_value dos itens positivos para bater 100% com o líquido da planilha Bookwire
+    if raw_items and total_sheet_net > 0 and abs(positive_sum - total_sheet_net) >= 0.01:
+        diff_neg = round(total_sheet_net - positive_sum, 2)
+        largest = max(raw_items, key=lambda x: x["original_value"])
+        if largest["original_value"] + diff_neg > 0.01:
+            largest["original_value"] = round(largest["original_value"] + diff_neg, 2)
+            largest["liquid_value"] = largest["original_value"]
+            largest["subtotal"] = largest["original_value"]
+
+    total_val = round(sum(it["original_value"] for it in raw_items), 2)
+
+    period = ""
+    if period_start and period_end:
+        period = f"{period_start} a {period_end}"
+    elif period_start:
+        period = period_start
+
+    receipt_month = ""
+    if period_start:
+        parts = period_start.split("/")
+        if len(parts) == 3:
+            receipt_month = f"{parts[1]}/{parts[2]}"
+    if not receipt_month:
+        m_ym = re.search(r'(20\d{2})[-_]?(\d{2})\d{2}', filename or "")
+        if m_ym:
+            receipt_month = f"{m_ym.group(2)}/{m_ym.group(1)}"
+
+    if not receipt_number and account_number:
+        receipt_number = account_number
+
+    now = datetime.now()
+    ref_suffix = f"{receipt_number or 'BW'}-{receipt_month or now.strftime('%m/%Y')}"
+    suggested_ref = f"BW-{ref_suffix}".replace(" ", "-")
+
+    return {
+        "report_model": "BOOKWIRE",
+        "period": period,
+        "receipt_month": receipt_month,
+        "receipt_number": receipt_number,
+        "suggested_reference": suggested_ref,
+        "total_items": len(raw_items),
+        "total_original_value": total_val,
         "items": raw_items,
     }
 
@@ -420,11 +674,12 @@ def decompose_and_reconcile_items(
 async def parse_and_preview_pearson_sheet(
     file: UploadFile = File(...),
     customer_id: Optional[int] = Form(None),
+    report_model: Optional[str] = Form("PEARSON"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Recebe a planilha enviada pela Pearson (XLSX/CSV),
+    Recebe a planilha enviada pela Pearson (BV) ou Bookwire (XLSX/CSV),
     extrai os dados de repasse por ISBN, e consulta CADA ISBN
     diretamente na API do Horus ERP (sem consultas SQL diretas).
     """
@@ -438,14 +693,29 @@ async def parse_and_preview_pearson_sheet(
                 detail="O arquivo excede o limite máximo permitido de 10 MB."
             )
 
-        filename = file.filename or "planilha_pearson.xlsx"
-        parsed_data = _parse_pearson_workbook(content, filename)
+        filename = file.filename or "planilha_repasse.xlsx"
+        normalized_model = (report_model or "PEARSON").strip().upper()
+        if normalized_model not in ("PEARSON", "BOOKWIRE"):
+            normalized_model = "PEARSON"
+
+        if normalized_model == "BOOKWIRE":
+            parsed_data = _parse_bookwire_file(content, filename)
+        else:
+            # Se o usuário deixou PEARSON selecionado mas subiu um CSV da Bookwire, detecta de forma resiliente
+            ext_lower = os.path.splitext(filename)[1].lower()
+            if ext_lower == ".csv" and b"Payment Amount Publisher" in content[:2048]:
+                parsed_data = _parse_bookwire_file(content, filename)
+                normalized_model = "BOOKWIRE"
+            else:
+                parsed_data = _parse_pearson_workbook(content, filename)
+
         items = parsed_data["items"]
+        model_label = "Bookwire" if normalized_model == "BOOKWIRE" else "Pearson"
 
         if not items:
             raise HTTPException(
                 status_code=400,
-                detail="Nenhum item com ISBN válido foi encontrado na planilha Pearson informada."
+                detail=f"Nenhum item com ISBN válido e saldo positivo foi encontrado na planilha {model_label} informada."
             )
 
         # Busca configurações da empresa
@@ -647,6 +917,7 @@ async def parse_and_preview_pearson_sheet(
         return PearsonPreviewResponse(
             success=True,
             filename=filename,
+            report_model=parsed_data.get("report_model", normalized_model),
             period=parsed_data["period"],
             receipt_month=parsed_data["receipt_month"],
             receipt_number=parsed_data["receipt_number"],
@@ -666,10 +937,10 @@ async def parse_and_preview_pearson_sheet(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"[Ebook Pearson] Erro inesperado ao processar planilha: {exc}", exc_info=True)
+        logger.error(f"[Ebook Repasse] Erro inesperado ao processar planilha: {exc}", exc_info=True)
         raise HTTPException(
             status_code=400,
-            detail=f"Não foi possível processar a planilha da Pearson: {str(exc)}. Verifique o formato do arquivo."
+            detail=f"Não foi possível processar a planilha de E-book: {str(exc)}. Verifique o formato do arquivo."
         )
 
 
@@ -905,12 +1176,15 @@ async def create_and_send_ebook_order(
         if not payload.items:
             raise HTTPException(status_code=400, detail="Adicione pelo menos 1 item para gerar o pedido.")
 
-        # ── VALIDAÇÃO DE VALOR TOTAL RECEBIDO (PEARSON) ────────────────────────
+        is_bookwire = str(payload.report_model or "PEARSON").strip().upper() == "BOOKWIRE"
+        platform_label = "Bookwire" if is_bookwire else "Pearson"
+
+        # ── VALIDAÇÃO DE VALOR TOTAL RECEBIDO ──────────────────────────────────
         total_liquido_itens = round(sum(float(it.liquid_unit_price) * max(1, it.quantity) for it in payload.items), 2)
         if payload.target_received_total <= 0:
             raise HTTPException(
                 status_code=400,
-                detail="Obrigatório informar o Valor Total Recebido (Pearson) antes de gerar o pedido."
+                detail=f"Obrigatório informar o Valor Total Recebido ({platform_label}) antes de gerar o pedido."
             )
         if payload.target_received_total < total_liquido_itens - 0.01:
             raise HTTPException(
@@ -956,7 +1230,7 @@ async def create_and_send_ebook_order(
                 status_code=400,
                 detail=(
                     f"BLOQUEIO CRÍTICO DE FATURAMENTO: Existem {len(physical_items)} item(ns) identificados no Horus como Livro Físico "
-                    f"({physical_sample}). O repasse da Biblioteca Virtual Pearson é restrito exclusivamente a E-Books. "
+                    f"({physical_sample}). O repasse de E-Books ({platform_label}) é restrito exclusivamente a E-Books. "
                     f"Corrija o ISBN na planilha para o da versão digital (E-Book) antes de transmitir o pedido."
                 )
             )
@@ -999,14 +1273,17 @@ async def create_and_send_ebook_order(
                 ean_isbn=it.isbn,
                 sku=it.horus_cod_item or (prod.sku if prod else it.isbn),
                 name=it.title or (prod.name if prod else f"E-book {it.isbn}"),
-                brand="Pearson BV"
+                brand="Bookwire" if is_bookwire else "Pearson BV"
             )
             order_items.append(order_item)
 
         total_liquido = round(total_liquido, 2)
-        clean_ref = str(payload.reference or f"BV-{datetime.now().strftime('%Y%m%d%H%M')}").strip()
+        default_prefix = "BW" if is_bookwire else "BV"
+        clean_ref = str(payload.reference or f"{default_prefix}-{datetime.now().strftime('%Y%m%d%H%M')}").strip()
         if clean_ref.startswith("BV-BV-"):
             clean_ref = clean_ref.replace("BV-BV-", "BV-")
+        elif clean_ref.startswith("BW-BW-"):
+            clean_ref = clean_ref.replace("BW-BW-", "BW-")
 
         # 2. Validação obrigatória da integração Horus ERP
         if not settings or not settings.horus_enabled or getattr(settings, "horus_api_mode", "B2B") != "B2B":
@@ -1022,7 +1299,8 @@ async def create_and_send_ebook_order(
             )
 
         horus_client = HorusOrders(db, current_user.company_id)
-        base_obs = (payload.obs_pedido or "PEDIDO E-BOOK PEARSON").strip()
+        default_obs = "PEDIDO E-BOOK BOOKWIRE" if is_bookwire else "PEDIDO E-BOOK PEARSON"
+        base_obs = (payload.obs_pedido or default_obs).strip()
         obs_texto = base_obs if clean_ref in base_obs else f"{base_obs} | REF: {clean_ref}"
 
         # 3. Transmissão do cabeçalho do pedido via API Horus (InsPedidoVenda)

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   BookOpen, 
@@ -57,6 +57,7 @@ interface PearsonItem {
 }
 
 interface PearsonPreviewData {
+  report_model?: 'PEARSON' | 'BOOKWIRE';
   period?: string;
   receipt_month?: string;
   receipt_number?: string;
@@ -98,6 +99,7 @@ export default function EbookPearsonPage() {
   } | null>(null);
 
   // ── Estado de Upload e Leitura da Planilha ─────────────────────────────────
+  const [reportModel, setReportModel] = useState<'PEARSON' | 'BOOKWIRE'>('PEARSON');
   const [file, setFile] = useState<File | null>(null);
   const [isParsing, setIsParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -112,6 +114,19 @@ export default function EbookPearsonPage() {
   const [obsPedido, setObsPedido] = useState<string>('REPASSE E-BOOK BIBLIOTECA VIRTUAL PEARSON');
   const [skipExpedition, setSkipExpedition] = useState<boolean>(true);
   const [searchFilter, setSearchFilter] = useState<string>('');
+
+  const platformLabel = reportModel === 'BOOKWIRE' ? 'Bookwire' : 'Pearson';
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const m = (params.get('model') || '').toUpperCase();
+      if (m === 'BOOKWIRE') {
+        setReportModel('BOOKWIRE');
+        setObsPedido('REPASSE E-BOOK BOOKWIRE');
+      }
+    }
+  }, []);
   
   // ── Filtros e Ajustes de Erros Críticos / Itens Não Localizados ──────────
   const [showOnlyUnlocated, setShowOnlyUnlocated] = useState<boolean>(false);
@@ -392,7 +407,7 @@ export default function EbookPearsonPage() {
 
   const handleProcessFile = async () => {
     if (!file) {
-      setParseError('Selecione o arquivo da planilha Pearson (.xlsx ou .csv) antes de prosseguir.');
+      setParseError(`Selecione o arquivo da planilha ${platformLabel} (.xlsx ou .csv) antes de prosseguir.`);
       return;
     }
 
@@ -404,6 +419,7 @@ export default function EbookPearsonPage() {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('report_model', reportModel);
       if (selectedCustomerId) {
         formData.append('customer_id', String(selectedCustomerId));
       }
@@ -427,7 +443,13 @@ export default function EbookPearsonPage() {
       }
 
       const data = await res.json();
+      const effectiveModel = data.report_model === 'BOOKWIRE' ? 'BOOKWIRE' : reportModel;
+      if (data.report_model === 'BOOKWIRE' && reportModel !== 'BOOKWIRE') {
+        setReportModel('BOOKWIRE');
+      }
+
       setPreviewMeta({
+        report_model: effectiveModel,
         period: data.period,
         receipt_month: data.receipt_month,
         receipt_number: data.receipt_number,
@@ -445,15 +467,18 @@ export default function EbookPearsonPage() {
         filename: data.filename
       });
 
-      setReference(data.suggested_reference || `BV-${Date.now()}`);
+      const defaultPrefix = effectiveModel === 'BOOKWIRE' ? 'BW' : 'BV';
+      setReference(data.suggested_reference || `${defaultPrefix}-${Date.now()}`);
       setTargetReceivedTotal(0); // Sempre zerado: obriga o preenchimento manual do valor recebido
       setItems(data.items || []);
 
-      if (data.receipt_month || data.receipt_number) {
+      if (effectiveModel === 'BOOKWIRE') {
+        setObsPedido(`REPASSE E-BOOK BOOKWIRE - REF ${data.suggested_reference}`);
+      } else if (data.receipt_month || data.receipt_number) {
         setObsPedido(`REPASSE E-BOOK BIBLIOTECA VIRTUAL PEARSON - REF ${data.suggested_reference}`);
       }
     } catch (err: any) {
-      setParseError(err.message || 'Falha de comunicação ao processar planilha da Pearson.');
+      setParseError(err.message || `Falha de comunicação ao processar planilha ${platformLabel}.`);
     } finally {
       setIsParsing(false);
     }
@@ -465,7 +490,7 @@ export default function EbookPearsonPage() {
     if (items.length === 0) return;
 
     if (targetReceivedTotal <= 0) {
-      alert('É obrigatório informar o Valor Total Recebido (Pearson) antes de efetuar o rateio.');
+      alert(`É obrigatório informar o Valor Total Recebido (${platformLabel}) antes de efetuar o rateio.`);
       return;
     }
 
@@ -564,7 +589,7 @@ export default function EbookPearsonPage() {
     }
 
     if (targetReceivedTotal <= 0) {
-      setSubmitError('Obrigatório informar o Valor Total Recebido (Pearson) antes de gerar o pedido.');
+      setSubmitError(`Obrigatório informar o Valor Total Recebido (${platformLabel}) antes de gerar o pedido.`);
       return;
     }
 
@@ -598,7 +623,7 @@ export default function EbookPearsonPage() {
 
     if (hasPhysicalBlocker) {
       setSubmitError(
-        `BLOQUEIO CRÍTICO DE FATURAMENTO: Existem ${physicalCount} item(ns) cadastrados no Horus ERP como Livro Físico (esperado E-Book). O repasse Pearson aceita exclusivamente a versão digital. Corrija o ISBN na planilha para o ISBN do E-book correspondente antes de gerar o pedido.`
+        `BLOQUEIO CRÍTICO DE FATURAMENTO: Existem ${physicalCount} item(ns) cadastrados no Horus ERP como Livro Físico (esperado E-Book). O repasse ${platformLabel} aceita exclusivamente a versão digital. Corrija o ISBN na planilha para o ISBN do E-book correspondente antes de gerar o pedido.`
       );
       return;
     }
@@ -614,10 +639,12 @@ export default function EbookPearsonPage() {
     setSubmitError(null);
 
     try {
+      const defaultPrefix = reportModel === 'BOOKWIRE' ? 'BW' : 'BV';
       const payload = {
         customer_id: selectedCustomerId,
-        reference: reference.trim() || `BV-${Date.now()}`,
+        reference: reference.trim() || `${defaultPrefix}-${Date.now()}`,
         target_received_total: targetReceivedTotal,
+        report_model: reportModel,
         payment_condition: paymentCondition,
         payment_method: paymentMethod,
         obs_pedido: obsPedido,
@@ -685,7 +712,7 @@ export default function EbookPearsonPage() {
                 Horus Direct • Gestão de Vendas DBM
               </span>
               <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">
-                E-book Pearson (BV)
+                {reportModel === 'BOOKWIRE' ? 'E-book Bookwire' : 'E-book Pearson (BV)'}
               </span>
             </div>
             <h1 className="text-sm font-black text-slate-900 dark:text-white leading-tight">
@@ -741,7 +768,7 @@ export default function EbookPearsonPage() {
                 setSelectedCustomer(null);
               }
             }}
-            placeholder="🔍 Digite Nome, Razão Social ou CNPJ do Cliente (ex: Pearson)..."
+            placeholder={`🔍 Digite Nome, Razão Social ou CNPJ do Cliente (ex: ${platformLabel})...`}
           />
 
           {selectedCustomer ? (
@@ -770,27 +797,64 @@ export default function EbookPearsonPage() {
             </div>
           ) : (
             <p className="text-[11px] text-slate-400 italic">
-              Selecione o cadastro da Pearson ou cliente correspondente para emitir o pedido de venda de e-books.
+              Selecione o cadastro da {platformLabel} ou cliente correspondente para emitir o pedido de venda de e-books.
             </p>
           )}
         </div>
 
-        {/* Upload da Planilha Pearson */}
+        {/* Upload da Planilha (Pearson ou Bookwire) */}
         <div className="lg:col-span-6 bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-2.5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                 <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                2. Planilha de Repasse Pearson (.xlsx / .csv)
+                2. Planilha de Repasse {platformLabel} (.xlsx / .csv)
               </span>
-              <span className="text-[10px] text-slate-400">Relatório BV por ISBN</span>
+
+              {/* Seletor de Modelo: Pearson vs Bookwire */}
+              <div className="inline-flex items-center rounded-lg bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200 dark:border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportModel('PEARSON');
+                    setParseError(null);
+                    if (items.length === 0) {
+                      setObsPedido('REPASSE E-BOOK BIBLIOTECA VIRTUAL PEARSON');
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all ${
+                    reportModel === 'PEARSON'
+                      ? 'bg-indigo-600 text-white shadow-2xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Pearson (BV)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportModel('BOOKWIRE');
+                    setParseError(null);
+                    if (items.length === 0) {
+                      setObsPedido('REPASSE E-BOOK BOOKWIRE');
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all ${
+                    reportModel === 'BOOKWIRE'
+                      ? 'bg-indigo-600 text-white shadow-2xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Bookwire
+                </button>
+              </div>
             </div>
 
             <div className="flex items-center gap-2">
               <label className="flex-1 flex items-center gap-2 px-3 py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-indigo-400 dark:hover:border-indigo-500 rounded-lg cursor-pointer bg-slate-50/50 dark:bg-slate-850/50 transition-all text-xs">
                 <Upload className="h-4 w-4 text-indigo-600 shrink-0" />
                 <span className="truncate text-slate-700 dark:text-slate-300 font-medium">
-                  {file ? file.name : "Clique para selecionar a planilha de repasse..."}
+                  {file ? file.name : `Clique para selecionar a planilha ${platformLabel} (.xlsx / .csv)...`}
                 </span>
                 <input 
                   type="file" 
@@ -835,7 +899,8 @@ export default function EbookPearsonPage() {
 
           {previewMeta && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 font-mono pt-1">
-              <span>Período: <strong className="text-slate-800 dark:text-slate-200">{previewMeta.period || 'BV'}</strong></span>
+              <span>Modelo: <strong className="text-indigo-600 dark:text-indigo-400">{previewMeta.report_model === 'BOOKWIRE' ? 'Bookwire' : 'Pearson'}</strong></span>
+              <span>Período: <strong className="text-slate-800 dark:text-slate-200">{previewMeta.period || (reportModel === 'BOOKWIRE' ? 'Bookwire' : 'BV')}</strong></span>
               <span>Mês: <strong className="text-slate-800 dark:text-slate-200">{previewMeta.receipt_month || '-'}</strong></span>
               <span>Nº: <strong className="text-indigo-600">{previewMeta.receipt_number || '-'}</strong></span>
               <span>Títulos: <strong className="text-slate-800 dark:text-slate-200">{previewMeta.total_items}</strong></span>
@@ -1072,7 +1137,7 @@ export default function EbookPearsonPage() {
               {/* Card 1: Soma da Planilha */}
               <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xs">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Total Planilha Pearson
+                  Total Planilha {platformLabel}
                 </span>
                 <span className="text-lg font-mono font-black text-slate-800 dark:text-slate-200">
                   {originalTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
@@ -1098,7 +1163,7 @@ export default function EbookPearsonPage() {
                       ? 'text-amber-700 dark:text-amber-400'
                       : 'text-indigo-700 dark:text-indigo-400'
                   }`}>
-                    Valor Total Recebido (Pearson)
+                    Valor Total Recebido ({platformLabel})
                   </span>
                   {targetReceivedTotal <= 0 ? (
                     <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-200 text-rose-800 dark:bg-rose-900 dark:text-rose-200 uppercase">
@@ -1115,7 +1180,7 @@ export default function EbookPearsonPage() {
                   onChangeValue={(val) => setTargetReceivedTotal(val)}
                   prefixStr="R$ "
                   className="w-full text-lg font-mono font-black text-indigo-700 dark:text-indigo-300 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-indigo-700 rounded-lg px-2.5 py-1 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  title="Informe o valor exato repassado/depositado pela Pearson"
+                  title={`Informe o valor exato repassado/depositado pela ${platformLabel}`}
                 />
                 {targetReceivedTotal <= 0 ? (
                   <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 block">
@@ -1234,7 +1299,7 @@ export default function EbookPearsonPage() {
                 type="button"
                 onClick={handleRestoreOriginals}
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
-                title="Restaura os valores originais da planilha Pearson com inteligência de preço de capa"
+                title={`Restaura os valores originais da planilha ${platformLabel} com inteligência de preço de capa`}
               >
                 <RotateCcw className="h-3 w-3" />
                 <span>Restaurar Originais</span>
@@ -1355,7 +1420,7 @@ export default function EbookPearsonPage() {
                   <th className="py-2 px-2 w-28">Status Horus API</th>
                   <th className="py-2 px-2 w-32 font-mono">ISBN</th>
                   <th className="py-2 px-2 min-w-[200px]">Título da Obra</th>
-                  <th className="py-2 px-2 text-center w-20">PageViews</th>
+                  <th className="py-2 px-2 text-center w-20">{reportModel === 'BOOKWIRE' ? 'Unidades' : 'PageViews'}</th>
                   <th className="py-2 px-2 text-right w-24">Preço Capa</th>
                   <th className="py-2 px-2 text-right w-24">Vlr Planilha</th>
                   <th className="py-2 px-2 text-center w-16 bg-slate-100/70 dark:bg-slate-800/60" title="Quantidade bloqueada: gerenciada pela inteligência de Preço de Capa e Rateio">Qtd</th>
