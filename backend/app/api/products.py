@@ -11,6 +11,7 @@ from app.models.user import User
 
 router = APIRouter(prefix="/products", tags=["products"])
 
+@router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(
     product_in: ProductCreate,
@@ -79,6 +80,7 @@ def create_product(
     db.refresh(db_product)
     return db_product
 
+@router.get("", response_model=dict)
 @router.get("/", response_model=dict)
 def list_products(
     skip: int = Query(0, ge=0),

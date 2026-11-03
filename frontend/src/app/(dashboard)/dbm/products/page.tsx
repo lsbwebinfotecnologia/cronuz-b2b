@@ -472,7 +472,7 @@ export default function DbmProductsSearchPage() {
         params.append('search', combinedQuery);
       }
 
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products?${params.toString()}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -539,8 +539,8 @@ export default function DbmProductsSearchPage() {
     try {
       const token = getToken();
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const params = new URLSearchParams({ q: queryKey, limit: '5', offset: '0' });
-      const res = await fetch(`${apiUrl}/companies/${companyId}/horus-sql/estoque-geral?${params.toString()}`, {
+      const params = new URLSearchParams({ search: queryKey, q: queryKey, limit: '5', offset: '0' });
+      const res = await fetch(`${apiUrl}/companies/${companyId}/horus-sql/items-estoque-geral?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -679,13 +679,16 @@ export default function DbmProductsSearchPage() {
     try {
       const token = getToken();
       const params = new URLSearchParams();
-      if (horusSearchTerm.trim()) params.append('q', horusSearchTerm.trim());
+      if (horusSearchTerm.trim()) {
+        params.append('search', horusSearchTerm.trim());
+        params.append('q', horusSearchTerm.trim());
+      }
       if (horusEditoraFilter.trim()) params.append('editora', horusEditoraFilter.trim());
       params.append('limit', String(horusLimit));
       params.append('offset', String(customOffset));
 
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/horus-sql/estoque-geral?${params.toString()}`,
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/horus-sql/items-estoque-geral?${params.toString()}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const data = await res.json();
@@ -695,8 +698,11 @@ export default function DbmProductsSearchPage() {
 
       const items: HorusEstoqueItem[] = data.items || [];
       setHorusItems(items);
-      setHorusTotalCount(data.total_count || items.length);
+      setHorusTotalCount(data.total_count ?? data.total ?? items.length);
       setHorusOffset(customOffset);
+      if (data.message && items.length === 0) {
+        setHorusSyncMessage({ type: 'error', text: data.message });
+      }
 
       const extraMap: Record<string, string> = { ...horusExtraIsbnsMap };
       items.forEach(it => {

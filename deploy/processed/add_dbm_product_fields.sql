@@ -2,6 +2,9 @@
 -- Tabela: prd_product
 -- Data: 2026-11-03
 
+ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS horus_cod_item INTEGER;
+ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS launch_date TIMESTAMP WITH TIME ZONE;
+CREATE INDEX IF NOT EXISTS ix_prd_product_launch_date ON prd_product (launch_date);
 ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS additional_isbns TEXT;
 ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS barcode VARCHAR(50);
 ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS cod_dbm VARCHAR(50);

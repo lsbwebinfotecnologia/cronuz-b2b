@@ -415,9 +415,12 @@ class HorusItemImportPayload(BaseModel):
 
 
 @router.get("/companies/{company_id}/horus-sql/items-estoque-geral")
+@router.get("/companies/{company_id}/horus-sql/estoque-geral")
 def get_items_estoque_geral(
     company_id: int,
     search: Optional[str] = None,
+    q: Optional[str] = None,
+    editora: Optional[str] = None,
     limit: int = 500,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -448,12 +451,18 @@ def get_items_estoque_geral(
     where_clauses = ["1=1"]
     params = []
 
-    if search and search.strip():
-        term = f"%{search.strip()}%"
+    effective_search = (search or q or "").strip()
+    if effective_search:
+        term = f"%{effective_search}%"
         where_clauses.append(
             "(I.NOM_ITEM LIKE %s OR I.COD_BARRA_ITEM LIKE %s OR I.COD_ISBN_ITEM LIKE %s OR CAST(I.COD_ITEM AS VARCHAR) LIKE %s OR ED.NOM_FANTASIA LIKE %s OR ED.NOM_EDITORA LIKE %s OR G.NOM_GENERO LIKE %s)"
         )
         params.extend([term, term, term, term, term, term, term])
+
+    if editora and editora.strip():
+        ed_term = f"%{editora.strip()}%"
+        where_clauses.append("(ED.NOM_FANTASIA LIKE %s OR ED.NOM_EDITORA LIKE %s)")
+        params.extend([ed_term, ed_term])
 
     where_sql = " AND ".join(where_clauses)
     legacy_pagination = getattr(settings, "horus_legacy_pagination", False)
