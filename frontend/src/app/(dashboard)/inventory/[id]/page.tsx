@@ -225,6 +225,9 @@ export default function InventoryDetailPage() {
 
   // Filtros & Paginação High Performance
   const [searchQuery, setSearchQuery] = useState('');
+  const [locationFilter, setLocationFilter] = useState('');
+  const [sessionSearchQuery, setSessionSearchQuery] = useState('');
+  const [sessionStatusFilter, setSessionStatusFilter] = useState<'all' | 'active' | 'canceled'>('all');
   const [onlyDivergent, setOnlyDivergent] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | 'counted' | 'uncounted'>('all');
   const [currentPage, setCurrentPage] = useState(1);
@@ -234,7 +237,7 @@ export default function InventoryDetailPage() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, onlyDivergent, statusFilter, auditSubTab]);
+  }, [searchQuery, locationFilter, onlyDivergent, statusFilter, auditSubTab]);
 
   // Modal de Ajuste de Quantidade por SKU
   const [skuAdjustModal, setSkuAdjustModal] = useState<{
@@ -1069,17 +1072,64 @@ export default function InventoryDetailPage() {
       </div>
 
       {/* Conteúdo da Tab 1: Sessões */}
-      {activeTab === 'sessions' && (
+      {activeTab === 'sessions' && (() => {
+        const filteredSessions = sessions.filter((sess) => {
+          if (sessionStatusFilter === 'active' && sess.status === 'CANCELADA') return false;
+          if (sessionStatusFilter === 'canceled' && sess.status !== 'CANCELADA') return false;
+          if (!sessionSearchQuery.trim()) return true;
+          const q = sessionSearchQuery.trim().toLowerCase();
+          return (
+            sess.location.toLowerCase().includes(q) ||
+            (sess.operator_name && sess.operator_name.toLowerCase().includes(q)) ||
+            (sess.user_name && sess.user_name.toLowerCase().includes(q)) ||
+            String(sess.id).includes(q)
+          );
+        });
+
+        return (
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
           <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                Histórico de Sessões por Prateleira
+                Histórico de Sessões por Prateleira / Bancada
               </h3>
-              <span className="text-xs text-slate-400">Total de {sessions.length} sessões registradas</span>
+              <span className="text-xs text-slate-400">
+                Exibindo {filteredSessions.length} de {sessions.length} sessões registradas
+              </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-full sm:w-64">
+                <MapPin className="h-3.5 w-3.5 absolute left-3 top-2.5 text-teal-600 dark:text-teal-400" />
+                <input
+                  type="text"
+                  placeholder="Filtrar por bancada/prateleira ou operador..."
+                  value={sessionSearchQuery}
+                  onChange={(e) => setSessionSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-7 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-500"
+                />
+                {sessionSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSessionSearchQuery('')}
+                    className="absolute right-2 top-2 text-xs text-slate-400 hover:text-slate-600"
+                    title="Limpar filtro"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              <select
+                value={sessionStatusFilter}
+                onChange={(e: any) => setSessionStatusFilter(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 focus:outline-none"
+              >
+                <option value="all">Todas as Prateleiras</option>
+                <option value="active">Apenas Ativas (Concluídas / Abertas)</option>
+                <option value="canceled">Apenas Canceladas</option>
+              </select>
+
               <button
                 type="button"
                 onClick={() => {
@@ -1099,9 +1149,11 @@ export default function InventoryDetailPage() {
             </div>
           </div>
 
-          {sessions.length === 0 ? (
+          {filteredSessions.length === 0 ? (
             <div className="p-12 text-center text-slate-500 text-sm">
-              Nenhuma prateleira contada ainda. Clique em "Iniciar Bipagem" para abrir a primeira sessão.
+              {sessions.length === 0
+                ? 'Nenhuma prateleira contada ainda. Clique em "Iniciar Bipagem" para abrir a primeira sessão.'
+                : 'Nenhuma bancada/prateleira encontrada para o filtro informado.'}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -1120,7 +1172,7 @@ export default function InventoryDetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {sessions.map((sess) => (
+                  {filteredSessions.map((sess) => (
                     <tr key={sess.id} className="hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors">
                       <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
                         <div className="inline-flex items-center gap-1.5">
@@ -1254,12 +1306,23 @@ export default function InventoryDetailPage() {
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* Conteúdo da Tab 2: Auditoria & Divergências */}
       {activeTab === 'discrepancies' && (() => {
+        const availableLocations = Array.from(
+          new Set([
+            ...sessions.map(s => s.location).filter(Boolean),
+            ...discrepancies.map(d => d.location).filter(Boolean)
+          ])
+        ).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+        const locQuery = locationFilter.trim().toLowerCase();
+
         const filteredDiscrepancies = discrepancies.filter(d => {
           if (onlyDivergent && !d.has_divergence) return false;
+          if (locQuery && !d.location.toLowerCase().includes(locQuery)) return false;
           if (!searchQuery) return true;
           const q = searchQuery.toLowerCase();
           return (
@@ -1275,6 +1338,7 @@ export default function InventoryDetailPage() {
           if (onlyDivergent && !s.has_divergence) return false;
           if (statusFilter === 'counted' && s.total_validated_qty === 0) return false;
           if (statusFilter === 'uncounted' && s.total_validated_qty > 0) return false;
+          if (locQuery && !s.locations_list.some(l => l.toLowerCase().includes(locQuery))) return false;
           if (!searchQuery) return true;
           const q = searchQuery.toLowerCase();
           return (
@@ -1372,11 +1436,39 @@ export default function InventoryDetailPage() {
                   </>
                 )}
 
+                {/* Filtro dedicado por Nome de Bancada / Prateleira */}
+                <div className="relative w-full sm:w-56">
+                  <MapPin className="h-3.5 w-3.5 absolute left-3 top-2.5 text-teal-600 dark:text-teal-400" />
+                  <input
+                    type="text"
+                    list="inventory-locations-datalist"
+                    placeholder="Filtrar bancada / prateleira..."
+                    value={locationFilter}
+                    onChange={(e) => setLocationFilter(e.target.value)}
+                    className="w-full pl-8 pr-7 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  />
+                  {locationFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setLocationFilter('')}
+                      className="absolute right-2 top-2 text-xs text-slate-400 hover:text-slate-600"
+                      title="Limpar filtro de bancada"
+                    >
+                      ✕
+                    </button>
+                  )}
+                  <datalist id="inventory-locations-datalist">
+                    {availableLocations.map((loc) => (
+                      <option key={loc} value={loc} />
+                    ))}
+                  </datalist>
+                </div>
+
                 <div className="relative w-full sm:w-60">
                   <Search className="h-4 w-4 absolute left-3 top-2.5 text-slate-400" />
                   <input
                     type="text"
-                    placeholder="Buscar ISBN, obra, prateleira, operador..."
+                    placeholder="Buscar ISBN, obra, editora..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent focus:outline-none focus:ring-1 focus:ring-teal-500"
