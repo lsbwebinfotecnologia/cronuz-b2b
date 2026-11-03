@@ -458,6 +458,20 @@ def get_items_estoque_geral(
     where_sql = " AND ".join(where_clauses)
     legacy_pagination = getattr(settings, "horus_legacy_pagination", False)
 
+    # Detecta coluna de data de lançamento disponível em ITENS_ESTOQUE_GERAL
+    launch_col_expr = "I.DAT_VAL_ESTGRUPO"
+    try:
+        cols_res = sql_client.query(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ITENS_ESTOQUE_GERAL' AND COLUMN_NAME IN ('DAT_LANCAMENTO', 'DAT_EXP_LANCTO', 'DAT_EDICAO', 'DAT_CADASTRO', 'DAT_VAL_ESTGRUPO')",
+            max_rows=10
+        )
+        avail_cols = {str(c.get("COLUMN_NAME") or "").upper() for c in (cols_res or [])}
+        coalesce_parts = [f"I.{c}" for c in ("DAT_LANCAMENTO", "DAT_EXP_LANCTO", "DAT_EDICAO", "DAT_CADASTRO", "DAT_VAL_ESTGRUPO") if c in avail_cols]
+        if coalesce_parts:
+            launch_col_expr = f"COALESCE({', '.join(coalesce_parts)})" if len(coalesce_parts) > 1 else coalesce_parts[0]
+    except Exception:
+        pass
+
     if legacy_pagination:
         sql = f"""
             SELECT TOP ({limit})
@@ -468,7 +482,9 @@ def get_items_estoque_geral(
                 ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
                 ISNULL(S.saldo_disponivel, 0) AS estoque,
                 ISNULL(G.NOM_GENERO, '') AS assunto,
-                ISNULL(I.DESC_SINOPSE, '') AS sinopse
+                ISNULL(I.DESC_SINOPSE, '') AS sinopse,
+                ISNULL(I.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
+                {launch_col_expr} AS data_lancamento
             FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
             LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
             LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
@@ -487,7 +503,9 @@ def get_items_estoque_geral(
                 ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
                 ISNULL(S.saldo_disponivel, 0) AS estoque,
                 ISNULL(G.NOM_GENERO, '') AS assunto,
-                ISNULL(I.DESC_SINOPSE, '') AS sinopse
+                ISNULL(I.DESC_SINOPSE, '') AS sinopse,
+                ISNULL(I.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
+                {launch_col_expr} AS data_lancamento
             FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
             LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
             LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
@@ -539,6 +557,9 @@ def get_items_estoque_geral(
             already_imported = True
             local_id = local_eans[isbn_str]
 
+        raw_dt = r.get("data_lancamento")
+        dt_iso = raw_dt.isoformat() if hasattr(raw_dt, "isoformat") else (str(raw_dt) if raw_dt else None)
+
         enriched_items.append({
             "cod_item": cod_str,
             "isbn": isbn_str,
@@ -548,6 +569,8 @@ def get_items_estoque_geral(
             "estoque": int(r.get("estoque") or 0),
             "assunto": str(r.get("assunto") or ""),
             "sinopse": str(r.get("sinopse") or ""),
+            "qtd_caixa": int(r.get("qtd_caixa") or 0),
+            "data_lancamento": dt_iso,
             "already_imported": already_imported,
             "local_product_id": local_id,
         })
@@ -569,16 +592,40 @@ def import_items_from_horus(
 ):
     """
     Importa/Sincroniza os itens selecionados (flegados) do Horus SQL na tabela prd_product do Cronuz.
-    Salva o horus_cod_item na tabela prd_product para cruzamento e relatórios analíticos futuros.
+    Salva o horus_cod_item e launch_date na tabela prd_product para cruzamento e relatórios analíticos futuros.
     Cria ou associa editora (Brand) e categoria (Gênero) correspondentes.
     """
     _assert_ownership(current_user, company_id)
 
+    from datetime import datetime
     from app.models.product import Product
     from app.models.catalog_support import Brand, Category
 
+    def _parse_launch_dt(val) -> Optional[datetime]:
+        if not val:
+            return None
+        if isinstance(val, datetime):
+            return val
+        s = str(val).strip()
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(s[:19] if "T" in fmt or ":" in fmt else s[:10], fmt)
+            except Exception:
+                continue
+        return None
+
     imported_count = 0
     updated_count = 0
+    synced_product_ids = []
+
+    def _merge_isbns(existing_str: Optional[str], new_str: Optional[str], primary_isbn: str = "") -> Optional[str]:
+        parts = []
+        for src in (existing_str or "", new_str or ""):
+            for raw in src.replace(";", ",").replace("\n", ",").split(","):
+                cleaned = "".join(ch for ch in raw.strip() if ch.isdigit() or ch.upper() == "X")
+                if cleaned and cleaned != primary_isbn and cleaned not in parts:
+                    parts.append(cleaned)
+        return ", ".join(parts) if parts else None
 
     try:
         for item in payload.items:
@@ -589,6 +636,7 @@ def import_items_from_horus(
             horus_code_int = int(cod_item) if cod_item.isdigit() else None
             nome = str(item.get("nome_item") or "").strip() or f"Produto #{cod_item}"
             isbn = str(item.get("isbn") or "").strip()
+            raw_additional_isbns = str(item.get("additional_isbns") or "").strip()
             
             try:
                 preco = float(item.get("preco") or 0.0)
@@ -600,9 +648,17 @@ def import_items_from_horus(
             except (ValueError, TypeError):
                 estoque = 0
 
+            try:
+                qtd_caixa = int(float(item.get("qtd_caixa") or 0)) if item.get("qtd_caixa") else None
+            except (ValueError, TypeError):
+                qtd_caixa = None
+
             editora_nome = str(item.get("editora") or "").strip()[:100]
             assunto_nome = str(item.get("assunto") or "").strip()[:100]
             sinopse = str(item.get("sinopse") or "").strip()
+            status_horus = str(item.get("status") or "").strip().upper()
+            is_esgotado = "ESGOTADO" in status_horus or "FORA DE LINHA" in status_horus
+            launch_dt = _parse_launch_dt(item.get("data_lancamento") or item.get("launch_date"))
 
             # Vincula ou cria Editora / Marca
             brand_id = None
@@ -654,31 +710,70 @@ def import_items_from_horus(
                 existing_product.name = nome
                 if isbn:
                     existing_product.ean_gtin = isbn
+                    if not existing_product.barcode:
+                        existing_product.barcode = isbn
                 existing_product.base_price = preco
                 existing_product.stock_quantity = estoque
                 existing_product.horus_cod_item = horus_code_int
+                if not existing_product.cod_dbm:
+                    existing_product.cod_dbm = str(existing_product.id or cod_item)
+                if qtd_caixa is not None:
+                    existing_product.units_per_box = qtd_caixa
+                if launch_dt:
+                    existing_product.launch_date = launch_dt
+                    if not existing_product.launch_month:
+                        existing_product.launch_month = launch_dt.month
+                    if not existing_product.launch_year:
+                        existing_product.launch_year = launch_dt.year
                 if brand_id:
                     existing_product.brand_id = brand_id
+                if editora_nome and not existing_product.brand:
+                    existing_product.brand = editora_nome
                 if category_id:
                     existing_product.category_id = category_id
+                if assunto_nome and not existing_product.subject:
+                    existing_product.subject = assunto_nome
                 if sinopse:
                     existing_product.long_description = sinopse
+                if is_esgotado:
+                    existing_product.is_out_of_print = True
+                if raw_additional_isbns:
+                    existing_product.additional_isbns = _merge_isbns(
+                        existing_product.additional_isbns, raw_additional_isbns, isbn
+                    )
+                db.flush()
+                synced_product_ids.append(existing_product.id)
                 updated_count += 1
             else:
+                merged_extra_isbns = _merge_isbns(None, raw_additional_isbns, isbn)
                 new_prod = Product(
                     company_id=company_id,
                     sku=cod_item,
                     name=nome,
                     ean_gtin=isbn,
+                    barcode=isbn if isbn else None,
+                    cod_dbm=cod_item,
                     base_price=preco,
                     stock_quantity=estoque,
                     horus_cod_item=horus_code_int,
+                    units_per_box=qtd_caixa,
+                    launch_date=launch_dt,
+                    launch_month=launch_dt.month if launch_dt else None,
+                    launch_year=launch_dt.year if launch_dt else None,
                     brand_id=brand_id,
+                    brand=editora_nome if editora_nome else None,
                     category_id=category_id,
+                    subject=assunto_nome if assunto_nome else None,
                     long_description=sinopse if sinopse else None,
+                    is_out_of_print=is_esgotado,
+                    additional_isbns=merged_extra_isbns,
+                    binding_finish="E-book" if "[E-BOOK]" in nome.upper() or "[EBOOK]" in nome.upper() else "Brochura",
+                    royalty_rule="Sem Royalties",
                     status="ACTIVE"
                 )
                 db.add(new_prod)
+                db.flush()
+                synced_product_ids.append(new_prod.id)
                 imported_count += 1
 
         db.commit()
@@ -687,9 +782,11 @@ def import_items_from_horus(
             "success": True,
             "imported_count": imported_count,
             "updated_count": updated_count,
-            "total_processed": len(payload.items)
+            "total_processed": len(payload.items),
+            "synced_product_ids": synced_product_ids
         }
     except Exception as e:
         db.rollback()
         log.error(f"[HorusSQL] Erro ao importar itens: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Erro interno ao importar produtos: {str(e)}")
+

@@ -49,12 +49,15 @@ interface PearsonItem {
   selected_for_rateio: boolean;
   in_horus: boolean;
   horus_cod_item?: string;
+  horus_isbn?: string;
+  merged_isbns?: string[];
   horus_title?: string;
   horus_cover_price?: number;
   horus_stock?: number;
   is_ebook?: boolean;
   api_message?: string;
 }
+
 
 interface PearsonPreviewData {
   report_model?: 'PEARSON' | 'BOOKWIRE';
@@ -214,6 +217,7 @@ export default function EbookPearsonPage() {
     const q = searchFilter.toLowerCase().trim();
     return list.filter(it => 
       it.isbn.toLowerCase().includes(q) ||
+      (it.merged_isbns && it.merged_isbns.some(m => m.toLowerCase().includes(q))) ||
       it.title_pearson.toLowerCase().includes(q) ||
       (it.horus_title && it.horus_title.toLowerCase().includes(q)) ||
       (it.horus_cod_item && String(it.horus_cod_item).toLowerCase().includes(q))
@@ -224,21 +228,121 @@ export default function EbookPearsonPage() {
     return Math.round((val + Number.EPSILON) * 100) / 100;
   }
 
-  // Inteligência de Decomposição (Quantidade x Preço de Capa e Quebra em Q=1)
+  // Unifica itens que apontam para o mesmo produto no Horus (mesmo horus_cod_item ou horus_isbn)
+  function unifyDuplicateHorusItems(itemsList: PearsonItem[]): {
+    unified: PearsonItem[];
+    mergedCount: number;
+  } {
+    if (!itemsList || itemsList.length === 0) {
+      return { unified: itemsList, mergedCount: 0 };
+    }
+
+    const unified: PearsonItem[] = [];
+    const seenByKey: Record<string, number> = {};
+    let mergedCount = 0;
+
+    for (const it of itemsList) {
+      const inHorus = Boolean(it.in_horus && it.horus_cod_item);
+      const codKey = String(it.horus_cod_item || '').trim().toUpperCase();
+      const isbnKey = String(it.horus_isbn || it.isbn || '').trim().toUpperCase();
+      const key = inHorus ? (codKey || isbnKey) : '';
+
+      if (!key) {
+        unified.push({
+          ...it,
+          merged_isbns: it.merged_isbns && it.merged_isbns.length > 0 ? [...it.merged_isbns] : [it.isbn]
+        });
+        continue;
+      }
+
+      if (seenByKey[key] === undefined) {
+        seenByKey[key] = unified.length;
+        const baseMerged = it.merged_isbns && it.merged_isbns.length > 0 ? [...it.merged_isbns] : [it.isbn];
+        if (!baseMerged.includes(it.isbn)) baseMerged.push(it.isbn);
+        unified.push({
+          ...it,
+          merged_isbns: baseMerged
+        });
+      } else {
+        mergedCount++;
+        const existingIdx = seenByKey[key];
+        const existing = { ...unified[existingIdx] };
+
+        const mergedIsbns = existing.merged_isbns && existing.merged_isbns.length > 0
+          ? [...existing.merged_isbns]
+          : [existing.isbn];
+        const incomingIsbns = it.merged_isbns && it.merged_isbns.length > 0
+          ? it.merged_isbns
+          : [it.isbn];
+        for (const m of incomingIsbns) {
+          if (m && !mergedIsbns.includes(m)) {
+            mergedIsbns.push(m);
+          }
+        }
+
+        const primaryHorusIsbn = existing.horus_isbn || it.horus_isbn || existing.isbn;
+        const combinedOriginal = round2((existing.original_value || 0) + (it.original_value || 0));
+        const combinedSubtotal = round2((existing.subtotal || 0) + (it.subtotal || 0));
+
+        unified[existingIdx] = {
+          ...existing,
+          isbn: primaryHorusIsbn,
+          horus_isbn: primaryHorusIsbn,
+          merged_isbns: mergedIsbns,
+          original_value: combinedOriginal,
+          subtotal: combinedSubtotal,
+          pageviews: (existing.pageviews || 0) + (it.pageviews || 0),
+          percentage: round2((existing.percentage || 0) + (it.percentage || 0)),
+          selected_for_rateio: existing.selected_for_rateio || it.selected_for_rateio,
+          horus_cover_price: existing.horus_cover_price || it.horus_cover_price,
+          horus_title: existing.horus_title || it.horus_title,
+          api_message: `✓ Unificado (${mergedIsbns.length} ISBNs: ${mergedIsbns.join(' + ')}) -> Horus #${existing.horus_cod_item}`
+        };
+      }
+    }
+
+    return { unified, mergedCount };
+  }
+
+  // Inteligência de Decomposição (Quantidade x Preço de Capa e Quebra em Q=1) + Unificação de Duplicados
   function decomposeAndReconcileItems(
     itemsList: PearsonItem[],
     targetTotal?: number
   ): PearsonItem[] {
     if (!itemsList || itemsList.length === 0) return itemsList;
 
-    const target = targetTotal !== undefined 
-      ? round2(targetTotal) 
-      : round2(itemsList.reduce((acc, it) => acc + it.subtotal, 0));
+    // Passo 0: Unifica automaticamente itens que representem o mesmo livro no Horus
+    const { unified } = unifyDuplicateHorusItems(itemsList);
+
+    const sumSubtotals = round2(unified.reduce((acc, it) => acc + it.subtotal, 0));
+    const target = targetTotal !== undefined && targetTotal > 0
+      ? round2(targetTotal)
+      : sumSubtotals;
+
+    // Se houver targetTotal >= sumSubtotals e diferença a ratear, distribui proporcionalmente antes de decompor
+    const workingList = unified.map(it => ({ ...it }));
+    const preDiff = round2(target - sumSubtotals);
+    if (targetTotal !== undefined && targetTotal > 0 && preDiff > 0.005) {
+      const selectedIndices = workingList
+        .map((it, idx) => it.selected_for_rateio ? idx : -1)
+        .filter(idx => idx !== -1);
+      if (selectedIndices.length > 0) {
+        const selectedWeight = selectedIndices.reduce((s, idx) => s + workingList[idx].subtotal, 0);
+        const useEqual = selectedWeight <= 0;
+        selectedIndices.forEach(idx => {
+          const it = workingList[idx];
+          const share = useEqual
+            ? preDiff / selectedIndices.length
+            : preDiff * (it.subtotal / selectedWeight);
+          it.subtotal = round2(it.subtotal + share);
+        });
+      }
+    }
 
     const results: PearsonItem[] = [];
 
     // Passo 1: Determinar Q e Pu preliminar para cada item respeitando Preço de Capa
-    for (const it of itemsList) {
+    for (const it of workingList) {
       const targetS = round2(it.subtotal);
       const cover = it.horus_cover_price || 0;
 
@@ -265,8 +369,8 @@ export default function EbookPearsonPage() {
           pu = round2(targetS / q);
         }
       } else {
-        q = Math.max(1, it.quantity);
-        pu = round2(targetS / q);
+        q = 1;
+        pu = targetS;
       }
 
       const sub = round2(q * pu);
@@ -343,36 +447,56 @@ export default function EbookPearsonPage() {
         },
         body: JSON.stringify({
           isbn: isbnToQuery,
+          original_isbn: item.isbn,
+          save_secondary_isbn: true,
           title: item.title_pearson
         })
       });
 
       if (!res.ok) {
-        throw new Error('Falha de conexão ao reconsultar item no Horus.');
+        throw new Error('Falha de conexão ao reconsultar item no Horus / DBM.');
       }
 
       const data = await res.json();
       if (data.found) {
-        setItems(prev => prev.map(it => {
-          if (it.id === item.id) {
-            return {
-              ...it,
-              isbn: data.isbn || it.isbn,
-              in_horus: true,
-              horus_cod_item: data.horus_cod_item,
-              horus_title: data.horus_title,
-              horus_cover_price: data.horus_cover_price ?? it.horus_cover_price,
-              horus_stock: data.horus_stock ?? it.horus_stock,
-              is_ebook: data.is_ebook,
-              api_message: data.api_message
-            };
-          }
-          return it;
-        }));
+        const hadExistingMatch = items.some(
+          other =>
+            other.id !== item.id &&
+            other.in_horus &&
+            ((data.horus_cod_item && other.horus_cod_item === data.horus_cod_item) ||
+              (data.horus_isbn && (other.horus_isbn === data.horus_isbn || other.isbn === data.horus_isbn)))
+        );
+
+        setItems(prev => {
+          const updated = prev.map(it => {
+            if (it.id === item.id) {
+              return {
+                ...it,
+                isbn: item.isbn,
+                horus_isbn: data.horus_isbn || isbnToQuery || it.isbn,
+                in_horus: true,
+                horus_cod_item: data.horus_cod_item,
+                horus_title: data.horus_title,
+                horus_cover_price: data.horus_cover_price ?? it.horus_cover_price,
+                horus_stock: data.horus_stock ?? it.horus_stock,
+                is_ebook: data.is_ebook,
+                api_message: data.api_message
+              };
+            }
+            return it;
+          });
+          return decomposeAndReconcileItems(updated, targetReceivedTotal > 0 ? targetReceivedTotal : undefined);
+        });
         setEditingRowId(null);
-        setRecheckSuccessMsg(`✓ Item ${item.isbn} localizado com sucesso no Horus (Cód: #${data.horus_cod_item})!`);
+        setRecheckSuccessMsg(
+          hadExistingMatch
+            ? `✓ Item ${item.isbn} unificado ao ISBN principal ${data.horus_isbn || isbnToQuery} (Horus #${data.horus_cod_item}) com valores somados e rateados automaticamente!`
+            : data.linked_secondary_isbn
+              ? `✓ Item ${item.isbn} vinculado ao Horus #${data.horus_cod_item} e 2º ISBN salvo no Cadastro DBM!`
+              : `✓ Item ${item.isbn} localizado com sucesso (Cód: #${data.horus_cod_item})!`
+        );
       } else {
-        alert(`O item com ISBN "${isbnToQuery}" ainda não foi localizado no Horus ERP nem no catálogo.`);
+        alert(`O item "${isbnToQuery}" ainda não foi localizado no Horus ERP nem no Cadastro Sincronizado do DBM.`);
       }
     } catch (err: any) {
       alert(err.message || 'Erro ao reconsultar item.');
@@ -381,27 +505,117 @@ export default function EbookPearsonPage() {
     }
   };
 
-  const handleManualApplyCode = (itemId: string) => {
+  const handleManualApplyCode = async (itemId: string) => {
     const cod = (editManualCodMap[itemId] || '').trim();
     if (!cod) {
-      alert('Informe o Código Horus numérico do item.');
+      alert('Informe o Código Horus numérico ou ISBN principal do item.');
       return;
     }
-    setItems(prev => prev.map(it => {
-      if (it.id === itemId) {
-        return {
-          ...it,
-          in_horus: true,
-          horus_cod_item: cod,
-          is_ebook: true,
-          api_message: `✓ Vinculado Manualmente (Cód: #${cod})`
-        };
+    const targetItem = items.find(it => it.id === itemId);
+    if (!targetItem) return;
+
+    setRecheckingId(itemId);
+    setRecheckSuccessMsg(null);
+    try {
+      const token = getToken();
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${apiUrl}/orders/ebook-pearson/lookup-item`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          isbn: cod,
+          original_isbn: targetItem.isbn,
+          save_secondary_isbn: true,
+          title: targetItem.title_pearson
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.found) {
+          const hadExistingMatch = items.some(
+            other =>
+              other.id !== itemId &&
+              other.in_horus &&
+              ((data.horus_cod_item && other.horus_cod_item === data.horus_cod_item) ||
+                (data.horus_isbn && (other.horus_isbn === data.horus_isbn || other.isbn === data.horus_isbn)))
+          );
+
+          setItems(prev => {
+            const updated = prev.map(it => {
+              if (it.id === itemId) {
+                return {
+                  ...it,
+                  in_horus: true,
+                  horus_isbn: data.horus_isbn || it.isbn,
+                  horus_cod_item: data.horus_cod_item || cod,
+                  horus_title: data.horus_title || it.horus_title,
+                  horus_cover_price: data.horus_cover_price ?? it.horus_cover_price,
+                  horus_stock: data.horus_stock ?? it.horus_stock,
+                  is_ebook: data.is_ebook ?? true,
+                  api_message: data.api_message || `✓ Vinculado ao Cód: #${data.horus_cod_item || cod}`
+                };
+              }
+              return it;
+            });
+            return decomposeAndReconcileItems(updated, targetReceivedTotal > 0 ? targetReceivedTotal : undefined);
+          });
+          setEditingRowId(null);
+          setRecheckSuccessMsg(
+            hadExistingMatch
+              ? `✓ Item ${targetItem.isbn} unificado ao ISBN principal ${data.horus_isbn || cod} (Horus #${data.horus_cod_item || cod}) com valores somados e rateados automaticamente!`
+              : data.linked_secondary_isbn
+                ? `✓ Código #${data.horus_cod_item || cod} vinculado e 2º ISBN (${targetItem.isbn}) salvo no Cadastro DBM!`
+                : `✓ Código #${data.horus_cod_item || cod} vinculado ao item com sucesso!`
+          );
+          return;
+        }
       }
-      return it;
-    }));
-    setEditingRowId(null);
-    setRecheckSuccessMsg(`✓ Código #${cod} vinculado manualmente ao item!`);
+
+      // Fallback caso o código não retorne dados extras mas o usuário queira forçar o vínculo
+      setItems(prev => {
+        const updated = prev.map(it => {
+          if (it.id === itemId) {
+            return {
+              ...it,
+              in_horus: true,
+              horus_cod_item: cod,
+              is_ebook: true,
+              api_message: `✓ Vinculado Manualmente (Cód: #${cod})`
+            };
+          }
+          return it;
+        });
+        return decomposeAndReconcileItems(updated, targetReceivedTotal > 0 ? targetReceivedTotal : undefined);
+      });
+      setEditingRowId(null);
+      setRecheckSuccessMsg(`✓ Código #${cod} vinculado manualmente ao item!`);
+    } catch {
+      setItems(prev => {
+        const updated = prev.map(it => {
+          if (it.id === itemId) {
+            return {
+              ...it,
+              in_horus: true,
+              horus_cod_item: cod,
+              is_ebook: true,
+              api_message: `✓ Vinculado Manualmente (Cód: #${cod})`
+            };
+          }
+          return it;
+        });
+        return decomposeAndReconcileItems(updated, targetReceivedTotal > 0 ? targetReceivedTotal : undefined);
+      });
+      setEditingRowId(null);
+      setRecheckSuccessMsg(`✓ Código #${cod} vinculado manualmente ao item!`);
+    } finally {
+      setRecheckingId(null);
+    }
   };
+
 
   // ── Ações de Leitura e Envio ──────────────────────────────────────────────
 
@@ -651,6 +865,7 @@ export default function EbookPearsonPage() {
         skip_expedition: skipExpedition,
         items: items.map(it => ({
           isbn: it.isbn,
+          horus_isbn: it.horus_isbn,
           title: it.title_pearson,
           quantity: it.quantity,
           liquid_unit_price: it.liquid_value,
@@ -661,6 +876,7 @@ export default function EbookPearsonPage() {
           is_ebook: it.is_ebook
         }))
       };
+
 
       const token = getToken();
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -1512,8 +1728,22 @@ export default function EbookPearsonPage() {
 
                       {/* ISBN */}
                       <td className="py-1.5 px-2 font-bold text-slate-800 dark:text-slate-200">
-                        {it.isbn}
+                        <div>{it.isbn}</div>
+                        {it.horus_isbn && it.horus_isbn !== it.isbn && (
+                          <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-indigo-600 dark:text-indigo-400" title="2º ISBN vinculado ao ISBN principal do Horus via Cadastro DBM">
+                            ↳ Horus: {it.horus_isbn}
+                          </span>
+                        )}
+                        {it.merged_isbns && it.merged_isbns.length > 1 && (
+                          <span
+                            className="inline-flex items-center gap-0.5 px-1 py-0.2 mt-0.5 rounded text-[8.5px] font-bold bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800"
+                            title={`Itens unificados no mesmo livro Horus: ${it.merged_isbns.join(' + ')}`}
+                          >
+                            ⊕ Unificado ({it.merged_isbns.length} ISBNs: {it.merged_isbns.filter(m => m !== it.isbn).join(', ')})
+                          </span>
+                        )}
                       </td>
+
 
                       {/* Título */}
                       <td className="py-1.5 px-2 font-sans font-medium text-slate-900 dark:text-white max-w-xs" title={it.title_pearson}>

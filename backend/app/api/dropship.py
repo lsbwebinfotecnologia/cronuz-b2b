@@ -1245,6 +1245,14 @@ async def _get_horus_item_info(
     return {"cod_item": cod_item, "vlr_capa": vlr_capa}
 
 
+def _uppercase_payload(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Garante que todos os valores textuais enviados ao ERP estejam em CAIXA ALTA (MAIÚSCULO)."""
+    return {
+        k: (v.strip().upper() if isinstance(v, str) else v)
+        for k, v in params.items()
+    }
+
+
 async def _get_or_create_horus_customer(
     horus_clients,
     customer_data: Dict[str, Any],
@@ -1256,9 +1264,21 @@ async def _get_or_create_horus_customer(
     Busca o cliente final     - CPF ausente → retorna None (quem chama decide o que fazer)
     - Endereço ausente → usa dados do seller como fallback
     - Falha no Hórus → levanta exceção com mensagem clara
+    - Todos os dados cadastrados/atualizados são enviados em CAIXA ALTA (MAIÚSCULO)
     """
     import logging
     log = logging.getLogger(__name__)
+
+    _UF_NOMES_UPPER = {
+        "AC": "ACRE", "AL": "ALAGOAS", "AP": "AMAPÁ", "AM": "AMAZONAS",
+        "BA": "BAHIA", "CE": "CEARÁ", "DF": "DISTRITO FEDERAL",
+        "ES": "ESPÍRITO SANTO", "GO": "GOIÁS", "MA": "MARANHÃO",
+        "MT": "MATO GROSSO", "MS": "MATO GROSSO DO SUL", "MG": "MINAS GERAIS",
+        "PA": "PARÁ", "PB": "PARAÍBA", "PR": "PARANÁ", "PE": "PERNAMBUCO",
+        "PI": "PIAUÍ", "RJ": "RIO DE JANEIRO", "RN": "RIO GRANDE DO NORTE",
+        "RS": "RIO GRANDE DO SUL", "RO": "RONDÔNIA", "RR": "RORAIMA",
+        "SC": "SANTA CATARINA", "SP": "SÃO PAULO", "SE": "SERGIPE", "TO": "TOCANTINS",
+    }
 
     cpf_cnpj = re.sub(r"\D", "", str(customer_data.get("cpf_cnpj") or ""))
     if not cpf_cnpj:
@@ -1273,38 +1293,31 @@ async def _get_or_create_horus_customer(
         )
         if busca and not busca.get("error") and busca.get("data"):
             data = busca["data"]
-            cod_cli = str(data.get("COD_CLI") or data.get("CODIGO") or "").strip()
+            cod_cli = str(data.get("COD_CLI") or data.get("CODIGO") or "").strip().upper()
             if cod_cli:
                 log.info(f"[Dropship] Cliente encontrado no Hórus: CPF={cpf_cnpj} COD_CLI={cod_cli}")
-                # Atualiza endereço do cliente encontrado (mesmo fluxo do InsAltEndCliente)
+                # Atualiza endereço do cliente encontrado (mesmo fluxo do InsAltEndCliente) em CAIXA ALTA
                 # O endereço é atualizado assincronamente — não bloqueia
                 try:
-                    _UF_NOMES_QUICK = {
-                        "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas",
-                        "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
-                        "ES": "Espírito Santo", "GO": "Goiás", "MA": "Maranhão",
-                        "MT": "Mato Grosso", "MS": "Mato Grosso do Sul", "MG": "Minas Gerais",
-                        "PA": "Pará", "PB": "Paraíba", "PR": "Paraná", "PE": "Pernambuco",
-                        "PI": "Piauí", "RJ": "Rio de Janeiro", "RN": "Rio Grande do Norte",
-                        "RS": "Rio Grande do Sul", "RO": "Rondônia", "RR": "Roraima",
-                        "SC": "Santa Catarina", "SP": "São Paulo", "SE": "Sergipe", "TO": "Tocantins",
-                    }
                     _uf  = str(customer_data.get("uf") or "").strip().upper()
                     _cep = re.sub(r"\D", "", str(customer_data.get("cep") or ""))
                     _end_params: Dict[str, Any] = {
                         "COD_CLI":       cod_cli,
-                        "COD_TPO_END":   config.horus_cod_endereco or "1",
-                        "NOM_PAIS":      "Brasil",
+                        "COD_TPO_END":   str(config.horus_cod_endereco or "1").strip().upper(),
+                        "NOM_PAIS":      "BRASIL",
                         "SIGLA_UF":      _uf,
-                        "NOME_UF":       _UF_NOMES_QUICK.get(_uf, _uf),
-                        "NOM_LOCAL":     str(customer_data.get("cidade") or "")[:60],
-                        "NOM_BAIRRO":    str(customer_data.get("bairro") or "")[:40],
-                        "DESC_ENDERECO": str(customer_data.get("endereco") or "")[:80],
-                        "NUM_END":       str(customer_data.get("numero") or "S/N")[:10],
+                        "NOME_UF":       _UF_NOMES_UPPER.get(_uf, _uf).upper(),
+                        "NOM_LOCAL":     str(customer_data.get("cidade") or "").strip().upper()[:60],
+                        "NOM_BAIRRO":    str(customer_data.get("bairro") or "").strip().upper()[:40],
+                        "DESC_ENDERECO": str(customer_data.get("endereco") or "").strip().upper()[:80],
+                        "NUM_END":       str(customer_data.get("numero") or "S/N").strip().upper()[:10],
                         "CEP":           _cep,
                     }
+                    if customer_data.get("complemento"):
+                        _end_params["COM_ENDERECO"] = str(customer_data["complemento"]).strip().upper()[:40]
+                    _end_params = _uppercase_payload(_end_params)
                     await horus_clients.get("InsAltEndCliente", params=_end_params)  # type: ignore[attr-defined]
-                    log.info(f"[Dropship] Endereço atualizado para COD_CLI={cod_cli}")
+                    log.info(f"[Dropship] Endereço atualizado (CAIXA ALTA) para COD_CLI={cod_cli}")
                 except Exception as _ex:
                     log.warning(f"[Dropship] InsAltEndCliente (atualização) não bloqueante: {_ex}")
                 return cod_cli
@@ -1314,22 +1327,22 @@ async def _get_or_create_horus_customer(
     except Exception as e:
         log.warning(f"[Dropship] Busca_ClienteB2B falhou (CPF={cpf_cnpj}): {e}")
 
-    # ── Monta dados para InsAltCliente / InsAltEndCliente ──────────────────────
-    nome     = str(customer_data.get("nome") or "").strip()
+    # ── Monta dados para InsAltCliente / InsAltEndCliente (tudo em CAIXA ALTA) ──
+    nome     = str(customer_data.get("nome") or "").strip().upper()
     cep      = re.sub(r"\D", "", str(customer_data.get("cep") or ""))
     uf       = str(customer_data.get("uf") or "").strip().upper()
-    cidade   = str(customer_data.get("cidade") or "").strip()
-    bairro   = str(customer_data.get("bairro") or "").strip()
-    endereco = str(customer_data.get("endereco") or "").strip()
-    numero   = str(customer_data.get("numero") or "S/N").strip()
+    cidade   = str(customer_data.get("cidade") or "").strip().upper()
+    bairro   = str(customer_data.get("bairro") or "").strip().upper()
+    endereco = str(customer_data.get("endereco") or "").strip().upper()
+    numero   = str(customer_data.get("numero") or "S/N").strip().upper()
 
     # Fallback de endereço: se o cliente não tem endereço, usa dados do seller
     if seller_company and (not cep or not uf or not cidade):
         cep      = cep or re.sub(r"\D", "", str(getattr(seller_company, "zip_code", "") or ""))
         uf       = uf or str(getattr(seller_company, "state", "") or "").strip().upper()
-        cidade   = cidade or str(getattr(seller_company, "city", "") or "").strip()
-        bairro   = bairro or str(getattr(seller_company, "neighborhood", "") or "").strip()
-        endereco = endereco or str(getattr(seller_company, "address", "") or "").strip()
+        cidade   = cidade or str(getattr(seller_company, "city", "") or "").strip().upper()
+        bairro   = bairro or str(getattr(seller_company, "neighborhood", "") or "").strip().upper()
+        endereco = endereco or str(getattr(seller_company, "address", "") or "").strip().upper()
 
     doc_key    = "CPF" if len(cpf_cnpj) == 11 else "CNPJ"
     tpo_pessoa = "F"  if len(cpf_cnpj) == 11 else "J"
@@ -1344,11 +1357,12 @@ async def _get_or_create_horus_customer(
 
     # Parâmetros opcionais da config do seller
     if config.horus_resp_cliente:
-        ins_params["NOM_RESP"] = config.horus_resp_cliente
+        ins_params["NOM_RESP"] = str(config.horus_resp_cliente).strip().upper()
     if config.horus_cod_resp:
-        ins_params["COD_RESPONSAVEL"] = config.horus_cod_resp
+        ins_params["COD_RESPONSAVEL"] = str(config.horus_cod_resp).strip().upper() if isinstance(config.horus_cod_resp, str) else config.horus_cod_resp
     # TIPO_CLI não é parâmetro do InsAltCliente (B2C) — não enviar
 
+    ins_params = _uppercase_payload(ins_params)
     log.info(f"[Dropship] InsAltCliente params: {ins_params}")
 
     try:
@@ -1368,13 +1382,13 @@ async def _get_or_create_horus_customer(
                         cnpj_destino=cnpj_destino, cpf=cpf_cnpj
                     )
                     if busca_retry and not busca_retry.get("error") and busca_retry.get("data"):
-                        cod_cli_retry = str(busca_retry["data"].get("COD_CLI") or busca_retry["data"].get("CODIGO") or "").strip()
+                        cod_cli_retry = str(busca_retry["data"].get("COD_CLI") or busca_retry["data"].get("CODIGO") or "").strip().upper()
                         if cod_cli_retry:
                             log.info(f"[Dropship] COD_CLI recuperado após duplicação: {cod_cli_retry}")
                             return cod_cli_retry
                 raise ValueError(f"InsCliente retornou Falha: {msg_horus}")
 
-            cod_cli = str(item.get("COD_CLI") or item.get("CODIGO") or "").strip()
+            cod_cli = str(item.get("COD_CLI") or item.get("CODIGO") or "").strip().upper()
             if not cod_cli:
                 raise ValueError(f"InsAltCliente não retornou COD_CLI. Resposta: {item}")
         else:
@@ -1387,38 +1401,28 @@ async def _get_or_create_horus_customer(
 
     log.info(f"[Dropship] Cliente criado com sucesso: COD_CLI={cod_cli}")
 
-    # ── PASSO 2: InsAltEndCliente — cadastrar endereço do cliente ──────────────
-    # Mapeamento de UF → nome completo do estado (obrigatório pelo Hórus)
-    _UF_NOMES = {
-        "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas",
-        "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
-        "ES": "Espírito Santo", "GO": "Goiás", "MA": "Maranhão",
-        "MT": "Mato Grosso", "MS": "Mato Grosso do Sul", "MG": "Minas Gerais",
-        "PA": "Pará", "PB": "Paraíba", "PR": "Paraná", "PE": "Pernambuco",
-        "PI": "Piauí", "RJ": "Rio de Janeiro", "RN": "Rio Grande do Norte",
-        "RS": "Rio Grande do Sul", "RO": "Rondônia", "RR": "Roraima",
-        "SC": "Santa Catarina", "SP": "São Paulo", "SE": "Sergipe", "TO": "Tocantins",
-    }
-    nome_uf = _UF_NOMES.get(uf, uf)
+    # ── PASSO 2: InsAltEndCliente — cadastrar endereço do cliente (CAIXA ALTA) ──
+    nome_uf = _UF_NOMES_UPPER.get(uf, uf).upper()
 
     end_params: Dict[str, Any] = {
-        "COD_CLI":      cod_cli,
-        "NOM_PAIS":     "Brasil",
-        "SIGLA_UF":     uf,
-        "NOME_UF":      nome_uf,
-        "NOM_LOCAL":    cidade[:60] if cidade else "",
-        "NOM_BAIRRO":   bairro[:40] if bairro else "",
+        "COD_CLI":       cod_cli,
+        "NOM_PAIS":      "BRASIL",
+        "SIGLA_UF":      uf,
+        "NOME_UF":       nome_uf,
+        "NOM_LOCAL":     cidade[:60] if cidade else "",
+        "NOM_BAIRRO":    bairro[:40] if bairro else "",
         "DESC_ENDERECO": endereco[:80] if endereco else "",
-        "NUM_END":      numero[:10],
-        "CEP":          cep,
+        "NUM_END":       numero[:10],
+        "CEP":           cep,
     }
 
     # Tipo de endereço: vem da config ou padrão 1
-    end_params["COD_TPO_END"] = config.horus_cod_endereco or "1"
+    end_params["COD_TPO_END"] = str(config.horus_cod_endereco or "1").strip().upper()
 
     if customer_data.get("complemento"):
-        end_params["COM_ENDERECO"] = str(customer_data["complemento"])[:40]
+        end_params["COM_ENDERECO"] = str(customer_data["complemento"]).strip().upper()[:40]
 
+    end_params = _uppercase_payload(end_params)
     log.info(f"[Dropship] InsAltEndCliente params: {end_params}")
 
     try:
@@ -1639,14 +1643,14 @@ async def send_order_to_horus(
     from app.integrators.horus_clients import HorusClients
     from app.integrators.horus_orders import HorusOrders
 
-    # 7. Preparar dados base
+    # 7. Preparar dados base (sempre em CAIXA ALTA para integração ERP)
     customer_data = order.customer_data or {}
-    ext_id        = str(order.external_reference or order.external_order_id or order.id)
-    cod_origem_remessa = f"RM-{ext_id[:20]}"
-    cod_origem_venda   = f"VD-{ext_id[:20]}"
+    ext_id        = str(order.external_reference or order.external_order_id or order.id).strip().upper()
+    cod_origem_remessa = f"RM-{ext_id[:20]}".upper()
+    cod_origem_venda   = f"VD-{ext_id[:20]}".upper()
     cnpj_destino       = re.sub(r"\D", "", str(company.document or ""))
     id_doc_erdos       = re.sub(r"\D", "", str(customer_erdos.id_doc)) if customer_erdos.id_doc else ""
-    id_guid_erdos      = customer_erdos.id_guid or ""
+    id_guid_erdos      = (customer_erdos.id_guid or "").strip().upper()
 
     # 8. Determinar parâmetro fiscal da remessa (intra × inter estado)
     uf_seller  = str(getattr(settings, "state", "") or getattr(company, "state", "") or "").strip().upper()
@@ -1702,7 +1706,7 @@ async def send_order_to_horus(
                 or item.get("isbn")
                 or item.get("barras_isbn")
                 or ""
-            ).strip()
+            ).strip().upper()
             if isbn and isbn not in item_info_map:
                 info = await _get_horus_item_info(
                     db=db,
@@ -1751,18 +1755,19 @@ async def send_order_to_horus(
 
             # ───────────────────────────────────────────────────────────────────
             # PEDIDO 1 — REMESSA (CFOP 6.923): B2C — entrega ao cliente final
-            # Usa horus_clients (sem CNPJ_DESTINO) + parâmetros B2C obrigatórios
+            # Usa horus_clients (sem CNPJ_DESTINO) + parâmetros B2C obrigatórios (CAIXA ALTA)
             # ───────────────────────────────────────────────────────────────────
+            obs_remessa = (
+                f"DROPSHIP ERDOS | PEDIDO ERDOS #{order.external_order_id} | REF: {order.external_reference or order.external_order_id} "
+                f"| CLIENTE: {customer_data.get('nome', 'N/A')} "
+                f"| CPF: {customer_data.get('cpf_cnpj', 'N/A')} "
+                f"| CEP: {customer_data.get('cep', 'N/A')}"
+            ).upper()
             remessa_params: Dict[str, Any] = {
                 "TIPO_PEDIDO_V_T_D":  "L",
                 "COD_PARAM_FISCAL":   fiscal_remessa,
                 "COD_PEDIDO_ORIGEM":  cod_origem_remessa,
-                "OBS_PEDIDO": (
-                    f"Dropship Erdos | Pedido Erdos #{order.external_order_id} | Ref: {order.external_reference or order.external_order_id} "
-                    f"| Cliente: {customer_data.get('nome', 'N/A')} "
-                    f"| CPF: {customer_data.get('cpf_cnpj', 'N/A')} "
-                    f"| CEP: {customer_data.get('cep', 'N/A')}"
-                ),
+                "OBS_PEDIDO":         obs_remessa,
             }
             # COD_EMPRESA e COD_FILIAL — obrigatórios B2C
             if settings.horus_company:
@@ -1780,8 +1785,9 @@ async def send_order_to_horus(
             if config.horus_cod_transp:
                 remessa_params["COD_TRANSP"] = config.horus_cod_transp
             if config.horus_frete_emit_dest:
-                remessa_params["FRETE_EMIT_DEST"] = config.horus_frete_emit_dest
+                remessa_params["FRETE_EMIT_DEST"] = str(config.horus_frete_emit_dest).strip().upper()
 
+            remessa_params = _uppercase_payload(remessa_params)
             remessa_result = await horus_clients.get(  # type: ignore[attr-defined]
                 "InsPedidoVenda", params=remessa_params
             )
@@ -1813,7 +1819,7 @@ async def send_order_to_horus(
                 isbn = (
                     item.get("sku") or item.get("sku_fornecedor")
                     or item.get("isbn") or item.get("barras_isbn") or ""
-                ).strip()
+                ).strip().upper()
                 qty = int(item.get("quantidade") or item.get("qty") or 1)
                 if not isbn:
                     errors.append(f"Item sem SKU/ISBN: {item}")
@@ -1842,13 +1848,14 @@ async def send_order_to_horus(
                 if cod_cli_final:
                     item_params_remessa["COD_CLI"] = cod_cli_final
 
+                item_params_remessa = _uppercase_payload(item_params_remessa)
                 await horus_clients.get(  # type: ignore[attr-defined]
                     "InsItensPedidoVenda", params=item_params_remessa
                 )
 
             # Muda status Remessa → AltStatus_Pedido (target: LEX ou config)
             if cod_ped_remessa:
-                target_status = (config.horus_status_envio_erp or "LEX").strip()
+                target_status = (config.horus_status_envio_erp or "LEX").strip().upper()
                 alt_status_params: Dict[str, Any] = {
                     "COD_EMPRESA":   settings.horus_company,
                     "COD_FILIAL":    settings.horus_branch,
@@ -1856,7 +1863,7 @@ async def send_order_to_horus(
                     "COD_PED_VENDA": cod_ped_remessa,
                     "STA_PEDIDO":    target_status,
                 }
-                alt_status_params = {k: v for k, v in alt_status_params.items() if v is not None and v != ""}
+                alt_status_params = _uppercase_payload({k: v for k, v in alt_status_params.items() if v is not None and v != ""})
                 try:
                     alt_res = await horus_clients.get(  # type: ignore[attr-defined]
                         "AltStatus_Pedido", params=alt_status_params
@@ -1877,17 +1884,17 @@ async def send_order_to_horus(
         # fim if usar_remessa
 
         # ─────────────────────────────────────────────────────────────────────────
-        # PEDIDO 2 — VENDA (CFOP 6.118): customer ERDOS → LAP → LFT
+        # PEDIDO 2 — VENDA (CFOP 6.118): customer ERDOS → LAP → LFT (CAIXA ALTA)
         # ─────────────────────────────────────────────────────────────────────────
         # Enviado como padrão B2B com TIPO_PEDIDO_V_T_D='L' (Logística).
         # O COD_PARAM_FISCAL é pré-configurado nas settings do cliente ERDOS no Hórus.
         # NÃO enviar COD_FORMA, QTD_PARCELAS, CONDICAO_PAGAMENTO neste pedido.
         # Fluxo de status: [criado] → AltStatus (LAP) → Pular_expedicao (LFT)
-        # OBS_PEDIDO: inclui dados do cliente quando remessa está desativada
+        # OBS_PEDIDO: inclui dados do cliente quando remessa está desativada (em CAIXA ALTA)
         if usar_remessa:
             obs_venda = (
-                f"Dropship Venda Erdos | Pedido Erdos #{order.external_order_id} | Ref: {order.external_reference or order.external_order_id}"
-            )
+                f"DROPSHIP VENDA ERDOS | PEDIDO ERDOS #{order.external_order_id} | REF: {order.external_reference or order.external_order_id}"
+            ).upper()
         else:
             c = customer_data
             end_partes = [
@@ -1900,10 +1907,10 @@ async def send_order_to_horus(
             bairro = c.get("bairro", "")
             cep = f"CEP: {c.get('cep', '')}".strip() if c.get("cep") else ""
             obs_venda = (
-                f"Dropship Venda Erdos | Ref: {order.external_reference or order.external_order_id} "
-                f"| Cliente: {c.get('nome', 'N/A')} | CPF/CNPJ: {c.get('cpf_cnpj', 'N/A')} "
-                f"| End: {end_str} - {bairro} - {localidade} - {cep}"
-            ).replace(" -  - ", " - ").strip(" |")
+                f"DROPSHIP VENDA ERDOS | REF: {order.external_reference or order.external_order_id} "
+                f"| CLIENTE: {c.get('nome', 'N/A')} | CPF/CNPJ: {c.get('cpf_cnpj', 'N/A')} "
+                f"| END: {end_str} - {bairro} - {localidade} - {cep}"
+            ).replace(" -  - ", " - ").strip(" |").upper()
 
         venda_params: Dict[str, Any] = {
             "ID_DOC":            id_doc_erdos,
@@ -1912,7 +1919,7 @@ async def send_order_to_horus(
             "TIPO_PEDIDO_V_T_D": "L",
             "COD_PEDIDO_ORIGEM": cod_origem_venda,
             "COD_PARAM_FISCAL":  fiscal_venda,
-            "OBS_PEDIDO": obs_venda,
+            "OBS_PEDIDO":        obs_venda,
         }
         # Adicionar VLR_FRETE ao pedido de Venda se configurado
         taxa_frete = float(config.vlr_taxa_frete or 0)
@@ -1920,6 +1927,7 @@ async def send_order_to_horus(
             venda_params["VLR_FRETE"] = round(taxa_frete, 2)
         # COD_EMPRESA, COD_FILIAL e COD_METODO NÃO devem ser enviados no pedido de Venda B2B
 
+        venda_params = _uppercase_payload(venda_params)
         venda_result = await horus_orders.get(  # type: ignore[attr-defined]
             "InsPedidoVenda", params=venda_params
         )
@@ -1935,7 +1943,7 @@ async def send_order_to_horus(
                 isbn = (
                     item.get("sku") or item.get("sku_fornecedor")
                     or item.get("isbn") or item.get("barras_isbn") or ""
-                ).strip()
+                ).strip().upper()
                 qty = int(item.get("quantidade") or item.get("qty") or 1)
                 if not isbn:
                     continue
@@ -1991,6 +1999,7 @@ async def send_order_to_horus(
                 if cod_cli_erdos:
                     alt_venda_params["COD_CLI"] = cod_cli_erdos
 
+                alt_venda_params = _uppercase_payload(alt_venda_params)
                 res_alt_venda = await horus_clients.get(  # type: ignore[attr-defined]
                     "AltStatus_Pedido", params=alt_venda_params
                 )
@@ -2020,6 +2029,7 @@ async def send_order_to_horus(
                 if cod_cli_erdos:
                     pular_params["COD_CLI"] = cod_cli_erdos
 
+                pular_params = _uppercase_payload(pular_params)
                 res_pular = await horus_clients.get(  # type: ignore[attr-defined]
                     "Pular_expedicao", params=pular_params
                 )
@@ -2034,7 +2044,7 @@ async def send_order_to_horus(
 
             # STEP 3 (sem remessa): AltStatus final da Venda — status configurável (padrão LEX)
             if not usar_remessa:
-                target_status_venda = (getattr(config, 'horus_status_pedido_venda', None) or "LEX").strip()
+                target_status_venda = (getattr(config, 'horus_status_pedido_venda', None) or "LEX").strip().upper()
                 try:
                     alt_venda_final_params: Dict[str, Any] = {
                         "COD_PED_VENDA": cod_ped_venda,
@@ -2047,6 +2057,7 @@ async def send_order_to_horus(
                     if cod_cli_erdos:
                         alt_venda_final_params["COD_CLI"] = cod_cli_erdos
 
+                    alt_venda_final_params = _uppercase_payload(alt_venda_final_params)
                     res_alt_final = await horus_clients.get(
                         "AltStatus_Pedido", params=alt_venda_final_params
                     )

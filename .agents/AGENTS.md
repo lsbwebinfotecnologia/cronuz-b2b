@@ -209,21 +209,22 @@ git push origin --delete feature/nome-da-funcionalidade
 
 ---
 
-## 🏛️ 8. Arquitetura Funcional: Pedidos DBM vs. Mesa Comercial Padrão (Intake de Pedidos)
+## 🏛️ 8. Arquitetura Funcional: Horus Direct DBM (Isolamento, UI Moderna & Experiência Excel) vs. Rotinas Padronizadas do Cronuz
 
-> [!NOTE]
-> **Distinção Arquitetural Estratégica**:
-> 1. **Rotina DBM (Horus Direct / Gestão de Vendas DBM)**:
->    - Segue uma linha de raciocínio dedicada para um modelo operacional específico de cliente (operações integradas diretamente ao ecossistema Horus Direct).
->    - Suas telas e regras de negócio contêm comportamentos customizados para essa operação específica.
-> 2. **Mesa de Análise & Intake Comercial Padrão (Liberada para todos os Sellers via Módulo)**:
->    - Módulo padronizado da plataforma Cronuz B2B destinado a todos os sellers.
->    - Interface densa estilo Access com abas comerciais unificadas:
->      - **`pedido`**: Itens capturados na importação (E-mail, WhatsApp, Planilha XLSX, PDF ou Digitação Manual) analisados com estoque Horus, situação (Reservado / Parcial / Falta), quantidades solicitadas vs aprovadas e totalizadores.
->      - **`novidades`**: Lançamentos e novidades do catálogo com estoque disponível e giro recente geral.
->      - **`reposição`**: Obras recorrentes de alto giro do cliente com saldo para reabastecimento.
->      - **`fundo de catálogo`**: Obras clássicas/long tail para composição de pedido mínimo e mix de vendas.
->    - Ambas compartilham o padrão de alta performance, densidade visual ERP (Access) e facilidade de navegação por teclado (Enter, setas e atalhos), mas mantêm rotinas de backend e regras de negócio isoladas para permitir evolução independente de cada frente.
+> [!IMPORTANT]
+> **Isolamento Arquitetural, Visual Moderno e Ergonomia de Planilha Excel do Ecossistema Horus Direct DBM**:
+> 1. **Independência Total das Rotinas Padronizadas do Cronuz B2B**:
+>    - Todas as tratativas de telas (`/dbm/*`, `/proposals/desk`), rotinas de backend (`ebook_pearson.py`, `horus_sql.py`, `dbm.py`), sincronizações e dinâmicas operacionais do **Horus Direct DBM** **fogem e NÃO possuem vínculos diretos** com as rotinas padronizadas do Cronuz B2B (como o cadastro padrão de produtos `/products`, Storefront B2B, PDV ou Mesa Comercial padrão).
+>    - Campos, regras de negócio (como múltiplos ISBNs de e-book, controle de tiragens, royalties, contratos autorais, código DBM, repasse Pearson/Bookwire, janela de novidades `-9m a +6m`) e comportamentos do DBM devem ser tratados em suas próprias telas e fluxos dedicados, sem descaracterizar nem depender das telas padrão do Cronuz.
+> 2. **Padrão Visual & Operacional Mandatório: UI Moderna e Limpa + Experiência Nativa de Planilha Excel**:
+>    - **Estética Moderna, Limpa e Suave (Sem Clones Datados dos Anos 90)**:
+>      - As telas do DBM não devem copiar cores pesadas ou bordas chanfradas antigas do Microsoft Access anos 90. Devem utilizar um design **SaaS moderno, limpo e confortável para uso prolongado** (tons suaves `slate-50`/`white`, acentos discretos em `indigo`/`slate`, tipografia nítida e organização modular em cartões/seções claras).
+>    - **Experiência 100% Excel / Planilha de Alta Produtividade**:
+>      - **Navegação Fluida por Teclado**: Uso intensivo de setas (`↑`, `↓`, `←`, `→`), `Home`, `End`, `Enter` (para avançar campo ou abrir ficha), `Tab`, `Duplo Clique`, `F2` (atalho de salvamento rápido) e `Esc` (retorno instantâneo à planilha).
+>      - **Grades de Alta Densidade (`Spreadsheet View`)**: Colunas alinhadas com fontes monoespaçadas para ISBNs, códigos Horus, saldos e preços, edição inline rápida na grade ou em sub-planilhas (como a planilha de **Tiragens & Custos**), filtros instantâneos e barra inferior de navegação rápida de registros (`|< < Registro X de N > >|`).
+>      - **Enriquecimento Híbrido Horus (API REST + SQL Direct)**: Aproveitar ao máximo os metadados ricos já disponíveis no Horus (Preço de Capa, Saldo Disponível, Saldo Consignado, Giro, Autor, Editora, Gênero/Assunto, Unidades por Caixa, Peso, Dimensões e Data de Lançamento) evitando campos redundantes ou nomenclaturas legadas confusas.
+> 3. **Mesa de Análise & Intake Comercial Padrão (Liberada para todos os Sellers via Módulo)**:
+>    - Módulo padronizado da plataforma Cronuz B2B destinado aos demais sellers (`/order-intake`), mantendo rotinas e regras de negócio isoladas do DBM para evolução independente de cada frente.
 
 ---
 
@@ -263,4 +264,20 @@ git push origin --delete feature/nome-da-funcionalidade
    - Deve manter os scripts `GERAR_EXECUTAVEL_HORUS_BRIDGE.bat`, `INSTALAR_SERVICO_WINDOWS.bat` (modo `--service` em background no boot do Windows) e `INICIAR_HORUS_API_BRIDGE.bat`.
 4. **Suporte a Droplet Dedicado (`SERVER_ROLE=horus_api_only`)**:
    - Quando configurado `SERVER_ROLE=horus_api_only` no `.env` de um Droplet dedicado na DigitalOcean, o backend desativa o APScheduler e sobe exclusivamente as rotas do Gateway da API Horus Complementar (`/Horus/api/TServerB2B/*`, `/horus-api-bridge/*` e `/health`), isolando 100% a carga de API externa do servidor principal.
+
+---
+
+## 🔠 11. Padrão Obrigatório de Caixa Alta (`UPPERCASE`) em Rotinas de Integração
+
+> [!IMPORTANT]
+> **Toda e qualquer rotina de integração (Hórus ERP, Erdos Dropship, Bookinfo, etc.) que for CADASTRAR algo novo ou ATUALIZAR registros (clientes, endereços, pedidos de remessa, pedidos de venda, itens, observações, status) DEVE OBRIGATORIAMENTE enviar todos os dados textuais em CAIXA ALTA (tudo maiúsculo / `.upper()`).**
+
+### Diretrizes Mandatórias:
+1. **Cadastros e Atualizações de Clientes e Endereços (`InsAltCliente`, `InsAltEndCliente`, etc.)**:
+   - Nome/Razão Social (`NOM_CLI`), Logradouro (`DESC_ENDERECO`), Número (`NUM_END`), Complemento (`COM_ENDERECO`), Bairro (`NOM_BAIRRO`), Cidade (`NOM_LOCAL`), UF (`SIGLA_UF`), Nome do Estado (`NOME_UF`), País (`NOM_PAIS`: `"BRASIL"`) e Responsável (`NOM_RESP`) devem sempre ser normalizados com `.strip().upper()` antes do envio.
+2. **Envio de Pedidos e Itens (`InsPedidoVenda`, `InsItensPedidoVenda`, `AltStatus_Pedido`, `Pular_expedicao`, etc.)**:
+   - Tanto no pedido de entrega/remessa ao consumidor final quanto no pedido de venda (ex: venda ERDOS), todos os campos de texto — como `COD_PEDIDO_ORIGEM`, `OBS_PEDIDO`, `ID_GUID`, `FRETE_EMIT_DEST`, `STA_PEDIDO` e `BARRAS_ISBN` — devem ser enviados integralmente em CAIXA ALTA.
+3. **Helper de Sanitização**:
+   - Sempre aplicar sanitização `.upper()` em dicionários de parâmetros (`payload`) de criação/atualização antes da chamada HTTP ao integrador externo.
+
 

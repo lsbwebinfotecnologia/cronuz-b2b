@@ -145,17 +145,17 @@ class HorusOrders(HorusClient):
             
         return False
 
-    async def send_order(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int], type_order: str = "V", obs: str = "pedido criado através da plataforma Horus B2B") -> Dict[str, Any]:
+    async def send_order(self, id_doc: str, id_guid: str, cnpj_destino: str, cod_pedido_origem: Union[str, int], type_order: str = "V", obs: str = "PEDIDO CRIADO ATRAVÉS DA PLATAFORMA HORUS B2B") -> Dict[str, Any]:
         """
         Translates sendOrder from HsOrders.php (calls InsPedidoVenda)
         """
         params = {
             "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
-            "ID_GUID": id_guid,
+            "ID_GUID": str(id_guid).strip().upper() if id_guid else None,
             "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
-            "TIPO_PEDIDO_V_T_D": type_order,
-            "COD_PEDIDO_ORIGEM": cod_pedido_origem,
-            "OBS_PEDIDO": obs,
+            "TIPO_PEDIDO_V_T_D": str(type_order).strip().upper() if type_order else "V",
+            "COD_PEDIDO_ORIGEM": str(cod_pedido_origem).strip().upper() if isinstance(cod_pedido_origem, str) else cod_pedido_origem,
+            "OBS_PEDIDO": str(obs).strip().upper() if obs else "",
         }
         
         # if self._settings.horus_company:
@@ -188,10 +188,10 @@ class HorusOrders(HorusClient):
         """
         params = {
             "ID_DOC": re.sub(r'\D', '', str(id_doc)) if id_doc else None,
-            "ID_GUID": id_guid,
+            "ID_GUID": str(id_guid).strip().upper() if id_guid else None,
             "CNPJ_DESTINO": re.sub(r'\D', '', str(cnpj_destino)) if cnpj_destino else None,
-            "COD_PEDIDO_ORIGEM": cod_pedido_origem,
-            "BARRAS_ISBN": isbn,
+            "COD_PEDIDO_ORIGEM": str(cod_pedido_origem).strip().upper() if isinstance(cod_pedido_origem, str) else cod_pedido_origem,
+            "BARRAS_ISBN": str(isbn).strip().upper() if isbn else isbn,
             "QTD_PEDIDA": qty,
         }
         

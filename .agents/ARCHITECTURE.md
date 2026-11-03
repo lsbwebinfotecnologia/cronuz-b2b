@@ -410,6 +410,9 @@ LOCAL (Mac):
 
 ## 4. Integradores Externos
 
+> [!IMPORTANT]
+> **Padrão Global de Caixa Alta (`UPPERCASE`) em Integrações**: Toda rotina de integração que cadastrar ou atualizar registros em ERPs ou sistemas externos (cadastro/atualização de clientes, endereços, envio de pedidos de entrega/remessa e pedidos de venda, itens, observações e status) **DEVE OBRIGATORIAMENTE** enviar todos os campos textuais em **CAIXA ALTA (tudo maiúsculo / `.upper()`)**.
+
 ### 4.1 Horus ERP — `integrators/horus.py`
 
 **Classe base:** `HorusClient`  
@@ -838,6 +841,34 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 ---
 
+## 11. Ecossistema Horus Direct DBM — Isolamento Arquitetural e Layout Microsoft Access / Excel
+
+> [!IMPORTANT]
+> **Regra de Ouro do Módulo DBM (`Horus Direct DBM`)**:
+> As tratativas de telas, rotinas, cadastros e dinâmicas operacionais do **Horus Direct DBM** (`/dbm/*`) **fogem e NÃO possuem vínculos diretos com as rotinas padronizadas do Cronuz B2B**.
+
+### 11.1 Independência de Rotinas e Regras de Negócio
+1. **Desacoplamento Completo**:
+   - O módulo DBM atende a uma dinâmica operacional editorial/distribuidora específica integrada ao Horus ERP + SQL Server (`Itens_estoque_geral`, repasses digitais Pearson Biblioteca Virtual e Bookwire, controle de tiragens, royalties e contratos autorais).
+   - O cadastro de livros do DBM (`/dbm/products` — aba **Cadastro de Produtos / Cadastro de Livros**) é **exclusivo do DBM** e não utiliza a tela padrão `/products` do Cronuz B2B.
+2. **Múltiplos ISBNs por Obra / E-book (Sincronização Horus ↔ DBM)**:
+   - No mercado editorial digital (Pearson BV, Bookwire, Amazon, Kobo, etc.), um mesmo e-book pode possuir **dois ou mais ISBNs** (ex: ISBN EPUB vs ISBN PDF/Distribuição), enquanto o Horus ERP armazena apenas um ISBN principal (`COD_BARRA_ITEM` / `BARRAS_ISBN`).
+   - O cadastro de produtos do DBM no Cronuz permite registrar **múltiplos ISBNs (ISBN Principal + ISBNs Adicionais/Secundários)** ao sincronizar ou editar o livro.
+   - Nas rotinas de importação e consulta do DBM (ex: Repasse E-book Pearson/Bookwire e reconsulta de itens), quando um ISBN da planilha **não é encontrado diretamente na API do Horus**, o sistema vasculha automaticamente o **cadastro sincronizado do DBM no Cronuz** (`ean_gtin`, `sku`, `barcode` e `additional_isbns`). Ao localizar o livro pelo 2º ISBN no cadastro DBM, o sistema recupera o `CodHorus` (`horus_cod_item`), o ISBN principal reconhecido pelo Horus e o Preço de Capa, garantindo a conciliação e transmissão sem falhas ao Horus ERP.
+
+### 11.2 Padrão de Layout Mandatório: Microsoft Access / Excel
+1. **Fidelidade ao Paradigma Access / Excel**:
+   - Todo o layout das telas do DBM deve obedecer ao formato clássico de sistemas desktop **Microsoft Access / Excel** (alta densidade de informação em tela única, sem espaçamentos excessivos de páginas web modernas):
+     - **Guias estilo Access** no topo (`Menu`, `Localiza Empresas`, `Pesquisa de Produtos`, `Cadastro de Produtos`).
+     - **Tela "Cadastro de Livros" (`Cadastro de Produtos`)**:
+       - Cabeçalho azul escuro institucional (`Cadastro de Livros`) com visualização da capa à esquerda.
+       - Bloco central com campos editoriais específicos: `Titulo`, `SubT`, `ISBN`, `Cod Barras`, `ISBNs Adicionais (2º/3º ISBN E-book)`, `Editora`, `Código Editora`, `Páginas`, `Preço s/ IVA`, `MêsAno`, `Data Lanc`, `Coleção`, `Assunto`, `Largura x Altura`, `Peso Gr`, `Acabamento`, `Royalties`, `Edição Nº`, `Unid/Cx`, `Esgotado`, `Data_Esgotado` e `Link`.
+       - Bloco direito com identificadores e contratos: `Cod DBM`, `CodHorus`, botão `Historico de Vendas do Produto`, `Empresa Royalties`, `% Royalties Ebook`, `Assinatura Contrato`, `Anos Validade` e data de expiração.
+       - Parte inferior dividida entre a sub-planilha datasheet de **`Tiragens`** (`id`, `data_tiragem`, `tiragem`, `frete`, `da_roy`, `pis`, `da_advance`, `custo_dbm`, `custo_pro`, `custo_fin`, `roy`, `da_saldo`, `ttc`) à esquerda e o campo **`Sinopse`** à direita.
+       - Barra de status inferior estilo Access (`Modo formulário`, seletor de registros `Registro: |< < 1 de N > >|`, `Sem Filtro`, `Pesquisar`, `Salvar`, `Sair`).
+
+---
+
 ## Checklist para Nova Feature
 
 Antes de iniciar qualquer nova funcionalidade, verificar:
@@ -849,6 +880,7 @@ Antes de iniciar qualquer nova funcionalidade, verificar:
 - [ ] O endpoint filtra por `company_id` corretamente?
 - [ ] O schema Pydantic (request + response) está atualizado?
 - [ ] Se novo módulo: seguir checklist da seção 7
+- [ ] Se for rotina/tela do **Horus Direct DBM**: garantir isolamento das rotinas padronizadas do Cronuz e seguir rigorosamente o layout estilo **Microsoft Access / Excel** (Seção 11)
 - [ ] Se envolve upload de arquivos (planilhas, imagens, notas, etc.):
   - [ ] Validar e limitar tamanho máximo no Frontend e Backend (Imagens <= 5MB, Planilhas/PDFs <= 10MB, Teto 15MB) para preservar performance e estabilidade do servidor
   - [ ] Garantir subpastas isoladas por seller (`uploads/<company_id>/...`) criadas dinamicamente
@@ -862,3 +894,4 @@ Antes de iniciar qualquer nova funcionalidade, verificar:
 ---
 
 *Documento mantido em: `/Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/.agents/ARCHITECTURE.md`*
+

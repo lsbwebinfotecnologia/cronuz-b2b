@@ -51,7 +51,31 @@ class Product(Base):
     stock_status_label = Column(String(100), nullable=True)
     cover_url = Column(String(500), nullable=True)
     horus_cod_item = Column(Integer, nullable=True, index=True)
+    launch_date = Column(DateTime(timezone=True), nullable=True, index=True)
     
+    # Horus Direct DBM Specific Fields (Cadastro de Livros Access + Multi-ISBNs E-book)
+    additional_isbns = Column(Text, nullable=True)           # ISBNs secundários/alternativos (separados por vírgula)
+    barcode = Column(String(50), nullable=True)              # Cod Barras
+    cod_dbm = Column(String(50), nullable=True)              # Cod DBM
+    publisher_code = Column(String(100), nullable=True)      # Código Editora
+    pages = Column(Integer, nullable=True)                   # Páginas
+    launch_month = Column(Integer, nullable=True)            # Mês Lançamento
+    launch_year = Column(Integer, nullable=True)             # Ano Lançamento
+    collection = Column(String(150), nullable=True)          # Coleção
+    subject = Column(String(150), nullable=True)             # Assunto
+    binding_finish = Column(String(100), nullable=True)      # Acabamento (Capa dura, Brochura, E-book)
+    royalty_rule = Column(String(100), nullable=True)        # Royalties (ex: Sem Royalties)
+    edition_number = Column(String(50), nullable=True)       # Edição Nº
+    units_per_box = Column(Integer, nullable=True)           # Unid/Cx
+    out_of_print_date = Column(String(30), nullable=True)    # Data_Esgotado
+    external_link = Column(String(500), nullable=True)       # Link
+    royalty_company = Column(String(200), nullable=True)     # Empresa Royalties
+    ebook_royalty_pct = Column(Float, nullable=True)         # % Royalties Ebook
+    contract_signed_date = Column(String(30), nullable=True) # Assinatura Contrato
+    contract_validity_years = Column(Integer, nullable=True) # Anos Validade
+    contract_expires_date = Column(String(30), nullable=True)# Data Expiração Contrato
+    dbm_tiragens = Column(Text, nullable=True)               # Sub-tabela Tiragens (JSON)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
@@ -60,3 +84,4 @@ class Product(Base):
     category = relationship("Category")
     brand_rel = relationship("Brand")
     characteristics = relationship("ProductCharacteristic", viewonly=True)
+

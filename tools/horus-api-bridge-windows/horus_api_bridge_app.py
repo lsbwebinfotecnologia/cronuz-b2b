@@ -120,7 +120,7 @@ HORUS_ICON_B64 = (
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "gateway_url": "http://localhost:8000",
+    "gateway_url": "https://cronuzb2b.com.br/api",
     "seller_email": "",
     "company_id": 0,
     "company_name": "",
@@ -153,6 +153,143 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "enable_gzip": True,
     "auto_start_tunnel": True,
 }
+
+
+class _InMemoryResponse:
+    def __init__(self, body_bytes: bytes):
+        self._body = body_bytes
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+
+def open_cloud_request(url: str, data_bytes: bytes, headers: Optional[Dict[str, str]] = None, timeout: int = 15):
+    """
+    Executa requisição HTTP/HTTPS para o Gateway Cloud com proteção multicamada contra Proxy/Firewall Windows:
+    1. Tenta conexão direta ignorando Proxy do Registro do Windows (ProxyHandler({})).
+    2. Se um Proxy corporativo retornar 403 HTML (não-JSON), não interrompe: testa automaticamente
+       horusb2b.com.br, cronuzb2b.com.br e IP direto em HTTPS (443) e HTTP (80).
+    3. Em último caso no Windows, utiliza o curl.exe nativo do Windows (Schannel + NTLM DefaultCredentials).
+    """
+    import ssl
+    import subprocess
+
+    req_headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) HorusWebserviceB2B/{APP_VERSION}",
+    }
+    if headers:
+        req_headers.update(headers)
+
+    ssl_ctx = ssl.create_default_context()
+
+    # Extrai o path a partir de /horus-api-bridge/...
+    path_idx = url.find("/horus-api-bridge/")
+    endpoint_suffix = url[path_idx:] if path_idx != -1 else ""
+
+    urls_to_try = [url]
+    if url.startswith("https://"):
+        urls_to_try.append("http://" + url[len("https://"):])
+    elif url.startswith("http://") and "localhost" not in url and "127.0.0.1" not in url:
+        urls_to_try.append("https://" + url[len("http://"):])
+
+    if endpoint_suffix and "localhost" not in url and "127.0.0.1" not in url:
+        for alt_base in [
+            "https://horusb2b.com.br/api",
+            "http://horusb2b.com.br/api",
+            "https://cronuzb2b.com.br/api",
+            "http://cronuzb2b.com.br/api",
+            "http://64.23.182.183/api",
+        ]:
+            alt_url = alt_base + endpoint_suffix
+            if alt_url not in urls_to_try:
+                urls_to_try.append(alt_url)
+
+    last_err: Optional[Exception] = None
+    for candidate_url in urls_to_try:
+        is_https = candidate_url.startswith("https://")
+        openers = [
+            urllib.request.build_opener(
+                urllib.request.ProxyHandler({}),
+                urllib.request.HTTPSHandler(context=ssl_ctx) if is_https else urllib.request.HTTPHandler(),
+            ),
+            urllib.request.build_opener(
+                urllib.request.ProxyHandler(),
+                urllib.request.HTTPSHandler(context=ssl_ctx) if is_https else urllib.request.HTTPHandler(),
+            ),
+        ]
+        for opener in openers:
+            req = urllib.request.Request(candidate_url, data=data_bytes, headers=req_headers, method="POST")
+            try:
+                return opener.open(req, timeout=timeout)
+            except urllib.error.HTTPError as http_err:
+                raw_err = ""
+                try:
+                    raw_err = http_err.read().decode("utf-8", errors="ignore")
+                except Exception:
+                    pass
+                # Verifica se a resposta veio realmente do nosso Backend FastAPI (JSON com "detail")
+                try:
+                    parsed_err = json.loads(raw_err)
+                    if isinstance(parsed_err, dict) and "detail" in parsed_err:
+                        raise RuntimeError(f"HTTP {http_err.code}: {parsed_err['detail']}")
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+                # Se não é JSON do nosso backend, é bloqueio de Proxy/Firewall local da rede do cliente; continua tentando!
+                snippet = raw_err.strip()[:120].replace("\n", " ")
+                last_err = RuntimeError(f"Proxy/Firewall local da rede retornou HTTP {http_err.code} em {candidate_url} ({snippet})")
+                continue
+            except Exception as err:
+                last_err = err
+                continue
+
+    # Fallback nativo Windows (curl.exe com Schannel e credenciais NTLM do Windows)
+    if sys.platform.startswith("win"):
+        for candidate_url in urls_to_try[:3]:
+            try:
+                cmd = [
+                    "curl.exe",
+                    "-s",
+                    "-S",
+                    "-k",
+                    "--max-time",
+                    str(timeout),
+                    "-X",
+                    "POST",
+                    candidate_url,
+                    "-H",
+                    "Content-Type: application/json",
+                    "-H",
+                    "Accept: application/json",
+                    "--data-binary",
+                    "@-",
+                ]
+                proc = subprocess.run(
+                    cmd,
+                    input=data_bytes,
+                    capture_output=True,
+                    timeout=timeout + 3,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+                )
+                if proc.returncode == 0 and proc.stdout:
+                    parsed = json.loads(proc.stdout.decode("utf-8", errors="ignore"))
+                    if isinstance(parsed, dict) and ("status" in parsed or "ok" in parsed):
+                        return _InMemoryResponse(proc.stdout)
+            except Exception:
+                continue
+
+    if last_err:
+        raise last_err
+    raise RuntimeError(f"Falha ao conectar em {url}")
 
 
 def load_config() -> Dict[str, Any]:
@@ -561,10 +698,10 @@ class LocalHorusBridgeExecutor:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Worker do Túnel Reverso Outbound (Conexão Persistente com a Nuvem)
+# Worker de Sincronização Webservice Horus B2B
 # ──────────────────────────────────────────────────────────────────────────────
 
-class ReverseTunnelWorker:
+class HorusWebserviceSyncWorker:
     def __init__(self, config_getter, executor: LocalHorusBridgeExecutor, log_callback=None, status_callback=None):
         self._get_cfg = config_getter
         self.executor = executor
@@ -598,25 +735,25 @@ class ReverseTunnelWorker:
             return
         self.service_mode = service_mode
         self.running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="HorusBridgeTunnel")
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="HorusWebserviceSync")
         self._thread.start()
 
     def stop(self):
         self.running = False
-        self._emit_status("Túnel Parado", False)
-        self._emit_log("Serviço de túnel reverso interrompido pelo operador.")
+        self._emit_status("Webservice Parado", False)
+        self._emit_log("Serviço Webservice interrompido pelo operador.")
 
     def refresh_local_probes(self):
         self.local_horus_ok, _ = self.executor.test_local_horus_http()
         self.local_sql_ok, _, self.local_sql_dbname = self.executor.test_local_sql()
 
     def _loop(self):
-        self._emit_log("Iniciando Túnel Reverso Outbound com o Gateway Cronuz B2B...")
+        self._emit_log("Iniciando Sincronizador Webservice com o Gateway Cronuz B2B...")
         last_probe = 0.0
 
         while self.running:
             cfg = self._get_cfg()
-            gw = (cfg.get("gateway_url") or "http://localhost:8000").strip().rstrip("/")
+            gw = (cfg.get("gateway_url") or "https://cronuzb2b.com.br/api").strip().rstrip("/")
             cid = int(cfg.get("company_id") or 0)
             lic = (cfg.get("license_key") or "").strip()
 
@@ -645,15 +782,13 @@ class ReverseTunnelWorker:
                 "wait_seconds": 20,
             }
 
-            req = urllib.request.Request(
-                f"{gw}/horus-api-bridge/agent/poll",
-                data=json.dumps(poll_payload).encode("utf-8"),
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                method="POST",
-            )
             try:
-                self._emit_status("Webservice & Túnel Iniciado!", True)
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                self._emit_status("Webservice Iniciado!", True)
+                with open_cloud_request(
+                    f"{gw}/horus-api-bridge/agent/poll",
+                    data_bytes=json.dumps(poll_payload).encode("utf-8"),
+                    timeout=30,
+                ) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     commands = data.get("commands") or []
                     for cmd in commands:
@@ -722,13 +857,11 @@ class ReverseTunnelWorker:
         }
 
         try:
-            req = urllib.request.Request(
+            with open_cloud_request(
                 f"{gw}/horus-api-bridge/agent/respond",
-                data=json.dumps(reply_payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=20) as _:
+                data_bytes=json.dumps(reply_payload).encode("utf-8"),
+                timeout=20,
+            ) as _:
                 pass
         except Exception as e:
             self._emit_log(f"Falha ao devolver resposta req_id={req_id}: {e}")
@@ -739,12 +872,6 @@ class ReverseTunnelWorker:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def apply_horus_icon_to_window(win) -> Optional[Any]:
-    if sys.platform.startswith("win"):
-        try:
-            import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("cronuz.horus.api.bridge.1.0")
-        except Exception:
-            pass
     ico_path = BASE_DIR / "horus_icon.ico"
     if ico_path.exists():
         try:
@@ -769,7 +896,7 @@ class HorusApiBridgeDesktopApp:
 
         self.cfg = load_config()
         self.executor = LocalHorusBridgeExecutor(lambda: self.cfg)
-        self.worker = ReverseTunnelWorker(
+        self.worker = HorusWebserviceSyncWorker(
             lambda: self.cfg,
             self.executor,
             log_callback=self._append_log_threadsafe,
@@ -1237,10 +1364,30 @@ class HorusApiBridgeDesktopApp:
         self.cfg["sql_user"] = self.ent_sql_user.get().strip()
         self.cfg["sql_pass"] = self.ent_sql_pass.get().strip()
 
-        self.cfg["gateway_url"] = self.ent_gw_url.get().strip().rstrip("/") or "http://localhost:8000"
+        self.cfg["gateway_url"] = self.ent_gw_url.get().strip().rstrip("/") or "https://cronuzb2b.com.br/api"
         self.cfg["seller_email"] = self.ent_web_email.get().strip()
-        if self.ent_api_token.get().strip():
-            self.cfg["api_token"] = self.ent_api_token.get().strip()
+
+        raw_token_or_lic = self.ent_api_token.get().strip()
+        if raw_token_or_lic.startswith("HBRI1."):
+            self.cfg["license_key"] = raw_token_or_lic
+        elif raw_token_or_lic:
+            self.cfg["api_token"] = raw_token_or_lic
+        elif self.ent_doc_token.get().strip():
+            self.cfg["api_token"] = self.ent_doc_token.get().strip()
+
+        if self.ent_doc_user.get().strip():
+            self.cfg["api_username"] = self.ent_doc_user.get().strip()
+        if self.ent_doc_pass.get().strip():
+            self.cfg["api_password"] = self.ent_doc_pass.get().strip()
+        if self.ent_doc_lic.get().strip():
+            self.cfg["license_key"] = self.ent_doc_lic.get().strip()
+
+        if self.cfg.get("license_key"):
+            ok_lic, _, lic_payload = verify_license_key_local(self.cfg["license_key"])
+            if ok_lic and lic_payload.get("cid"):
+                self.cfg["company_id"] = int(lic_payload["cid"])
+                if lic_payload.get("doc") and not self.cfg.get("company_document"):
+                    self.cfg["company_document"] = str(lic_payload["doc"])
 
         try:
             self.cfg["batch_limit"] = int(self.ent_batch.get().strip() or 100000)
@@ -1288,14 +1435,12 @@ class HorusApiBridgeDesktopApp:
             "agent_version": APP_VERSION,
             "service_mode": False,
         }
-        req = urllib.request.Request(
-            f"{gw}/horus-api-bridge/agent/auth",
-            data=json.dumps(req_body).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with open_cloud_request(
+                f"{gw}/horus-api-bridge/agent/auth",
+                data_bytes=json.dumps(req_body).encode("utf-8"),
+                timeout=15,
+            ) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 remote_cfg = data.get("config") or {}
                 self.cfg["company_id"] = remote_cfg.get("company_id")
@@ -1313,16 +1458,19 @@ class HorusApiBridgeDesktopApp:
                 self._refresh_license_banner()
                 self.start_tunnel()
                 messagebox.showinfo("Autorizado", f"Agente autenticado com sucesso!\n{remote_cfg.get('status_label')}")
-        except urllib.error.HTTPError as e:
-            detail = "Falha de autenticação."
-            try:
-                err_json = json.loads(e.read().decode("utf-8"))
-                detail = err_json.get("detail") or detail
-            except Exception:
-                pass
-            messagebox.showerror("Não Autorizado", f"HTTP {e.code}: {detail}")
         except Exception as e:
-            messagebox.showerror("Erro de Rede", f"Não foi possível conectar ao Gateway ({gw}):\n{e}")
+            ok_local, msg_local, _ = verify_license_key_local(self.cfg.get("license_key") or "")
+            if ok_local:
+                save_config(self.cfg)
+                self._populate_from_config()
+                self._refresh_license_banner()
+                self.start_tunnel()
+                messagebox.showinfo(
+                    "Autorizado (Chave Criptográfica Local)",
+                    f"Licença validada localmente com sucesso!\n{msg_local}",
+                )
+                return
+            messagebox.showerror("Erro de Rede / Proxy Local", f"Não foi possível autenticar no Gateway ({gw}):\n{e}")
 
     def test_t1_horus(self):
         self._collect_ui_into_config()
@@ -1357,9 +1505,11 @@ class HorusApiBridgeDesktopApp:
         self.root.after(600, self.start_tunnel)
 
     def open_api_docs(self):
-        gw = (self.cfg.get("gateway_url") or "http://localhost:8000").strip().rstrip("/")
-        # Se estiver no ambiente padrão Cronuz, abre a rota /horus-api-docs do Frontend ou JSON docs do Gateway
-        doc_url = gw.replace(":8000", ":3000") + "/horus-api-docs"
+        gw = (self.cfg.get("gateway_url") or "https://cronuzb2b.com.br/api").strip().rstrip("/")
+        if gw.endswith("/api"):
+            doc_url = gw[:-4] + "/horus-api-docs"
+        else:
+            doc_url = gw.replace(":8000", ":3000") + "/horus-api-docs"
         webbrowser.open(doc_url)
 
     def _append_log_threadsafe(self, line: str):
@@ -1385,11 +1535,10 @@ def run_headless_service():
     Executa o HorusAPIBridge em modo Serviço Silencioso (--service) para o Windows Server.
     """
     logger.info("════════════════════════════════════════════════════════════════════")
-    logger.info(" INICIANDO HORUS API BRIDGE EM MODO SERVIÇO WINDOWS (--service)")
+    logger.info(" INICIANDO HORUS WEBSERVICE B2B EM MODO SERVIÇO WINDOWS (--service)")
     logger.info("════════════════════════════════════════════════════════════════════")
-    cfg = load_config()
     executor = LocalHorusBridgeExecutor(lambda: load_config())
-    worker = ReverseTunnelWorker(lambda: load_config(), executor)
+    worker = HorusWebserviceSyncWorker(lambda: load_config(), executor)
     worker.start(service_mode=True)
     try:
         while True:

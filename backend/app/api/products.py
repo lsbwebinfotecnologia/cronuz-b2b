@@ -211,11 +211,20 @@ def list_products(
     
     if search:
         from sqlalchemy import func, cast, String
-        search_filter = f"%{search}%"
+        search_clean = search.strip()
+        search_filter = f"%{search_clean}%"
+        search_digits = "".join(ch for ch in search_clean if ch.isdigit() or ch.upper() == "X")
+        digits_filter = f"%{search_digits}%" if len(search_digits) >= 4 else search_filter
         query = query.filter(
             (func.unaccent(Product.name).ilike(func.unaccent(search_filter))) |
             (Product.sku.ilike(search_filter)) |
             (Product.ean_gtin.ilike(search_filter)) |
+            (Product.ean_gtin.ilike(digits_filter)) |
+            (Product.additional_isbns.ilike(search_filter)) |
+            (Product.additional_isbns.ilike(digits_filter)) |
+            (Product.barcode.ilike(search_filter)) |
+            (Product.cod_dbm.ilike(search_filter)) |
+            (Product.publisher_code.ilike(search_filter)) |
             (cast(Product.horus_cod_item, String).ilike(search_filter))
         )
         
@@ -256,6 +265,8 @@ def list_products(
             item_dict["brand"] = p.brand or ""
         if p.category and p.category.name:
             item_dict["category_name"] = p.category.name
+        elif p.subject:
+            item_dict["category_name"] = p.subject
         items.append(item_dict)
 
     return {
@@ -279,6 +290,7 @@ def get_product(
         raise HTTPException(status_code=404, detail="Produto não encontrado.")
     return product
 
+@router.put("/{product_id}", response_model=ProductResponse)
 @router.patch("/{product_id}", response_model=ProductResponse)
 def update_product(
     product_id: int,
@@ -290,6 +302,7 @@ def update_product(
         Product.id == product_id,
         Product.company_id == current_user.company_id
     ).first()
+
     
     if not db_product:
         raise HTTPException(status_code=404, detail="Produto não encontrado.")

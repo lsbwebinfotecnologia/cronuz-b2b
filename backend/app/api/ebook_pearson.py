@@ -78,14 +78,17 @@ class PearsonItemPreview(BaseModel):
     subtotal: float = 0.0
     selected_for_rateio: bool = True
     
-    # Dados consultados via API Horus
+    # Dados consultados via API Horus / Cadastro Sincronizado DBM
     in_horus: bool = False
     horus_cod_item: Optional[str] = None
+    horus_isbn: Optional[str] = None
+    merged_isbns: Optional[List[str]] = None
     horus_title: Optional[str] = None
     horus_cover_price: Optional[float] = None
     horus_stock: Optional[int] = None
     is_ebook: Optional[bool] = None  # True = E-book (EBOOK: 'S'), False = Livro Físico (EBOOK: 'N')
     api_message: Optional[str] = None
+
 
 
 class PearsonPreviewResponse(BaseModel):
@@ -112,16 +115,20 @@ class PearsonPreviewResponse(BaseModel):
 class LookupItemRequest(BaseModel):
     isbn: str
     title: Optional[str] = None
+    original_isbn: Optional[str] = None
+    save_secondary_isbn: Optional[bool] = True
 
 
 class LookupItemResponse(BaseModel):
     found: bool
     isbn: str
+    horus_isbn: Optional[str] = None
     horus_cod_item: Optional[str] = None
     horus_title: Optional[str] = None
     horus_cover_price: Optional[float] = None
     horus_stock: Optional[int] = None
     is_ebook: Optional[bool] = None
+    linked_secondary_isbn: Optional[str] = None
     api_message: str
 
 
@@ -141,6 +148,7 @@ class ReapportionRequest(BaseModel):
 
 class CreateEbookOrderItem(BaseModel):
     isbn: str
+    horus_isbn: Optional[str] = None
     title: str
     quantity: int = 1
     liquid_unit_price: float
@@ -166,7 +174,7 @@ class CreateEbookOrderRequest(BaseModel):
 
 def _clean_isbn(raw_val: Any) -> str:
     """
-    Extrai o código exatamente como informado na planilha Pearson,
+    Extrai o código exatamente como informado na planilha Pearson/Bookwire,
     removendo apenas espaços, quebras de linha e hífens, sem alterar
     ou manobrar os dígitos originais da célula.
     """
@@ -178,6 +186,127 @@ def _clean_isbn(raw_val: Any) -> str:
         val_str = val_str[:-2]
     # Remove espaços em branco e traços
     return re.sub(r'[\s\-]', '', val_str)
+
+
+def _extract_additional_isbn_list(raw_additional: Optional[str]) -> List[str]:
+    """Quebra a string de ISBNs adicionais em lista limpa de códigos."""
+    if not raw_additional:
+        return []
+    tokens = []
+    for part in re.split(r'[,;\s\n|]+', str(raw_additional)):
+        c = _clean_isbn(part)
+        if c and c not in tokens:
+            tokens.append(c)
+    return tokens
+
+
+def _find_dbm_product_by_any_isbn(db: Session, company_id: int, search_code: str) -> Optional[Product]:
+    """
+    Vasculha o cadastro de produtos sincronizado do DBM no Cronuz (prd_product):
+    1) Pelo ISBN principal (ean_gtin), código de barras (barcode), SKU ou Cod DBM
+    2) Pelo Código Horus (horus_cod_item) se o termo for numérico curto
+    3) Pelos ISBNs adicionais/secundários (additional_isbns) cadastrados no livro do DBM!
+    """
+    clean = _clean_isbn(search_code)
+    if not clean:
+        return None
+
+    # 1. Busca direta nos campos indexados (ISBN principal, SKU, Barcode, Cod DBM)
+    prod = db.query(Product).filter(
+        Product.company_id == company_id,
+        (Product.ean_gtin == clean) |
+        (Product.sku == clean) |
+        (Product.barcode == clean) |
+        (Product.cod_dbm == clean)
+    ).first()
+    if prod:
+        return prod
+
+    # 2. Se for código numérico curto (ex: Cód. Horus), verifica horus_cod_item
+    if clean.isdigit() and len(clean) < 10:
+        prod = db.query(Product).filter(
+            Product.company_id == company_id,
+            Product.horus_cod_item == int(clean)
+        ).first()
+        if prod:
+            return prod
+
+    # 3. Vasculha nos ISBNs adicionais/secundários (additional_isbns) do cadastro DBM
+    candidates = db.query(Product).filter(
+        Product.company_id == company_id,
+        Product.additional_isbns.isnot(None),
+        Product.additional_isbns.ilike(f"%{clean}%")
+    ).all()
+    for cand in candidates:
+        extra_list = _extract_additional_isbn_list(cand.additional_isbns)
+        if clean in extra_list:
+            return cand
+
+    return None
+
+
+def _save_secondary_isbn_on_dbm_product(
+    db: Session,
+    company_id: int,
+    secondary_isbn: str,
+    horus_cod_item: Optional[str] = None,
+    horus_primary_isbn: Optional[str] = None,
+    horus_title: Optional[str] = None,
+    horus_cover_price: Optional[float] = None,
+) -> Optional[str]:
+    """
+    Quando um 2º ISBN (da Pearson/Bookwire) é vinculado a um item do Horus,
+    persiste automaticamente esse 2º ISBN em `additional_isbns` do cadastro DBM (prd_product).
+    """
+    sec_clean = _clean_isbn(secondary_isbn)
+    prim_clean = _clean_isbn(horus_primary_isbn)
+    if not sec_clean or len(sec_clean) < 8:
+        return None
+    if prim_clean and sec_clean == prim_clean:
+        return None
+
+    prod = None
+    if horus_cod_item and str(horus_cod_item).isdigit():
+        prod = db.query(Product).filter(
+            Product.company_id == company_id,
+            Product.horus_cod_item == int(horus_cod_item)
+        ).first()
+    if not prod and prim_clean:
+        prod = _find_dbm_product_by_any_isbn(db, company_id, prim_clean)
+    if not prod and horus_cod_item:
+        prod = db.query(Product).filter(
+            Product.company_id == company_id,
+            Product.sku == str(horus_cod_item)
+        ).first()
+
+    if prod:
+        existing_list = _extract_additional_isbn_list(prod.additional_isbns)
+        if sec_clean != _clean_isbn(prod.ean_gtin) and sec_clean not in existing_list:
+            existing_list.append(sec_clean)
+            prod.additional_isbns = ", ".join(existing_list)
+            db.commit()
+        return sec_clean
+    elif horus_cod_item and (prim_clean or horus_title):
+        # Cria o registro sincronizado no catálogo DBM já com o 2º ISBN vinculado
+        new_prod = Product(
+            company_id=company_id,
+            sku=str(horus_cod_item),
+            cod_dbm=str(horus_cod_item),
+            horus_cod_item=int(horus_cod_item) if str(horus_cod_item).isdigit() else None,
+            name=horus_title or f"E-book {prim_clean or sec_clean}",
+            ean_gtin=prim_clean or sec_clean,
+            barcode=prim_clean or sec_clean,
+            additional_isbns=sec_clean if prim_clean and prim_clean != sec_clean else None,
+            base_price=float(horus_cover_price or 0.0),
+            binding_finish="E-book",
+            royalty_rule="Sem Royalties",
+            status="ACTIVE"
+        )
+        db.add(new_prod)
+        db.commit()
+        return sec_clean
+    return None
+
 
 
 
@@ -567,6 +696,79 @@ def _parse_bookwire_file(file_bytes: bytes, filename: str) -> Dict[str, Any]:
     }
 
 
+def _unify_duplicate_horus_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Unifica itens que apontam para o mesmo código Horus (`horus_cod_item`)
+    ou mesmo ISBN principal do Horus (`horus_isbn`), somando `original_value`,
+    `subtotal`, `pageviews` e `percentage` para que não haja duplicidade no envio
+    ao Horus ERP e os valores sejam devidamente rateados/decompostos.
+    """
+    if not items:
+        return items
+
+    unified: List[Dict[str, Any]] = []
+
+    for it in items:
+        item_copy = dict(it)
+        in_horus = bool(item_copy.get("in_horus"))
+        cod_item = str(item_copy.get("horus_cod_item") or "").strip()
+        horus_isbn = _clean_isbn(item_copy.get("horus_isbn") or item_copy.get("isbn"))
+        raw_isbn = _clean_isbn(item_copy.get("isbn"))
+
+        if not in_horus or (not cod_item and not horus_isbn):
+            unified.append(item_copy)
+            continue
+
+        # Procura se já existe na lista unificada um item localizado para o mesmo produto Horus
+        existing_match = None
+        for u in unified:
+            if not u.get("in_horus"):
+                continue
+            u_cod = str(u.get("horus_cod_item") or "").strip()
+            u_hisbn = _clean_isbn(u.get("horus_isbn") or u.get("isbn"))
+            if (cod_item and u_cod and cod_item == u_cod) or (horus_isbn and u_hisbn and horus_isbn == u_hisbn):
+                existing_match = u
+                break
+
+        if existing_match is None:
+            if not item_copy.get("merged_isbns"):
+                item_copy["merged_isbns"] = [raw_isbn] if raw_isbn else []
+            unified.append(item_copy)
+        else:
+            # Unifica os valores no item existente
+            merged_list = list(existing_match.get("merged_isbns") or [existing_match.get("isbn")])
+            if raw_isbn and raw_isbn not in merged_list:
+                merged_list.append(raw_isbn)
+            existing_match["merged_isbns"] = merged_list
+
+            # Garante que o ISBN principal do Horus fique como referência principal
+            primary_isbn = _clean_isbn(existing_match.get("horus_isbn")) or horus_isbn or existing_match["isbn"]
+            existing_match["horus_isbn"] = primary_isbn
+            existing_match["isbn"] = primary_isbn
+
+            existing_match["original_value"] = round(
+                float(existing_match.get("original_value") or 0.0) + float(item_copy.get("original_value") or 0.0), 2
+            )
+            existing_match["subtotal"] = round(
+                float(existing_match.get("subtotal") or 0.0) + float(item_copy.get("subtotal") or 0.0), 2
+            )
+            existing_match["liquid_value"] = existing_match["subtotal"]
+            existing_match["quantity"] = 1
+            existing_match["pageviews"] = int(existing_match.get("pageviews") or 0) + int(item_copy.get("pageviews") or 0)
+            existing_match["percentage"] = round(
+                float(existing_match.get("percentage") or 0.0) + float(item_copy.get("percentage") or 0.0), 4
+            )
+            if not existing_match.get("horus_cover_price") and item_copy.get("horus_cover_price"):
+                existing_match["horus_cover_price"] = item_copy["horus_cover_price"]
+
+            joined_isbns = " + ".join(merged_list)
+            existing_match["api_message"] = (
+                f"✓ Unificado ({joined_isbns}) → Horus #{existing_match.get('horus_cod_item')}"
+            )
+
+    return unified
+
+
 def decompose_and_reconcile_items(
     items: List[Dict[str, Any]], 
     target_total: Optional[float] = None
@@ -587,7 +789,7 @@ def decompose_and_reconcile_items(
         return items
 
     if target_total is None:
-        target_total = round(sum(float(it.get("original_value") or it.get("subtotal") or 0.0) for it in items), 2)
+        target_total = round(sum(float(it.get("subtotal") or it.get("original_value") or 0.0) for it in items), 2)
     else:
         target_total = round(float(target_total), 2)
 
@@ -595,7 +797,7 @@ def decompose_and_reconcile_items(
 
     # Passo 1: Determinar Q e Pu preliminar para cada item respeitando Capa
     for it in items:
-        target_s = round(float(it.get("original_value") or it.get("subtotal") or 0.0), 2)
+        target_s = round(float(it.get("subtotal") or it.get("original_value") or 0.0), 2)
         cover = float(it.get("horus_cover_price") or 0.0)
 
         if cover > 0.0 and target_s > cover:
@@ -616,8 +818,8 @@ def decompose_and_reconcile_items(
                 q += 1
                 pu = round(target_s / q, 2)
         else:
-            q = max(1, int(it.get("quantity") or 1))
-            pu = round(target_s / q, 2)
+            q = 1
+            pu = target_s
 
         subtotal = round(q * pu, 2)
         item_copy = dict(it)
@@ -666,6 +868,7 @@ def decompose_and_reconcile_items(
                     break
 
     return results
+
 
 
 # ── Endpoint 1: Upload, Leitura e Consulta de ISBNs via API Horus ─────────────
@@ -789,8 +992,14 @@ async def parse_and_preview_pearson_sheet(
             except Exception as e:
                 logger.warning(f"[Ebook Pearson] Erro geral ao consultar API Horus: {e}")
 
-        # Fallback complementar: catálogo local PostgreSQL para itens que não vieram do Horus
+        # Fallback complementar: Cadastro Sincronizado do DBM no Cronuz (incluindo 2º/3º ISBNs de E-book)
         raw_enriched = []
+        search_client_fallback = (
+            HorusProductSearch(db=db, company_id=current_user.company_id)
+            if (settings and settings.horus_enabled and settings.horus_url)
+            else None
+        )
+
         for it in items:
             isbn = it["isbn"]
             hr = horus_map.get(isbn)
@@ -801,13 +1010,42 @@ async def parse_and_preview_pearson_sheet(
                         break
 
             is_ebook = None
+            horus_isbn_resolved = isbn
+            matched_via_secondary = False
+
+            # Se não achou pelo ISBN da planilha diretamente no Horus, vasculha no Cadastro Sincronizado do DBM (incluindo ISBNs adicionais)
+            prod_dbm = None
+            if not hr:
+                prod_dbm = _find_dbm_product_by_any_isbn(db, current_user.company_id, isbn)
+                if prod_dbm and prod_dbm.ean_gtin:
+                    prim_isbn = _clean_isbn(prod_dbm.ean_gtin)
+                    if prim_isbn and prim_isbn != isbn:
+                        matched_via_secondary = True
+                        horus_isbn_resolved = prim_isbn
+                        hr = horus_map.get(prim_isbn)
+                        if not hr and search_client_fallback:
+                            try:
+                                res_sec = await search_client_fallback.busca_acervo(
+                                    term=prim_isbn, search_option="BARRAS_ISBN", limit=5
+                                )
+                                if res_sec and isinstance(res_sec, list) and len(res_sec) > 0 and not res_sec[0].get("Falha"):
+                                    hr = res_sec[0]
+                                    horus_map[prim_isbn] = hr
+                            except Exception as _e_sec:
+                                logger.debug(f"[Ebook DBM] Busca Horus por ISBN principal {prim_isbn} falhou: {_e_sec}")
+
             if hr:
                 in_horus = True
-                horus_cod = str(hr.get("COD_ITEM") or hr.get("ID") or "")
+                horus_cod = str(hr.get("COD_ITEM") or hr.get("ID") or (prod_dbm.horus_cod_item if prod_dbm else "") or "")
+                horus_barras = _clean_isbn(hr.get("COD_BARRA_ITEM") or hr.get("BARRAS_ISBN") or horus_isbn_resolved)
+                if horus_barras:
+                    horus_isbn_resolved = horus_barras
                 horus_title = str(hr.get("NOM_ITEM") or hr.get("NOME") or it["title_pearson"])
                 cover_price = parse_horus_price(
                     hr.get("VLR_CAPA") or hr.get("PRECO") or hr.get("PRECO_TABELA") or hr.get("VALOR_CAPA") or 0.0
                 )
+                if cover_price <= 0.0 and prod_dbm:
+                    cover_price = parse_horus_price(prod_dbm.promotional_price or prod_dbm.base_price or 0.0)
                 if cover_price <= 0.0:
                     cover_price = None
                 stock = _safe_int(hr.get("SALDO_DISPONIVEL") or hr.get("QTD_ESTOQUE") or 0)
@@ -817,43 +1055,52 @@ async def parse_and_preview_pearson_sheet(
                 nom_upper = horus_title.upper()
                 if raw_ebook == "S" or "[E-BOOK]" in nom_upper or "[EBOOK]" in nom_upper:
                     is_ebook = True
-                    api_msg = f"✓ Localizado na API Horus (Cód: {horus_cod})"
+                    if matched_via_secondary:
+                        api_msg = f"✓ 2º ISBN vinculado via DBM → Horus #{horus_cod} (ISBN Horus: {horus_isbn_resolved})"
+                    else:
+                        api_msg = f"✓ Localizado na API Horus (Cód: {horus_cod})"
                 elif raw_ebook == "N":
                     is_ebook = False
                     api_msg = f"⚠ Livro Físico no Horus (Cód: {horus_cod}) - Requer ISBN do E-book"
                 else:
                     is_ebook = True
-                    api_msg = f"✓ Localizado na API Horus (Cód: {horus_cod})"
+                    if matched_via_secondary:
+                        api_msg = f"✓ 2º ISBN vinculado via DBM → Horus #{horus_cod} (ISBN Horus: {horus_isbn_resolved})"
+                    else:
+                        api_msg = f"✓ Localizado na API Horus (Cód: {horus_cod})"
             else:
-                # Fallback para tabela de produtos do Cronuz
-                prod = db.query(Product).filter(
-                    Product.company_id == current_user.company_id,
-                    (Product.ean_gtin == isbn) | (Product.sku == isbn)
-                ).first()
+                if not prod_dbm:
+                    prod_dbm = _find_dbm_product_by_any_isbn(db, current_user.company_id, isbn)
 
-                if prod:
+                if prod_dbm:
                     in_horus = True
-                    horus_cod = str(prod.sku or prod.id)
-                    horus_title = prod.name
-                    cover_price = parse_horus_price(prod.promotional_price or prod.base_price or 0.0)
+                    horus_cod = str(prod_dbm.horus_cod_item or prod_dbm.sku or prod_dbm.id)
+                    horus_isbn_resolved = _clean_isbn(prod_dbm.ean_gtin) or isbn
+                    horus_title = prod_dbm.name
+                    cover_price = parse_horus_price(prod_dbm.promotional_price or prod_dbm.base_price or 0.0)
                     if cover_price <= 0.0:
                         cover_price = None
-                    stock = _safe_int(prod.stock_quantity or 0)
+                    stock = _safe_int(prod_dbm.stock_quantity or 0)
                     is_ebook = True
-                    api_msg = f"✓ Catálogo Local Cronuz (Cód: {horus_cod})"
+                    if horus_isbn_resolved != isbn:
+                        api_msg = f"✓ Localizado por 2º ISBN no Cadastro DBM (Cód: {horus_cod} | ISBN Horus: {horus_isbn_resolved})"
+                    else:
+                        api_msg = f"✓ Cadastro Sincronizado DBM (Cód: {horus_cod})"
                 else:
                     in_horus = False
                     horus_cod = None
+                    horus_isbn_resolved = None
                     horus_title = None
                     cover_price = None
                     stock = None
                     is_ebook = None
-                    api_msg = "⚠ Não localizado na API Horus nem no catálogo"
+                    api_msg = "⚠ Não localizado na API Horus nem no Cadastro DBM"
 
             raw_enriched.append({
                 "id": it["id"],
                 "row": it["row"],
                 "isbn": it["isbn"],
+                "horus_isbn": horus_isbn_resolved,
                 "title_pearson": it["title_pearson"],
                 "pageviews": it["pageviews"],
                 "percentage": it["percentage"],
@@ -869,7 +1116,11 @@ async def parse_and_preview_pearson_sheet(
                 "is_ebook": is_ebook,
                 "api_message": api_msg,
                 "selected_for_rateio": True,
+                "merged_isbns": [it["isbn"]],
             })
+
+        # Unifica itens que apontam para o mesmo produto no Horus (ex: 2º ISBN resolvido para o mesmo livro)
+        raw_enriched = _unify_duplicate_horus_items(raw_enriched)
 
         # Aplica Inteligência de Decomposição (Quantidade x Preço de Capa e Quebra em Q=1)
         decomposed = decompose_and_reconcile_items(raw_enriched, target_total=parsed_data["total_original_value"])
@@ -879,6 +1130,8 @@ async def parse_and_preview_pearson_sheet(
                 id=d["id"],
                 row=d["row"],
                 isbn=d["isbn"],
+                horus_isbn=d.get("horus_isbn"),
+                merged_isbns=d.get("merged_isbns"),
                 title_pearson=d["title_pearson"],
                 pageviews=d["pageviews"],
                 percentage=d["percentage"],
@@ -944,7 +1197,7 @@ async def parse_and_preview_pearson_sheet(
         )
 
 
-# ── Endpoint: Reconsulta Individual de Item no Horus / Catálogo ─────────────
+# ── Endpoint: Reconsulta Individual de Item no Horus / Catálogo DBM ──────────
 
 @router.post("/lookup-item", response_model=LookupItemResponse)
 async def lookup_single_item(
@@ -953,37 +1206,66 @@ async def lookup_single_item(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Reconsulta um item individual diretamente no Horus (por ISBN ou Nome)
-    ou no catálogo local, permitindo ajuste manual inline pelo usuário.
+    Reconsulta um item individual diretamente no Horus (por ISBN ou Cód. Horus)
+    e, quando não localizar direto no Horus, vasculha o Cadastro Sincronizado do DBM
+    no Cronuz (incluindo 2º/3º ISBNs em `additional_isbns`).
+    Se `original_isbn` for informado e diferente do ISBN principal do Horus,
+    salva automaticamente esse 2º ISBN no cadastro DBM do produto.
     """
     assert_company_ownership(current_user, current_user.company_id)
     clean_isbn = _clean_isbn(payload.isbn)
-    clean_title = (payload.title or "").split(":")[0].strip()
+    orig_isbn = _clean_isbn(payload.original_isbn) if payload.original_isbn else clean_isbn
 
     settings = db.query(CompanySettings).filter(
         CompanySettings.company_id == current_user.company_id
     ).first()
 
     hr_found = None
+    prod_dbm = _find_dbm_product_by_any_isbn(db, current_user.company_id, clean_isbn)
+    matched_via_dbm_secondary = False
 
     if settings and settings.horus_enabled and settings.horus_url:
         search_client = HorusProductSearch(db=db, company_id=current_user.company_id)
         
-        # Busca direta e estrita por ISBN
-        if clean_isbn and len(clean_isbn) >= 9:
+        # 1. Busca direta no Horus por BARRAS_ISBN (>= 8 dígitos) ou COD_ITEM (< 8 dígitos)
+        if clean_isbn and len(clean_isbn) >= 8:
             try:
                 res = await search_client.busca_acervo(term=clean_isbn, search_option="BARRAS_ISBN", limit=5)
                 if res and isinstance(res, list) and len(res) > 0 and not res[0].get("Falha"):
                     hr_found = res[0]
             except Exception as _e:
                 logger.debug(f"[Lookup Item] Busca por ISBN falhou: {_e}")
+        elif clean_isbn and clean_isbn.isdigit():
+            try:
+                res = await search_client.busca_acervo(term=clean_isbn, search_option="COD_ITEM", limit=5)
+                if res and isinstance(res, list) and len(res) > 0 and not res[0].get("Falha"):
+                    hr_found = res[0]
+            except Exception as _e_cod:
+                logger.debug(f"[Lookup Item] Busca por COD_ITEM falhou: {_e_cod}")
+
+        # 2. Se não achou direto no Horus, mas achou no Cadastro DBM (ex: pelo 2º ISBN), consulta o Horus pelo ISBN principal do DBM
+        if not hr_found and prod_dbm and prod_dbm.ean_gtin:
+            prim_isbn = _clean_isbn(prod_dbm.ean_gtin)
+            if prim_isbn and prim_isbn != clean_isbn:
+                matched_via_dbm_secondary = True
+                try:
+                    res_prim = await search_client.busca_acervo(term=prim_isbn, search_option="BARRAS_ISBN", limit=5)
+                    if res_prim and isinstance(res_prim, list) and len(res_prim) > 0 and not res_prim[0].get("Falha"):
+                        hr_found = res_prim[0]
+                except Exception as _e_prim:
+                    logger.debug(f"[Lookup Item] Busca Horus via ISBN principal DBM ({prim_isbn}) falhou: {_e_prim}")
 
     if hr_found:
-        horus_cod = str(hr_found.get("COD_ITEM") or hr_found.get("ID") or "")
+        horus_cod = str(hr_found.get("COD_ITEM") or hr_found.get("ID") or (prod_dbm.horus_cod_item if prod_dbm else "") or "")
+        horus_primary_isbn = _clean_isbn(
+            hr_found.get("COD_BARRA_ITEM") or hr_found.get("BARRAS_ISBN") or (prod_dbm.ean_gtin if prod_dbm else clean_isbn)
+        )
         horus_title = str(hr_found.get("NOM_ITEM") or hr_found.get("NOME") or payload.title or clean_isbn)
         cover_price = parse_horus_price(
             hr_found.get("VLR_CAPA") or hr_found.get("PRECO") or hr_found.get("PRECO_TABELA") or hr_found.get("VALOR_CAPA") or 0.0
         )
+        if cover_price <= 0.0 and prod_dbm:
+            cover_price = parse_horus_price(prod_dbm.promotional_price or prod_dbm.base_price or 0.0)
         if cover_price <= 0.0:
             cover_price = None
         stock = _safe_int(hr_found.get("SALDO_DISPONIVEL") or hr_found.get("QTD_ESTOQUE") or 0)
@@ -993,58 +1275,97 @@ async def lookup_single_item(
         nom_upper = horus_title.upper()
         if raw_ebook == "S" or "[E-BOOK]" in nom_upper or "[EBOOK]" in nom_upper:
             is_ebook = True
-            api_msg = f"✓ Localizado no Horus ERP (Cód: #{horus_cod})"
+            api_msg = (
+                f"✓ Localizado via 2º ISBN no Cadastro DBM → Horus #{horus_cod} (ISBN Horus: {horus_primary_isbn})"
+                if matched_via_dbm_secondary
+                else f"✓ Localizado no Horus ERP (Cód: #{horus_cod})"
+            )
         elif raw_ebook == "N":
             is_ebook = False
             api_msg = f"⚠ Livro Físico no Horus (Cód: #{horus_cod}) - Requer ISBN do E-book"
         else:
             is_ebook = True
-            api_msg = f"✓ Localizado no Horus ERP (Cód: #{horus_cod})"
+            api_msg = (
+                f"✓ Localizado via 2º ISBN no Cadastro DBM → Horus #{horus_cod} (ISBN Horus: {horus_primary_isbn})"
+                if matched_via_dbm_secondary
+                else f"✓ Localizado no Horus ERP (Cód: #{horus_cod})"
+            )
+
+        linked_sec = None
+        if payload.save_secondary_isbn and orig_isbn and horus_primary_isbn and orig_isbn != horus_primary_isbn:
+            linked_sec = _save_secondary_isbn_on_dbm_product(
+                db=db,
+                company_id=current_user.company_id,
+                secondary_isbn=orig_isbn,
+                horus_cod_item=horus_cod,
+                horus_primary_isbn=horus_primary_isbn,
+                horus_title=horus_title,
+                horus_cover_price=cover_price,
+            )
+            if linked_sec:
+                api_msg = f"✓ Vinculado ao Horus #{horus_cod} e 2º ISBN ({linked_sec}) salvo no Cadastro DBM!"
 
         return LookupItemResponse(
             found=True,
-            isbn=clean_isbn or payload.isbn,
+            isbn=orig_isbn or clean_isbn or payload.isbn,
+            horus_isbn=horus_primary_isbn or clean_isbn,
             horus_cod_item=horus_cod,
             horus_title=horus_title,
             horus_cover_price=cover_price,
             horus_stock=stock,
             is_ebook=is_ebook,
+            linked_secondary_isbn=linked_sec,
             api_message=api_msg
         )
 
-    # Fallback catálogo local Cronuz
-    prod = None
-    if clean_isbn:
-        prod = db.query(Product).filter(
-            Product.company_id == current_user.company_id,
-            (Product.ean_gtin == clean_isbn) | (Product.sku == clean_isbn)
-        ).first()
-
-    if prod:
-        horus_cod = str(prod.sku or prod.id)
-        cover_price = parse_horus_price(prod.promotional_price or prod.base_price or 0.0)
+    # Fallback: Cadastro Sincronizado do DBM no Cronuz (incluindo `additional_isbns`)
+    if prod_dbm:
+        horus_cod = str(prod_dbm.horus_cod_item or prod_dbm.sku or prod_dbm.id)
+        horus_primary_isbn = _clean_isbn(prod_dbm.ean_gtin) or clean_isbn
+        cover_price = parse_horus_price(prod_dbm.promotional_price or prod_dbm.base_price or 0.0)
         if cover_price <= 0.0:
             cover_price = None
-        stock = _safe_int(prod.stock_quantity or 0)
+        stock = _safe_int(prod_dbm.stock_quantity or 0)
+
+        linked_sec = None
+        if payload.save_secondary_isbn and orig_isbn and horus_primary_isbn and orig_isbn != horus_primary_isbn:
+            linked_sec = _save_secondary_isbn_on_dbm_product(
+                db=db,
+                company_id=current_user.company_id,
+                secondary_isbn=orig_isbn,
+                horus_cod_item=horus_cod,
+                horus_primary_isbn=horus_primary_isbn,
+                horus_title=prod_dbm.name,
+                horus_cover_price=cover_price,
+            )
+
+        msg_dbm = (
+            f"✓ Localizado via 2º ISBN no Cadastro DBM (Cód: #{horus_cod} | ISBN Horus: {horus_primary_isbn})"
+            if horus_primary_isbn != (orig_isbn or clean_isbn)
+            else f"✓ Localizado no Cadastro Sincronizado DBM (Cód: #{horus_cod})"
+        )
         return LookupItemResponse(
             found=True,
-            isbn=clean_isbn or payload.isbn,
+            isbn=orig_isbn or clean_isbn or payload.isbn,
+            horus_isbn=horus_primary_isbn,
             horus_cod_item=horus_cod,
-            horus_title=prod.name,
+            horus_title=prod_dbm.name,
             horus_cover_price=cover_price,
             horus_stock=stock,
             is_ebook=True,
-            api_message=f"✓ Localizado no Catálogo Cronuz (Cód: #{horus_cod})"
+            linked_secondary_isbn=linked_sec,
+            api_message=msg_dbm
         )
 
     return LookupItemResponse(
         found=False,
         isbn=clean_isbn or payload.isbn,
+        horus_isbn=None,
         horus_cod_item=None,
         horus_title=None,
         horus_cover_price=None,
         horus_stock=None,
-        api_message="⚠ Não localizado no Horus ERP nem no catálogo local"
+        api_message="⚠ Não localizado no Horus ERP nem no Cadastro Sincronizado do DBM"
     )
 
 
@@ -1179,6 +1500,64 @@ async def create_and_send_ebook_order(
         is_bookwire = str(payload.report_model or "PEARSON").strip().upper() == "BOOKWIRE"
         platform_label = "Bookwire" if is_bookwire else "Pearson"
 
+        # Se houver itens duplicados apontando para o mesmo código/ISBN Horus no payload, unifica e re-decompõe
+        seen_keys: Dict[str, int] = {}
+        has_dup = False
+        for it in payload.items:
+            k = (str(it.horus_cod_item or "").strip().upper() or _clean_isbn(it.horus_isbn or it.isbn))
+            if k and k in seen_keys:
+                has_dup = True
+                break
+            if k:
+                seen_keys[k] = 1
+
+        if has_dup:
+            raw_for_unify = [
+                {
+                    "id": str(idx),
+                    "row": idx + 1,
+                    "isbn": it.isbn,
+                    "horus_isbn": it.horus_isbn or it.isbn,
+                    "title_pearson": it.title,
+                    "pageviews": it.pageviews,
+                    "percentage": 0.0,
+                    "original_value": it.original_value,
+                    "quantity": max(1, it.quantity),
+                    "liquid_value": round(float(it.liquid_unit_price), 2),
+                    "subtotal": round(float(it.liquid_unit_price) * max(1, it.quantity), 2),
+                    "in_horus": bool(it.horus_cod_item),
+                    "horus_cod_item": it.horus_cod_item,
+                    "horus_title": it.title,
+                    "horus_cover_price": it.horus_cover_price,
+                    "horus_stock": 0.0,
+                    "is_ebook": it.is_ebook,
+                    "api_message": "",
+                }
+                for idx, it in enumerate(payload.items)
+            ]
+            unified_raw = _unify_duplicate_horus_items(raw_for_unify)
+            target_for_reconcile = (
+                payload.target_received_total
+                if payload.target_received_total > 0
+                else round(sum(d["subtotal"] for d in unified_raw), 2)
+            )
+            reconciled_raw = decompose_and_reconcile_items(unified_raw, target_total=target_for_reconcile)
+            payload.items = [
+                PearsonOrderItemInput(
+                    isbn=d["isbn"],
+                    horus_isbn=d.get("horus_isbn"),
+                    title=d["title_pearson"],
+                    pageviews=d.get("pageviews", 0),
+                    original_value=d["original_value"],
+                    liquid_unit_price=d["liquid_value"],
+                    quantity=d["quantity"],
+                    horus_cod_item=d.get("horus_cod_item"),
+                    horus_cover_price=d.get("horus_cover_price"),
+                    is_ebook=d.get("is_ebook"),
+                )
+                for d in reconciled_raw
+            ]
+
         # ── VALIDAÇÃO DE VALOR TOTAL RECEBIDO ──────────────────────────────────
         total_liquido_itens = round(sum(float(it.liquid_unit_price) * max(1, it.quantity) for it in payload.items), 2)
         if payload.target_received_total <= 0:
@@ -1258,11 +1637,8 @@ async def create_and_send_ebook_order(
             line_total = round(price * qty, 2)
             total_liquido += line_total
 
-            # Localiza se existe produto Cronuz vinculado ao ISBN
-            prod = db.query(Product).filter(
-                Product.company_id == current_user.company_id,
-                (Product.ean_gtin == it.isbn) | (Product.sku == it.isbn)
-            ).first()
+            # Localiza se existe produto no Cadastro Sincronizado do DBM vinculado ao ISBN (principal ou secundário)
+            prod = _find_dbm_product_by_any_isbn(db, current_user.company_id, it.isbn)
 
             order_item = OrderItem(
                 product_id=prod.id if prod else None,
@@ -1270,7 +1646,7 @@ async def create_and_send_ebook_order(
                 quantity_requested=qty,
                 unit_price=price,
                 total_price=line_total,
-                ean_isbn=it.isbn,
+                ean_isbn=_clean_isbn(it.horus_isbn) or (prod.ean_gtin if prod and prod.ean_gtin else it.isbn),
                 sku=it.horus_cod_item or (prod.sku if prod else it.isbn),
                 name=it.title or (prod.name if prod else f"E-book {it.isbn}"),
                 brand="Bookwire" if is_bookwire else "Pearson BV"
@@ -1336,29 +1712,37 @@ async def create_and_send_ebook_order(
             )
 
         # 4. Transmissão de cada item com o VLR_LIQUIDO unitário rateado
+        # Usa o ISBN principal do Horus (horus_isbn ou prod.ean_gtin) caso o item da planilha tenha vindo com 2º ISBN
         items_sent = 0
         items_failed = []
         for it in payload.items:
             clean_it_isbn = _clean_isbn(it.isbn) or it.isbn
+            prod_match = _find_dbm_product_by_any_isbn(db, current_user.company_id, clean_it_isbn)
+            horus_isbn_to_send = (
+                _clean_isbn(it.horus_isbn)
+                or (_clean_isbn(prod_match.ean_gtin) if prod_match and prod_match.ean_gtin else None)
+                or clean_it_isbn
+            )
             try:
                 res_item = await horus_client.send_order_item(
                     id_doc=customer.document,
                     id_guid=customer.id_guid,
                     cnpj_destino=company.document,
                     cod_pedido_origem=clean_ref,
-                    isbn=clean_it_isbn,
+                    isbn=horus_isbn_to_send,
                     qty=max(1, it.quantity),
                     price=round(float(it.liquid_unit_price), 2)  # VLR_LIQUIDO exato
                 )
                 if res_item and isinstance(res_item, list) and len(res_item) > 0:
                     if res_item[0].get("Falha"):
-                        items_failed.append(f"ISBN {clean_it_isbn}: {res_item[0].get('Mensagem', 'Erro no item')}")
+                        items_failed.append(f"ISBN {horus_isbn_to_send}: {res_item[0].get('Mensagem', 'Erro no item')}")
                     else:
                         items_sent += 1
                 else:
                     items_sent += 1
             except Exception as e_item:
-                items_failed.append(f"ISBN {clean_it_isbn}: {str(e_item)}")
+                items_failed.append(f"ISBN {horus_isbn_to_send}: {str(e_item)}")
+
 
         if items_failed:
             logger.error(f"[Ebook Pearson] Erro nos itens no Horus: {items_failed}")

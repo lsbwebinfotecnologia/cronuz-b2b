@@ -28,6 +28,30 @@ class ProductBase(BaseModel):
     stock_status_label: Optional[str] = None
     cover_url: Optional[str] = None
     horus_cod_item: Optional[int] = None
+    launch_date: Optional[datetime] = None
+    is_pre_sale: Optional[bool] = False
+    is_out_of_print: Optional[bool] = False
+    additional_isbns: Optional[str] = None
+    barcode: Optional[str] = None
+    cod_dbm: Optional[str] = None
+    publisher_code: Optional[str] = None
+    pages: Optional[int] = None
+    launch_month: Optional[int] = None
+    launch_year: Optional[int] = None
+    collection: Optional[str] = None
+    subject: Optional[str] = None
+    binding_finish: Optional[str] = None
+    royalty_rule: Optional[str] = None
+    edition_number: Optional[str] = None
+    units_per_box: Optional[int] = None
+    out_of_print_date: Optional[str] = None
+    external_link: Optional[str] = None
+    royalty_company: Optional[str] = None
+    ebook_royalty_pct: Optional[float] = None
+    contract_signed_date: Optional[str] = None
+    contract_validity_years: Optional[int] = None
+    contract_expires_date: Optional[str] = None
+    dbm_tiragens: Optional[str] = None
 
 class ProductCreate(ProductBase):
     characteristics: Optional[List[ProductCharacteristicCreate]] = []
@@ -54,6 +78,31 @@ class ProductUpdate(BaseModel):
     allow_purchase: Optional[bool] = None
     stock_status_label: Optional[str] = None
     cover_url: Optional[str] = None
+    horus_cod_item: Optional[int] = None
+    launch_date: Optional[datetime] = None
+    is_pre_sale: Optional[bool] = None
+    is_out_of_print: Optional[bool] = None
+    additional_isbns: Optional[str] = None
+    barcode: Optional[str] = None
+    cod_dbm: Optional[str] = None
+    publisher_code: Optional[str] = None
+    pages: Optional[int] = None
+    launch_month: Optional[int] = None
+    launch_year: Optional[int] = None
+    collection: Optional[str] = None
+    subject: Optional[str] = None
+    binding_finish: Optional[str] = None
+    royalty_rule: Optional[str] = None
+    edition_number: Optional[str] = None
+    units_per_box: Optional[int] = None
+    out_of_print_date: Optional[str] = None
+    external_link: Optional[str] = None
+    royalty_company: Optional[str] = None
+    ebook_royalty_pct: Optional[float] = None
+    contract_signed_date: Optional[str] = None
+    contract_validity_years: Optional[int] = None
+    contract_expires_date: Optional[str] = None
+    dbm_tiragens: Optional[str] = None
     characteristics: Optional[List[ProductCharacteristicCreate]] = []
 
 class ProductResponse(ProductBase):
@@ -67,3 +116,4 @@ class ProductResponse(ProductBase):
 
     class Config:
         from_attributes = True
+
