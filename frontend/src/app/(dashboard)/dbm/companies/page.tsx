@@ -1217,7 +1217,7 @@ export default function DbmCompaniesSearchPage() {
                   <CurrencyInput
                     prefixStr="R$ "
                     value={formData.min_order_total ?? 0}
-                    onValueChange={(val) => setFormData({ ...formData, min_order_total: val || 0 })}
+                    onChangeValue={(val) => setFormData({ ...formData, min_order_total: val || 0 })}
                     placeholder="R$ 0,00"
                     className="w-full rounded-xl border border-indigo-200 bg-indigo-50/30 px-3 py-2 font-mono font-bold text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-indigo-800/70 dark:bg-slate-800 dark:text-white"
                   />
