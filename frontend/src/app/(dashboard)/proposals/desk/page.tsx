@@ -1642,7 +1642,7 @@ export default function ProposalsDeskPage() {
     }
   };
 
-  const handleSaveProposal = async (overrideStatus?: SellerStatus) => {
+  const handleSaveProposal = async (overrideStatus?: SellerCustomStatus) => {
     if (!customer) {
       toast.error('Selecione um cliente antes de salvar o orçamento.');
       return;
