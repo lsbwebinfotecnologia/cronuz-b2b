@@ -121,6 +121,7 @@ from app.models import product_address as product_address_models
 from app.models import horus_bi_sale as horus_bi_sale_models
 from app.models import global_setting as global_setting_models
 from app.models import b2c_storefront as b2c_storefront_models
+from app.models import dbm_proposal as dbm_proposal_models
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -173,10 +174,12 @@ encomenda_models.Base.metadata.create_all(bind=engine)
 product_address_models.Base.metadata.create_all(bind=engine)
 horus_bi_sale_models.Base.metadata.create_all(bind=engine)
 b2c_storefront_models.Base.metadata.create_all(bind=engine)
+dbm_proposal_models.Base.metadata.create_all(bind=engine)
 try:
     from sqlalchemy import text as _sql_text
     with engine.begin() as _conn:
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS b2c_showcases_config JSON"))
+        _conn.execute(_sql_text("ALTER TABLE crm_customer ADD COLUMN IF NOT EXISTS min_order_total DOUBLE PRECISION NOT NULL DEFAULT 0"))
 except Exception as _ddl_err:
     _main_logger.warning("Auto-DDL warning: %s", _ddl_err)
 

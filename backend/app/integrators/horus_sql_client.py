@@ -132,17 +132,38 @@ class HorusSQLClient:
             logger.info(f"[HorusSQLPool] Criando nova conexao (pytds): {username}@{host}:{port}/{database}")
 
             try:
-                conn = pytds.connect(
-                    server=host,
-                    port=port,
-                    user=username,
-                    password=password,
-                    database=database,
-                    login_timeout=10,
-                    timeout=30,
-                    autocommit=True,
-                    as_dict=True,
-                )
+                try:
+                    conn = pytds.connect(
+                        server=host,
+                        port=port,
+                        user=username,
+                        password=password,
+                        database=database,
+                        login_timeout=10,
+                        timeout=30,
+                        autocommit=True,
+                        as_dict=True,
+                    )
+                except Exception as login_err:
+                    err_str = str(login_err)
+                    if username.lower() != "sa" and ("Falha de logon" in err_str or "Login failed" in err_str):
+                        logger.warning(
+                            f"[HorusSQLPool] Falha de logon com usuario '{username}' para company={self.company_id}. "
+                            "Tentando fallback em memoria com usuario 'sa'..."
+                        )
+                        conn = pytds.connect(
+                            server=host,
+                            port=port,
+                            user="sa",
+                            password=password,
+                            database=database,
+                            login_timeout=10,
+                            timeout=30,
+                            autocommit=True,
+                            as_dict=True,
+                        )
+                    else:
+                        raise
                 entry = {
                     "conn": conn,
                     "lock": threading.Lock(),
@@ -153,6 +174,33 @@ class HorusSQLClient:
                 return entry
             finally:
                 password = ""  # limpar da memoria
+
+    def get_branch_cnpj(self) -> Optional[str]:
+        """
+        Retorna o CNPJ limpo (14 digitos) da filial configurada no Horus (FILIAL_GERAL),
+        utilizado como CNPJ_DESTINO real nas chamadas da API TServerB2B quando o CNPJ
+        da empresa no Cronuz e de homologacao/teste.
+        """
+        import re
+        try:
+            entry = self._get_connection_entry()
+            if "branch_cnpj" in entry:
+                return entry["branch_cnpj"]
+            cod_emp = int(self.cod_empresa) if str(self.cod_empresa).isdigit() else 1
+            cod_fil = int(self.cod_filial) if str(self.cod_filial).isdigit() else 1
+            rows = self.query(
+                "SELECT TOP 1 CNPJ FROM FILIAL_GERAL WITH (NOLOCK) WHERE COD_EMPRESA = %s AND COD_FILIAL = %s",
+                (cod_emp, cod_fil),
+                max_rows=1,
+            )
+            if rows and rows[0].get("CNPJ"):
+                clean = re.sub(r"\D", "", str(rows[0]["CNPJ"]))
+                if clean:
+                    entry["branch_cnpj"] = clean
+                    return clean
+        except Exception as e:
+            logger.debug(f"[HorusSQLClient] Nao foi possivel obter CNPJ da FILIAL_GERAL: {e}")
+        return None
 
     def _get_connection(self):
         """Retorna conexao pura do pool."""

@@ -149,6 +149,7 @@ class DbmCompanySavePayload(BaseModel):
     notes_message: Optional[str] = None
     customer_account: Optional[str] = None
     royalties_data: Optional[str] = None
+    min_order_total: Optional[float] = 0.0
     is_cliente: bool = True
     is_fornecedor: bool = False
     horus_cod_cli: Optional[int] = None
@@ -167,6 +168,7 @@ class DbmCompanyItem(BaseModel):
     notes_message: Optional[str] = None
     customer_account: Optional[str] = None
     royalties_data: Optional[str] = None
+    min_order_total: Optional[float] = 0.0
     is_cliente: bool = True
     is_fornecedor: bool = False
     horus_cod_cli: Optional[int] = None
@@ -441,6 +443,7 @@ def list_dbm_companies(
             "notes_message": c.notes_message or "",
             "customer_account": c.customer_account or "",
             "royalties_data": c.royalties_data or "",
+            "min_order_total": round(float(c.min_order_total or 0.0), 2),
             "is_cliente": c.is_cliente if c.is_cliente is not None else True,
             "is_fornecedor": c.is_fornecedor if c.is_fornecedor is not None else False,
             "horus_cod_cli": c.horus_cod_cli,
@@ -486,6 +489,7 @@ def get_dbm_company(
         "notes_message": cust.notes_message or "",
         "customer_account": cust.customer_account or "",
         "royalties_data": cust.royalties_data or "",
+        "min_order_total": round(float(cust.min_order_total or 0.0), 2),
         "is_cliente": cust.is_cliente if cust.is_cliente is not None else True,
         "is_fornecedor": cust.is_fornecedor if cust.is_fornecedor is not None else False,
         "horus_cod_cli": cust.horus_cod_cli,
@@ -537,6 +541,7 @@ def save_dbm_company(
         ).first()
 
     status_action = "updated" if existing_cust else "created"
+    min_order_val = round(max(0.0, float(payload.min_order_total or 0.0)), 2)
 
     if existing_cust:
         existing_cust.name = apelido
@@ -549,6 +554,7 @@ def save_dbm_company(
         existing_cust.notes_message = (payload.notes_message or "").strip() or None
         existing_cust.customer_account = (payload.customer_account or "").strip() or None
         existing_cust.royalties_data = (payload.royalties_data or "").strip() or None
+        existing_cust.min_order_total = min_order_val
         existing_cust.is_cliente = payload.is_cliente
         existing_cust.is_fornecedor = payload.is_fornecedor
         existing_cust.horus_cod_cli = payload.horus_cod_cli
@@ -567,6 +573,7 @@ def save_dbm_company(
             notes_message=(payload.notes_message or "").strip() or None,
             customer_account=(payload.customer_account or "").strip() or None,
             royalties_data=(payload.royalties_data or "").strip() or None,
+            min_order_total=min_order_val,
             is_cliente=payload.is_cliente,
             is_fornecedor=payload.is_fornecedor,
             horus_cod_cli=payload.horus_cod_cli,
@@ -596,6 +603,7 @@ def save_dbm_company(
             "notes_message": target_cust.notes_message,
             "customer_account": target_cust.customer_account,
             "royalties_data": target_cust.royalties_data,
+            "min_order_total": round(float(target_cust.min_order_total or 0.0), 2),
             "is_cliente": target_cust.is_cliente,
             "is_fornecedor": target_cust.is_fornecedor,
             "horus_cod_cli": target_cust.horus_cod_cli,
@@ -1281,7 +1289,7 @@ def _resolve_customer_horus_cod_cli(
     customer: Customer,
     sql_client: Optional[HorusSQLClient]
 ) -> Optional[int]:
-    """Garante o COD_CLI do cliente no Horus (via coluna local, SQL CLIENTES ou HorusBISale)."""
+    """Garante o COD_CLI do cliente no Horus (via coluna local, SQL CLIENTES ou HorusBISale) sem alterar o banco."""
     if customer.horus_cod_cli:
         return int(customer.horus_cod_cli)
 
@@ -1299,10 +1307,7 @@ def _resolve_customer_horus_cod_cli(
                 max_rows=1
             )
             if rows and rows[0].get("COD_CLI"):
-                cod = int(rows[0]["COD_CLI"])
-                customer.horus_cod_cli = cod
-                db.commit()
-                return cod
+                return int(rows[0]["COD_CLI"])
         except Exception as e:
             log.warning(f"[DBM Desk] Aviso ao resolver COD_CLI via SQL: {e}")
 
@@ -1330,7 +1335,7 @@ async def get_proposals_desk_customer_context(
     """
     Carrega os dados cadastrais, financeiros e os 4 cards operacionais do cliente
     (Última Remessa, Última Venda, Último Acerto, Última Devolução) de forma HÍBRIDA:
-    1. Horus SQL Server (NF_MESTRE + NF_ITENS + LANCTOS_CRECEBER)
+    1. Horus SQL Server (NF_MESTRE + NF_ITENS + NF_ENTRADA + VW_ITENS_CONSIGNACAO + LANCTOS_CRECEBER)
     2. Horus B2B REST API (Busca_ClienteB2B + Busca_Contrato_Cliente_Sintetico)
     3. Base local Cronuz (crm_customer + horus_bi_sales)
     """
@@ -1358,6 +1363,8 @@ async def get_proposals_desk_customer_context(
 
     cod_cli = _resolve_customer_horus_cod_cli(db, customer, sql_client)
     cod_filial = int(sql_client.cod_filial) if (sql_client and str(sql_client.cod_filial).isdigit()) else 2
+    branch_cnpj = sql_client.get_branch_cnpj() if sql_client else None
+    effective_cnpj_destino = branch_cnpj or _sanitize_doc(company.document or "") if company else ""
 
     credit_limit = float(customer.credit_limit or 0.0)
     used_credit = float(customer.open_debts or 0.0)
@@ -1366,25 +1373,39 @@ async def get_proposals_desk_customer_context(
     consigned_value = 0.0
     default_discount = float(customer.discount or 35.0)
     max_discount = max(default_discount, 45.0)
+    api_customer_info: dict = {}
 
     # 1. Enriquecimento via API Horus (Financeiro e Contrato Consignação)
-    if settings and getattr(settings, "horus_enabled", False) and getattr(settings, "horus_url", None) and company and customer.document:
+    if settings and getattr(settings, "horus_enabled", False) and getattr(settings, "horus_url", None) and effective_cnpj_destino and customer.document:
         try:
             h_client = HorusClients(db, seller_id)
             fin_res = await h_client.get_customer_financials(
-                cnpj_destino=_sanitize_doc(company.document or ""),
+                cnpj_destino=effective_cnpj_destino,
                 cnpj_cliente=_sanitize_doc(customer.document or "")
             )
             if fin_res:
+                api_customer_info = fin_res.get("raw") if isinstance(fin_res.get("raw"), dict) else {}
+                if not cod_cli and fin_res.get("cod_cli"):
+                    cod_cli = int(fin_res["cod_cli"])
                 if float(fin_res.get("credit_limit") or 0) > 0:
                     credit_limit = float(fin_res["credit_limit"])
                 if float(fin_res.get("debt_balance") or 0) > 0:
                     used_credit = float(fin_res["debt_balance"])
+                if float(fin_res.get("discount") or 0) > 0:
+                    default_discount = float(fin_res["discount"])
+                    max_discount = max(default_discount, 50.0)
+                if float(fin_res.get("remessa_balance") or 0) > 0:
+                    consigned_value = float(fin_res["remessa_balance"])
 
-            id_guid = customer.id_guid or getattr(settings, "horus_default_b2b_guid", "") or ""
+            id_guid = (
+                customer.id_guid
+                or (fin_res.get("id_guid") if fin_res else "")
+                or getattr(settings, "horus_default_b2b_guid", "")
+                or ""
+            )
             if id_guid:
                 consig_res = await h_client.get_consignment_summary(
-                    cnpj_destino=_sanitize_doc(company.document or ""),
+                    cnpj_destino=effective_cnpj_destino,
                     cnpj_cliente=_sanitize_doc(customer.document or ""),
                     id_guid=id_guid,
                     limit=50
@@ -1393,15 +1414,19 @@ async def get_proposals_desk_customer_context(
                     for ctr in consig_res:
                         if isinstance(ctr, dict) and not ctr.get("Falha"):
                             consigned_units += int(float(str(ctr.get("SALDO_ITENS", 0) or 0).replace(",", ".")))
-                            consigned_value += float(str(ctr.get("VLR_TOTAL_LIQUIDO", 0) or 0).replace(",", "."))
+                            val_liq = float(str(ctr.get("VLR_TOTAL_LIQUIDO", 0) or 0).replace(",", "."))
+                            if val_liq > 0:
+                                consigned_value += val_liq
                 elif isinstance(consig_res, dict) and not consig_res.get("Falha"):
                     consigned_units = int(float(str(consig_res.get("SALDO_ITENS", 0) or 0).replace(",", ".")))
-                    consigned_value = float(str(consig_res.get("VLR_TOTAL_LIQUIDO", 0) or 0).replace(",", "."))
+                    val_liq = float(str(consig_res.get("VLR_TOTAL_LIQUIDO", 0) or 0).replace(",", "."))
+                    if val_liq > 0:
+                        consigned_value = val_liq
             await h_client.close()
         except Exception as e:
             log.warning(f"[DBM Desk] Aviso ao consultar API Horus p/ cliente {customer.id}: {e}")
 
-    # 2. Enriquecimento Financeiro via Horus SQL (LANCTOS_CRECEBER) se disponível
+    # 2. Enriquecimento Financeiro e Consignação via Horus SQL (LANCTOS_CRECEBER + VW_ITENS_CONSIGNACAO)
     if sql_client and cod_cli:
         try:
             fin_rows = sql_client.query(
@@ -1424,6 +1449,30 @@ async def get_proposals_desk_customer_context(
                 overdue_debt = sql_vencido
         except Exception as e:
             log.warning(f"[DBM Desk] Aviso ao consultar LANCTOS_CRECEBER cliente #{cod_cli}: {e}")
+
+        if consigned_units == 0:
+            try:
+                consig_sql_rows = sql_client.query(
+                    """
+                    SELECT
+                        ISNULL(SUM(V.SALDO), 0) AS total_pecas,
+                        ISNULL(SUM(V.SALDO * ISNULL(V.VLR_VENDIDO, V.VLR_PRECO * (1.0 - ISNULL(V.VLR_DESCONTO, 0) / 100.0))), 0) AS total_valor
+                    FROM VW_ITENS_CONSIGNACAO V WITH (NOLOCK)
+                    WHERE V.COD_CLI = %s
+                      AND ISNULL(V.SALDO, 0) > 0
+                    """,
+                    (cod_cli,),
+                    max_rows=1
+                )
+                if consig_sql_rows:
+                    sql_pecas = int(float(consig_sql_rows[0].get("total_pecas") or 0))
+                    sql_vlr = float(consig_sql_rows[0].get("total_valor") or 0.0)
+                    if sql_pecas > 0:
+                        consigned_units = sql_pecas
+                    if consigned_value == 0 and sql_vlr > 0:
+                        consigned_value = sql_vlr
+            except Exception as e:
+                log.warning(f"[DBM Desk] Aviso ao consultar VW_ITENS_CONSIGNACAO cliente #{cod_cli}: {e}")
 
     # 3. Cards de Últimas Operações (Remessa, Venda, Acerto, Devolução)
     ops_metrics = {
@@ -1479,9 +1528,54 @@ async def get_proposals_desk_customer_context(
                         "totalUnits": int(float(r_op.get("total_units") or 0)),
                         "date": _format_br_date(r_op.get("dat_emissao")),
                         "doc": f"NF #{nro}" if nro else "—",
+                        "_rawDate": r_op.get("dat_emissao"),
                     }
             except Exception as e:
                 log.warning(f"[DBM Desk] Aviso ao consultar card {op_key} via SQL p/ cliente #{cod_cli}: {e}")
+
+        # Verifica também NF_ENTRADA + ITENS_NOTAS_FISCAIS para Devolução de Consignação (CFOP 1918/2918/etc)
+        try:
+            dev_cfop_in = ", ".join(f"'{c}'" for c in CFOP_DEVOLUCAO_LIST)
+            clean_ne_cfop = "REPLACE(REPLACE(REPLACE(RTRIM(LTRIM(ISNULL(INF.COD_NATUREZA, NE.COD_NATUREZA))), '.', ''), ',', ''), ' ', '')"
+            top_clause = "TOP 1" if legacy_pagination else ""
+            offset_clause = "" if legacy_pagination else "OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY"
+            sql_dev_ent = f"""
+                SELECT {top_clause}
+                    NE.COD_NF_ENTRADA AS cod_nf,
+                    ISNULL(NE.NRO_NOTA_FISCAL, CAST(NE.COD_NF_ENTRADA AS VARCHAR)) AS nro_nf,
+                    NE.DAT_EMISSAO_NF AS dat_emissao,
+                    ISNULL(SUM(INF.QTD_ITENS), 0) AS total_units,
+                    ISNULL(MAX(NE.VLR_LIQUIDO_NF), ISNULL(SUM(INF.VLR_LIQUIDO_ITEM), 0)) AS total_value
+                FROM NF_ENTRADA NE WITH (NOLOCK)
+                LEFT JOIN ITENS_NOTAS_FISCAIS INF WITH (NOLOCK)
+                    ON INF.COD_NF_ENTRADA = NE.COD_NF_ENTRADA
+                    AND INF.COD_FILIAL = NE.COD_FILIAL
+                    AND INF.COD_EMPRESA = NE.COD_EMPRESA
+                WHERE NE.COD_CLI = %s
+                  AND ISNULL(NE.SIT_NF, '') NOT IN ('C', 'CAN')
+                  AND {clean_ne_cfop} IN ({dev_cfop_in})
+                GROUP BY NE.COD_NF_ENTRADA, NE.NRO_NOTA_FISCAL, NE.DAT_EMISSAO_NF
+                ORDER BY NE.DAT_EMISSAO_NF DESC, NE.COD_NF_ENTRADA DESC
+                {offset_clause}
+            """
+            rows_dev_ent = sql_client.query(sql_dev_ent, (cod_cli,), max_rows=1)
+            if rows_dev_ent and len(rows_dev_ent) > 0:
+                r_de = rows_dev_ent[0]
+                dt_de = _parse_any_datetime(r_de.get("dat_emissao"))
+                dt_cur = _parse_any_datetime(ops_metrics["devolucao"].get("_rawDate"))
+                if not dt_cur or (dt_de and dt_de >= dt_cur):
+                    nro_de = str(r_de.get("nro_nf") or r_de.get("cod_nf") or "").strip()
+                    ops_metrics["devolucao"] = {
+                        "totalValue": round(float(r_de.get("total_value") or 0.0), 2),
+                        "totalUnits": int(float(r_de.get("total_units") or 0)),
+                        "date": _format_br_date(r_de.get("dat_emissao")),
+                        "doc": f"NF #{nro_de}" if nro_de else "—",
+                    }
+        except Exception as e:
+            log.warning(f"[DBM Desk] Aviso ao consultar NF_ENTRADA devolução cliente #{cod_cli}: {e}")
+
+        for k_op in ops_metrics:
+            ops_metrics[k_op].pop("_rawDate", None)
 
     # 3B. Fallback / Complemento Híbrido via HorusBISale local (se algum card ainda estiver zerado)
     for op_key, cfops in cfop_groups.items():
@@ -1523,7 +1617,12 @@ async def get_proposals_desk_customer_context(
     # 3C. Se consignado total não veio da API mas temos remessa/acerto, garante valor coerente
     if consigned_units == 0 and ops_metrics["remessa"]["totalUnits"] > 0:
         consigned_units = ops_metrics["remessa"]["totalUnits"]
-        consigned_value = ops_metrics["remessa"]["totalValue"]
+        if consigned_value == 0:
+            consigned_value = ops_metrics["remessa"]["totalValue"]
+
+    min_order_val = float(getattr(customer, "min_order_total", 0.0) or 0.0)
+    if min_order_val <= 0 and getattr(customer, "commercial_policy", None):
+        min_order_val = float(getattr(customer.commercial_policy, "min_order_total", 0.0) or 0.0)
 
     return {
         "customer": {
@@ -1537,6 +1636,7 @@ async def get_proposals_desk_customer_context(
             "canal": customer.segment or "Livrarias",
             "city": customer.city or "—",
             "uf": customer.state or "—",
+            "minOrderValue": round(min_order_val, 2),
             "creditLimit": round(credit_limit, 2),
             "usedCredit": round(used_credit, 2),
             "overdueDebt": round(overdue_debt, 2),
@@ -1545,8 +1645,11 @@ async def get_proposals_desk_customer_context(
             "maxDiscountAllowed": round(max_discount, 2),
             "defaultDiscount": round(default_discount, 2),
             "observations": customer.notes_message or customer.nfse_notes or "Nenhuma observação comercial registrada para este cliente.",
+            "b2bAcceptsConsignment": api_customer_info.get("B2B_ACEITA_PED_CONSIG"),
+            "b2bAcceptsSale": api_customer_info.get("B2B_ACEITA_PED_VENDA"),
         },
         "operationsMetrics": ops_metrics,
+        "apiCustomerB2B": api_customer_info,
     }
 
 
@@ -1558,10 +1661,12 @@ def _enrich_items_with_bi_metrics(
     items_list: list[dict],
     client_sales_days: int = 30,
     general_sales_days: int = 90,
+    sql_client: Optional[HorusSQLClient] = None,
 ) -> list[dict]:
     """
-    Cruza uma lista de itens com HorusBISale para preencher giro do cliente (Xd e 365d)
-    e giro geral da distribuidora (Yd) com alta performance em lote (batch query).
+    Cruza uma lista de itens com o Horus SQL (NF_ITENS / NF_MESTRE / VW_ITENS_CONSIGNACAO)
+    e com HorusBISale para preencher giro do cliente (Xd e 365d), giro geral da distribuidora (Yd)
+    e saldo consignado no cliente em lote (batch query).
     """
     if not items_list:
         return items_list
@@ -1569,7 +1674,7 @@ def _enrich_items_with_bi_metrics(
     from datetime import timedelta
     from app.models.horus_bi_sale import HorusBISale
 
-    isbns = list({str(it.get("isbn") or "").strip() for it in items_list if it.get("isbn")})
+    isbns = list({str(it.get("isbn") or "").strip().replace("-", "").replace(" ", "") for it in items_list if it.get("isbn")})
     if not isbns:
         return items_list
 
@@ -1578,12 +1683,70 @@ def _enrich_items_with_bi_metrics(
     dt_365 = now_dt - timedelta(days=365)
     dt_gen_window = now_dt - timedelta(days=max(1, general_sales_days))
 
-    cli_period_map = {}
-    cli_365_map = {}
-    gen_period_map = {}
+    cli_period_map: dict[str, int] = {}
+    cli_365_map: dict[str, int] = {}
+    gen_period_map: dict[str, int] = {}
+    consig_map: dict[str, int] = {}
 
+    # 1. Enriquecimento direto via Horus SQL Server (alta precisão em tempo real)
+    if sql_client:
+        try:
+            cfop_sales_in = ", ".join(f"'{c}'" for c in (list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST)))
+            clean_cfop_expr = "REPLACE(REPLACE(REPLACE(RTRIM(LTRIM(ISNULL(NFI.COD_NATUREZA, NF.COD_NATUREZA))), '.', ''), ',', ''), ' ', '')"
+            for c_start in range(0, len(isbns), 120):
+                chunk = isbns[c_start:c_start + 120]
+                ph = ", ".join(["%s"] * len(chunk))
+                # Giro Geral (Yd) + Giro Cliente (Xd e 365d) em uma única passada por lote
+                if cod_cli:
+                    sql_batch_giro = f"""
+                        SELECT
+                            RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, CAST(NFI.COD_ITEM AS VARCHAR))))) AS isbn,
+                            SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS gen_qty,
+                            SUM(CASE WHEN NF.COD_CLI = %s AND NF.DAT_EMISSAO_NF >= DATEADD(day, -365, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS cli_365,
+                            SUM(CASE WHEN NF.COD_CLI = %s AND NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS cli_win
+                        FROM NF_ITENS NFI WITH (NOLOCK)
+                        INNER JOIN NF_MESTRE NF WITH (NOLOCK)
+                            ON NF.COD_NF = NFI.COD_NF
+                            AND NF.COD_FILIAL = NFI.COD_FILIAL
+                            AND NF.COD_EMPRESA = NFI.COD_EMPRESA
+                        INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = NFI.COD_ITEM
+                        WHERE ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
+                          AND NF.DAT_EMISSAO_NF >= DATEADD(day, -370, GETDATE())
+                          AND {clean_cfop_expr} IN ({cfop_sales_in})
+                          AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}))
+                        GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, NFI.COD_ITEM
+                    """
+                    params = (general_sales_days, cod_cli, cod_cli, client_sales_days) + tuple(chunk) + tuple(chunk)
+                    g_rows = sql_client.query(sql_batch_giro, params, max_rows=300)
+                    for gr in (g_rows or []):
+                        k = str(gr.get("isbn") or "").strip().replace("-", "").replace(" ", "")
+                        if k:
+                            gen_period_map[k] = int(float(gr.get("gen_qty") or 0))
+                            cli_365_map[k] = int(float(gr.get("cli_365") or 0))
+                            cli_period_map[k] = int(float(gr.get("cli_win") or 0))
+
+                    # Saldo consignado ativo por item na VW_ITENS_CONSIGNACAO
+                    sql_batch_consig = f"""
+                        SELECT
+                            RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, CAST(V.COD_ITEM AS VARCHAR))))) AS isbn,
+                            SUM(ISNULL(V.SALDO, 0)) AS saldo_consig
+                        FROM VW_ITENS_CONSIGNACAO V WITH (NOLOCK)
+                        INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = V.COD_ITEM
+                        WHERE V.COD_CLI = %s
+                          AND ISNULL(V.SALDO, 0) > 0
+                          AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}))
+                        GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, V.COD_ITEM
+                    """
+                    c_rows = sql_client.query(sql_batch_consig, (cod_cli,) + tuple(chunk) + tuple(chunk), max_rows=300)
+                    for cr in (c_rows or []):
+                        k = str(cr.get("isbn") or "").strip().replace("-", "").replace(" ", "")
+                        if k:
+                            consig_map[k] = int(float(cr.get("saldo_consig") or 0))
+        except Exception as e:
+            log.warning(f"[DBM Desk] Aviso ao enriquecer giro via Horus SQL em lote: {e}")
+
+    # 2. Complemento via HorusBISale local (quando SQL não retornou para algum ISBN)
     try:
-        # Giro Geral nos últimos general_sales_days
         gen_rows = db.query(
             HorusBISale.ean,
             func.sum(HorusBISale.qty_fulfilled).label("qty")
@@ -1594,9 +1757,10 @@ def _enrich_items_with_bi_metrics(
             HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
         ).group_by(HorusBISale.ean).all()
         for r in gen_rows:
-            gen_period_map[str(r.ean).strip()] = int(r.qty or 0)
+            k = str(r.ean).strip().replace("-", "").replace(" ", "")
+            if k not in gen_period_map:
+                gen_period_map[k] = int(r.qty or 0)
 
-        # Giro do Cliente (365d e período)
         if customer or cod_cli:
             cust_filter = (
                 or_(HorusBISale.customer_id == customer.id, HorusBISale.customer_horus_id == cod_cli)
@@ -1614,7 +1778,9 @@ def _enrich_items_with_bi_metrics(
                 HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
             ).group_by(HorusBISale.ean).all()
             for r in cli_365_rows:
-                cli_365_map[str(r.ean).strip()] = int(r.qty or 0)
+                k = str(r.ean).strip().replace("-", "").replace(" ", "")
+                if k not in cli_365_map:
+                    cli_365_map[k] = int(r.qty or 0)
 
             cli_win_rows = db.query(
                 HorusBISale.ean,
@@ -1627,12 +1793,14 @@ def _enrich_items_with_bi_metrics(
                 HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
             ).group_by(HorusBISale.ean).all()
             for r in cli_win_rows:
-                cli_period_map[str(r.ean).strip()] = int(r.qty or 0)
+                k = str(r.ean).strip().replace("-", "").replace(" ", "")
+                if k not in cli_period_map:
+                    cli_period_map[k] = int(r.qty or 0)
     except Exception as e:
         log.warning(f"[DBM Desk] Aviso ao enriquecer giro BI em lote: {e}")
 
     for it in items_list:
-        isbn = str(it.get("isbn") or "").strip()
+        isbn = str(it.get("isbn") or "").strip().replace("-", "").replace(" ", "")
         if isbn:
             if not it.get("clientSalesPeriod"):
                 it["clientSalesPeriod"] = cli_period_map.get(isbn, 0)
@@ -1640,6 +1808,8 @@ def _enrich_items_with_bi_metrics(
                 it["clientSales365d"] = cli_365_map.get(isbn, 0)
             if not it.get("generalSalesPeriod"):
                 it["generalSalesPeriod"] = gen_period_map.get(isbn, 0)
+            if not it.get("consignedBalance") and isbn in consig_map:
+                it["consignedBalance"] = consig_map[isbn]
 
     return items_list
 
@@ -1697,7 +1867,7 @@ async def get_proposals_desk_catalog_tabs(
     fundo_items: list[dict] = []
     seen_isbns: set[str] = set()
 
-    # ── 1. ABA NOVIDADES (-9 meses até +6 meses) ──────────────────────────────
+    # ── 1. ABA NOVIDADES (-9 meses até +6 meses, APENAS COM SALDO > 0) ────────
     if sql_client:
         launch_expr = _detect_horus_launch_col(sql_client)
         top_clause = f"TOP ({limit})" if legacy_pagination else ""
@@ -1719,6 +1889,7 @@ async def get_proposals_desk_catalog_tabs(
             LEFT JOIN ITENS_ESTPRECO_ATUAL PA WITH (NOLOCK) ON PA.COD_ITEM = I.COD_ITEM
             LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = I.COD_ITEM AND S.cod_filial = {cod_filial}
             WHERE ISNULL(I.STA_ATIVO, 'S') <> 'N'
+              AND ISNULL(S.saldo_disponivel, 0) > 0
               AND {launch_expr} >= DATEADD(month, -9, GETDATE())
               AND {launch_expr} <= DATEADD(month, 6, GETDATE())
             ORDER BY {launch_expr} DESC, I.COD_ITEM DESC
@@ -1727,6 +1898,9 @@ async def get_proposals_desk_catalog_tabs(
         try:
             rows_nov = sql_client.query(sql_nov, max_rows=limit)
             for r in (rows_nov or []):
+                est = int(float(r.get("estoque") or 0))
+                if est <= 0:
+                    continue
                 isbn = str(r.get("isbn") or r.get("cod_item") or "").strip()
                 if not isbn or isbn in seen_isbns:
                     continue
@@ -1745,7 +1919,7 @@ async def get_proposals_desk_catalog_tabs(
                     "requestedQty": 0,
                     "consignedBalance": 0,
                     "clientSalesPeriod": 0,
-                    "stockAvailable": max(0, int(float(r.get("estoque") or 0))),
+                    "stockAvailable": est,
                     "boxQty": max(1, int(r.get("qtd_caixa") or 12)),
                     "clientSales365d": 0,
                     "generalSalesPeriod": 0,
@@ -1757,7 +1931,7 @@ async def get_proposals_desk_catalog_tabs(
         except Exception as e:
             log.warning(f"[DBM Desk] Aviso ao buscar Novidades no Horus SQL: {e}")
 
-    # Complementa Novidades com base local prd_product (launch_date entre -9m e +6m, ou created_at se launch_date nulo)
+    # Complementa Novidades com base local prd_product (launch_date entre -9m e +6m, APENAS COM SALDO > 0)
     if len(novidades_items) < limit:
         rem = limit - len(novidades_items)
         q_local_nov = db.query(Product, Brand.name.label("brand_name"), Category.name.label("cat_name")).outerjoin(
@@ -1767,6 +1941,7 @@ async def get_proposals_desk_catalog_tabs(
         ).filter(
             Product.company_id == seller_id,
             Product.status == "ACTIVE",
+            Product.stock_quantity > 0,
             or_(
                 Product.launch_date.between(win_start, win_end),
                 (Product.launch_date.is_(None) & Product.created_at.between(win_start, win_end))
@@ -1777,6 +1952,9 @@ async def get_proposals_desk_catalog_tabs(
         ).limit(rem).all()
 
         for p, b_name, c_name in q_local_nov:
+            est_loc = int(p.stock_quantity or 0)
+            if est_loc <= 0:
+                continue
             isbn = str(p.ean_gtin or p.sku or p.id).strip()
             if not isbn or isbn in seen_isbns:
                 continue
@@ -1789,14 +1967,14 @@ async def get_proposals_desk_catalog_tabs(
                 "sku": str(p.sku or p.id),
                 "title": p.name,
                 "publisher": b_name or p.brand or "Editora",
-                "subject": c_name or "Catálogo",
+                "subject": p.subject or c_name or "Catálogo",
                 "coverPrice": float(p.promotional_price or p.base_price or 0.0),
                 "discountPct": default_disc,
                 "requestedQty": 0,
                 "consignedBalance": 0,
                 "clientSalesPeriod": 0,
-                "stockAvailable": max(0, int(p.stock_quantity or 0)),
-                "boxQty": 12,
+                "stockAvailable": est_loc,
+                "boxQty": max(1, int(p.units_per_box or 12)),
                 "clientSales365d": 0,
                 "generalSalesPeriod": 0,
                 "sourceTab": "NOVIDADES",
@@ -1805,137 +1983,120 @@ async def get_proposals_desk_catalog_tabs(
                 **meta,
             })
 
-    # ── 2. ABA REPOSIÇÃO (Histórico de Giro do Cliente + Curva A) ─────────────
-    try:
-        q_rep = db.query(
-            HorusBISale.ean,
-            HorusBISale.item_code,
-            HorusBISale.item_name,
-            HorusBISale.publisher,
-            HorusBISale.genre,
-            func.sum(HorusBISale.qty_fulfilled).label("sold_365"),
-            func.max(HorusBISale.gross_value).label("max_gross")
-        ).filter(
-            HorusBISale.company_id == seller_id,
-            HorusBISale.sale_date >= (now_dt - timedelta(days=365)),
-            HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
-        )
-        if cod_cli:
-            q_rep_cli = q_rep.filter(
-                or_(HorusBISale.customer_id == customer.id, HorusBISale.customer_horus_id == cod_cli)
-            ).group_by(
-                HorusBISale.ean, HorusBISale.item_code, HorusBISale.item_name, HorusBISale.publisher, HorusBISale.genre
-            ).order_by(func.sum(HorusBISale.qty_fulfilled).desc()).limit(limit).all()
-        else:
-            q_rep_cli = []
+    # ── 2. ABA FUNDO DE CATÁLOGO (Obras > 9m de lançamento com saldo > 0, sem repetir Novidades) ─
+    if sql_client:
+        launch_expr = _detect_horus_launch_col(sql_client)
+        top_clause = f"TOP ({limit * 2})" if legacy_pagination else ""
+        offset_clause = "" if legacy_pagination else f"OFFSET 0 ROWS FETCH NEXT {limit * 2} ROWS ONLY"
+        sql_fnd = f"""
+            SELECT {top_clause}
+                I.COD_ITEM AS cod_item,
+                RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')))) AS isbn,
+                RTRIM(LTRIM(ISNULL(I.NOM_ITEM, ''))) AS nome_item,
+                RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, 'Editora')))) AS editora,
+                RTRIM(LTRIM(ISNULL(G.NOM_GENERO, 'Geral'))) AS assunto,
+                ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
+                ISNULL(S.saldo_disponivel, 0) AS estoque,
+                ISNULL(I.QTD_ITENS_CAIXA, 12) AS qtd_caixa,
+                {launch_expr} AS data_lancamento
+            FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
+            LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
+            LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
+            LEFT JOIN ITENS_ESTPRECO_ATUAL PA WITH (NOLOCK) ON PA.COD_ITEM = I.COD_ITEM
+            LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = I.COD_ITEM AND S.cod_filial = {cod_filial}
+            WHERE ISNULL(I.STA_ATIVO, 'S') <> 'N'
+              AND ISNULL(S.saldo_disponivel, 0) > 0
+              AND ({launch_expr} IS NULL OR {launch_expr} < DATEADD(month, -9, GETDATE()))
+            ORDER BY ISNULL(S.saldo_disponivel, 0) DESC, I.COD_ITEM DESC
+            {offset_clause}
+        """
+        try:
+            rows_fnd = sql_client.query(sql_fnd, max_rows=limit * 2)
+            for r in (rows_fnd or []):
+                est = int(float(r.get("estoque") or 0))
+                if est <= 0:
+                    continue
+                isbn = str(r.get("isbn") or r.get("cod_item") or "").strip()
+                if not isbn or isbn in seen_isbns:
+                    continue
+                seen_isbns.add(isbn)
+                l_dt = _parse_any_datetime(r.get("data_lancamento"))
+                meta = _compute_launch_metadata(l_dt, now_dt) if l_dt else {}
+                fundo_items.append({
+                    "id": f"fnd-sql-{r.get('cod_item') or isbn}",
+                    "isbn": isbn,
+                    "sku": str(r.get("cod_item") or isbn),
+                    "title": str(r.get("nome_item") or f"Item #{isbn}"),
+                    "publisher": str(r.get("editora") or "Editora"),
+                    "subject": str(r.get("assunto") or "Geral"),
+                    "coverPrice": float(r.get("preco") or 0.0),
+                    "discountPct": default_disc,
+                    "requestedQty": 0,
+                    "consignedBalance": 0,
+                    "clientSalesPeriod": 0,
+                    "stockAvailable": est,
+                    "boxQty": max(1, int(r.get("qtd_caixa") or 12)),
+                    "clientSales365d": 0,
+                    "generalSalesPeriod": 0,
+                    "sourceTab": "FUNDO_CATALOGO",
+                    "addedOrigin": None,
+                    "manualStatus": None,
+                    **meta,
+                })
+                if len(fundo_items) >= limit:
+                    break
+        except Exception as e:
+            log.warning(f"[DBM Desk] Aviso ao buscar Fundo de Catálogo no Horus SQL: {e}")
 
-        rep_rows = list(q_rep_cli)
-        if len(rep_rows) < limit:
-            q_rep_gen = q_rep.group_by(
-                HorusBISale.ean, HorusBISale.item_code, HorusBISale.item_name, HorusBISale.publisher, HorusBISale.genre
-            ).order_by(func.sum(HorusBISale.qty_fulfilled).desc()).limit(limit).all()
-            rep_rows.extend(q_rep_gen)
-
-        # Cruza com prd_product local para estoque e preço de capa atualizados
-        rep_eans = [str(r.ean).strip() for r in rep_rows if r.ean]
-        local_prod_map = {}
-        if rep_eans:
-            l_prods = db.query(Product).filter(
+    if len(fundo_items) < limit:
+        try:
+            q_fundo = db.query(Product, Brand.name.label("brand_name"), Category.name.label("cat_name")).outerjoin(
+                Brand, Brand.id == Product.brand_id
+            ).outerjoin(
+                Category, Category.id == Product.category_id
+            ).filter(
                 Product.company_id == seller_id,
-                Product.ean_gtin.in_(rep_eans)
-            ).all()
-            for lp in l_prods:
-                local_prod_map[str(lp.ean_gtin).strip()] = lp
+                Product.status == "ACTIVE",
+                Product.stock_quantity > 0
+            ).order_by(Product.stock_quantity.desc(), Product.id.asc()).limit(limit * 2).all()
 
-        for r in rep_rows:
-            isbn = str(r.ean or "").strip()
-            if not isbn or isbn in seen_isbns:
-                continue
-            seen_isbns.add(isbn)
-            lp = local_prod_map.get(isbn)
-            price = float(lp.promotional_price or lp.base_price or 0.0) if lp else float(r.max_gross or 49.90)
-            stock = int(lp.stock_quantity or 0) if lp else 25
-            reposicao_items.append({
-                "id": f"rep-{isbn}",
-                "isbn": isbn,
-                "sku": str(r.item_code or (lp.sku if lp else isbn)),
-                "title": (lp.name if lp else r.item_name) or f"Livro {isbn}",
-                "publisher": r.publisher or (lp.brand if lp else "Editora"),
-                "subject": r.genre or "Reposição",
-                "coverPrice": round(price, 2),
-                "discountPct": default_disc,
-                "requestedQty": 0,
-                "consignedBalance": 0,
-                "clientSalesPeriod": 0,
-                "stockAvailable": max(0, stock),
-                "boxQty": 12,
-                "clientSales365d": int(r.sold_365 or 0),
-                "generalSalesPeriod": 0,
-                "sourceTab": "REPOSICAO",
-                "addedOrigin": None,
-                "manualStatus": None,
-            })
-            if len(reposicao_items) >= limit:
-                break
-    except Exception as e:
-        log.warning(f"[DBM Desk] Aviso ao montar aba Reposição: {e}")
+            for p, b_name, c_name in q_fundo:
+                est_loc = int(p.stock_quantity or 0)
+                if est_loc <= 0:
+                    continue
+                isbn = str(p.ean_gtin or p.sku or p.id).strip()
+                if not isbn or isbn in seen_isbns:
+                    continue
+                seen_isbns.add(isbn)
+                eff_dt = _parse_any_datetime(p.launch_date)
+                meta = _compute_launch_metadata(eff_dt, now_dt) if eff_dt else {}
+                fundo_items.append({
+                    "id": f"fnd-{p.id}",
+                    "isbn": isbn,
+                    "sku": str(p.sku or p.id),
+                    "title": p.name,
+                    "publisher": b_name or p.brand or "Editora",
+                    "subject": p.subject or c_name or "Fundo de Catálogo",
+                    "coverPrice": float(p.promotional_price or p.base_price or 0.0),
+                    "discountPct": default_disc,
+                    "requestedQty": 0,
+                    "consignedBalance": 0,
+                    "clientSalesPeriod": 0,
+                    "stockAvailable": est_loc,
+                    "boxQty": max(1, int(p.units_per_box or 12)),
+                    "clientSales365d": 0,
+                    "generalSalesPeriod": 0,
+                    "sourceTab": "FUNDO_CATALOGO",
+                    "addedOrigin": None,
+                    "manualStatus": None,
+                    **meta,
+                })
+                if len(fundo_items) >= limit:
+                    break
+        except Exception as e:
+            log.warning(f"[DBM Desk] Aviso ao montar aba Fundo de Catálogo local: {e}")
 
-    # ── 3. ABA FUNDO DE CATÁLOGO (Obras de catálogo / backlist com estoque) ───
-    try:
-        q_fundo = db.query(Product, Brand.name.label("brand_name"), Category.name.label("cat_name")).outerjoin(
-            Brand, Brand.id == Product.brand_id
-        ).outerjoin(
-            Category, Category.id == Product.category_id
-        ).filter(
-            Product.company_id == seller_id,
-            Product.status == "ACTIVE",
-            Product.stock_quantity > 0
-        ).order_by(Product.stock_quantity.desc(), Product.id.asc()).limit(limit * 2).all()
-
-        for p, b_name, c_name in q_fundo:
-            isbn = str(p.ean_gtin or p.sku or p.id).strip()
-            if not isbn or isbn in seen_isbns:
-                continue
-            seen_isbns.add(isbn)
-            eff_dt = _parse_any_datetime(p.launch_date)
-            meta = _compute_launch_metadata(eff_dt, now_dt) if eff_dt else {}
-            fundo_items.append({
-                "id": f"fnd-{p.id}",
-                "isbn": isbn,
-                "sku": str(p.sku or p.id),
-                "title": p.name,
-                "publisher": b_name or p.brand or "Editora",
-                "subject": c_name or "Fundo de Catálogo",
-                "coverPrice": float(p.promotional_price or p.base_price or 0.0),
-                "discountPct": default_disc,
-                "requestedQty": 0,
-                "consignedBalance": 0,
-                "clientSalesPeriod": 0,
-                "stockAvailable": max(0, int(p.stock_quantity or 0)),
-                "boxQty": 12,
-                "clientSales365d": 0,
-                "generalSalesPeriod": 0,
-                "sourceTab": "FUNDO_CATALOGO",
-                "addedOrigin": None,
-                "manualStatus": None,
-                **meta,
-            })
-            if len(fundo_items) >= limit:
-                break
-    except Exception as e:
-        log.warning(f"[DBM Desk] Aviso ao montar aba Fundo de Catálogo: {e}")
-
-    # Se Reposição ficou vazia (ex: sem vendas BI ainda), popula com produtos em estoque
-    if not reposicao_items and len(fundo_items) > 4:
-        half = len(fundo_items) // 2
-        for it in fundo_items[:half]:
-            it_copy = dict(it)
-            it_copy["id"] = f"rep-fallback-{it['isbn']}"
-            it_copy["sourceTab"] = "REPOSICAO"
-            reposicao_items.append(it_copy)
-        fundo_items = fundo_items[half:]
-
-    # Enriquecimento em lote de métricas BI (30d, 365d, 90d)
+    # Enriquecimento em lote de métricas BI/SQL (30d, 365d, 90d, consignado)
     all_cat_items = novidades_items + reposicao_items + fundo_items
     _enrich_items_with_bi_metrics(
         db=db,
@@ -1945,6 +2106,7 @@ async def get_proposals_desk_catalog_tabs(
         items_list=all_cat_items,
         client_sales_days=client_sales_days,
         general_sales_days=general_sales_days,
+        sql_client=sql_client,
     )
 
     return {
@@ -1960,10 +2122,531 @@ async def get_proposals_desk_catalog_tabs(
     }
 
 
+@router.get("/proposals-desk/replenishment-items")
+async def get_proposals_desk_replenishment_items(
+    customer_id: int = Query(..., description="ID do cliente selecionado"),
+    replenishment_sales_days: int = Query(90, ge=1, le=1095, description="Dias de histórico de vendas ao cliente para basear a reposição"),
+    client_sales_days: int = Query(30, ge=1, le=730),
+    general_sales_days: int = Query(90, ge=1, le=730),
+    exclude_isbns: Optional[str] = Query(None, description="Lista de ISBNs separados por vírgula já presentes em outras abas (ex: Pedido, Novidades)"),
+    company_id: Optional[int] = Query(None),
+    limit: int = Query(150, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Busca sob demanda para a aba REPOSIÇÃO:
+    1. Coleta os itens que possuem SALDO CONSIGNADO ativo com o cliente via API Horus (Busca_Contrato_Cliente_Analitico),
+       e caso o cliente não possua permissão B2B na API (B2B_PEDIDOS=0) ou a API retorne vazio, faz fallback automático
+       na View oficial do Horus SQL (VW_ITENS_CONSIGNACAO).
+    2. Coleta e cruza o histórico dos itens VENDIDOS / ACERTADOS para o cliente nos últimos X dias (replenishment_sales_days)
+       via Horus SQL (NF_ITENS / NF_MESTRE) e base BI (HorusBISale).
+    3. Filtra rigorosamente para retornar apenas itens com SALDO DE ESTOQUE DISPONÍVEL > 0 (stockAvailable > 0)
+       e que não estejam na lista de exclusão (exclude_isbns), evitando duplicidade entre abas.
+    """
+    from datetime import timedelta
+    from app.models.company import Company
+    from app.models.product import Product
+    from app.models.catalog_support import Brand, Category
+    from app.models.horus_bi_sale import HorusBISale
+    from app.integrators.horus_clients import HorusClients
+
+    seller_id = _resolve_seller_id(current_user, company_id)
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == seller_id
+    ).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
+    company = db.query(Company).filter(Company.id == seller_id).first()
+    legacy_pagination = getattr(settings, "horus_legacy_pagination", False) if settings else False
+    default_disc = float(customer.discount or 35.0)
+
+    excluded_set: set[str] = set()
+    if exclude_isbns:
+        for raw_c in exclude_isbns.split(","):
+            cl = raw_c.strip().replace("-", "").replace(" ", "")
+            if cl:
+                excluded_set.add(cl)
+
+    sql_client = None
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+    except Exception:
+        sql_client = None
+
+    cod_cli = _resolve_customer_horus_cod_cli(db, customer, sql_client)
+    cod_filial = int(sql_client.cod_filial) if (sql_client and str(sql_client.cod_filial).isdigit()) else 2
+    branch_cnpj = sql_client.get_branch_cnpj() if sql_client else None
+    effective_cnpj_destino = branch_cnpj or (_sanitize_doc(company.document or "") if company else "")
+    clean_cli_doc = _sanitize_doc(customer.document or "")
+
+    # Mapa de itens candidatos indexado por ISBN/código limpo
+    candidates_by_key: dict[str, dict] = {}
+    consigned_from_api_count = 0
+    consigned_from_sql_count = 0
+    sold_in_window_count = 0
+    sold_total_units_window = 0
+
+    api_diagnostic: dict = {
+        "endpoint": "Busca_Contrato_Cliente_Analitico",
+        "status": "NOT_CALLED",
+        "message": "",
+        "params": {},
+        "itemsReturned": 0,
+        "rawResponse": None,
+        "customerB2BInfo": None,
+    }
+    sql_diagnostic: dict = {
+        "codCli": cod_cli,
+        "codFilial": cod_filial,
+        "consignmentSource": "NONE",
+        "consignedSkusFound": 0,
+        "salesWindowDays": replenishment_sales_days,
+        "salesCfops": list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST),
+        "salesSkusFound": 0,
+        "salesTotalUnits": 0,
+    }
+
+    # ── PASSO 1A: Coletar Saldo Consignado no Cliente via API Horus (Busca_Contrato_Cliente_Analitico) ──
+    if settings and getattr(settings, "horus_enabled", False) and getattr(settings, "horus_url", None) and effective_cnpj_destino and clean_cli_doc:
+        try:
+            h_client = HorusClients(db, seller_id)
+            fin_res = await h_client.get_customer_financials(
+                cnpj_destino=effective_cnpj_destino,
+                cnpj_cliente=clean_cli_doc,
+            )
+            if fin_res:
+                api_diagnostic["customerB2BInfo"] = fin_res.get("raw")
+                if not cod_cli and fin_res.get("cod_cli"):
+                    cod_cli = int(fin_res["cod_cli"])
+                    sql_diagnostic["codCli"] = cod_cli
+                if float(fin_res.get("discount") or 0) > 0:
+                    default_disc = float(fin_res["discount"])
+
+            id_guid = (
+                customer.id_guid
+                or (fin_res.get("id_guid") if fin_res else "")
+                or getattr(settings, "horus_default_b2b_guid", "")
+                or ""
+            )
+            api_diagnostic["params"] = {
+                "CNPJ_DESTINO": effective_cnpj_destino,
+                "ID_DOC": clean_cli_doc,
+                "ID_GUID": id_guid,
+            }
+
+            if id_guid:
+                consig_details = await h_client.get_consignment_details(
+                    cnpj_destino=effective_cnpj_destino,
+                    cnpj_cliente=clean_cli_doc,
+                    id_guid=id_guid,
+                    limit=500
+                )
+                rows_api = consig_details if isinstance(consig_details, list) else ([consig_details] if isinstance(consig_details, dict) else [])
+                api_diagnostic["rawResponse"] = rows_api[:5] if rows_api else consig_details
+
+                if rows_api and isinstance(rows_api[0], dict) and (rows_api[0].get("Falha") or rows_api[0].get("FALHA") == "S"):
+                    err_msg = str(rows_api[0].get("Mensagem") or rows_api[0].get("MENSAGEM") or rows_api[0].get("Falha") or "Falha na API Horus")
+                    api_diagnostic["status"] = "API_REJECTED"
+                    api_diagnostic["message"] = err_msg
+                else:
+                    for row in rows_api:
+                        if not isinstance(row, dict) or row.get("Falha") or row.get("FALHA") == "S":
+                            continue
+                        raw_saldo = row.get("SALDO_ITENS")
+                        if raw_saldo is None:
+                            q_atend = float(str(row.get("QTD_ATENDIDA", 0) or 0).replace(",", "."))
+                            q_fat = float(str(row.get("QTD_FATURADA", 0) or 0).replace(",", "."))
+                            q_dev = float(str(row.get("QTD_DEVOLVIDA", row.get("QTD_DEV_FAT", 0)) or 0).replace(",", "."))
+                            saldo_consig = int(max(0.0, q_atend - q_fat - q_dev))
+                        else:
+                            saldo_consig = int(float(str(raw_saldo or 0).replace(",", ".")))
+
+                        if saldo_consig <= 0:
+                            continue
+
+                        isbn = str(
+                            row.get("BARRAS_ISBN")
+                            or row.get("COD_BARRA_ITEM")
+                            or row.get("COD_ISBN_ITEM")
+                            or row.get("COD_ITEM")
+                            or ""
+                        ).strip()
+                        clean_isbn = isbn.replace("-", "").replace(" ", "")
+                        if not clean_isbn or clean_isbn in excluded_set:
+                            continue
+
+                        cod_item_str = str(row.get("COD_ITEM") or clean_isbn).strip()
+                        vlr_capa = float(str(row.get("VLR_CAPA") or row.get("VLR_PRECO") or 0).replace(",", "."))
+                        per_desc = float(str(row.get("PER_DESCONTO") or row.get("DESCONTO") or default_disc).replace(",", "."))
+
+                        if clean_isbn in candidates_by_key:
+                            candidates_by_key[clean_isbn]["consignedBalance"] += saldo_consig
+                        else:
+                            consigned_from_api_count += 1
+                            candidates_by_key[clean_isbn] = {
+                                "isbn": clean_isbn,
+                                "sku": cod_item_str,
+                                "cod_item": int(cod_item_str) if cod_item_str.isdigit() else None,
+                                "title": str(row.get("NOM_ITEM") or row.get("DESC_ITEM") or f"Item #{clean_isbn}").strip(),
+                                "publisher": str(row.get("NOM_EDITORA") or "Editora").strip(),
+                                "subject": str(row.get("NOM_GENERO") or "Consignado").strip(),
+                                "coverPrice": round(vlr_capa, 2),
+                                "discountPct": round(per_desc, 2),
+                                "consignedBalance": saldo_consig,
+                                "soldInReplenishmentWindow": 0,
+                            }
+                    api_diagnostic["status"] = "OK"
+                    api_diagnostic["itemsReturned"] = consigned_from_api_count
+                    api_diagnostic["message"] = f"{consigned_from_api_count} SKUs consignados retornados via API Horus."
+            else:
+                api_diagnostic["status"] = "NO_GUID"
+                api_diagnostic["message"] = "Cliente não possui ID_GUID B2B cadastrado no Horus."
+            await h_client.close()
+        except Exception as e:
+            api_diagnostic["status"] = "ERROR"
+            api_diagnostic["message"] = str(e)
+            log.warning(f"[DBM Desk] Aviso ao consultar consignado analítico na API Horus p/ cliente {customer.id}: {e}")
+
+    # ── PASSO 1B: Fallback Automático de Consignação via Banco de Dados (VW_ITENS_CONSIGNACAO) ──
+    if consigned_from_api_count == 0 and sql_client and cod_cli:
+        top_clause = f"TOP ({limit * 2})" if legacy_pagination else ""
+        offset_clause = "" if legacy_pagination else f"OFFSET 0 ROWS FETCH NEXT {limit * 2} ROWS ONLY"
+        sql_consig = f"""
+            SELECT {top_clause}
+                V.COD_ITEM AS cod_item,
+                RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, CAST(V.COD_ITEM AS VARCHAR))))) AS isbn,
+                RTRIM(LTRIM(ISNULL(I.NOM_ITEM, ISNULL(V.NOME_ITEM, CONCAT('Item #', V.COD_ITEM))))) AS nome_item,
+                RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, 'Editora')))) AS editora,
+                RTRIM(LTRIM(ISNULL(G.NOM_GENERO, 'Geral'))) AS assunto,
+                SUM(ISNULL(V.SALDO, 0)) AS saldo_consig,
+                MAX(ISNULL(PA.VLR_CAPA, ISNULL(V.VLR_PRECO, 0.0))) AS preco_capa,
+                MAX(ISNULL(V.VLR_DESCONTO, %s)) AS per_desconto,
+                MAX(ISNULL(S.saldo_disponivel, 0)) AS estoque_atual,
+                MAX(ISNULL(I.QTD_ITENS_CAIXA, 12)) AS qtd_caixa
+            FROM VW_ITENS_CONSIGNACAO V WITH (NOLOCK)
+            LEFT JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = V.COD_ITEM
+            LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
+            LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
+            LEFT JOIN ITENS_ESTPRECO_ATUAL PA WITH (NOLOCK) ON PA.COD_ITEM = V.COD_ITEM
+            LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = V.COD_ITEM AND S.cod_filial = {cod_filial}
+            WHERE V.COD_CLI = %s
+              AND ISNULL(V.SALDO, 0) > 0
+            GROUP BY
+                V.COD_ITEM,
+                I.COD_BARRA_ITEM,
+                I.COD_ISBN_ITEM,
+                I.NOM_ITEM,
+                V.NOME_ITEM,
+                ED.NOM_FANTASIA,
+                ED.NOM_EDITORA,
+                G.NOM_GENERO
+            ORDER BY SUM(ISNULL(V.SALDO, 0)) DESC
+            {offset_clause}
+        """
+        try:
+            c_rows = sql_client.query(sql_consig, (default_disc, cod_cli), max_rows=limit * 2)
+            for r in (c_rows or []):
+                saldo_c = int(float(r.get("saldo_consig") or 0))
+                if saldo_c <= 0:
+                    continue
+                isbn = str(r.get("isbn") or r.get("cod_item") or "").strip().replace("-", "").replace(" ", "")
+                if not isbn or isbn in excluded_set:
+                    continue
+                cod_it = r.get("cod_item")
+                consigned_from_sql_count += 1
+                candidates_by_key[isbn] = {
+                    "isbn": isbn,
+                    "sku": str(cod_it or isbn),
+                    "cod_item": int(cod_it) if str(cod_it).isdigit() else None,
+                    "title": str(r.get("nome_item") or f"Item #{isbn}").strip(),
+                    "publisher": str(r.get("editora") or "Editora").strip(),
+                    "subject": str(r.get("assunto") or "Geral").strip(),
+                    "coverPrice": round(float(r.get("preco_capa") or 0.0), 2),
+                    "discountPct": round(float(r.get("per_desconto") or default_disc), 2),
+                    "consignedBalance": saldo_c,
+                    "soldInReplenishmentWindow": 0,
+                    "stockAvailable": int(float(r.get("estoque_atual") or 0)),
+                    "boxQty": max(1, int(r.get("qtd_caixa") or 12)),
+                }
+            sql_diagnostic["consignmentSource"] = "VW_ITENS_CONSIGNACAO"
+            sql_diagnostic["consignedSkusFound"] = consigned_from_sql_count
+        except Exception as e:
+            log.warning(f"[DBM Desk] Aviso ao buscar consignação via SQL VW_ITENS_CONSIGNACAO: {e}")
+
+    # ── PASSO 2: Histórico de Itens Vendidos / Acertados ao Cliente nos últimos X dias (SQL + BI) ──
+    now_dt = datetime.utcnow()
+    dt_rep_start = now_dt - timedelta(days=max(1, replenishment_sales_days))
+
+    if sql_client and cod_cli:
+        cfop_sales_in = ", ".join(f"'{c}'" for c in (list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST)))
+        clean_cfop_expr = "REPLACE(REPLACE(REPLACE(RTRIM(LTRIM(ISNULL(NFI.COD_NATUREZA, NF.COD_NATUREZA))), '.', ''), ',', ''), ' ', '')"
+        top_clause = f"TOP ({limit * 2})" if legacy_pagination else ""
+        offset_clause = "" if legacy_pagination else f"OFFSET 0 ROWS FETCH NEXT {limit * 2} ROWS ONLY"
+
+        sql_hist = f"""
+            SELECT {top_clause}
+                NFI.COD_ITEM AS cod_item,
+                RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, CAST(NFI.COD_ITEM AS VARCHAR))))) AS isbn,
+                RTRIM(LTRIM(ISNULL(I.NOM_ITEM, CONCAT('Item #', NFI.COD_ITEM)))) AS nome_item,
+                RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, 'Editora')))) AS editora,
+                RTRIM(LTRIM(ISNULL(G.NOM_GENERO, 'Geral'))) AS assunto,
+                SUM(ISNULL(NFI.QTD_ITENS, 0)) AS qtd_vendida_x,
+                MAX(ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, ISNULL(NFI.VLR_BRUTO_ITEM, 0.0)))) AS preco_capa,
+                MAX(ISNULL(S.saldo_disponivel, 0)) AS estoque_atual,
+                MAX(ISNULL(I.QTD_ITENS_CAIXA, 12)) AS qtd_caixa
+            FROM NF_ITENS NFI WITH (NOLOCK)
+            INNER JOIN NF_MESTRE NF WITH (NOLOCK)
+                ON NF.COD_NF = NFI.COD_NF
+                AND NF.COD_FILIAL = NFI.COD_FILIAL
+                AND NF.COD_EMPRESA = NFI.COD_EMPRESA
+            LEFT JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = NFI.COD_ITEM
+            LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
+            LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
+            LEFT JOIN ITENS_ESTPRECO_ATUAL PA WITH (NOLOCK) ON PA.COD_ITEM = NFI.COD_ITEM
+            LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = NFI.COD_ITEM AND S.cod_filial = {cod_filial}
+            WHERE NF.COD_CLI = %s
+              AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
+              AND NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE())
+              AND {clean_cfop_expr} IN ({cfop_sales_in})
+            GROUP BY
+                NFI.COD_ITEM,
+                I.COD_BARRA_ITEM,
+                I.COD_ISBN_ITEM,
+                I.NOM_ITEM,
+                ED.NOM_FANTASIA,
+                ED.NOM_EDITORA,
+                G.NOM_GENERO
+            ORDER BY SUM(ISNULL(NFI.QTD_ITENS, 0)) DESC
+            {offset_clause}
+        """
+        try:
+            hist_rows = sql_client.query(sql_hist, (cod_cli, replenishment_sales_days), max_rows=limit * 2)
+            for r in (hist_rows or []):
+                isbn = str(r.get("isbn") or r.get("cod_item") or "").strip().replace("-", "").replace(" ", "")
+                if not isbn or isbn in excluded_set:
+                    continue
+                qty_v = int(float(r.get("qtd_vendida_x") or 0))
+                if qty_v > 0:
+                    sold_in_window_count += 1
+                    sold_total_units_window += qty_v
+                if isbn in candidates_by_key:
+                    candidates_by_key[isbn]["soldInReplenishmentWindow"] = max(
+                        candidates_by_key[isbn].get("soldInReplenishmentWindow", 0), qty_v
+                    )
+                    if not candidates_by_key[isbn].get("stockAvailable"):
+                        candidates_by_key[isbn]["stockAvailable"] = int(float(r.get("estoque_atual") or 0))
+                    if not candidates_by_key[isbn].get("coverPrice") and float(r.get("preco_capa") or 0) > 0:
+                        candidates_by_key[isbn]["coverPrice"] = round(float(r.get("preco_capa") or 0), 2)
+                    if r.get("assunto"):
+                        candidates_by_key[isbn]["subject"] = str(r.get("assunto")).strip()
+                else:
+                    cod_it = r.get("cod_item")
+                    candidates_by_key[isbn] = {
+                        "isbn": isbn,
+                        "sku": str(cod_it or isbn),
+                        "cod_item": int(cod_it) if str(cod_it).isdigit() else None,
+                        "title": str(r.get("nome_item") or f"Item #{isbn}").strip(),
+                        "publisher": str(r.get("editora") or "Editora").strip(),
+                        "subject": str(r.get("assunto") or "Geral").strip(),
+                        "coverPrice": round(float(r.get("preco_capa") or 0.0), 2),
+                        "discountPct": default_disc,
+                        "consignedBalance": 0,
+                        "soldInReplenishmentWindow": qty_v,
+                        "stockAvailable": int(float(r.get("estoque_atual") or 0)),
+                        "boxQty": max(1, int(r.get("qtd_caixa") or 12)),
+                    }
+            sql_diagnostic["salesSkusFound"] = sold_in_window_count
+            sql_diagnostic["salesTotalUnits"] = sold_total_units_window
+        except Exception as e:
+            log.warning(f"[DBM Desk] Aviso ao buscar vendas de reposição no Horus SQL: {e}")
+
+    # Complementa também com HorusBISale local para os últimos X dias
+    try:
+        q_bi_rep = db.query(
+            HorusBISale.ean,
+            HorusBISale.item_code,
+            HorusBISale.item_name,
+            HorusBISale.publisher,
+            HorusBISale.genre,
+            func.sum(HorusBISale.qty_fulfilled).label("sold_x"),
+            func.max(HorusBISale.gross_value).label("max_gross")
+        ).filter(
+            HorusBISale.company_id == seller_id,
+            HorusBISale.sale_date >= dt_rep_start,
+            HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
+        )
+        if cod_cli:
+            q_bi_rep = q_bi_rep.filter(
+                or_(HorusBISale.customer_id == customer.id, HorusBISale.customer_horus_id == cod_cli)
+            )
+        else:
+            q_bi_rep = q_bi_rep.filter(HorusBISale.customer_id == customer.id)
+
+        bi_rows = q_bi_rep.group_by(
+            HorusBISale.ean, HorusBISale.item_code, HorusBISale.item_name, HorusBISale.publisher, HorusBISale.genre
+        ).order_by(func.sum(HorusBISale.qty_fulfilled).desc()).limit(limit).all()
+
+        for r in bi_rows:
+            isbn = str(r.ean or "").strip().replace("-", "").replace(" ", "")
+            if not isbn or isbn in excluded_set:
+                continue
+            qty_x = int(r.sold_x or 0)
+            if isbn in candidates_by_key:
+                if qty_x > candidates_by_key[isbn].get("soldInReplenishmentWindow", 0):
+                    candidates_by_key[isbn]["soldInReplenishmentWindow"] = qty_x
+            else:
+                sold_in_window_count += 1
+                candidates_by_key[isbn] = {
+                    "isbn": isbn,
+                    "sku": str(r.item_code or isbn),
+                    "cod_item": int(r.item_code) if str(r.item_code).isdigit() else None,
+                    "title": str(r.item_name or f"Livro {isbn}").strip(),
+                    "publisher": str(r.publisher or "Editora").strip(),
+                    "subject": str(r.genre or "Reposição").strip(),
+                    "coverPrice": round(float(r.max_gross or 0.0), 2),
+                    "discountPct": default_disc,
+                    "consignedBalance": 0,
+                    "soldInReplenishmentWindow": qty_x,
+                }
+    except Exception as e:
+        log.warning(f"[DBM Desk] Aviso ao complementar reposição via HorusBISale: {e}")
+
+    # ── PASSO 3: Enriquecer Estoque / Preço / Assunto e Filtrar Estoque > 0 ────
+    all_keys = list(candidates_by_key.keys())
+    if all_keys and sql_client:
+        try:
+            for c_start in range(0, len(all_keys), 150):
+                chunk = all_keys[c_start:c_start + 150]
+                ph = ", ".join(["%s"] * len(chunk))
+                sql_enrich = f"""
+                    SELECT
+                        I.COD_ITEM AS cod_item,
+                        RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')))) AS isbn,
+                        RTRIM(LTRIM(ISNULL(I.NOM_ITEM, ''))) AS nome_item,
+                        RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, 'Editora')))) AS editora,
+                        RTRIM(LTRIM(ISNULL(G.NOM_GENERO, 'Geral'))) AS assunto,
+                        ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
+                        ISNULL(S.saldo_disponivel, 0) AS estoque,
+                        ISNULL(I.QTD_ITENS_CAIXA, 12) AS qtd_caixa
+                    FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
+                    LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
+                    LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
+                    LEFT JOIN ITENS_ESTPRECO_ATUAL PA WITH (NOLOCK) ON PA.COD_ITEM = I.COD_ITEM
+                    LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = I.COD_ITEM AND S.cod_filial = {cod_filial}
+                    WHERE I.COD_BARRA_ITEM IN ({ph})
+                       OR I.COD_ISBN_ITEM IN ({ph})
+                """
+                e_rows = sql_client.query(sql_enrich, tuple(chunk + chunk), max_rows=300)
+                for er in (e_rows or []):
+                    k = str(er.get("isbn") or "").strip().replace("-", "").replace(" ", "")
+                    if k in candidates_by_key:
+                        c_obj = candidates_by_key[k]
+                        c_obj["stockAvailable"] = int(float(er.get("estoque") or 0))
+                        if float(er.get("preco") or 0) > 0:
+                            c_obj["coverPrice"] = round(float(er.get("preco") or 0), 2)
+                        if er.get("nome_item"):
+                            c_obj["title"] = str(er.get("nome_item")).strip()
+                        if er.get("editora"):
+                            c_obj["publisher"] = str(er.get("editora")).strip()
+                        if er.get("assunto"):
+                            c_obj["subject"] = str(er.get("assunto")).strip()
+                        c_obj["boxQty"] = max(1, int(er.get("qtd_caixa") or 12))
+        except Exception as e:
+            log.warning(f"[DBM Desk] Aviso ao enriquecer estoque SQL da reposição: {e}")
+
+    # Complementa estoque/preço com base local prd_product quando necessário
+    if all_keys:
+        try:
+            l_prods = db.query(Product, Brand.name.label("brand_name"), Category.name.label("cat_name")).outerjoin(
+                Brand, Brand.id == Product.brand_id
+            ).outerjoin(
+                Category, Category.id == Product.category_id
+            ).filter(
+                Product.company_id == seller_id,
+                Product.ean_gtin.in_(all_keys)
+            ).all()
+            for lp, b_name, c_name in l_prods:
+                k = str(lp.ean_gtin or "").strip().replace("-", "").replace(" ", "")
+                if k in candidates_by_key:
+                    c_obj = candidates_by_key[k]
+                    if "stockAvailable" not in c_obj:
+                        c_obj["stockAvailable"] = int(lp.stock_quantity or 0)
+                    if not c_obj.get("coverPrice"):
+                        c_obj["coverPrice"] = round(float(lp.promotional_price or lp.base_price or 0.0), 2)
+                    if not c_obj.get("subject") or c_obj["subject"] in ("Consignado", "Reposição"):
+                        c_obj["subject"] = lp.subject or c_name or "Geral"
+                    if not c_obj.get("publisher") or c_obj["publisher"] == "Editora":
+                        c_obj["publisher"] = b_name or lp.brand or "Editora"
+                    c_obj["boxQty"] = max(1, int(lp.units_per_box or 12))
+        except Exception as e:
+            log.warning(f"[DBM Desk] Aviso ao cruzar prd_product na reposição: {e}")
+
+    # Filtra rigorosamente saldo de estoque > 0 (Regra 6) e ordena por Consignado DESC, Vendidos nos últimos X dias DESC
+    final_items: list[dict] = []
+    for k, c_obj in candidates_by_key.items():
+        stock_val = int(c_obj.get("stockAvailable") or 0)
+        if stock_val <= 0:
+            continue
+        sold_x = int(c_obj.get("soldInReplenishmentWindow") or 0)
+        final_items.append({
+            "id": f"rep-{k}",
+            "isbn": k,
+            "sku": str(c_obj.get("sku") or k),
+            "title": c_obj.get("title") or f"Livro {k}",
+            "publisher": c_obj.get("publisher") or "Editora",
+            "subject": c_obj.get("subject") or "Geral",
+            "coverPrice": float(c_obj.get("coverPrice") or 0.0),
+            "discountPct": float(c_obj.get("discountPct") or default_disc),
+            "requestedQty": 0,
+            "consignedBalance": int(c_obj.get("consignedBalance") or 0),
+            "clientSalesPeriod": sold_x,
+            "stockAvailable": stock_val,
+            "boxQty": int(c_obj.get("boxQty") or 12),
+            "clientSales365d": sold_x,
+            "generalSalesPeriod": 0,
+            "sourceTab": "REPOSICAO",
+            "addedOrigin": None,
+            "manualStatus": None,
+        })
+
+    final_items.sort(
+        key=lambda x: (x.get("consignedBalance", 0), x.get("clientSalesPeriod", 0), x.get("stockAvailable", 0)),
+        reverse=True
+    )
+    final_items = final_items[:limit]
+
+    _enrich_items_with_bi_metrics(
+        db=db,
+        seller_id=seller_id,
+        customer=customer,
+        cod_cli=cod_cli,
+        items_list=final_items,
+        client_sales_days=client_sales_days,
+        general_sales_days=general_sales_days,
+        sql_client=sql_client,
+    )
+
+    return {
+        "replenishmentSalesDays": replenishment_sales_days,
+        "consignedItemsCount": sum(1 for x in final_items if x.get("consignedBalance", 0) > 0),
+        "consignedFromApiCount": consigned_from_api_count,
+        "consignedFromSqlCount": consigned_from_sql_count,
+        "soldInWindowCount": sum(1 for x in final_items if x.get("clientSalesPeriod", 0) > 0),
+        "apiDiagnostic": api_diagnostic,
+        "sqlDiagnostic": sql_diagnostic,
+        "items": final_items,
+    }
+
+
 @router.get("/proposals-desk/last-operation-items")
 async def get_proposals_desk_last_operation_items(
     customer_id: int = Query(..., description="ID do cliente selecionado"),
     operation_type: str = Query("ACERTO", description="ACERTO (CFOP 5113/5114/6113/6114) ou VENDA"),
+    exclude_isbns: Optional[str] = Query(None, description="ISBNs separados por vírgula já presentes em outras abas"),
     company_id: Optional[int] = Query(None),
     client_sales_days: int = Query(30, ge=1, le=730),
     general_sales_days: int = Query(90, ge=1, le=730),
@@ -1976,7 +2659,7 @@ async def get_proposals_desk_last_operation_items(
     - Higieniza o CFOP (COD_NATUREZA) olhando apenas números:
       * ACERTO: 5113, 5114, 6113, 6114
       * VENDA: 5101, 5102, 6101, 6102, 5403, 6403, 5405, 6405
-    - Possui fallback automático para HorusBISale caso o SQL Server esteja indisponível.
+    - Filtra apenas itens com saldo de estoque > 0 e sem duplicar itens já em outras abas.
     """
     from app.models.product import Product
     from app.models.horus_bi_sale import HorusBISale
@@ -1992,6 +2675,13 @@ async def get_proposals_desk_last_operation_items(
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
     legacy_pagination = getattr(settings, "horus_legacy_pagination", False) if settings else False
     default_disc = float(customer.discount or 35.0)
+
+    excluded_set: set[str] = set()
+    if exclude_isbns:
+        for raw_c in exclude_isbns.split(","):
+            cl = raw_c.strip().replace("-", "").replace(" ", "")
+            if cl:
+                excluded_set.add(cl)
 
     op_mode = (operation_type or "ACERTO").strip().upper()
     target_cfops = CFOP_ACERTO_LIST if op_mode == "ACERTO" else CFOP_VENDA_LIST
@@ -2093,10 +2783,18 @@ async def get_proposals_desk_last_operation_items(
                 tot_u = 0
                 tot_v = 0.0
                 for idx, r in enumerate(raw_nf_items or []):
+                    est_atual = max(0, int(float(r.get("estoque_atual") or 0)))
+                    if est_atual <= 0:
+                        continue
+                    isbn = str(r.get("isbn") or r.get("cod_item") or "").strip()
+                    clean_isbn = isbn.replace("-", "").replace(" ", "")
+                    if clean_isbn in excluded_set:
+                        continue
+                    excluded_set.add(clean_isbn)
+
                     qty_nf = max(1, int(float(r.get("qtd_nf") or 1)))
                     gross = float(r.get("vlr_bruto") or 0.0)
                     net = float(r.get("vlr_liquido") or 0.0)
-                    # Se VLR_BRUTO_ITEM na NF for unitário vs total, normaliza
                     unit_gross = gross if gross > 0 else 49.90
                     if net > 0 and gross > 0 and net <= gross:
                         disc_pct = round(max(0.0, min(90.0, (1.0 - (net / gross)) * 100.0)), 2)
@@ -2106,21 +2804,20 @@ async def get_proposals_desk_last_operation_items(
                     tot_u += qty_nf
                     tot_v += round(unit_net * qty_nf, 2)
 
-                    isbn = str(r.get("isbn") or r.get("cod_item") or "").strip()
                     items_out.append({
                         "id": f"ult-sql-{target_cod_nf}-{idx}",
                         "isbn": isbn,
                         "sku": str(r.get("cod_item") or isbn),
                         "title": str(r.get("nome_item") or f"Item #{isbn}"),
                         "publisher": str(r.get("editora") or "Editora"),
-                        "subject": f"{r.get('assunto') or 'Geral'} • NF #{nf_head.get('nro_nf')} (CFOP {r.get('cfop_item')})",
+                        "subject": str(r.get("assunto") or "Geral"),
                         "coverPrice": round(unit_gross, 2),
                         "discountPct": disc_pct,
                         "requestedQty": 0,
                         "lastOperationQty": qty_nf,
                         "consignedBalance": 0,
                         "clientSalesPeriod": 0,
-                        "stockAvailable": max(0, int(float(r.get("estoque_atual") or 0))),
+                        "stockAvailable": est_atual,
                         "boxQty": max(1, int(r.get("qtd_caixa") or 12)),
                         "clientSales365d": qty_nf,
                         "generalSalesPeriod": 0,
@@ -2176,7 +2873,15 @@ async def get_proposals_desk_last_operation_items(
                 tot_v = 0.0
                 for idx, s in enumerate(nf_sales):
                     isbn = str(s.ean or "").strip()
+                    clean_isbn = isbn.replace("-", "").replace(" ", "")
+                    if not clean_isbn or clean_isbn in excluded_set:
+                        continue
                     lp = l_map.get(isbn)
+                    est_loc = max(0, int(lp.stock_quantity or 0)) if lp else 15
+                    if est_loc <= 0:
+                        continue
+                    excluded_set.add(clean_isbn)
+
                     qty_nf = max(1, int(s.qty_fulfilled or s.qty_ordered or 1))
                     gross = float(lp.promotional_price or lp.base_price or 0.0) if lp else float(s.gross_value or 49.90)
                     disc = float(s.discount_percent or default_disc)
@@ -2190,14 +2895,14 @@ async def get_proposals_desk_last_operation_items(
                         "sku": str(s.item_code or (lp.sku if lp else isbn)),
                         "title": (lp.name if lp else s.item_name) or f"Livro {isbn}",
                         "publisher": s.publisher or (lp.brand if lp else "Editora"),
-                        "subject": f"{s.genre or 'Catálogo'} • CFOP {s.cfop}",
+                        "subject": s.genre or "Catálogo",
                         "coverPrice": round(gross, 2),
                         "discountPct": round(disc, 2),
                         "requestedQty": 0,
                         "lastOperationQty": qty_nf,
                         "consignedBalance": 0,
                         "clientSalesPeriod": 0,
-                        "stockAvailable": max(0, int(lp.stock_quantity or 0)) if lp else 15,
+                        "stockAvailable": est_loc,
                         "boxQty": 12,
                         "clientSales365d": qty_nf,
                         "generalSalesPeriod": 0,
@@ -2228,6 +2933,7 @@ async def get_proposals_desk_last_operation_items(
         items_list=items_out,
         client_sales_days=client_sales_days,
         general_sales_days=general_sales_days,
+        sql_client=sql_client,
     )
 
     return {
@@ -2677,5 +3383,337 @@ async def import_proposals_desk_order(
         "source": source_label,
         "items": items_out,
     }
+
+
+# ── DBM Orçamentos & Propostas (Persistência Isolada DBM) ─────────────────────
+
+class DbmProposalSavePayload(BaseModel):
+    id: Optional[int] = None
+    company_id: Optional[int] = None
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    customer_corporate_name: Optional[str] = None
+    customer_document: Optional[str] = None
+    customer_horus_cod_cli: Optional[int] = None
+    status_id: str = "st-2"
+    status_name: str = "Aguardando Análise Comercial"
+    status_phase: str = "EM_ANALISE"
+    total_titles: int = 0
+    total_requested_qty: int = 0
+    total_approved_qty: int = 0
+    total_cover_value: float = 0.0
+    total_net_value: float = 0.0
+    average_discount: float = 0.0
+    global_discount: float = 0.0
+    min_order_value: float = 0.0
+    horus_order_number: Optional[str] = None
+    notes: Optional[str] = None
+    items: List[dict] = []
+
+
+class DbmProposalStatusPatchPayload(BaseModel):
+    status_id: str
+    status_name: str
+    status_phase: str
+    horus_order_number: Optional[str] = None
+
+
+@router.get("/proposals")
+def list_dbm_proposals(
+    company_id: Optional[int] = Query(None),
+    customer_id: Optional[int] = Query(None),
+    status_phase: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Lista orçamentos e propostas do módulo DBM com visão limpa, rápida e isolada por seller.
+    """
+    from app.models.dbm_proposal import DbmProposal
+
+    seller_id = _resolve_seller_id(current_user, company_id)
+    q = db.query(DbmProposal).filter(DbmProposal.company_id == seller_id)
+
+    if customer_id:
+        q = q.filter(DbmProposal.customer_id == customer_id)
+
+    if status_phase and status_phase.strip() and status_phase.strip().upper() != "ALL":
+        phases = [p.strip().upper() for p in status_phase.split(",") if p.strip()]
+        if phases:
+            q = q.filter(DbmProposal.status_phase.in_(phases))
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        clean_num = re.sub(r"\D", "", search.strip())
+        filters = [
+            DbmProposal.customer_name.ilike(term),
+            DbmProposal.customer_corporate_name.ilike(term),
+            DbmProposal.customer_document.ilike(term),
+            DbmProposal.status_name.ilike(term),
+            DbmProposal.horus_order_number.ilike(term),
+        ]
+        if clean_num and clean_num.isdigit():
+            num_val = int(clean_num)
+            filters.append(DbmProposal.local_id == num_val)
+            filters.append(DbmProposal.id == num_val)
+            filters.append(DbmProposal.customer_horus_cod_cli == num_val)
+        q = q.filter(or_(*filters))
+
+    total = q.count()
+    rows = q.order_by(DbmProposal.updated_at.desc(), DbmProposal.id.desc()).offset(skip).limit(limit).all()
+
+    items_out = []
+    for p in rows:
+        items_out.append({
+            "id": p.id,
+            "local_id": p.local_id,
+            "customer_id": p.customer_id,
+            "customer_name": p.customer_name,
+            "customer_corporate_name": p.customer_corporate_name or p.customer_name,
+            "customer_document": p.customer_document or "",
+            "customer_horus_cod_cli": p.customer_horus_cod_cli,
+            "status_id": p.status_id,
+            "status_name": p.status_name,
+            "status_phase": p.status_phase,
+            "total_titles": p.total_titles or 0,
+            "total_requested_qty": p.total_requested_qty or 0,
+            "total_approved_qty": p.total_approved_qty or 0,
+            "total_cover_value": round(float(p.total_cover_value or 0.0), 2),
+            "total_net_value": round(float(p.total_net_value or 0.0), 2),
+            "average_discount": round(float(p.average_discount or 0.0), 2),
+            "global_discount": round(float(p.global_discount or 0.0), 2),
+            "min_order_value": round(float(p.min_order_value or 0.0), 2),
+            "horus_order_number": p.horus_order_number,
+            "notes": p.notes,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        })
+
+    return {
+        "items": items_out,
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get("/proposals/{proposal_id}")
+def get_dbm_proposal(
+    proposal_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Retorna os dados completos de um orçamento/proposta do DBM (incluindo os itens da grade).
+    """
+    from app.models.dbm_proposal import DbmProposal
+
+    seller_id = _resolve_seller_id(current_user, company_id)
+    prop = db.query(DbmProposal).filter(
+        DbmProposal.id == proposal_id,
+        DbmProposal.company_id == seller_id
+    ).first()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
+
+    return {
+        "id": prop.id,
+        "local_id": prop.local_id,
+        "customer_id": prop.customer_id,
+        "customer_name": prop.customer_name,
+        "customer_corporate_name": prop.customer_corporate_name or prop.customer_name,
+        "customer_document": prop.customer_document or "",
+        "customer_horus_cod_cli": prop.customer_horus_cod_cli,
+        "status_id": prop.status_id,
+        "status_name": prop.status_name,
+        "status_phase": prop.status_phase,
+        "total_titles": prop.total_titles or 0,
+        "total_requested_qty": prop.total_requested_qty or 0,
+        "total_approved_qty": prop.total_approved_qty or 0,
+        "total_cover_value": round(float(prop.total_cover_value or 0.0), 2),
+        "total_net_value": round(float(prop.total_net_value or 0.0), 2),
+        "average_discount": round(float(prop.average_discount or 0.0), 2),
+        "global_discount": round(float(prop.global_discount or 0.0), 2),
+        "min_order_value": round(float(prop.min_order_value or 0.0), 2),
+        "horus_order_number": prop.horus_order_number,
+        "notes": prop.notes,
+        "items": prop.items_json or [],
+        "created_at": prop.created_at.isoformat() if prop.created_at else None,
+        "updated_at": prop.updated_at.isoformat() if prop.updated_at else None,
+    }
+
+
+@router.post("/proposals")
+def save_dbm_proposal(
+    payload: DbmProposalSavePayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Salva ou atualiza um orçamento/proposta da Mesa DBM.
+    """
+    from app.models.dbm_proposal import DbmProposal
+
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+
+    cust = None
+    if payload.customer_id:
+        cust = db.query(Customer).filter(
+            Customer.id == payload.customer_id,
+            Customer.company_id == seller_id
+        ).first()
+
+    cust_name = (payload.customer_name or (cust.name if cust else "") or "Cliente").strip()
+    cust_corp = (payload.customer_corporate_name or (cust.corporate_name if cust else "") or cust_name).strip()
+    cust_doc = (payload.customer_document or (cust.document if cust else "") or "").strip()
+    cust_cod_cli = payload.customer_horus_cod_cli or (cust.horus_cod_cli if cust else None)
+    if isinstance(cust_cod_cli, str):
+        cust_cod_cli = int(cust_cod_cli) if cust_cod_cli.isdigit() else None
+
+    existing = None
+    if payload.id and payload.id > 0:
+        existing = db.query(DbmProposal).filter(
+            DbmProposal.id == payload.id,
+            DbmProposal.company_id == seller_id
+        ).first()
+
+    user_id = getattr(current_user, "id", None) if not isinstance(current_user, dict) else current_user.get("id")
+
+    if existing:
+        existing.customer_id = cust.id if cust else payload.customer_id
+        existing.customer_name = cust_name
+        existing.customer_corporate_name = cust_corp
+        existing.customer_document = cust_doc
+        existing.customer_horus_cod_cli = cust_cod_cli
+        existing.status_id = payload.status_id
+        existing.status_name = payload.status_name
+        existing.status_phase = payload.status_phase
+        existing.total_titles = int(payload.total_titles or 0)
+        existing.total_requested_qty = int(payload.total_requested_qty or 0)
+        existing.total_approved_qty = int(payload.total_approved_qty or 0)
+        existing.total_cover_value = round(float(payload.total_cover_value or 0.0), 2)
+        existing.total_net_value = round(float(payload.total_net_value or 0.0), 2)
+        existing.average_discount = round(float(payload.average_discount or 0.0), 2)
+        existing.global_discount = round(float(payload.global_discount or 0.0), 2)
+        existing.min_order_value = round(float(payload.min_order_value or 0.0), 2)
+        if payload.horus_order_number is not None:
+            existing.horus_order_number = payload.horus_order_number
+        if payload.notes is not None:
+            existing.notes = payload.notes
+        existing.items_json = payload.items or []
+        existing.updated_at = datetime.now(timezone.utc)
+        target = existing
+        action = "updated"
+    else:
+        max_local = db.query(func.max(DbmProposal.local_id)).filter(
+            DbmProposal.company_id == seller_id
+        ).scalar() or 0
+        next_local_id = int(max_local) + 1
+
+        new_prop = DbmProposal(
+            company_id=seller_id,
+            local_id=next_local_id,
+            customer_id=cust.id if cust else payload.customer_id,
+            customer_name=cust_name,
+            customer_corporate_name=cust_corp,
+            customer_document=cust_doc,
+            customer_horus_cod_cli=cust_cod_cli,
+            status_id=payload.status_id,
+            status_name=payload.status_name,
+            status_phase=payload.status_phase,
+            total_titles=int(payload.total_titles or 0),
+            total_requested_qty=int(payload.total_requested_qty or 0),
+            total_approved_qty=int(payload.total_approved_qty or 0),
+            total_cover_value=round(float(payload.total_cover_value or 0.0), 2),
+            total_net_value=round(float(payload.total_net_value or 0.0), 2),
+            average_discount=round(float(payload.average_discount or 0.0), 2),
+            global_discount=round(float(payload.global_discount or 0.0), 2),
+            min_order_value=round(float(payload.min_order_value or 0.0), 2),
+            horus_order_number=payload.horus_order_number,
+            notes=payload.notes,
+            items_json=payload.items or [],
+            created_by_user_id=user_id,
+        )
+        db.add(new_prop)
+        db.flush()
+        target = new_prop
+        action = "created"
+
+    db.commit()
+    db.refresh(target)
+
+    return {
+        "success": True,
+        "action": action,
+        "proposal": {
+            "id": target.id,
+            "local_id": target.local_id,
+            "customer_id": target.customer_id,
+            "customer_name": target.customer_name,
+            "status_id": target.status_id,
+            "status_name": target.status_name,
+            "status_phase": target.status_phase,
+            "total_titles": target.total_titles,
+            "total_approved_qty": target.total_approved_qty,
+            "total_net_value": target.total_net_value,
+            "created_at": target.created_at.isoformat() if target.created_at else None,
+            "updated_at": target.updated_at.isoformat() if target.updated_at else None,
+        }
+    }
+
+
+@router.patch("/proposals/{proposal_id}/status")
+def update_dbm_proposal_status(
+    proposal_id: int,
+    payload: DbmProposalStatusPatchPayload,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.models.dbm_proposal import DbmProposal
+
+    seller_id = _resolve_seller_id(current_user, company_id)
+    prop = db.query(DbmProposal).filter(
+        DbmProposal.id == proposal_id,
+        DbmProposal.company_id == seller_id
+    ).first()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
+
+    prop.status_id = payload.status_id
+    prop.status_name = payload.status_name
+    prop.status_phase = payload.status_phase
+    if payload.horus_order_number is not None:
+        prop.horus_order_number = payload.horus_order_number
+    prop.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"success": True, "id": prop.id, "status_name": prop.status_name, "status_phase": prop.status_phase}
+
+
+@router.delete("/proposals/{proposal_id}")
+def delete_dbm_proposal(
+    proposal_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.models.dbm_proposal import DbmProposal
+
+    seller_id = _resolve_seller_id(current_user, company_id)
+    prop = db.query(DbmProposal).filter(
+        DbmProposal.id == proposal_id,
+        DbmProposal.company_id == seller_id
+    ).first()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
+
+    db.delete(prop)
+    db.commit()
+    return {"success": True, "deleted_id": proposal_id}
+
 
 

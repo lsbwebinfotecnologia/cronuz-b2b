@@ -28,9 +28,11 @@ import {
   Check,
   AlertTriangle,
   Truck,
-  Users
+  Users,
+  ShoppingCart
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 interface DbmCompanyItem {
   id: number;
@@ -44,6 +46,7 @@ interface DbmCompanyItem {
   notes_message?: string;
   customer_account?: string;
   royalties_data?: string;
+  min_order_total?: number;
   is_cliente: boolean;
   is_fornecedor: boolean;
   horus_cod_cli?: number | null;
@@ -94,6 +97,7 @@ export default function DbmCompaniesSearchPage() {
     notes_message: '',
     customer_account: '',
     royalties_data: '',
+    min_order_total: 0,
     is_cliente: true,
     is_fornecedor: false,
     horus_cod_cli: null,
@@ -216,6 +220,7 @@ export default function DbmCompaniesSearchPage() {
       notes_message: company.notes_message || '',
       customer_account: company.customer_account || '',
       royalties_data: company.royalties_data || '',
+      min_order_total: Number(company.min_order_total ?? 0),
       is_cliente: company.is_cliente ?? true,
       is_fornecedor: company.is_fornecedor ?? false,
       horus_cod_cli: company.horus_cod_cli ?? null,
@@ -224,6 +229,12 @@ export default function DbmCompaniesSearchPage() {
     setHorusCheckMsg(null);
     setSaveErrorMsg(null);
     setMainTab('form');
+  };
+
+  // Direcionar para novo orçamento na Mesa DBM com o cliente selecionado
+  const handleNewProposalForCompany = (targetCustomerId: number) => {
+    if (!targetCustomerId || targetCustomerId <= 0) return;
+    router.push(`/proposals/desk?customer_id=${targetCustomerId}`);
   };
 
   // Iniciar novo cadastro de empresa
@@ -356,6 +367,7 @@ export default function DbmCompaniesSearchPage() {
         notes_message: formData.notes_message?.trim() || null,
         customer_account: formData.customer_account?.trim() || null,
         royalties_data: formData.royalties_data?.trim() || null,
+        min_order_total: Number(formData.min_order_total ?? 0),
         is_cliente: formData.is_cliente,
         is_fornecedor: formData.is_fornecedor,
         horus_cod_cli: formData.horus_cod_cli ? Number(formData.horus_cod_cli) : null,
@@ -390,6 +402,7 @@ export default function DbmCompaniesSearchPage() {
           notes_message: saved.notes_message || '',
           customer_account: saved.customer_account || '',
           royalties_data: saved.royalties_data || '',
+          min_order_total: Number(saved.min_order_total ?? 0),
           is_cliente: saved.is_cliente ?? true,
           is_fornecedor: saved.is_fornecedor ?? false,
           horus_cod_cli: saved.horus_cod_cli ?? null,
@@ -661,7 +674,27 @@ export default function DbmCompaniesSearchPage() {
                   Folha de Dados
                 </span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = selectedIndex >= 0 ? companies[selectedIndex] : companies[0];
+                    if (target?.id) {
+                      handleNewProposalForCompany(target.id);
+                    } else {
+                      router.push('/proposals/desk');
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2 text-xs font-bold text-amber-800 shadow-sm hover:bg-amber-100 hover:border-amber-400 transition-colors dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                  title={
+                    selectedIndex >= 0 && companies[selectedIndex]
+                      ? `Criar novo orçamento para ${companies[selectedIndex].name}`
+                      : 'Criar novo orçamento com a empresa selecionada'
+                  }
+                >
+                  <ShoppingCart className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                  Novo Orçamento
+                </button>
                 <button
                   type="button"
                   onClick={handleOpenImportModal}
@@ -740,6 +773,7 @@ export default function DbmCompaniesSearchPage() {
                     <th className="py-2.5 px-3">Fantasia (apelido)</th>
                     <th className="py-2.5 px-3">Razão Social</th>
                     <th className="py-2.5 px-3 w-36">Cidade / UF</th>
+                    <th className="py-2.5 px-3 w-32 text-right">Mín. Faturamento</th>
                     <th className="py-2.5 px-3 w-36 text-center">Cód. Horus</th>
                     <th className="py-2.5 px-3 w-24 text-center">Ações</th>
                   </tr>
@@ -747,14 +781,14 @@ export default function DbmCompaniesSearchPage() {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-mono text-[11px]">
                   {loading ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-400">
+                      <td colSpan={8} className="py-12 text-center text-slate-400">
                         <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2 text-indigo-500" />
                         Carregando empresas da base Cronuz...
                       </td>
                     </tr>
                   ) : companies.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-400">
+                      <td colSpan={8} className="py-12 text-center text-slate-400">
                         <Building2 className="h-8 w-8 mx-auto mb-2 opacity-30" />
                         Nenhuma empresa localizada com os filtros selecionados.
                       </td>
@@ -789,6 +823,11 @@ export default function DbmCompaniesSearchPage() {
                           </td>
                           <td className="py-2 px-3 font-sans text-slate-600 dark:text-slate-300">
                             {c.city ? `${c.city} - ${c.state || ''}` : c.state || '—'}
+                          </td>
+                          <td className="py-2 px-3 text-right font-mono font-bold text-slate-700 dark:text-slate-300">
+                            {Number(c.min_order_total || 0) > 0
+                              ? Number(c.min_order_total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                              : <span className="text-slate-400 font-normal">R$ 0,00</span>}
                           </td>
                           <td className="py-2 px-3 text-center">
                             <div className="flex items-center justify-center gap-1 flex-wrap">
@@ -902,6 +941,16 @@ export default function DbmCompaniesSearchPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                {formData.id > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleNewProposalForCompany(formData.id)}
+                    className="px-3.5 py-1.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 text-xs font-bold hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300 flex items-center gap-1.5 shadow-sm transition-colors"
+                  >
+                    <ShoppingCart className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                    Novo Orçamento
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleNewCompany}
@@ -1089,9 +1138,9 @@ export default function DbmCompaniesSearchPage() {
                 </div>
               </div>
 
-              {/* Linha 2: Cidade, UF, Grupo, Segmento, Custummer Accou: */}
+              {/* Linha 2: Cidade, UF, Grupo, Segmento, Custummer Accou e Valor Mínimo de Faturamento */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end">
-                <div className="lg:col-span-3">
+                <div className="lg:col-span-2">
                   <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
                     Cidade:
                   </label>
@@ -1117,13 +1166,13 @@ export default function DbmCompaniesSearchPage() {
                   </select>
                 </div>
 
-                <div className="lg:col-span-3">
+                <div className="lg:col-span-2">
                   <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
                     Grupo:
                   </label>
                   <input
                     type="text"
-                    placeholder="Ex: Grupo Leitura, Livrarias..."
+                    placeholder="Ex: Grupo Leitura..."
                     value={formData.group_name || ''}
                     onChange={(e) => setFormData({ ...formData, group_name: e.target.value })}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
@@ -1148,16 +1197,29 @@ export default function DbmCompaniesSearchPage() {
                   </select>
                 </div>
 
-                <div className="lg:col-span-3">
+                <div className="lg:col-span-2">
                   <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
                     Custummer Accou:
                   </label>
                   <input
                     type="text"
-                    placeholder="Código da conta do cliente"
+                    placeholder="Código da conta"
                     value={formData.customer_account || ''}
                     onChange={(e) => setFormData({ ...formData, customer_account: e.target.value })}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  />
+                </div>
+
+                <div className="lg:col-span-3">
+                  <label className="block text-[11px] font-bold text-indigo-700 dark:text-indigo-300 mb-1">
+                    Valor Mínimo de Faturamento:
+                  </label>
+                  <CurrencyInput
+                    prefixStr="R$ "
+                    value={formData.min_order_total ?? 0}
+                    onValueChange={(val) => setFormData({ ...formData, min_order_total: val || 0 })}
+                    placeholder="R$ 0,00"
+                    className="w-full rounded-xl border border-indigo-200 bg-indigo-50/30 px-3 py-2 font-mono font-bold text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-indigo-800/70 dark:bg-slate-800 dark:text-white"
                   />
                 </div>
               </div>

@@ -219,6 +219,9 @@ git push origin --delete feature/nome-da-funcionalidade
 > 2. **Padrão Visual & Operacional Mandatório: UI Moderna e Limpa + Experiência Nativa de Planilha Excel**:
 >    - **Estética Moderna, Limpa e Suave (Sem Clones Datados dos Anos 90)**:
 >      - As telas do DBM não devem copiar cores pesadas ou bordas chanfradas antigas do Microsoft Access anos 90. Devem utilizar um design **SaaS moderno, limpo e confortável para uso prolongado** (tons suaves `slate-50`/`white`, acentos discretos em `indigo`/`slate`, tipografia nítida e organização modular em cartões/seções claras).
+>    - **Proibição de Redundâncias Operacionais e Repetição de Botões**:
+>      - **NUNCA duplique botões de mesma função na mesma tela/rotina** (ex.: colocar `+ Novo Orçamento` na barra de topo e repetir outro botão `+ Novo` no cabeçalho do card de filtros ou dentro do estado vazio da tabela, ou repetir botões de ação em todas as linhas quando já existe a ação principal no topo).
+>      - Cada ação primária (como `Novo Orçamento`, `Nova Empresa`, `Novo Produto`) deve existir em **um único ponto claro no topo da tela**, mantendo a interface enxuta, intuitiva e livre de poluição visual.
 >    - **Experiência 100% Excel / Planilha de Alta Produtividade**:
 >      - **Navegação Fluida por Teclado**: Uso intensivo de setas (`↑`, `↓`, `←`, `→`), `Home`, `End`, `Enter` (para avançar campo ou abrir ficha), `Tab`, `Duplo Clique`, `F2` (atalho de salvamento rápido) e `Esc` (retorno instantâneo à planilha).
 >      - **Grades de Alta Densidade (`Spreadsheet View`)**: Colunas alinhadas com fontes monoespaçadas para ISBNs, códigos Horus, saldos e preços, edição inline rápida na grade ou em sub-planilhas (como a planilha de **Tiragens & Custos**), filtros instantâneos e barra inferior de navegação rápida de registros (`|< < Registro X de N > >|`).

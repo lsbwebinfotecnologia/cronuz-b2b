@@ -47,6 +47,7 @@ class Customer(Base):
     notes_message = Column(Text, nullable=True)
     customer_account = Column(String(150), nullable=True)
     royalties_data = Column(Text, nullable=True)
+    min_order_total = Column(Float, default=0.0, nullable=False, server_default="0")
     is_cliente = Column(Boolean, default=True, nullable=False, server_default="true")
     is_fornecedor = Column(Boolean, default=False, nullable=False, server_default="false")
     horus_cod_cli = Column(Integer, nullable=True, index=True)

@@ -93,7 +93,7 @@ class HorusClients(HorusClient):
 
     async def get_customer_financials(self, cnpj_destino: str, cnpj_cliente: str) -> Dict[str, Any]:
         """
-        Specialized fetch to grab credit limit and debt balance via Busca_ClienteB2B
+        Specialized fetch to grab credit limit, debt balance, consignment remessa and B2B flags via Busca_ClienteB2B
         """
         params = {
             "CNPJ_DESTINO": cnpj_destino,
@@ -106,34 +106,61 @@ class HorusClients(HorusClient):
         
         result = await self.get("Busca_ClienteB2B", params=params)
         
+        def _parse_br_float(val: Any) -> float:
+            if val is None or val == "":
+                return 0.0
+            if isinstance(val, (int, float)):
+                return float(val)
+            s = str(val).strip()
+            if "," in s and "." in s:
+                s = s.replace(".", "").replace(",", ".")
+            elif "," in s:
+                s = s.replace(",", ".")
+            try:
+                return float(s)
+            except (ValueError, TypeError):
+                return 0.0
+
         if result and isinstance(result, list) and len(result) > 0:
             item = result[0]
-            if not item.get("Falha") and not item.get("FALHA"):
-                # Field names are based on standard Horus B2B API documentation
-                # Usually returned as VLR_LIMITE, LIMITE_CREDITO, LIMITE_DISPONIVEL, VLR_DEBITO, etc.
-                # Assuming standard fields: LIMITE_CREDITO and SALDO_DEVEDOR or VLR_DEBITO
-                try:
-                    limit_raw = float(item.get("LIMITE_CREDITO", item.get("VLR_LIMITE", 0)))
-                except (ValueError, TypeError):
-                    limit_raw = 0.0
-                    
-                try:
-                    debt_raw = float(item.get("SALDO_DEVEDOR", item.get("VLR_DEBITO", item.get("TOT_DEBITO", 0))))
-                except (ValueError, TypeError):
-                    debt_raw = 0.0
-                    
+            if isinstance(item, dict) and not item.get("Falha") and not item.get("FALHA"):
+                limit_raw = _parse_br_float(
+                    item.get("LIMITE") or item.get("LIMITE_CREDITO") or item.get("VLR_LIMITE") or 0
+                )
+                debt_raw = _parse_br_float(
+                    item.get("TOTAL_DEBITOS") or item.get("SALDO_DEVEDOR") or item.get("VLR_DEBITO") or item.get("TOT_DEBITO") or 0
+                )
+                remessa_raw = _parse_br_float(item.get("REMESSA") or 0)
+                disc_raw = _parse_br_float(item.get("VLR_DESC_CLI") or 0)
+                cod_cli_val = item.get("COD_CLI")
                 return {
                     "credit_limit": limit_raw,
                     "debt_balance": debt_raw,
                     "available_limit": max(0.0, limit_raw - debt_raw),
-                    "status": item.get("SITUACAO", "ATIVO")
+                    "remessa_balance": remessa_raw,
+                    "discount": disc_raw,
+                    "cod_cli": int(cod_cli_val) if str(cod_cli_val or "").isdigit() else None,
+                    "id_guid": str(item.get("ID_GUID") or "").strip(),
+                    "b2b_aceita_ped_consig": str(item.get("B2B_ACEITA_PED_CONSIG") or "").strip(),
+                    "b2b_aceita_ped_venda": str(item.get("B2B_ACEITA_PED_VENDA") or "").strip(),
+                    "data_ultimo_acerto": item.get("DATA_ULTIMO_ACERTO"),
+                    "status": item.get("SITUACAO", "ATIVO"),
+                    "raw": item,
                 }
                 
         return {
             "credit_limit": 0.0,
             "debt_balance": 0.0,
             "available_limit": 0.0,
-            "status": "DESCONHECIDO"
+            "remessa_balance": 0.0,
+            "discount": 0.0,
+            "cod_cli": None,
+            "id_guid": "",
+            "b2b_aceita_ped_consig": "",
+            "b2b_aceita_ped_venda": "",
+            "data_ultimo_acerto": None,
+            "status": "DESCONHECIDO",
+            "raw": result,
         }
 
     async def search_products(self, query: str = "", limit: int = 20) -> Any:
