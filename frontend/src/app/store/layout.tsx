@@ -27,6 +27,7 @@ async function getStoreConfig(companyId: number) {
       const data = await res.json();
       return { 
         coverImageBaseUrl: data.cover_image_base_url || null,
+        coverImageSecondaryBaseUrl: data.cover_image_secondary_base_url || null,
         usesHorus: data.uses_horus || false,
         b2bShowStockQuantity: data.b2b_show_stock_quantity !== undefined ? data.b2b_show_stock_quantity : true,
         logo: data.logo || null,
@@ -36,7 +37,7 @@ async function getStoreConfig(companyId: number) {
   } catch (error) {
     console.error("Failed to fetch store settings:", error);
   }
-  return { coverImageBaseUrl: null, usesHorus: false, b2bShowStockQuantity: true, logo: null, name: null };
+  return { coverImageBaseUrl: null, coverImageSecondaryBaseUrl: null, usesHorus: false, b2bShowStockQuantity: true, logo: null, name: null };
 }
 
 export default async function StoreLayout({ children }: { children: React.ReactNode }) {
@@ -58,7 +59,7 @@ export default async function StoreLayout({ children }: { children: React.ReactN
   const config = await getStoreConfig(companyId);
 
   return (
-    <StoreProvider coverImageBaseUrl={config.coverImageBaseUrl} companyId={companyId} usesHorus={config.usesHorus} b2bShowStockQuantity={config.b2bShowStockQuantity} logo={config.logo} name={config.name}>
+    <StoreProvider coverImageBaseUrl={config.coverImageBaseUrl} coverImageSecondaryBaseUrl={config.coverImageSecondaryBaseUrl} companyId={companyId} usesHorus={config.usesHorus} b2bShowStockQuantity={config.b2bShowStockQuantity} logo={config.logo} name={config.name}>
       <CartProvider>
         <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-[#0a0f1c] dark:text-white flex flex-col font-sans transition-colors duration-200">
           {/* Faixa de alerta crítico — acima do header, sem fechar (pin_to_top=true) */}

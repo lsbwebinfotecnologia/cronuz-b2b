@@ -3640,11 +3640,27 @@ def get_public_b2c_storefront_info(
         f"obrigações legais, em conformidade com a Lei Geral de Proteção de Dados (Lei nº 13.709/2018 - LGPD)."
     )
 
+    from app.payments.catalog import provider_config_status
     from app.payments.registry import default_channel_modes, routes_map
     all_routes = routes_map(db, company.id)
-    b2c_routes = all_routes.get("B2C_STOREFRONT") or {}
+    b2c_routes = dict(all_routes.get("B2C_STOREFRONT") or {})
     ch_modes = default_channel_modes(settings, all_routes)
     b2c_ch_mode = ch_modes.get("B2C_STOREFRONT") or {"mode": "PER_METHOD"}
+
+    vindi_cfg_mode = (
+        str((settings.b2c_showcases_config or {}).get("vindi_config", {}).get("integration_mode") or "TRANSPARENT").upper()
+        if settings and isinstance(settings.b2c_showcases_config, dict)
+        and isinstance(settings.b2c_showcases_config.get("vindi_config"), dict)
+        else "TRANSPARENT"
+    )
+    is_payment_link_mode = b2c_ch_mode.get("mode") == "PAYMENT_LINK" or vindi_cfg_mode == "PAYMENT_LINK"
+    effective_gateway_active = (
+        str(b2c_ch_mode.get("link_provider") or "VINDI").upper()
+        if is_payment_link_mode
+        else (getattr(settings, "payment_gateway_active", "EFI") if settings else "EFI")
+    )
+    if is_payment_link_mode:
+        b2c_routes["LINK"] = effective_gateway_active
 
     payload = {
         "company_id": company.id,
@@ -3655,26 +3671,18 @@ def get_public_b2c_storefront_info(
         "seo_title": company.seo_title or company.name,
         "seo_description": company.seo_description or f"Loja Oficial {company.name}",
         "cover_image_base_url": settings.cover_image_base_url if settings else None,
+        "cover_image_secondary_base_url": settings.cover_image_secondary_base_url if settings else None,
         "uses_horus": bool(settings.horus_enabled) if settings else False,
         "b2c_checkout_mode": getattr(settings, "b2c_checkout_mode", "NATIVE_GATEWAY") if settings else "NATIVE_GATEWAY",
-        "b2c_channel_mode": b2c_ch_mode.get("mode", "PER_METHOD"),
+        "b2c_channel_mode": "PAYMENT_LINK" if is_payment_link_mode else b2c_ch_mode.get("mode", "PER_METHOD"),
         "b2c_method_providers": b2c_routes,
         "tray_enabled": bool(getattr(settings, "tray_enabled", False)) if settings else False,
         "tray_store_url": getattr(settings, "tray_store_url", None) if settings else None,
         "b2c_default_freight_value": float(getattr(settings, "b2c_default_freight_value", 0) or 0) if settings else 0.0,
         "b2c_free_shipping_min_value": float(getattr(settings, "b2c_free_shipping_min_value", 0) or 0) if settings else 0.0,
         "b2c_lgpd_terms_text": (getattr(settings, "b2c_lgpd_terms_text", None) if settings else None) or default_lgpd,
-        "payment_gateway_active": getattr(settings, "payment_gateway_active", "EFI") if settings else "EFI",
-        "vindi_integration_mode": (
-            "PAYMENT_LINK"
-            if b2c_ch_mode.get("mode") == "PAYMENT_LINK"
-            else (
-                str((settings.b2c_showcases_config or {}).get("vindi_config", {}).get("integration_mode") or "TRANSPARENT").upper()
-                if settings and isinstance(settings.b2c_showcases_config, dict)
-                and isinstance(settings.b2c_showcases_config.get("vindi_config"), dict)
-                else "TRANSPARENT"
-            )
-        ),
+        "payment_gateway_active": effective_gateway_active,
+        "vindi_integration_mode": "PAYMENT_LINK" if is_payment_link_mode else vindi_cfg_mode,
         "vindi_express_cpf_only": bool(b2c_ch_mode.get("express_cpf_only", True)),
         "vindi_sandbox": (
             bool((settings.b2c_showcases_config or {}).get("vindi_config", {}).get("sandbox", True))
@@ -3691,8 +3699,14 @@ def get_public_b2c_storefront_info(
         "payment_gateway_ready": bool(
             settings
             and (
-                (getattr(settings, "payment_gateway_active", "EFI") == "VINDI" and len((settings.vindi_api_key or "").strip()) >= 8)
-                or getattr(settings, "payment_gateway_active", "EFI") != "VINDI"
+                (
+                    effective_gateway_active == "VINDI"
+                    and (
+                        len((settings.vindi_api_key or "").strip()) >= 8
+                        or bool(provider_config_status(db, company.id, "VINDI", settings).get("configured"))
+                    )
+                )
+                or effective_gateway_active != "VINDI"
             )
         ),
         "appearance": appearance,
@@ -5431,7 +5445,14 @@ async def process_b2c_checkout(
     fallback_gateway = (getattr(settings, "payment_gateway_active", "EFI") or "EFI").upper() if settings else "EFI"
     req_payment_method = (data.payment_method or "PIX").strip().upper()
 
-    if b2c_ch_mode.get("mode") == "PAYMENT_LINK" or req_payment_method == "PAYMENT_LINK":
+    vindi_cfg_checkout_mode = (
+        str((settings.b2c_showcases_config or {}).get("vindi_config", {}).get("integration_mode") or "").upper()
+        if settings and isinstance(settings.b2c_showcases_config, dict)
+        and isinstance(settings.b2c_showcases_config.get("vindi_config"), dict)
+        else ""
+    )
+
+    if b2c_ch_mode.get("mode") == "PAYMENT_LINK" or vindi_cfg_checkout_mode == "PAYMENT_LINK" or req_payment_method == "PAYMENT_LINK":
         req_payment_method = "PAYMENT_LINK"
         active_gateway = str(b2c_ch_mode.get("link_provider") or b2c_routes.get("LINK") or "VINDI").upper()
     elif req_payment_method == "CREDIT_CARD":

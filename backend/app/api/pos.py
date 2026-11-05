@@ -547,11 +547,12 @@ async def realtime_search_horus(
         else:
             search_option = "NOME"
 
-    # URL base de capas
+    # URL base de capas (primária e secundária)
     settings = db.query(CompanySettings).filter(
         CompanySettings.company_id == company_id
     ).first()
     cover_base_url = settings.cover_image_base_url if settings else None
+    cover_secondary_base_url = settings.cover_image_secondary_base_url if settings else None
 
     try:
         client = HorusProductSearch(db, company_id)
@@ -667,9 +668,16 @@ async def realtime_search_horus(
         stock_val = stocks[idx] if idx < len(stocks) else 0.0
 
         cover_url = None
-        if cover_base_url and cod_barra:
-            base = cover_base_url.rstrip("/")
-            cover_url = f"{base}/{cod_barra}.jpg"
+        cover_secondary_url = None
+        if cod_barra:
+            if cover_base_url:
+                base = cover_base_url.rstrip("/")
+                cover_url = f"{base}/{cod_barra}.jpg"
+            if cover_secondary_base_url:
+                sec_base = cover_secondary_base_url.rstrip("/")
+                cover_secondary_url = f"{sec_base}/{cod_barra}.jpg"
+            if not cover_url and cover_secondary_url:
+                cover_url = cover_secondary_url
 
         formatted_items.append({
             "barcode": cod_barra,
@@ -680,6 +688,7 @@ async def realtime_search_horus(
             "stock": stock_val,
             "horus_item_code": str(cod_item) if cod_item else None,
             "cover_url": cover_url,
+            "cover_secondary_url": cover_secondary_url,
             "source": "HORUS_REALTIME",
         })
 

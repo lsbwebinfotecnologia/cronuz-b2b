@@ -4,6 +4,7 @@ import React, { createContext, useContext } from 'react';
 
 interface StoreContextType {
   coverImageBaseUrl: string | null;
+  coverImageSecondaryBaseUrl: string | null;
   companyId: number;
   usesHorus: boolean;
   b2bShowStockQuantity: boolean;
@@ -13,6 +14,7 @@ interface StoreContextType {
 
 const StoreContext = createContext<StoreContextType>({
   coverImageBaseUrl: null,
+  coverImageSecondaryBaseUrl: null,
   companyId: 1,
   usesHorus: false,
   b2bShowStockQuantity: true,
@@ -25,6 +27,7 @@ export const useStoreConfig = () => useContext(StoreContext);
 export function StoreProvider({ 
   children, 
   coverImageBaseUrl,
+  coverImageSecondaryBaseUrl = null,
   companyId,
   usesHorus,
   b2bShowStockQuantity,
@@ -33,6 +36,7 @@ export function StoreProvider({
 }: { 
   children: React.ReactNode, 
   coverImageBaseUrl: string | null,
+  coverImageSecondaryBaseUrl?: string | null,
   companyId: number,
   usesHorus: boolean,
   b2bShowStockQuantity: boolean,
@@ -40,7 +44,7 @@ export function StoreProvider({
   name: string | null
 }) {
   return (
-    <StoreContext.Provider value={{ coverImageBaseUrl, companyId, usesHorus, b2bShowStockQuantity, logo, name }}>
+    <StoreContext.Provider value={{ coverImageBaseUrl, coverImageSecondaryBaseUrl, companyId, usesHorus, b2bShowStockQuantity, logo, name }}>
       {children}
     </StoreContext.Provider>
   );

@@ -1592,7 +1592,13 @@ export default function PDVPage() {
                               alt={item.title}
                               className="w-10 h-14 object-cover rounded-md border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100"
                               onError={(e) => {
-                                (e.currentTarget as HTMLElement).style.display = 'none';
+                                const img = e.currentTarget as HTMLImageElement;
+                                const secUrl = (item as any).cover_secondary_url;
+                                if (secUrl && img.src !== secUrl) {
+                                  img.src = secUrl;
+                                } else {
+                                  img.style.display = 'none';
+                                }
                               }}
                             />
                           )}

@@ -120,11 +120,12 @@ async def search_product(
     if not current_user.company_id:
         raise HTTPException(status_code=400, detail="Usuário sem empresa vinculada.")
 
-    # Lê URL base de capas configurada pelo seller
+    # Lê URL base de capas configurada pelo seller (primária e secundária)
     settings = db.query(CompanySettings).filter(
         CompanySettings.company_id == current_user.company_id
     ).first()
     cover_base_url: Optional[str] = settings.cover_image_base_url if settings else None
+    cover_secondary_base_url: Optional[str] = settings.cover_image_secondary_base_url if settings else None
 
     try:
         client = HorusProductSearch(db, current_user.company_id)
@@ -161,7 +162,10 @@ async def search_product(
         for item in raw:
             if isinstance(item, dict):
                 cod_barra = item.get("COD_BARRA_ITEM") or item.get("BARRAS_ISBN")
-                item["COVER_URL"] = _build_cover_url(cover_base_url, cod_barra)
+                primary_cover = _build_cover_url(cover_base_url, cod_barra)
+                secondary_cover = _build_cover_url(cover_secondary_base_url, cod_barra)
+                item["COVER_URL"] = primary_cover or secondary_cover
+                item["COVER_SECONDARY_URL"] = secondary_cover
             items.append(item)
 
         total_found = len(items)
@@ -194,7 +198,10 @@ async def search_product(
                 detail=raw.get("Mensagem", "Nenhum produto localizado no Horus."),
             )
         cod_barra = raw.get("COD_BARRA_ITEM") or raw.get("BARRAS_ISBN")
-        raw["COVER_URL"] = _build_cover_url(cover_base_url, cod_barra)
+        primary_cover = _build_cover_url(cover_base_url, cod_barra)
+        secondary_cover = _build_cover_url(cover_secondary_base_url, cod_barra)
+        raw["COVER_URL"] = primary_cover or secondary_cover
+        raw["COVER_SECONDARY_URL"] = secondary_cover
 
         matched_cod_item = raw.get("COD_ITEM")
         matched_isbn = cod_barra

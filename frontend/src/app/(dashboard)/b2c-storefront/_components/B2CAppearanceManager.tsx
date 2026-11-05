@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { ProductImage } from '@/components/store/ProductImage';
 import {
   Globe,
   Sparkles,
@@ -1594,15 +1595,14 @@ export default function B2CAppearanceManager({
                             >
                               <div className="flex items-center gap-2.5 min-w-0">
                                 <div className="w-10 h-12 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center overflow-hidden shrink-0">
-                                  {item.cover_url ? (
-                                    <img
-                                      src={getImageUrl(item.cover_url)}
-                                      alt={item.name}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  ) : (
-                                    <BookOpen className="w-4 h-4 text-slate-400" />
-                                  )}
+                                  <ProductImage
+                                    eanGtin={item.ean_gtin || item.sku}
+                                    alt={item.name}
+                                    coverUrl={item.cover_url}
+                                    companyIdProp={companyId}
+                                    className="w-full h-full object-cover"
+                                    iconClassName="w-4 h-4 text-slate-400"
+                                  />
                                 </div>
                                 <div className="min-w-0">
                                   <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
@@ -1698,15 +1698,14 @@ export default function B2CAppearanceManager({
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
                           <div className="w-10 h-14 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center overflow-hidden shrink-0">
-                            {prod.cover_url ? (
-                              <img
-                                src={getImageUrl(prod.cover_url)}
-                                alt={prod.name}
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <BookOpen className="w-4 h-4 text-slate-400" />
-                            )}
+                            <ProductImage
+                              eanGtin={prod.ean_gtin || prod.sku}
+                              alt={prod.name}
+                              coverUrl={prod.cover_url}
+                              companyIdProp={companyId}
+                              className="w-full h-full object-cover"
+                              iconClassName="w-4 h-4 text-slate-400"
+                            />
                           </div>
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
@@ -2356,15 +2355,14 @@ export default function B2CAppearanceManager({
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
                           <div className="w-10 h-14 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center overflow-hidden shrink-0">
-                            {prod.cover_url ? (
-                              <img
-                                src={getImageUrl(prod.cover_url)}
-                                alt={prod.name}
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <BookOpen className="w-4 h-4 text-slate-400" />
-                            )}
+                            <ProductImage
+                              eanGtin={prod.ean_gtin || prod.sku}
+                              alt={prod.name}
+                              coverUrl={prod.cover_url}
+                              companyIdProp={companyId}
+                              className="w-full h-full object-cover"
+                              iconClassName="w-4 h-4 text-slate-400"
+                            />
                           </div>
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">

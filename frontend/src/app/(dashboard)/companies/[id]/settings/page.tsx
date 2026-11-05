@@ -25,6 +25,7 @@ export default function CompanySettingsPage() {
 
   const [settings, setSettings] = useState({
     cover_image_base_url: '',
+    cover_image_secondary_base_url: '',
     b2b_showcases_config: defaultShowcases,
     b2b_show_stock_quantity: true
   });
@@ -47,6 +48,7 @@ export default function CompanySettingsPage() {
           const data = await res.json();
           setSettings({
             cover_image_base_url: data.cover_image_base_url || '',
+            cover_image_secondary_base_url: data.cover_image_secondary_base_url || '',
             b2b_showcases_config: data.b2b_showcases_config || defaultShowcases,
             b2b_show_stock_quantity: data.b2b_show_stock_quantity !== undefined ? data.b2b_show_stock_quantity : true
           });
@@ -181,14 +183,27 @@ export default function CompanySettingsPage() {
               <h3 className="text-sm font-bold text-blue-600 tracking-wide uppercase mb-1">INTEGRAÇÃO DE CAPAS</h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">Servidor fallback global para imagens de referência rápida.</p>
               
-              <div className="space-y-3">
-                <input
-                  type="text"
-                  value={settings.cover_image_base_url}
-                  onChange={(e) => setSettings(prev => ({ ...prev, cover_image_base_url: e.target.value }))}
-                  placeholder="https://capas.cronuz.com.br"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 px-4 text-sm font-mono text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
-                />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">Link Primário de Capas (Base URL)</label>
+                  <input
+                    type="text"
+                    value={settings.cover_image_base_url}
+                    onChange={(e) => setSettings(prev => ({ ...prev, cover_image_base_url: e.target.value }))}
+                    placeholder="https://capas.cronuz.com.br"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 px-4 text-sm font-mono text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">Link Secundário de Capas — Fallback (Base URL)</label>
+                  <input
+                    type="text"
+                    value={settings.cover_image_secondary_base_url}
+                    onChange={(e) => setSettings(prev => ({ ...prev, cover_image_secondary_base_url: e.target.value }))}
+                    placeholder="https://capas-secundario.site.com.br"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 px-4 text-sm font-mono text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
+                  />
+                </div>
               </div>
            </div>
 

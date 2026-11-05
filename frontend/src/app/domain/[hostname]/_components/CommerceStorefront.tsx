@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Search, ShoppingCart, User, Menu, ChevronRight, Loader2, Star } from 'lucide-react';
 import { getImageUrl } from '@/lib/image_helper';
+import { ProductImage } from '@/components/store/ProductImage';
 
 export default function CommerceStorefront({ hostname, domainInfo }: { hostname: string, domainInfo: any }) {
     const [loading, setLoading] = useState(true);
@@ -195,11 +196,14 @@ export default function CommerceStorefront({ hostname, domainInfo }: { hostname:
                                         </div>
                                     )}
 
-                                    <div className="aspect-[3/4] mb-4 bg-slate-50 rounded-xl overflow-hidden relative">
-                                        <img 
-                                            src={product.cover_url || `https://via.placeholder.com/300x400?text=${encodeURIComponent(product.name)}`} 
+                                    <div className="aspect-[3/4] mb-4 bg-slate-50 rounded-xl overflow-hidden relative flex items-center justify-center">
+                                        <ProductImage 
+                                            eanGtin={product.ean_gtin || product.sku}
                                             alt={product.name}
-                                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                            coverUrl={product.cover_url}
+                                            companyIdProp={domainInfo?.company_id || 1}
+                                            className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500"
+                                            iconClassName="w-10 h-10 text-slate-300"
                                         />
                                     </div>
 

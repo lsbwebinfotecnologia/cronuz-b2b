@@ -122,6 +122,16 @@ def get_dynamic_showcase(
         raise HTTPException(status_code=404, detail="Vitrine não encontrada")
 
     resp = schemas.DynamicShowcaseDetailResponse.model_validate(showcase)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == current_user.company_id).first()
+    cover_base = settings.cover_image_base_url if settings else None
+    cover_sec_base = settings.cover_image_secondary_base_url if settings else None
+    for item_resp in resp.items:
+        if item_resp.product and item_resp.product.ean_gtin:
+            isbn_str = item_resp.product.ean_gtin.strip()
+            sec_url = _build_cover_url(cover_sec_base, isbn_str)
+            item_resp.product.cover_secondary_url = sec_url
+            if not item_resp.product.cover_url:
+                item_resp.product.cover_url = _build_cover_url(cover_base, isbn_str) or sec_url
     resp.items_count = len(showcase.items)
     resp.is_currently_active = showcase.is_currently_active
     return resp
@@ -218,6 +228,7 @@ def search_items_for_showcase(
     company_id = current_user.company_id
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
     cover_base = settings.cover_image_base_url if settings else None
+    cover_secondary_base = settings.cover_image_secondary_base_url if settings else None
 
     # Get set of already added product IDs and ISBNs in this showcase
     added_links = db.query(DynamicShowcaseItem).filter(DynamicShowcaseItem.showcase_id == showcase.id).all()
@@ -252,7 +263,8 @@ def search_items_for_showcase(
 
         results = []
         for p in products:
-            cover = p.cover_url or _build_cover_url(cover_base, p.ean_gtin)
+            cover_sec = _build_cover_url(cover_secondary_base, p.ean_gtin)
+            cover = p.cover_url or _build_cover_url(cover_base, p.ean_gtin) or cover_sec
             is_in_showcase = (
                 p.id in added_prod_ids or 
                 (p.ean_gtin and p.ean_gtin.strip() in added_isbns) or
@@ -272,6 +284,7 @@ def search_items_for_showcase(
                 "promotional_price": p.promotional_price,
                 "stock_quantity": p.stock_quantity,
                 "cover_url": cover,
+                "cover_secondary_url": cover_sec,
                 "already_added": is_in_showcase
             })
         return {"source": "CRONUZ", "total": total, "items": results}
@@ -330,7 +343,8 @@ def search_items_for_showcase(
                 vlr_liq = parse_horus_price(item.get("VLR_LIQ_CLI", item.get("VLR_LIQ_DESCONTO_PDV", item.get("PRECO_VENDA", "0"))))
                 stock_qty = int(item.get("SALDO_DISPONIVEL", item.get("SALDO", 0)))
 
-                cover = _build_cover_url(cover_base, isbn)
+                cover_sec = _build_cover_url(cover_secondary_base, isbn)
+                cover = _build_cover_url(cover_base, isbn) or cover_sec
 
                 # Checa se já existe no Cronuz
                 existing_prod = None
@@ -361,6 +375,7 @@ def search_items_for_showcase(
                     "promotional_price": vlr_liq if (vlr_liq and vlr_capa and vlr_liq < vlr_capa) else None,
                     "stock_quantity": stock_qty,
                     "cover_url": cover,
+                    "cover_secondary_url": cover_sec,
                     "already_added": already_added
                 })
 
@@ -396,6 +411,7 @@ def add_item_to_showcase(
     company_id = current_user.company_id
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
     cover_base = settings.cover_image_base_url if settings else None
+    cover_secondary_base = settings.cover_image_secondary_base_url if settings else None
 
     product: Optional[Product] = None
 
@@ -448,7 +464,7 @@ def add_item_to_showcase(
 
         isbn_clean = (item_in.isbn or "").strip()
         cod_clean = item_in.horus_cod_item or (isbn_clean if isbn_clean else None)
-        cover = item_in.cover_url or _build_cover_url(cover_base, isbn_clean)
+        cover = item_in.cover_url or _build_cover_url(cover_base, isbn_clean) or _build_cover_url(cover_secondary_base, isbn_clean)
 
         product = Product(
             company_id=company_id,
