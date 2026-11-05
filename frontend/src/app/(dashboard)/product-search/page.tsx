@@ -70,6 +70,7 @@ type HorusProduct = {
   TIPO?: string;
   STATUS_ITEM?: string;
   COVER_URL?: string | null;
+  COVER_SECONDARY_URL?: string | null;
   source?: 'HORUS' | 'CRONUZ';
   has_erp_registration?: boolean;
   badge_warning?: string | null;
@@ -990,12 +991,26 @@ export default function ProductSearchPage() {
                             }`}
                         >
                           {p.COVER_URL ? (
-                            <img
-                              src={p.COVER_URL}
-                              alt=""
-                              className="w-10 h-14 object-contain rounded bg-white dark:bg-slate-900 shadow-xs shrink-0"
-                              onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                            />
+                            <>
+                              <img
+                                src={p.COVER_URL}
+                                alt=""
+                                className="w-10 h-14 object-contain rounded bg-white dark:bg-slate-900 shadow-xs shrink-0"
+                                onError={e => {
+                                  const img = e.currentTarget;
+                                  if (p.COVER_SECONDARY_URL && img.src !== p.COVER_SECONDARY_URL) {
+                                    img.src = p.COVER_SECONDARY_URL;
+                                  } else {
+                                    img.style.display = 'none';
+                                    const nextEl = img.nextElementSibling as HTMLElement | null;
+                                    if (nextEl) nextEl.style.display = 'flex';
+                                  }
+                                }}
+                              />
+                              <div style={{ display: 'none' }} className="w-10 h-14 rounded bg-slate-200 dark:bg-slate-700 items-center justify-center shrink-0">
+                                <BookOpen className="w-4 h-4 text-slate-400" />
+                              </div>
+                            </>
                           ) : (
                             <div className="w-10 h-14 rounded bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0">
                               <BookOpen className="w-4 h-4 text-slate-400" />
@@ -1031,12 +1046,27 @@ export default function ProductSearchPage() {
                       {/* Capa com destaque */}
                       <div className="w-full p-6 flex items-center justify-center bg-slate-50/70 dark:bg-slate-800/30 border-b border-slate-100 dark:border-slate-800">
                         {product.COVER_URL ? (
-                          <img
-                            src={product.COVER_URL}
-                            alt={`Capa de ${product.NOM_ITEM}`}
-                            className="max-h-72 w-auto object-contain rounded-xl shadow-md border border-slate-200/60 dark:border-slate-700"
-                            onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                          />
+                          <>
+                            <img
+                              src={product.COVER_URL}
+                              alt={`Capa de ${product.NOM_ITEM}`}
+                              className="max-h-72 w-auto object-contain rounded-xl shadow-md border border-slate-200/60 dark:border-slate-700"
+                              onError={e => {
+                                const img = e.currentTarget;
+                                if (product.COVER_SECONDARY_URL && img.src !== product.COVER_SECONDARY_URL) {
+                                  img.src = product.COVER_SECONDARY_URL;
+                                } else {
+                                  img.style.display = 'none';
+                                  const nextEl = img.nextElementSibling as HTMLElement | null;
+                                  if (nextEl) nextEl.style.display = 'flex';
+                                }
+                              }}
+                            />
+                            <div style={{ display: 'none' }} className="w-40 h-56 rounded-xl bg-slate-200 dark:bg-slate-800 flex-col items-center justify-center text-slate-400 gap-2 border border-slate-200 dark:border-slate-700">
+                              <BookOpen className="w-10 h-10 opacity-40" />
+                              <span className="text-xs font-medium">Sem imagem</span>
+                            </div>
+                          </>
                         ) : (
                           <div className="w-40 h-56 rounded-xl bg-slate-200 dark:bg-slate-800 flex flex-col items-center justify-center text-slate-400 gap-2 border border-slate-200 dark:border-slate-700">
                             <BookOpen className="w-10 h-10 opacity-40" />
@@ -1978,7 +2008,26 @@ export default function ProductSearchPage() {
             {/* Resumo do produto encomendado */}
             <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center gap-3">
               {product.COVER_URL ? (
-                <img src={product.COVER_URL} alt="" className="w-10 h-14 object-contain rounded bg-white dark:bg-slate-900 shadow-xs shrink-0" />
+                <>
+                  <img
+                    src={product.COVER_URL}
+                    alt=""
+                    className="w-10 h-14 object-contain rounded bg-white dark:bg-slate-900 shadow-xs shrink-0"
+                    onError={e => {
+                      const img = e.currentTarget;
+                      if (product.COVER_SECONDARY_URL && img.src !== product.COVER_SECONDARY_URL) {
+                        img.src = product.COVER_SECONDARY_URL;
+                      } else {
+                        img.style.display = 'none';
+                        const nextEl = img.nextElementSibling as HTMLElement | null;
+                        if (nextEl) nextEl.style.display = 'flex';
+                      }
+                    }}
+                  />
+                  <div style={{ display: 'none' }} className="w-10 h-14 rounded bg-slate-200 dark:bg-slate-700 items-center justify-center shrink-0">
+                    <BookOpen className="w-5 h-5 text-slate-400" />
+                  </div>
+                </>
               ) : (
                 <div className="w-10 h-14 rounded bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0">
                   <BookOpen className="w-5 h-5 text-slate-400" />

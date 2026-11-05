@@ -273,15 +273,49 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     fetchCatalog('', 'default', 0, false);
   }, [companyId]);
 
-  const resolveProductCover = (prod: any) => {
-    if (!prod) return null;
-    if (prod.cover_url) return getImageUrl(prod.cover_url);
-    const isbn = prod.ean_gtin || prod.sku;
-    if (storeInfo?.cover_image_base_url && isbn) {
-      const base = storeInfo.cover_image_base_url.replace(/\/$/, '');
-      return `${base}/${isbn}.jpg`;
+  const resolveProductCoverCandidates = (prod: any): string[] => {
+    if (!prod) return [];
+    const list: string[] = [];
+    const addUnique = (u: string | null | undefined) => {
+      if (!u) return;
+      const trimmed = u.trim();
+      if (trimmed && !list.includes(trimmed)) list.push(trimmed);
+    };
+    if (prod.cover_url) addUnique(getImageUrl(prod.cover_url));
+    const isbn = String(prod.ean_gtin || prod.sku || '').trim();
+    if (isbn) {
+      if (storeInfo?.cover_image_base_url) {
+        const base = storeInfo.cover_image_base_url.replace(/\/$/, '');
+        addUnique(`${base}/${isbn}.jpg`);
+      }
+      if (storeInfo?.cover_image_secondary_base_url) {
+        const secBase = storeInfo.cover_image_secondary_base_url.replace(/\/$/, '');
+        addUnique(`${secBase}/${isbn}.jpg`);
+      }
     }
-    return null;
+    return list;
+  };
+
+  const resolveProductCover = (prod: any) => {
+    const candidates = resolveProductCoverCandidates(prod);
+    return candidates[0] || null;
+  };
+
+  const handleCoverImgError = (e: React.SyntheticEvent<HTMLImageElement, Event>, prod: any) => {
+    const img = e.currentTarget;
+    const candidates = resolveProductCoverCandidates(prod);
+    const currentStep = Number(img.dataset.fallbackStep || '0');
+    const nextStep = currentStep + 1;
+    if (nextStep < candidates.length) {
+      img.dataset.fallbackStep = String(nextStep);
+      img.src = candidates[nextStep];
+    } else {
+      img.style.display = 'none';
+      const fallbackPlaceholder = img.parentElement?.querySelector('[data-cover-placeholder="true"]') as HTMLElement | null;
+      if (fallbackPlaceholder) {
+        fallbackPlaceholder.style.display = 'block';
+      }
+    }
   };
 
   const formatBRL = (val: number) =>
@@ -869,11 +903,14 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     toast.success('Você saiu da sua conta.');
   };
 
+  const isVindiPaymentLinkMode =
+    storeInfo?.b2c_channel_mode === 'PAYMENT_LINK' ||
+    (storeInfo?.payment_gateway_active === 'VINDI' && storeInfo?.vindi_integration_mode === 'PAYMENT_LINK');
+
   const isVindiExpressLink =
     differenceToPay > 0.009 &&
     !(storeInfo?.b2c_checkout_mode === 'TRAY_REDIRECT' && storeInfo?.tray_enabled) &&
-    storeInfo?.payment_gateway_active === 'VINDI' &&
-    storeInfo?.vindi_integration_mode === 'PAYMENT_LINK' &&
+    isVindiPaymentLinkMode &&
     storeInfo?.vindi_express_cpf_only !== false;
 
   const handleFinalizeCheckout = async (e: React.FormEvent) => {
@@ -937,8 +974,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
           payment_method:
             differenceToPay <= 0.009
               ? 'VOUCHER_100'
-              : storeInfo?.payment_gateway_active === 'VINDI' &&
-                storeInfo?.vindi_integration_mode === 'PAYMENT_LINK'
+              : isVindiPaymentLinkMode
               ? 'PAYMENT_LINK'
               : paymentMethod,
           card_holder_name: cardForm.holder_name || customerForm.name,
@@ -1216,14 +1252,18 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
           className="relative aspect-[3/4] bg-slate-100 flex items-center justify-center p-3 sm:p-4 cursor-pointer overflow-hidden"
         >
           {cover ? (
-            <img
-              src={cover}
-              alt={prod.name}
-              className="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform duration-300"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
-              }}
-            />
+            <>
+              <img
+                src={cover}
+                alt={prod.name}
+                className="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform duration-300"
+                onError={(e) => handleCoverImgError(e, prod)}
+              />
+              <div data-cover-placeholder="true" style={{ display: 'none' }} className="text-center p-3 text-slate-400">
+                <BookOpen className="w-10 h-10 mx-auto mb-1 opacity-50" />
+                <span className="text-[10px] font-mono block">{prod.ean_gtin || prod.sku}</span>
+              </div>
+            </>
           ) : (
             <div className="text-center p-3 text-slate-400">
               <BookOpen className="w-10 h-10 mx-auto mb-1 opacity-50" />
@@ -1751,11 +1791,20 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
             {/* Left Column: High-Res Cover */}
             <div className="lg:col-span-5 flex flex-col items-center justify-center bg-slate-50 rounded-2xl p-6 border border-slate-100 relative min-h-[320px] sm:min-h-[420px]">
               {resolveProductCover(selectedProduct) ? (
-                <img
-                  src={resolveProductCover(selectedProduct)!}
-                  alt={selectedProduct.name}
-                  className="max-h-[360px] sm:max-h-[420px] w-auto object-contain drop-shadow-md"
-                />
+                <>
+                  <img
+                    src={resolveProductCover(selectedProduct)!}
+                    alt={selectedProduct.name}
+                    className="max-h-[360px] sm:max-h-[420px] w-auto object-contain drop-shadow-md"
+                    onError={(e) => handleCoverImgError(e, selectedProduct)}
+                  />
+                  <div data-cover-placeholder="true" style={{ display: 'none' }} className="text-center text-slate-300 space-y-2">
+                    <BookOpen className="w-20 h-20 mx-auto" />
+                    <p className="text-xs font-mono text-slate-400">
+                      ISBN: {selectedProduct.ean_gtin || selectedProduct.sku}
+                    </p>
+                  </div>
+                </>
               ) : (
                 <div className="text-center text-slate-300 space-y-2">
                   <BookOpen className="w-20 h-20 mx-auto" />
@@ -4527,8 +4576,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                 {/* Payment Method Selection (PIX vs Cartão de Crédito via Homologated Gateway Efí / Vindi) */}
                 {differenceToPay > 0.009 &&
                   !(storeInfo?.b2c_checkout_mode === 'TRAY_REDIRECT' && storeInfo?.tray_enabled) &&
-                  storeInfo?.payment_gateway_active === 'VINDI' &&
-                  storeInfo?.vindi_integration_mode === 'PAYMENT_LINK' && (
+                  isVindiPaymentLinkMode && (
                     <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-1 text-xs">
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-indigo-950 flex items-center gap-1.5">
@@ -4547,10 +4595,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
 
                 {differenceToPay > 0.009 &&
                   !(storeInfo?.b2c_checkout_mode === 'TRAY_REDIRECT' && storeInfo?.tray_enabled) &&
-                  !(
-                    storeInfo?.payment_gateway_active === 'VINDI' &&
-                    storeInfo?.vindi_integration_mode === 'PAYMENT_LINK'
-                  ) && (
+                  !isVindiPaymentLinkMode && (
                     <div className="space-y-3 pt-2 border-t border-slate-200">
                       <div className="flex items-center justify-between">
                         <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">

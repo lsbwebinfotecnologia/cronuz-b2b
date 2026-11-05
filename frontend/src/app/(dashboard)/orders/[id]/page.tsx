@@ -67,6 +67,7 @@ interface OrderDetail {
     logs: OrderLog[];
     interactions: OrderInteraction[];
     cover_image_base_url?: string;
+    cover_image_secondary_base_url?: string;
 }
 
 const statusColorMap: Record<string, string> = {
@@ -557,6 +558,7 @@ export default function OrderDetailPage() {
                                             alt={item.name}
                                             companyIdProp={order.company_id} 
                                             baseUrl={order.cover_image_base_url}
+                                            secondaryBaseUrl={order.cover_image_secondary_base_url}
                                         />
                                     </div>
                                     <div className="flex-1 min-w-0">

@@ -738,6 +738,7 @@ async def get_order_detail(
     from app.models.company_settings import CompanySettings
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
     order_dict["cover_image_base_url"] = settings.cover_image_base_url if settings else None
+    order_dict["cover_image_secondary_base_url"] = settings.cover_image_secondary_base_url if settings else None
 
     return order_dict
 

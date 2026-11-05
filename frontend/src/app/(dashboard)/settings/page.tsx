@@ -105,6 +105,7 @@ export default function SettingsPage() {
     pdv_max_installments: 12,
     pdv_min_installment_amount: 5.0,
     cover_image_base_url: '',
+    cover_image_secondary_base_url: '',
     efi_sandbox: true,
     efi_client_id: '',
     efi_client_secret: '',
@@ -210,6 +211,7 @@ export default function SettingsPage() {
         pdv_max_installments: data.pdv_max_installments ?? 12,
         pdv_min_installment_amount: data.pdv_min_installment_amount ?? 5.0,
         cover_image_base_url: data.cover_image_base_url || '',
+        cover_image_secondary_base_url: data.cover_image_secondary_base_url || '',
         efi_sandbox: data.efi_sandbox ?? true,
         efi_client_id: data.efi_client_id || '',
         efi_client_secret: data.efi_client_secret || '',
@@ -222,7 +224,11 @@ export default function SettingsPage() {
         smtp_from_email: data.smtp_from_email || '',
         smtp_bcc_email: data.smtp_bcc_email || '',
         smtp_use_ssl: data.smtp_use_ssl || false,
-        payment_gateway_active: data.payment_gateway_active || 'EFI',
+        payment_gateway_active:
+          data.b2c_showcases_config?.payment_channel_modes?.B2C_STOREFRONT?.mode === 'PAYMENT_LINK' ||
+          data.b2c_showcases_config?.vindi_config?.integration_mode === 'PAYMENT_LINK'
+            ? data.b2c_showcases_config?.payment_channel_modes?.B2C_STOREFRONT?.link_provider || 'VINDI'
+            : data.payment_gateway_active || 'EFI',
         cielo_client_id: data.cielo_client_id || '',
         cielo_client_secret: data.cielo_client_secret || '',
         cielo_merchant_id: data.cielo_merchant_id || '',
@@ -230,8 +236,14 @@ export default function SettingsPage() {
         rede_token: data.rede_token || '',
         vindi_api_key: data.vindi_api_key || '',
         vindi_sandbox: data.b2c_showcases_config?.vindi_config?.sandbox !== false,
-        vindi_integration_mode: data.b2c_showcases_config?.vindi_config?.integration_mode || 'TRANSPARENT',
-        vindi_express_cpf_only: data.b2c_showcases_config?.vindi_config?.express_cpf_only !== false,
+        vindi_integration_mode:
+          data.b2c_showcases_config?.payment_channel_modes?.B2C_STOREFRONT?.mode === 'PAYMENT_LINK'
+            ? 'PAYMENT_LINK'
+            : data.b2c_showcases_config?.vindi_config?.integration_mode || 'TRANSPARENT',
+        vindi_express_cpf_only:
+          data.b2c_showcases_config?.payment_channel_modes?.B2C_STOREFRONT?.express_cpf_only !== undefined
+            ? data.b2c_showcases_config.payment_channel_modes.B2C_STOREFRONT.express_cpf_only !== false
+            : data.b2c_showcases_config?.vindi_config?.express_cpf_only !== false,
         vindi_max_installments: Number(data.b2c_showcases_config?.vindi_config?.max_installments || 6),
         vindi_allow_pix: data.b2c_showcases_config?.vindi_config?.allow_pix !== false,
         vindi_allow_credit_card: data.b2c_showcases_config?.vindi_config?.allow_credit_card !== false,
@@ -366,9 +378,13 @@ export default function SettingsPage() {
       const b2cTargetMode =
         settings.b2c_checkout_mode === 'TRAY_REDIRECT'
           ? 'TRAY_REDIRECT'
-          : (settings.vindi_integration_mode || 'TRANSPARENT') === 'PAYMENT_LINK'
+          : (settings.vindi_integration_mode || 'TRANSPARENT') === 'PAYMENT_LINK' ||
+            existingChannelModes.B2C_STOREFRONT?.mode === 'PAYMENT_LINK'
           ? 'PAYMENT_LINK'
           : 'PER_METHOD';
+      if (b2cTargetMode === 'PAYMENT_LINK') {
+        payloadSettings.payment_gateway_active = existingChannelModes.B2C_STOREFRONT?.link_provider || 'VINDI';
+      }
       payloadSettings.b2c_showcases_config = {
         ...(settings.b2c_showcases_config || {}),
         payment_channel_modes: {
@@ -791,18 +807,38 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Servidor Local de Capas (Base URL)</label>
-                    <input
-                      type="url"
-                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-[var(--color-primary-base)]/50 dark:placeholder:text-slate-600"
-                      placeholder="https://capas.cronuz.com.br"
-                      value={settings.cover_image_base_url}
-                      onChange={e => setSettings({ ...settings, cover_image_base_url: e.target.value })}
-                    />
-                    <p className="text-xs text-slate-500 mt-1">
-                      Caminho do diretório base que contém as imagens dos produtos, que serão consultadas via <b>ISBN.jpg</b> (ex: https://capas.site.com.br/978...jpg).
-                    </p>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
+                        Servidor Primário de Capas (Base URL)
+                      </label>
+                      <input
+                        type="url"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-[var(--color-primary-base)]/50 dark:placeholder:text-slate-600"
+                        placeholder="https://capas.cataventobr.com.br"
+                        value={settings.cover_image_base_url}
+                        onChange={e => setSettings({ ...settings, cover_image_base_url: e.target.value })}
+                      />
+                      <p className="text-xs text-slate-500 mt-1">
+                        1ª opção de busca por <b>ISBN.jpg</b> (ex: https://capas.site.com.br/978...jpg).
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
+                        Servidor Secundário de Capas — Fallback (Base URL)
+                      </label>
+                      <input
+                        type="url"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-[var(--color-primary-base)]/50 dark:placeholder:text-slate-600"
+                        placeholder="https://capas-secundario.site.com.br"
+                        value={settings.cover_image_secondary_base_url}
+                        onChange={e => setSettings({ ...settings, cover_image_secondary_base_url: e.target.value })}
+                      />
+                      <p className="text-xs text-slate-500 mt-1">
+                        2ª opção automática: se a capa não existir no link primário, busca no link secundário via <b>ISBN.jpg</b>. Se não houver em nenhum dos dois, exibe sem capa.
+                      </p>
+                    </div>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 dark:border-slate-800/60 dark:bg-slate-900/40 mt-6 md:w-3/4 lg:w-2/3">

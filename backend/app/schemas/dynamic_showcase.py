@@ -38,6 +38,7 @@ class DynamicShowcaseItemProduct(BaseModel):
     promotional_price: Optional[float] = None
     brand: Optional[str] = None
     cover_url: Optional[str] = None
+    cover_secondary_url: Optional[str] = None
     stock_quantity: int = 0
     status: Optional[str] = None
 

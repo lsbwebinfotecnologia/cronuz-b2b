@@ -95,6 +95,9 @@ def get_public_event(
         raise HTTPException(status_code=404, detail="Evento não encontrado.")
 
     company = db.query(Company).filter(Company.id == evt.company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == evt.company_id).first()
+    cover_base = settings.cover_image_base_url.rstrip("/") if (settings and settings.cover_image_base_url) else None
+    cover_sec_base = settings.cover_image_secondary_base_url.rstrip("/") if (settings and settings.cover_image_secondary_base_url) else None
     school = db.query(Customer).filter(Customer.id == evt.school_customer_id).first() if evt.school_customer_id else None
 
     # Turmas ativas da escola
@@ -139,6 +142,9 @@ def get_public_event(
                     p = prod_map.get(item.product_id)
                     if p and (p.stock_quantity or 0) > 0:
                         category_name = p.category.name if p.category else (p.brand or "Geral")
+                        isbn_clean = (p.ean_gtin or p.sku or "").strip()
+                        prim_url = f"{cover_base}/{isbn_clean}.jpg" if (cover_base and isbn_clean) else None
+                        sec_url = f"{cover_sec_base}/{isbn_clean}.jpg" if (cover_sec_base and isbn_clean) else None
                         products_data.append({
                             "id": p.id,
                             "sku": p.sku,
@@ -146,7 +152,8 @@ def get_public_event(
                             "name": p.name,
                             "price": p.promotional_price or p.base_price,
                             "base_price": p.base_price,
-                            "image_url": p.cover_url or getattr(p, "image_url", None),
+                            "image_url": p.cover_url or getattr(p, "image_url", None) or prim_url or sec_url,
+                            "image_secondary_url": sec_url,
                             "brand": p.brand,
                             "category": category_name,
                             "short_description": p.short_description,
@@ -176,6 +183,9 @@ def get_public_event(
                         p = prod_map.get(sp.product_id)
                         if p and (p.stock_quantity or 0) > 0:
                             category_name = p.category.name if p.category else (p.brand or "Geral")
+                            isbn_clean = (p.ean_gtin or p.sku or "").strip()
+                            prim_url = f"{cover_base}/{isbn_clean}.jpg" if (cover_base and isbn_clean) else None
+                            sec_url = f"{cover_sec_base}/{isbn_clean}.jpg" if (cover_sec_base and isbn_clean) else None
                             products_data.append({
                                 "id": p.id,
                                 "sku": p.sku,
@@ -183,7 +193,8 @@ def get_public_event(
                                 "name": p.name,
                                 "price": p.promotional_price or p.base_price,
                                 "base_price": p.base_price,
-                                "image_url": p.cover_url or getattr(p, "image_url", None),
+                                "image_url": p.cover_url or getattr(p, "image_url", None) or prim_url or sec_url,
+                                "image_secondary_url": sec_url,
                                 "brand": p.brand,
                                 "category": category_name,
                                 "short_description": p.short_description,
@@ -200,6 +211,8 @@ def get_public_event(
         "company_id": evt.company_id,
         "company_name": company.name if company else "",
         "company_logo": company.logo if company else None,
+        "cover_image_base_url": cover_base,
+        "cover_image_secondary_base_url": cover_sec_base,
         "school_id": school.id if school else None,
         "school_name": school.name if school else "Escola Parceira",
         "title": showcase_title or evt.title,

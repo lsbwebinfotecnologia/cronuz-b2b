@@ -31,6 +31,7 @@ export default function ProductsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   
   const [coverBaseUrl, setCoverBaseUrl] = useState<string | null>(null);
+  const [coverSecondaryBaseUrl, setCoverSecondaryBaseUrl] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<number>(1);
   const [categoryId, setCategoryId] = useState<string>('');
   const [orderBy, setOrderBy] = useState<string>('name');
@@ -166,6 +167,7 @@ export default function ProductsPage() {
         if (res.ok) {
            const data = await res.json();
            setCoverBaseUrl(data.cover_image_base_url || null);
+           setCoverSecondaryBaseUrl(data.cover_image_secondary_base_url || null);
         }
         
         // Load categories
@@ -700,6 +702,7 @@ export default function ProductsPage() {
                           eanGtin={product.ean_gtin} 
                           alt={product.name}
                           baseUrl={coverBaseUrl}
+                          secondaryBaseUrl={coverSecondaryBaseUrl}
                           companyIdProp={companyId}
                           coverUrl={product.cover_url}
                           className="w-full h-full object-contain p-0.5"

@@ -50,6 +50,7 @@ class CompanySettings(Base):
     bookinfo_allow_partial_fulfill = Column(Boolean, default=True, nullable=False) # Permite atendimento parcial nas regras
     metabooks_api_key = Column(String(255), nullable=True)
     cover_image_base_url = Column(String(500), nullable=True)
+    cover_image_secondary_base_url = Column(String(500), nullable=True)
     
     # Advanced Stock Config
     allow_backorder = Column(Boolean, default=False, nullable=False)

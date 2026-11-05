@@ -53,6 +53,7 @@ export default function NewProductPage() {
   const [availableCharacteristics, setAvailableCharacteristics] = useState<any[]>([]);
 
   const [coverBaseUrl, setCoverBaseUrl] = useState('');
+  const [coverSecondaryBaseUrl, setCoverSecondaryBaseUrl] = useState('');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [collectingBookinfo, setCollectingBookinfo] = useState(false);
@@ -128,6 +129,9 @@ export default function NewProductPage() {
           const settings = await settingsRes.json();
           if (settings.cover_image_base_url) {
             setCoverBaseUrl(settings.cover_image_base_url.replace(/\/$/, ''));
+          }
+          if (settings.cover_image_secondary_base_url) {
+            setCoverSecondaryBaseUrl(settings.cover_image_secondary_base_url.replace(/\/$/, ''));
           }
         }
       } catch (e) {
@@ -554,7 +558,23 @@ export default function NewProductPage() {
                          {imagePreview ? (
                            <div className="w-32 h-44 shrink-0 rounded-lg overflow-hidden border border-slate-200 shadow-sm relative group bg-white">
                               {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={imagePreview} alt="Capa" className="w-full h-full object-contain" />
+                              <img
+                                src={imagePreview}
+                                alt="Capa"
+                                className="w-full h-full object-contain"
+                                onError={() => {
+                                  const ean = product.ean_gtin?.trim();
+                                  const primUrl = coverBaseUrl && ean ? `${coverBaseUrl}/${ean}.jpg` : null;
+                                  const secUrl = coverSecondaryBaseUrl && ean ? `${coverSecondaryBaseUrl}/${ean}.jpg` : null;
+                                  if (primUrl && imagePreview !== primUrl && imagePreview !== secUrl) {
+                                    setImagePreview(primUrl);
+                                  } else if (secUrl && imagePreview !== secUrl) {
+                                    setImagePreview(secUrl);
+                                  } else {
+                                    setImagePreview(null);
+                                  }
+                                }}
+                              />
                               <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                 <button type="button" onClick={() => setImagePreview(null)} className="bg-white text-rose-600 p-2 rounded-full hover:bg-rose-50"><Trash2 className="w-4 h-4" /></button>
                               </div>

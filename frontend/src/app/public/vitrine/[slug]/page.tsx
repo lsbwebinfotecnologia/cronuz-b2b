@@ -663,7 +663,25 @@ export default function PublicEventShowcasePage() {
                 <div className="space-y-3">
                   <div className="aspect-[3/4] bg-slate-100 dark:bg-slate-800 rounded-2xl overflow-hidden flex items-center justify-center p-3 relative">
                     {p.image_url ? (
-                      <img src={p.image_url} alt={p.name} className="h-full w-full object-contain group-hover:scale-105 transition-transform" />
+                      <>
+                        <img
+                          src={p.image_url}
+                          alt={p.name}
+                          className="h-full w-full object-contain group-hover:scale-105 transition-transform"
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            const secUrl = (p as any).image_secondary_url || (eventData?.cover_image_secondary_base_url && ((p as any).ean_gtin || p.sku) ? `${eventData.cover_image_secondary_base_url.replace(/\/$/, '')}/${(p as any).ean_gtin || p.sku}.jpg` : null);
+                            if (secUrl && img.src !== secUrl) {
+                              img.src = secUrl;
+                            } else {
+                              img.style.display = 'none';
+                              const nextEl = img.nextElementSibling as HTMLElement | null;
+                              if (nextEl) nextEl.style.display = 'block';
+                            }
+                          }}
+                        />
+                        <BookOpen style={{ display: 'none' }} className="h-12 w-12 text-slate-300 dark:text-slate-600 group-hover:scale-110 transition-transform" />
+                      </>
                     ) : (
                       <BookOpen className="h-12 w-12 text-slate-300 dark:text-slate-600 group-hover:scale-110 transition-transform" />
                     )}

@@ -32,6 +32,7 @@ class CompanySettingsBase(BaseModel):
     bookinfo_allow_partial_fulfill: Optional[bool] = True
     metabooks_api_key: Optional[str] = None
     cover_image_base_url: Optional[str] = None
+    cover_image_secondary_base_url: Optional[str] = None
     allow_backorder: Optional[bool] = False
     max_backorder_qty: Optional[int] = 0
     pdv_type: Optional[str] = "NON_FISCAL"

@@ -58,7 +58,7 @@ def default_channel_modes(settings=None, routes: Optional[Dict[str, Dict[str, st
     inferred_b2c_mode = "PER_METHOD"
     if b2c_checkout_mode == "TRAY_REDIRECT" and getattr(settings, "tray_enabled", False):
         inferred_b2c_mode = "TRAY_REDIRECT"
-    elif active_gw == "VINDI" and vindi_int_mode == "PAYMENT_LINK":
+    elif vindi_int_mode == "PAYMENT_LINK":
         inferred_b2c_mode = "PAYMENT_LINK"
     elif routes and routes.get("B2C_STOREFRONT", {}).get("LINK") and not any(
         routes.get("B2C_STOREFRONT", {}).get(m) for m in ("CARD", "PIX", "BOLETO")
@@ -126,12 +126,22 @@ def routes_map(db: Session, company_id: int) -> Dict[str, Dict[str, str]]:
     for r in db.query(PayChannelRoute).filter(PayChannelRoute.company_id == company_id).all():
         out.setdefault(r.channel, {})[r.method] = r.provider
 
-    # Se o seller ainda não salvou rotas na matriz para B2C_STOREFRONT, espelha o gateway ativo legado
-    if "B2C_STOREFRONT" not in out:
-        from app.models.company_settings import CompanySettings
-        settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
-        if settings:
-            active_gw = (getattr(settings, "payment_gateway_active", "EFI") or "EFI").upper()
+    from app.models.company_settings import CompanySettings
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if settings:
+        raw_cfg = settings.b2c_showcases_config if isinstance(settings.b2c_showcases_config, dict) else {}
+        ch_modes = raw_cfg.get("payment_channel_modes") if isinstance(raw_cfg.get("payment_channel_modes"), dict) else {}
+        b2c_ch = ch_modes.get("B2C_STOREFRONT") if isinstance(ch_modes.get("B2C_STOREFRONT"), dict) else {}
+        v_cfg = raw_cfg.get("vindi_config") if isinstance(raw_cfg.get("vindi_config"), dict) else {}
+        is_b2c_link = (
+            b2c_ch.get("mode") == "PAYMENT_LINK"
+            or str(v_cfg.get("integration_mode") or "").upper() == "PAYMENT_LINK"
+        )
+        link_prov = str(b2c_ch.get("link_provider") or "VINDI").upper()
+
+        # Se o seller ainda não salvou rotas na matriz para B2C_STOREFRONT, espelha o gateway ativo
+        if "B2C_STOREFRONT" not in out:
+            active_gw = link_prov if is_b2c_link else (getattr(settings, "payment_gateway_active", "EFI") or "EFI").upper()
             if active_gw in PAY_PROVIDERS:
                 b2c_map: Dict[str, str] = {}
                 if "CARD" in PROVIDER_CATALOG[active_gw]["methods"]:
@@ -142,6 +152,8 @@ def routes_map(db: Session, company_id: int) -> Dict[str, Dict[str, str]]:
                     b2c_map["LINK"] = active_gw
                 if b2c_map:
                     out["B2C_STOREFRONT"] = b2c_map
+        elif is_b2c_link and link_prov in PAY_PROVIDERS:
+            out["B2C_STOREFRONT"]["LINK"] = link_prov
     return out
 
 

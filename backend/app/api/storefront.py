@@ -211,6 +211,7 @@ def get_storefront_config(
     
     return {
         "cover_image_base_url": settings.cover_image_base_url if settings else None,
+        "cover_image_secondary_base_url": settings.cover_image_secondary_base_url if settings else None,
         "uses_horus": settings.horus_enabled if settings else False,
         "horus_api_mode": settings.horus_api_mode if settings else 'B2B',
         "business_model": settings.business_model if settings else 'B2B_CRONUZ',

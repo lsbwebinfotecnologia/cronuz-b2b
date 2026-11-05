@@ -307,13 +307,12 @@ def update_company_settings(
             effective_checkout_mode = update_data.get("b2c_checkout_mode") or getattr(settings, "b2c_checkout_mode", "NATIVE_GATEWAY")
             if effective_checkout_mode == "TRAY_REDIRECT" and getattr(settings, "tray_enabled", False):
                 b2c_ch["mode"] = "TRAY_REDIRECT"
-            elif str(v_cfg.get("integration_mode") or "").upper() == "PAYMENT_LINK":
+            elif str(v_cfg.get("integration_mode") or "").upper() == "PAYMENT_LINK" or b2c_ch.get("mode") == "PAYMENT_LINK":
                 b2c_ch["mode"] = "PAYMENT_LINK"
                 b2c_ch["link_provider"] = b2c_ch.get("link_provider") or "VINDI"
                 if "express_cpf_only" in v_cfg:
                     b2c_ch["express_cpf_only"] = bool(v_cfg.get("express_cpf_only", True))
-                if not update_data.get("payment_gateway_active"):
-                    settings.payment_gateway_active = "VINDI"
+                settings.payment_gateway_active = str(b2c_ch.get("link_provider") or "VINDI").upper()
             elif "payment_channel_modes" not in value and b2c_ch.get("mode") == "PAYMENT_LINK" and str(v_cfg.get("integration_mode") or "").upper() == "TRANSPARENT":
                 b2c_ch["mode"] = "PER_METHOD"
             if b2c_ch:
@@ -323,6 +322,18 @@ def update_company_settings(
             flag_modified(settings, "b2c_showcases_config")
         else:
             setattr(settings, key, value)
+
+    # Garante que payment_gateway_active fique sincronizado com PAYMENT_LINK se o modo do canal B2C_STOREFRONT for PAYMENT_LINK
+    if isinstance(settings.b2c_showcases_config, dict):
+        final_ch_modes = settings.b2c_showcases_config.get("payment_channel_modes") or {}
+        final_b2c_ch = final_ch_modes.get("B2C_STOREFRONT") if isinstance(final_ch_modes, dict) else {}
+        final_v_cfg = settings.b2c_showcases_config.get("vindi_config") or {}
+        if (isinstance(final_b2c_ch, dict) and final_b2c_ch.get("mode") == "PAYMENT_LINK") or (
+            isinstance(final_v_cfg, dict) and str(final_v_cfg.get("integration_mode") or "").upper() == "PAYMENT_LINK"
+        ):
+            settings.payment_gateway_active = str(
+                (final_b2c_ch.get("link_provider") if isinstance(final_b2c_ch, dict) else None) or "VINDI"
+            ).upper()
         
     db.commit()
     db.refresh(settings)

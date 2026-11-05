@@ -351,14 +351,24 @@ export default function ShowcaseItemsManagementPage() {
                     {/* Imagem / Capa */}
                     <div className="w-14 h-20 rounded-lg bg-slate-200 dark:bg-slate-700 flex-shrink-0 overflow-hidden flex items-center justify-center relative border border-slate-200 dark:border-slate-700">
                       {item.cover_url ? (
-                        <img
-                          src={item.cover_url}
-                          alt={item.title}
-                          className="w-full h-full object-cover"
-                          onError={(e: any) => {
-                            e.currentTarget.style.display = 'none';
-                          }}
-                        />
+                        <>
+                          <img
+                            src={item.cover_url}
+                            alt={item.title}
+                            className="w-full h-full object-cover"
+                            onError={(e: any) => {
+                              const img = e.currentTarget as HTMLImageElement;
+                              if (item.cover_secondary_url && img.src !== item.cover_secondary_url) {
+                                img.src = item.cover_secondary_url;
+                              } else {
+                                img.style.display = 'none';
+                                const nextEl = img.nextElementSibling as HTMLElement | null;
+                                if (nextEl) nextEl.style.display = 'block';
+                              }
+                            }}
+                          />
+                          <BookOpen style={{ display: 'none' }} className="w-6 h-6 text-slate-400" />
+                        </>
                       ) : (
                         <BookOpen className="w-6 h-6 text-slate-400" />
                       )}
@@ -459,14 +469,25 @@ export default function ShowcaseItemsManagementPage() {
                         {/* Capa */}
                         <div className="w-12 h-16 rounded-lg bg-slate-100 dark:bg-slate-800 flex-shrink-0 overflow-hidden flex items-center justify-center border border-slate-200 dark:border-slate-700">
                           {prod?.cover_url ? (
-                            <img
-                              src={prod.cover_url}
-                              alt={prod.name}
-                              className="w-full h-full object-cover"
-                              onError={(e: any) => {
-                                e.currentTarget.style.display = 'none';
-                              }}
-                            />
+                            <>
+                              <img
+                                src={prod.cover_url}
+                                alt={prod.name}
+                                className="w-full h-full object-cover"
+                                onError={(e: any) => {
+                                  const img = e.currentTarget as HTMLImageElement;
+                                  const secUrl = (prod as any).cover_secondary_url;
+                                  if (secUrl && img.src !== secUrl) {
+                                    img.src = secUrl;
+                                  } else {
+                                    img.style.display = 'none';
+                                    const nextEl = img.nextElementSibling as HTMLElement | null;
+                                    if (nextEl) nextEl.style.display = 'block';
+                                  }
+                                }}
+                              />
+                              <BookOpen style={{ display: 'none' }} className="w-5 h-5 text-slate-400" />
+                            </>
                           ) : (
                             <BookOpen className="w-5 h-5 text-slate-400" />
                           )}
