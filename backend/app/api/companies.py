@@ -294,9 +294,35 @@ def update_company_settings(
          db.add(settings)
     
     # Update fields
+    from sqlalchemy.orm.attributes import flag_modified
+    existing_b2c_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
     update_data = settings_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
-        setattr(settings, key, value)
+        if key == "b2c_showcases_config" and isinstance(value, dict):
+            merged_cfg = {**existing_b2c_cfg, **value}
+            # Sincroniza payment_channel_modes.B2C_STOREFRONT com vindi_config.integration_mode e b2c_checkout_mode
+            v_cfg = merged_cfg.get("vindi_config") if isinstance(merged_cfg.get("vindi_config"), dict) else {}
+            ch_modes = dict(merged_cfg.get("payment_channel_modes") or {}) if isinstance(merged_cfg.get("payment_channel_modes"), dict) else {}
+            b2c_ch = dict(ch_modes.get("B2C_STOREFRONT") or {})
+            effective_checkout_mode = update_data.get("b2c_checkout_mode") or getattr(settings, "b2c_checkout_mode", "NATIVE_GATEWAY")
+            if effective_checkout_mode == "TRAY_REDIRECT" and getattr(settings, "tray_enabled", False):
+                b2c_ch["mode"] = "TRAY_REDIRECT"
+            elif str(v_cfg.get("integration_mode") or "").upper() == "PAYMENT_LINK":
+                b2c_ch["mode"] = "PAYMENT_LINK"
+                b2c_ch["link_provider"] = b2c_ch.get("link_provider") or "VINDI"
+                if "express_cpf_only" in v_cfg:
+                    b2c_ch["express_cpf_only"] = bool(v_cfg.get("express_cpf_only", True))
+                if not update_data.get("payment_gateway_active"):
+                    settings.payment_gateway_active = "VINDI"
+            elif "payment_channel_modes" not in value and b2c_ch.get("mode") == "PAYMENT_LINK" and str(v_cfg.get("integration_mode") or "").upper() == "TRANSPARENT":
+                b2c_ch["mode"] = "PER_METHOD"
+            if b2c_ch:
+                ch_modes["B2C_STOREFRONT"] = b2c_ch
+                merged_cfg["payment_channel_modes"] = ch_modes
+            settings.b2c_showcases_config = merged_cfg
+            flag_modified(settings, "b2c_showcases_config")
+        else:
+            setattr(settings, key, value)
         
     db.commit()
     db.refresh(settings)

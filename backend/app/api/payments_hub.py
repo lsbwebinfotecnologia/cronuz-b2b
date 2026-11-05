@@ -163,12 +163,20 @@ def update_payment_routes(
         if provider is None:
             if row:
                 db.delete(row)
+                existing.pop((channel, method), None)
         elif row:
             row.provider = provider
             row.changed_by_user_id = current_user.id
         else:
-            db.add(PayChannelRoute(company_id=company_id, channel=channel, method=method,
-                                   provider=provider, changed_by_user_id=current_user.id))
+            new_row = PayChannelRoute(
+                company_id=company_id,
+                channel=channel,
+                method=method,
+                provider=provider,
+                changed_by_user_id=current_user.id,
+            )
+            db.add(new_row)
+            existing[(channel, method)] = new_row
 
     # Persist channel_modes (PER_METHOD vs PAYMENT_LINK vs TRAY_REDIRECT) and sync with B2C settings
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
@@ -229,8 +237,8 @@ def update_payment_routes(
 
     db.commit()
     try:
-        from app.api.b2c_storefront import _b2c_cache_invalidate
-        _b2c_cache_invalidate(company_id)
+        from app.api.b2c_storefront import _b2c_cache_clear
+        _b2c_cache_clear(company_id)
     except Exception:
         pass
     return _hub(db, company_id)

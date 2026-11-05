@@ -990,19 +990,91 @@ export function SellerPaymentRoutingMatrix({
       const chMap = { ...(prev[channelCode] || {}) };
       if (providerCode) chMap[methodCode] = providerCode;
       else delete chMap[methodCode];
-      return { ...prev, [channelCode]: chMap };
+      const nextRoutes = { ...prev, [channelCode]: chMap };
+      setSettings((sPrev: any) => ({
+        ...sPrev,
+        _hub_routes: nextRoutes,
+        _hub_channels: hub?.channels || [],
+      }));
+      return nextRoutes;
     });
   };
 
   const setChannelModeField = (channelCode: string, field: string, value: any) => {
-    setChannelModes((prev) => ({
-      ...prev,
-      [channelCode]: {
+    setChannelModes((prev) => {
+      const updatedCh = {
         ...(prev[channelCode] || { mode: 'PER_METHOD', link_provider: 'VINDI', express_cpf_only: true }),
         [field]: value,
-      },
-    }));
+      };
+      const nextModes = {
+        ...prev,
+        [channelCode]: updatedCh,
+      };
+
+      // Sincroniza imediatamente com o estado principal do SettingsPage
+      setSettings((sPrev: any) => {
+        const nextShowcases = {
+          ...(sPrev.b2c_showcases_config || {}),
+          payment_channel_modes: nextModes,
+        };
+        const patch: any = {
+          ...sPrev,
+          b2c_showcases_config: nextShowcases,
+          _hub_channel_modes: nextModes,
+          _hub_routes: routes,
+          _hub_channels: hub?.channels || [],
+        };
+        if (channelCode === 'B2C_STOREFRONT') {
+          if (updatedCh.mode === 'TRAY_REDIRECT') {
+            patch.b2c_checkout_mode = 'TRAY_REDIRECT';
+          } else if (updatedCh.mode === 'PAYMENT_LINK') {
+            const lp = updatedCh.link_provider || 'VINDI';
+            patch.b2c_checkout_mode = 'NATIVE_GATEWAY';
+            patch.payment_gateway_active = lp;
+            patch.vindi_integration_mode = 'PAYMENT_LINK';
+            patch.vindi_express_cpf_only = updatedCh.express_cpf_only !== false;
+          } else {
+            patch.b2c_checkout_mode = 'NATIVE_GATEWAY';
+            patch.vindi_integration_mode = 'TRANSPARENT';
+          }
+        }
+        return patch;
+      });
+
+      return nextModes;
+    });
   };
+
+  // Mantém a matriz sincronizada se o usuário clicar na modalidade dentro do VindiCheckoutPanel abaixo
+  useEffect(() => {
+    if (!hub || loadingHub) return;
+    setChannelModes((prev) => {
+      const curB2c = prev.B2C_STOREFRONT || {
+        mode: 'PER_METHOD',
+        link_provider: 'VINDI',
+        express_cpf_only: true,
+      };
+      const targetMode =
+        settings.b2c_checkout_mode === 'TRAY_REDIRECT'
+          ? 'TRAY_REDIRECT'
+          : settings.vindi_integration_mode === 'PAYMENT_LINK'
+          ? 'PAYMENT_LINK'
+          : 'PER_METHOD';
+      const targetExpress = settings.vindi_express_cpf_only !== false;
+      if (curB2c.mode === targetMode && curB2c.express_cpf_only === targetExpress) {
+        return prev;
+      }
+      return {
+        ...prev,
+        B2C_STOREFRONT: {
+          ...curB2c,
+          mode: targetMode,
+          link_provider: curB2c.link_provider || 'VINDI',
+          express_cpf_only: targetExpress,
+        },
+      };
+    });
+  }, [settings.vindi_integration_mode, settings.vindi_express_cpf_only, settings.b2c_checkout_mode]);
 
   const handleSaveMatrix = async () => {
     if (!companyId || !hub) return;
@@ -1034,11 +1106,22 @@ export function SellerPaymentRoutingMatrix({
       setRoutes(data.routes || {});
       setChannelModes(data.channel_modes || {});
 
-      // Sincroniza estado local do settings para o B2C
+      // Sincroniza estado local do settings para o B2C (incluindo payment_channel_modes em b2c_showcases_config)
       const b2cCfg = (data.channel_modes || {}).B2C_STOREFRONT || {};
       const b2cRoutes = (data.routes || {}).B2C_STOREFRONT || {};
+      const nextShowcases = {
+        ...(settings.b2c_showcases_config || {}),
+        payment_channel_modes: data.channel_modes || channelModes,
+      };
       if (b2cCfg.mode === 'TRAY_REDIRECT') {
-        setSettings({ ...settings, b2c_checkout_mode: 'TRAY_REDIRECT' });
+        setSettings({
+          ...settings,
+          b2c_checkout_mode: 'TRAY_REDIRECT',
+          b2c_showcases_config: nextShowcases,
+          _hub_channel_modes: data.channel_modes || channelModes,
+          _hub_routes: data.routes || routes,
+          _hub_channels: data.channels || hub?.channels || [],
+        });
       } else if (b2cCfg.mode === 'PAYMENT_LINK') {
         const lp = b2cCfg.link_provider || 'VINDI';
         setSettings({
@@ -1047,6 +1130,10 @@ export function SellerPaymentRoutingMatrix({
           payment_gateway_active: lp,
           vindi_integration_mode: 'PAYMENT_LINK',
           vindi_express_cpf_only: b2cCfg.express_cpf_only !== false,
+          b2c_showcases_config: nextShowcases,
+          _hub_channel_modes: data.channel_modes || channelModes,
+          _hub_routes: data.routes || routes,
+          _hub_channels: data.channels || hub?.channels || [],
         });
       } else {
         const primary = b2cRoutes.CARD || b2cRoutes.PIX || b2cRoutes.BOLETO || settings.payment_gateway_active;
@@ -1055,6 +1142,10 @@ export function SellerPaymentRoutingMatrix({
           b2c_checkout_mode: 'NATIVE_GATEWAY',
           payment_gateway_active: primary,
           vindi_integration_mode: 'TRANSPARENT',
+          b2c_showcases_config: nextShowcases,
+          _hub_channel_modes: data.channel_modes || channelModes,
+          _hub_routes: data.routes || routes,
+          _hub_channels: data.channels || hub?.channels || [],
         });
       }
 

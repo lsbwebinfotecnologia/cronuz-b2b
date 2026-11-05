@@ -316,14 +316,70 @@ export default function SettingsPage() {
       });
 
       const payloadSettings: any = { ...settings };
+      const pendingHubModes = payloadSettings._hub_channel_modes;
+      const pendingHubRoutes = payloadSettings._hub_routes;
+      const pendingHubChannels = payloadSettings._hub_channels;
+      delete payloadSettings._hub_channel_modes;
+      delete payloadSettings._hub_routes;
+      delete payloadSettings._hub_channels;
       delete payloadSettings.inter_cert_path;
       delete payloadSettings.inter_key_path;
       delete payloadSettings.efi_certificate_path;
       // tray_enabled é gerido na integração Tray; aqui é apenas leitura
       delete payloadSettings.tray_enabled;
-      // Configurações de Link / Sandbox da Vindi ficam em b2c_showcases_config.vindi_config (preserva o restante do JSON)
+
+      // Se o usuário alterou o Passo 1 (Matriz de Canais / Link no Fim da Venda) e clicou no Salvar Geral da página, persiste as rotas do Hub também
+      if (pendingHubModes && Array.isArray(pendingHubChannels)) {
+        try {
+          const routeItems: Array<{ channel: string; method: string; provider: string | null }> = [];
+          pendingHubChannels.forEach((ch: any) => {
+            const chMode = pendingHubModes[ch.code]?.mode || 'PER_METHOD';
+            (ch.methods || []).forEach((m: string) => {
+              let prov = pendingHubRoutes?.[ch.code]?.[m] || null;
+              if (chMode === 'PAYMENT_LINK' && m === 'LINK') {
+                prov = pendingHubModes[ch.code]?.link_provider || 'VINDI';
+              }
+              routeItems.push({ channel: ch.code, method: m, provider: prov });
+            });
+          });
+          await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/payments/routes`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              routes: routeItems,
+              channel_modes: pendingHubModes,
+            }),
+          });
+        } catch (hubErr) {
+          console.error('Erro ao sincronizar rotas do Hub:', hubErr);
+        }
+      }
+
+      // Configurações de Link / Sandbox da Vindi ficam em b2c_showcases_config.vindi_config (preserva o restante do JSON e sincroniza payment_channel_modes)
+      const existingChannelModes =
+        pendingHubModes ||
+        settings.b2c_showcases_config?.payment_channel_modes ||
+        {};
+      const b2cTargetMode =
+        settings.b2c_checkout_mode === 'TRAY_REDIRECT'
+          ? 'TRAY_REDIRECT'
+          : (settings.vindi_integration_mode || 'TRANSPARENT') === 'PAYMENT_LINK'
+          ? 'PAYMENT_LINK'
+          : 'PER_METHOD';
       payloadSettings.b2c_showcases_config = {
         ...(settings.b2c_showcases_config || {}),
+        payment_channel_modes: {
+          ...existingChannelModes,
+          B2C_STOREFRONT: {
+            ...(existingChannelModes.B2C_STOREFRONT || {}),
+            mode: b2cTargetMode,
+            link_provider: existingChannelModes.B2C_STOREFRONT?.link_provider || 'VINDI',
+            express_cpf_only: settings.vindi_express_cpf_only !== false,
+          },
+        },
         vindi_config: {
           ...(settings.b2c_showcases_config?.vindi_config || {}),
           sandbox: Boolean(settings.vindi_sandbox),
