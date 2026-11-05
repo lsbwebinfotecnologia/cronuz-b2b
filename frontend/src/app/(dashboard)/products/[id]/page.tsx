@@ -34,6 +34,7 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
   const [history, setHistory] = useState({ stock: [], prices: [] });
 
   const [product, setProduct] = useState({
+    id: 0,
     sku: '',
     name: '',
     short_description: '',
@@ -52,6 +53,8 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
     status: 'ACTIVE',
     stock_quantity: 0,
     cover_url: '',
+    horus_cod_item: '' as number | '',
+    publisher_code: '',
     characteristics: [] as { characteristic_id: number, value: string }[]
   });
 
@@ -60,28 +63,83 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
   const [coverBaseUrl, setCoverBaseUrl] = useState('');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [collectingBookinfo, setCollectingBookinfo] = useState(false);
+
+  const handleCollectBookinfoCover = async () => {
+    if (!product.ean_gtin) {
+      toast.error('Preencha o ISBN (EAN/GTIN) do produto antes de buscar na Bookinfo.');
+      return;
+    }
+    setCollectingBookinfo(true);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const numericId = product.id > 0 ? product.id : (Number.isFinite(Number(resolvedParams.id)) ? Number(resolvedParams.id) : undefined);
+      const res = await fetch(`${apiBase}/upload/cover/bookinfo`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}`
+        },
+        body: JSON.stringify({
+          isbn: product.ean_gtin,
+          product_id: numericId
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setImagePreview(`${apiBase}${data.url}?t=${Date.now()}`);
+        setProduct(prev => ({
+          ...prev,
+          cover_url: data.url,
+          long_description: prev.long_description || data.synopsis || prev.long_description,
+          short_description: prev.short_description || (data.synopsis ? String(data.synopsis).slice(0, 300) : prev.short_description),
+          weight_kg: prev.weight_kg || data.weight_kg || prev.weight_kg,
+          width_cm: prev.width_cm || data.width_cm || prev.width_cm,
+          height_cm: prev.height_cm || data.height_cm || prev.height_cm,
+          length_cm: prev.length_cm || data.length_cm || prev.length_cm,
+        }));
+        toast.success(data.message || 'Capa coletada na Bookinfo e salva no servidor com sucesso!');
+      } else {
+        toast.error(data.detail || 'Não foi possível coletar a capa na Bookinfo.');
+      }
+    } catch (e) {
+      toast.error('Erro de conexão ao consultar a Bookinfo.');
+    } finally {
+      setCollectingBookinfo(false);
+    }
+  };
 
   useEffect(() => {
     const fetchData = async () => {
       try {
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
         const headers = { 'Authorization': `Bearer ${getToken()}` };
         
         const [{ getUser }] = await Promise.all([import('@/lib/auth')]);
         const user = getUser();
         
+        // Resolve/load product first (so horus-X is imported once into prd_product)
+        const prodRes = await fetch(`${apiBase}/products/${resolvedParams.id}`, { headers });
+        if (!prodRes.ok) {
+          toast.error("Produto não encontrado.");
+          router.push('/products');
+          return;
+        }
+        const pData = await prodRes.json();
+        const resolvedNumericId = pData.id || resolvedParams.id;
+
         const promises = [
-          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/categories`, { headers }),
-          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/brands`, { headers }),
-          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/${resolvedParams.id}`, { headers }),
-          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/${resolvedParams.id}/history`, { headers }),
-          fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/characteristics`, { headers })
+          fetch(`${apiBase}/categories`, { headers }),
+          fetch(`${apiBase}/brands`, { headers }),
+          fetch(`${apiBase}/products/${resolvedNumericId}/history`, { headers }),
+          fetch(`${apiBase}/characteristics`, { headers })
         ];
 
         if (user?.company_id) {
-          promises.push(fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${user.company_id}/settings`, { headers }));
+          promises.push(fetch(`${apiBase}/companies/${user.company_id}/settings`, { headers }));
         }
 
-        const [catRes, brandRes, prodRes, histRes, charRes, settingsRes] = await Promise.all(promises);
+        const [catRes, brandRes, histRes, charRes, settingsRes] = await Promise.all(promises);
 
         if (catRes.ok) setCategories(await catRes.json());
         if (brandRes.ok) setBrands(await brandRes.json());
@@ -90,38 +148,34 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
            setAvailableCharacteristics(chars);
         }
         
-        if (prodRes.ok) {
-           const pData = await prodRes.json();
-           setProduct({
-               ...pData,
-               category_id: pData.category_id || '',
-               brand_id: pData.brand_id || '',
-               cover_url: pData.cover_url || '',
-               characteristics: pData.characteristics || []
-           });
-           
-           if (settingsRes?.ok) {
-             const settings = await settingsRes.json();
-             if (settings.cover_image_base_url) {
-               const baseUrl = settings.cover_image_base_url.replace(/\/$/, '');
-               setCoverBaseUrl(baseUrl);
-               if (pData.cover_url) {
-                 setImagePreview(pData.cover_url.startsWith('http') ? pData.cover_url : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${pData.cover_url}`);
-               } else if (pData.ean_gtin) {
-                 // Try to automatically load the image if it exists
-                 setImagePreview(`${baseUrl}/${pData.ean_gtin}.jpg`);
-               }
-             } else {
-                 if (pData.cover_url) {
-                     setImagePreview(pData.cover_url.startsWith('http') ? pData.cover_url : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${pData.cover_url}`);
-                 } else if (pData.ean_gtin && pData.brand_id && pData.category_id) { // simple check if product acts populated
-                     setImagePreview(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/static/covers/${user.company_id}/${pData.ean_gtin}.jpg`);
-                 }
-             }
-           }
-        } else {
-           toast.error("Produto não encontrado.");
-           router.push('/products');
+        setProduct({
+            ...pData,
+            id: pData.id || 0,
+            category_id: pData.category_id || '',
+            brand_id: pData.brand_id || '',
+            cover_url: pData.cover_url || '',
+            characteristics: pData.characteristics || []
+        });
+        
+        if (settingsRes?.ok) {
+          const settings = await settingsRes.json();
+          if (settings.cover_image_base_url) {
+            const baseUrl = settings.cover_image_base_url.replace(/\/$/, '');
+            setCoverBaseUrl(baseUrl);
+            if (pData.cover_url) {
+              setImagePreview(pData.cover_url.startsWith('http') ? pData.cover_url : `${apiBase}${pData.cover_url}`);
+            } else if (pData.ean_gtin) {
+              setImagePreview(`${baseUrl}/${pData.ean_gtin}.jpg`);
+            }
+          } else {
+              if (pData.cover_url) {
+                  setImagePreview(pData.cover_url.startsWith('http') ? pData.cover_url : `${apiBase}${pData.cover_url}`);
+              } else if (pData.ean_gtin && user?.company_id) {
+                  setImagePreview(`${apiBase}/uploads/covers/${user.company_id}/${pData.ean_gtin}.jpg`);
+              }
+          }
+        } else if (pData.cover_url) {
+          setImagePreview(pData.cover_url.startsWith('http') ? pData.cover_url : `${apiBase}${pData.cover_url}`);
         }
 
         if (histRes.ok) setHistory(await histRes.json());
@@ -177,7 +231,8 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
     
     setLoading(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/${resolvedParams.id}`, {
+      const targetId = product.id > 0 ? product.id : resolvedParams.id;
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/${targetId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -190,6 +245,8 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
           category_id: product.category_id || undefined,
           brand_id: product.brand_id || undefined,
           cover_url: product.cover_url || undefined,
+          horus_cod_item: product.horus_cod_item ? Number(product.horus_cod_item) : undefined,
+          publisher_code: product.publisher_code || undefined,
           characteristics: product.characteristics.filter(c => c.characteristic_id && c.value)
         })
       });
@@ -197,7 +254,7 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
       if (res.ok) {
         toast.success("Produto editado com sucesso!");
         // Refresh history
-        const histRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/${resolvedParams.id}/history`, {
+        const histRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/products/${targetId}/history`, {
            headers: { 'Authorization': `Bearer ${getToken()}` }
         });
         if (histRes.ok) setHistory(await histRes.json());
@@ -329,14 +386,50 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Código SKU <span className="text-rose-500">*</span></label>
-                      <input type="text" name="sku" value={product.sku} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white uppercase" />
+                      <input type="text" name="sku" value={product.sku} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white uppercase font-mono" />
                     </div>
-                     <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Código de Barras (EAN/GTIN)</label>
-                      <input type="text" name="ean_gtin" value={product.ean_gtin || ''} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Cód. Horus / Ref. Tray</label>
+                      <input type="number" name="horus_cod_item" value={product.horus_cod_item || ''} onChange={handleChange} placeholder="Ex: 163096" className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white font-mono" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">ISBN / EAN / GTIN</label>
+                      <input type="text" name="ean_gtin" value={product.ean_gtin || ''} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white font-mono" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">ID do Produto na Tray</label>
+                      <input type="text" name="publisher_code" value={product.publisher_code || ''} onChange={handleChange} placeholder="Auto-vinculado (Ex: 7)" className="w-full bg-indigo-50/50 border border-indigo-200 text-sm rounded-xl p-3 dark:bg-indigo-950/30 dark:border-indigo-800 dark:text-indigo-200 font-mono" />
+                    </div>
+                  </div>
+                 </div>
+
+                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 dark:bg-slate-900/50 dark:border-slate-800">
+                  <h3 className="text-lg font-semibold text-slate-900 mb-4 dark:text-white flex items-center gap-2">
+                    <Settings2 className="w-5 h-5 text-slate-400" /> Peso, Dimensões e Saldo de Estoque
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Saldo Estoque</label>
+                      <input type="number" name="stock_quantity" value={product.stock_quantity} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 font-mono dark:bg-slate-950 dark:border-slate-800 dark:text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Peso (kg)</label>
+                      <CurrencyInput maxDecimals={3} value={product.weight_kg || 0} onChangeValue={(val) => setProduct(p => ({...p, weight_kg: val}))} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Largura (cm)</label>
+                      <CurrencyInput maxDecimals={2} value={product.width_cm || 0} onChangeValue={(val) => setProduct(p => ({...p, width_cm: val}))} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Altura (cm)</label>
+                      <CurrencyInput maxDecimals={2} value={product.height_cm || 0} onChangeValue={(val) => setProduct(p => ({...p, height_cm: val}))} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Comp. (cm)</label>
+                      <CurrencyInput maxDecimals={2} value={product.length_cm || 0} onChangeValue={(val) => setProduct(p => ({...p, length_cm: val}))} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl block p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white"/>
                     </div>
                   </div>
                  </div>
@@ -475,48 +568,46 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
                          )}
 
                          <div className="flex-1">
-                            <h4 className="text-sm font-medium text-slate-900 dark:text-white mb-2">Padrão de Resolução: <span className="font-mono text-indigo-600 dark:text-indigo-400">{product.ean_gtin}.jpg</span></h4>
+                            <h4 className="text-sm font-medium text-slate-900 dark:text-white mb-1">
+                              Arquivo salvo no servidor por ISBN: <span className="font-mono text-indigo-600 dark:text-indigo-400">{product.ean_gtin}.jpg / .png</span>
+                            </h4>
+                            <p className="text-xs text-slate-500 mb-4">
+                              Você pode subir manualmente a capa em <b>JPEG ou PNG</b> (redimensionada automaticamente para o padrão de vitrine <b>600x900px</b>) ou coletar a imagem direto na <b>Bookinfo</b> pelo ISBN.
+                            </p>
                             
-                            {coverBaseUrl ? (
-                               <p className="text-sm text-slate-500 mb-4">
-                                 O sistema tenta carregar a imagem automaticamente baseando-se por prioridade nas configurações gerais.
-                               </p>
-                            ) : (
-                               <p className="text-sm text-slate-500 mb-4">A sua empresa não possui uma URL base configurada nas configurações gerais. Você pode tentar puxar de uma, ou fazer o upload manual abaixo.</p>
-                            )}
-                            
-                            <div className="flex gap-3">
-                              {coverBaseUrl && (
-                                <button type="button" onClick={() => {
-                                  const cUrl = `${coverBaseUrl}/${product.ean_gtin}.jpg`;
-                                  setImagePreview(cUrl);
-                                  setProduct(prev => ({...prev, cover_url: cUrl}));
-                                }} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-xl transition-colors dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                                  Tentar Sincronizar
-                                </button>
-                              )}
-                              
-                              <label className={`px-4 py-2 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-medium rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-2 ${uploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
+                            <div className="flex flex-wrap gap-3">
+                              <label className={`px-4 py-2.5 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-semibold rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-2 ${uploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
                                 {uploadingImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                                Fazer Upload Manual
+                                Subir Capa (JPG / PNG)
                                 <input type="file" className="hidden" accept="image/jpeg, image/png, image/webp" onChange={async (e) => {
                                   if (!e.target.files?.length) return;
+                                  const fileObj = e.target.files[0];
+                                  if (fileObj.size > 5 * 1024 * 1024) {
+                                    toast.error("O arquivo excede o limite máximo de 5 MB para imagens de capa.");
+                                    return;
+                                  }
                                   setUploadingImage(true);
                                   const formData = new FormData();
-                                  formData.append('file', e.target.files[0]);
+                                  formData.append('file', fileObj);
                                   formData.append('isbn', product.ean_gtin);
+                                  if (product.id > 0) {
+                                    formData.append('product_id', String(product.id));
+                                  } else if (Number.isFinite(Number(resolvedParams.id))) {
+                                    formData.append('product_id', String(resolvedParams.id));
+                                  }
                                   
                                   try {
-                                    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/cover`, {
+                                    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+                                    const res = await fetch(`${apiBase}/upload/cover`, {
                                       method: 'POST',
                                       headers: { 'Authorization': `Bearer ${getToken()}` },
                                       body: formData
                                     });
                                     if(res.ok) {
                                       const data = await res.json();
-                                      setImagePreview(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${data.url}`);
+                                      setImagePreview(`${apiBase}${data.url}?t=${Date.now()}`);
                                       setProduct(prev => ({...prev, cover_url: data.url}));
-                                      toast.success("Imagem enviada com sucesso!");
+                                      toast.success(data.message || "Imagem de capa salva com sucesso!");
                                     } else {
                                       const err = await res.json();
                                       toast.error(err.detail || "Erro no upload");
@@ -528,6 +619,26 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
                                   }
                                 }} />
                               </label>
+
+                              <button
+                                type="button"
+                                onClick={handleCollectBookinfoCover}
+                                disabled={collectingBookinfo}
+                                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm flex items-center gap-2 disabled:opacity-50"
+                              >
+                                {collectingBookinfo ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4" />}
+                                {collectingBookinfo ? 'Coletando na Bookinfo...' : 'Coletar Capa na Bookinfo'}
+                              </button>
+
+                              {coverBaseUrl && (
+                                <button type="button" onClick={() => {
+                                  const cUrl = `${coverBaseUrl}/${product.ean_gtin}.jpg`;
+                                  setImagePreview(cUrl);
+                                  setProduct(prev => ({...prev, cover_url: cUrl}));
+                                }} className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-xl transition-colors dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                                  Usar URL Base Externa
+                                </button>
+                              )}
                             </div>
                          </div>
                        </div>

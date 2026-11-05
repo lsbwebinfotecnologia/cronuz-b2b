@@ -17,34 +17,56 @@ import {
   Database,
   RefreshCw,
   Flame,
+  Eye,
+  Truck,
+  FileText,
+  CreditCard,
+  Trash2,
+  PackageCheck,
+  Bell,
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { CurrencyInput } from '@/components/CurrencyInput';
 
+const B2C_ORDER_STATUS_STEPS = [
+  { key: 'WAITING_PAYMENT', label: 'Aguardando Pagamento', badge: 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300' },
+  { key: 'PAID', label: 'Pago', badge: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300' },
+  { key: 'SEPARATION', label: 'Em Separação', badge: 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300' },
+  { key: 'FINALIZED', label: 'Finalizado', badge: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300' },
+  { key: 'DELIVERED', label: 'Entregue', badge: 'bg-teal-100 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300' },
+  { key: 'CANCELLED', label: 'Cancelado', badge: 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300' },
+];
+
 export default function SellerB2CStorefrontManagementPage({
   viewMode = 'coupons',
   initialTab,
 }: {
-  viewMode?: 'coupons' | 'orders' | 'settings';
+  viewMode?: 'coupons' | 'orders' | 'customers' | 'settings';
   initialTab?: string;
 } = {}) {
   // Determine effective section based on Left Sidebar route
-  const effectiveSection: 'coupons' | 'orders' | 'settings' =
+  const effectiveSection: 'coupons' | 'orders' | 'customers' | 'settings' =
     initialTab === 'orders'
       ? 'orders'
+      : initialTab === 'customers'
+      ? 'customers'
       : initialTab === 'lgpd'
       ? 'settings'
       : viewMode;
 
   // Sub-filter inside the Coupons page only (Cupons Individuais vs Lotes/Campanhas vs Histórico de Uso)
   const [couponSubView, setCouponSubView] = useState<'list' | 'batches' | 'history'>('list');
+  // Sub-tabs inside Settings (Checkout & Pagamento | Frete & Entrega | Cache | LGPD)
+  const [settingsSubTab, setSettingsSubTab] = useState<'checkout' | 'freight' | 'cache' | 'lgpd'>('checkout');
   const [loading, setLoading] = useState(true);
 
   const [summary, setSummary] = useState<any>(null);
   const [batches, setBatches] = useState<any[]>([]);
   const [coupons, setCoupons] = useState<any[]>([]);
   const [b2cOrders, setB2cOrders] = useState<any[]>([]);
+  const [b2cCustomers, setB2cCustomers] = useState<any[]>([]);
+  const [pendingAviseMeCount, setPendingAviseMeCount] = useState(0);
   const [redemptions, setRedemptions] = useState<any[]>([]);
   const [lgpdConsents, setLgpdConsents] = useState<any[]>([]);
 
@@ -54,6 +76,21 @@ export default function SellerB2CStorefrontManagementPage({
   const [selectedBatchFilter, setSelectedBatchFilter] = useState('');
   const [redemptionSearch, setRedemptionSearch] = useState('');
   const [orderSearch, setOrderSearch] = useState('');
+  const [orderStatusFilter, setOrderStatusFilter] = useState('ALL');
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [onlyStockAlerts, setOnlyStockAlerts] = useState(false);
+
+  // Order Detail Modal ("Olhinho")
+  const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
+  const [orderEditForm, setOrderEditForm] = useState({
+    status: 'WAITING_PAYMENT',
+    invoice_number: '',
+    invoice_key: '',
+    tracking_code: '',
+    carrier_name: '',
+    tracking_url: '',
+  });
+  const [savingOrder, setSavingOrder] = useState(false);
 
   // Modals for Coupon Creation
   const [showBatchModal, setShowBatchModal] = useState(false);
@@ -100,6 +137,21 @@ export default function SellerB2CStorefrontManagementPage({
     b2c_default_freight_value: 15.9,
     b2c_free_shipping_min_value: 150.0,
     b2c_lgpd_terms_text: '',
+    payment_gateway_active: 'EFI',
+    vindi_api_key: '',
+    vindi_sandbox: true,
+    efi_sandbox: true,
+    efi_client_id: '',
+    efi_client_secret: '',
+    efi_payee_code: '',
+    origin_zip_code: '',
+    correios_user: '',
+    correios_password: '',
+    freight_config: {
+      default_book_weight_kg: 0.35,
+      correios_enabled: true,
+      carrier_table: [] as any[],
+    },
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -117,8 +169,43 @@ export default function SellerB2CStorefrontManagementPage({
   const [clearingCache, setClearingCache] = useState(false);
   const [warmingCache, setWarmingCache] = useState(false);
   const [savingCacheConfig, setSavingCacheConfig] = useState(false);
+  const [syncingVindi, setSyncingVindi] = useState(false);
 
   const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+  const handleSyncVindiOrders = async (orderId?: number) => {
+    setSyncingVindi(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/orders/sync-vindi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(orderId ? { order_id: orderId } : {}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Falha ao consultar a Vindi.');
+      toast.success(
+        data.message ||
+          `Vindi consultada: ${data.checked || 0} pedido(s) verificado(s), ${data.approved_now || 0} aprovado(s).`
+      );
+      await loadAllData();
+      if (orderId) {
+        const ordRes = await fetch(`${apiBase}/b2c/orders`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (ordRes.ok) {
+          const all = await ordRes.json();
+          setB2cOrders(all);
+          const updated = all.find((x: any) => x.id === orderId);
+          if (updated) setSelectedOrder(updated);
+        }
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao sincronizar status na Vindi.');
+    } finally {
+      setSyncingVindi(false);
+    }
+  };
 
   const loadAllData = async () => {
     setLoading(true);
@@ -126,7 +213,7 @@ export default function SellerB2CStorefrontManagementPage({
       const token = getToken();
       const headers = { Authorization: `Bearer ${token}` };
 
-      const [sumRes, batchRes, coupRes, ordRes, redRes, lgpdRes, cacheRes] = await Promise.all([
+      const [sumRes, batchRes, coupRes, ordRes, custRes, redRes, lgpdRes, cacheRes] = await Promise.all([
         fetch(`${apiBase}/b2c/coupons/summary`, { headers }),
         fetch(`${apiBase}/b2c/coupons/batches`, { headers }),
         fetch(
@@ -140,6 +227,14 @@ export default function SellerB2CStorefrontManagementPage({
         fetch(
           `${apiBase}/b2c/orders?${new URLSearchParams({
             ...(orderSearch ? { search: orderSearch } : {}),
+            ...(orderStatusFilter && orderStatusFilter !== 'ALL' ? { status: orderStatusFilter } : {}),
+          }).toString()}`,
+          { headers }
+        ),
+        fetch(
+          `${apiBase}/b2c/customers?${new URLSearchParams({
+            ...(customerSearch ? { search: customerSearch } : {}),
+            ...(onlyStockAlerts ? { only_stock_alerts: 'true' } : {}),
           }).toString()}`,
           { headers }
         ),
@@ -165,12 +260,34 @@ export default function SellerB2CStorefrontManagementPage({
             b2c_default_freight_value: Number(s.settings.b2c_default_freight_value || 0),
             b2c_free_shipping_min_value: Number(s.settings.b2c_free_shipping_min_value || 0),
             b2c_lgpd_terms_text: s.settings.b2c_lgpd_terms_text || '',
+            payment_gateway_active: s.settings.payment_gateway_active || 'EFI',
+            vindi_api_key: s.settings.vindi_api_key || '',
+            vindi_sandbox: s.settings.vindi_sandbox !== false,
+            efi_sandbox: s.settings.efi_sandbox !== false,
+            efi_client_id: s.settings.efi_client_id || '',
+            efi_client_secret: s.settings.efi_client_secret || '',
+            efi_payee_code: s.settings.efi_payee_code || '',
+            origin_zip_code: s.settings.origin_zip_code || '',
+            correios_user: s.settings.correios_user || '',
+            correios_password: s.settings.correios_password || '',
+            freight_config: {
+              default_book_weight_kg: Number(s.settings.freight_config?.default_book_weight_kg || 0.35),
+              correios_enabled: s.settings.freight_config?.correios_enabled !== false,
+              carrier_table: Array.isArray(s.settings.freight_config?.carrier_table)
+                ? s.settings.freight_config.carrier_table
+                : [],
+            },
           });
         }
       }
       if (batchRes.ok) setBatches(await batchRes.json());
       if (coupRes.ok) setCoupons(await coupRes.json());
       if (ordRes.ok) setB2cOrders(await ordRes.json());
+      if (custRes.ok) {
+        const custData = await custRes.json();
+        setB2cCustomers(custData.customers || []);
+        setPendingAviseMeCount(Number(custData.pending_alerts_count || 0));
+      }
       if (redRes.ok) setRedemptions(await redRes.json());
       if (lgpdRes.ok) setLgpdConsents(await lgpdRes.json());
       if (cacheRes.ok) setCacheStatus(await cacheRes.json());
@@ -183,7 +300,81 @@ export default function SellerB2CStorefrontManagementPage({
 
   useEffect(() => {
     loadAllData();
-  }, [selectedBatchFilter, couponStatusFilter]);
+  }, [selectedBatchFilter, couponStatusFilter, orderStatusFilter, onlyStockAlerts]);
+
+  const handleUpdateStockNotifyStatus = async (notifyId: string, newStatus = 'NOTIFIED') => {
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/customers/stock-notify/${notifyId}?status=${newStatus}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao atualizar alerta.');
+      toast.success(data.message || 'Alerta Avise-me atualizado!');
+      loadAllData();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
+  const openOrderDetailsModal = (order: any) => {
+    setSelectedOrder(order);
+    setOrderEditForm({
+      status: order.status || 'WAITING_PAYMENT',
+      invoice_number: order.invoice_number || '',
+      invoice_key: order.invoice_key || '',
+      tracking_code: order.tracking_code || '',
+      carrier_name: order.carrier_name || '',
+      tracking_url: order.tracking_url || '',
+    });
+  };
+
+  const handleSaveOrderDetails = async (overrideStatus?: string) => {
+    if (!selectedOrder) return;
+    setSavingOrder(true);
+    try {
+      const token = getToken();
+      const payload = {
+        ...orderEditForm,
+        ...(overrideStatus ? { status: overrideStatus } : {}),
+      };
+      const res = await fetch(`${apiBase}/b2c/orders/${selectedOrder.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao atualizar pedido.');
+      toast.success(data.message || `Pedido #${selectedOrder.id} atualizado!`);
+      setSelectedOrder((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              status: data.status,
+              status_label: data.status_label,
+              invoice_number: data.invoice_number,
+              invoice_key: data.invoice_key,
+              tracking_code: data.tracking_code,
+              carrier_name: data.carrier_name,
+              tracking_url: data.tracking_url,
+            }
+          : null
+      );
+      setOrderEditForm((prev) => ({
+        ...prev,
+        status: data.status,
+      }));
+      loadAllData();
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao salvar pedido.');
+    } finally {
+      setSavingOrder(false);
+    }
+  };
 
   const handleCreateBatch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -317,7 +508,24 @@ export default function SellerB2CStorefrontManagementPage({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(settingsForm),
+        // Pagamento (gateway, credenciais e modo de finalização) é salvo em Configurações → Pagamentos
+        body: JSON.stringify(
+          Object.fromEntries(
+            Object.entries(settingsForm).filter(
+              ([k]) =>
+                ![
+                  'payment_gateway_active',
+                  'vindi_api_key',
+                  'vindi_sandbox',
+                  'b2c_checkout_mode',
+                  'efi_sandbox',
+                  'efi_client_id',
+                  'efi_client_secret',
+                  'efi_payee_code',
+                ].includes(k)
+            )
+          )
+        ),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erro ao salvar configurações.');
@@ -711,13 +919,18 @@ export default function SellerB2CStorefrontManagementPage({
                               Cupom de Saldo Residual
                             </span>
                           )}
+                          {c.coupon_mode === 'MULTI_USE' && (
+                            <span className="inline-block mt-1 text-[10px] font-bold text-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 px-1.5 py-0.5 rounded">
+                              Múltiplos Usos ({c.uses_count || 0} / {c.max_uses || 1} usados)
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-4">
                           <span className="font-semibold text-slate-800 dark:text-slate-200">
                             {c.partner_company_name || c.batch_name || 'Cupom Avulso'}
                           </span>
                           <span className="block text-[11px] text-slate-400">
-                            {c.allows_freight_discount ? 'Abate Produtos + Frete' : 'Abate Produtos'} •{' '}
+                            {c.allows_freight_discount ? 'Frete Grátis Incluso' : 'Frete Normal'} •{' '}
                             {c.allow_residual_balance !== false ? 'Gera Residual' : 'Uso Único'}
                           </span>
                         </td>
@@ -783,10 +996,10 @@ export default function SellerB2CStorefrontManagementPage({
                           </div>
                         </td>
                         <td className="py-3 px-4 text-right">
-                          {c.status === 'AVAILABLE' && (
+                          {(c.status === 'AVAILABLE' || c.status === 'PARTIALLY_USED') && (
                             <button
                               onClick={() => handleCancelCoupon(c.id, c.code)}
-                              className="text-xs font-semibold text-rose-600 hover:underline"
+                              className="text-xs font-semibold text-rose-600 hover:underline cursor-pointer"
                             >
                               Cancelar
                             </button>
@@ -977,7 +1190,7 @@ export default function SellerB2CStorefrontManagementPage({
       )}
 
       {/* ===================================================================== */}
-      {/* VIEW 2: PEDIDOS & CARRINHOS (/b2c-storefront/orders)                  */}
+      {/* VIEW 2: PEDIDOS DA LOJA B2C (/b2c-storefront/orders)                  */}
       {/* ===================================================================== */}
       {effectiveSection === 'orders' && (
         <div className="space-y-4">
@@ -988,10 +1201,10 @@ export default function SellerB2CStorefrontManagementPage({
               </div>
               <div>
                 <h1 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
-                  Pedidos &amp; Carrinhos da Loja B2C
+                  Pedidos da Loja B2C
                 </h1>
                 <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-                  Acompanhe todas as vendas concluídas na loja virtual, cupons aplicados e carrinhos enviados para finalização.
+                  Acompanhe os pedidos da loja virtual, evolua o status operacional, informe a Nota Fiscal e o código de rastreio.
                 </p>
               </div>
             </div>
@@ -1000,158 +1213,702 @@ export default function SellerB2CStorefrontManagementPage({
               href={storePublicUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 transition-colors self-start sm:self-auto"
+              className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 transition-colors self-start sm:self-auto cursor-pointer"
             >
               <ExternalLink className="w-4 h-4 text-indigo-600" />
               Ver Loja Online
             </a>
           </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={orderSearch}
-                onChange={(e) => setOrderSearch(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && loadAllData()}
-                placeholder="Buscar pedido por cliente, CPF, e-mail, cupom ou sessão Tray..."
-                className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
-              />
+          {selectedOrder ? (
+            /* ================================================================= */
+            /* TELA DEDICADA DE DETALHE DO PEDIDO B2C (SEM MODAL)                */
+            /* ================================================================= */
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrder(null)}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:underline cursor-pointer mb-1.5"
+                  >
+                    ← Voltar para Lista de Pedidos
+                  </button>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-white">
+                      Detalhes do Pedido #{selectedOrder.id}
+                    </h2>
+                    <span
+                      className={`px-3 py-1 rounded-full text-xs font-bold ${
+                        (
+                          B2C_ORDER_STATUS_STEPS.find((s) => s.key === selectedOrder.status) ||
+                          B2C_ORDER_STATUS_STEPS[0]
+                        ).badge
+                      }`}
+                    >
+                      {selectedOrder.status_label || selectedOrder.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Realizado em{' '}
+                    {selectedOrder.created_at
+                      ? new Date(selectedOrder.created_at).toLocaleString('pt-BR')
+                      : '—'}{' '}
+                    • Canal: {selectedOrder.payment_gateway || selectedOrder.checkout_mode}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedOrder(null)}
+                  className="self-start sm:self-auto px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                >
+                  ← Voltar para Pedidos
+                </button>
+              </div>
+
+              {/* Régua Oficial de Status do Pedido B2C */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2.5">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
+                  Fluxo de Status do Pedido B2C (Clique para avançar ou alterar)
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                  {B2C_ORDER_STATUS_STEPS.map((step, idx) => {
+                    const active = orderEditForm.status === step.key;
+                    return (
+                      <button
+                        key={step.key}
+                        type="button"
+                        disabled={savingOrder}
+                        onClick={() => {
+                          setOrderEditForm((prev) => ({ ...prev, status: step.key }));
+                          handleSaveOrderDetails(step.key);
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          active
+                            ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm'
+                            : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:border-indigo-300'
+                        }`}
+                      >
+                        <span className="block text-[10px] opacity-75 font-bold">
+                          Etapa {idx + 1}
+                        </span>
+                        <span className="block text-xs font-extrabold mt-0.5">{step.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Dados do Cliente + Endereço de Entrega & Resumo Financeiro */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2">
+                  <h4 className="text-xs font-bold uppercase text-slate-400">
+                    Dados do Cliente &amp; Endereço de Entrega
+                  </h4>
+                  <p className="text-sm font-bold text-slate-900 dark:text-white">
+                    {selectedOrder.customer_name}
+                  </p>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 font-mono">
+                    CPF: {selectedOrder.customer_cpf} • Tel: {selectedOrder.customer_phone || 'Não informado'}
+                  </p>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    E-mail: {selectedOrder.customer_email}
+                  </p>
+                  {selectedOrder.shipping_address?.street && (
+                    <div className="pt-2 mt-2 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300">
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                        Endereço de Entrega ({selectedOrder.freight_service_name || 'Frete'}):
+                      </span>
+                      {selectedOrder.shipping_address.street}, {selectedOrder.shipping_address.number}
+                      {selectedOrder.shipping_address.complement
+                        ? ` - ${selectedOrder.shipping_address.complement}`
+                        : ''}
+                      <br />
+                      {selectedOrder.shipping_address.neighborhood} —{' '}
+                      {selectedOrder.shipping_address.city}/{selectedOrder.shipping_address.state} • CEP:{' '}
+                      {selectedOrder.shipping_address.zip_code}
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2">
+                  <h4 className="text-xs font-bold uppercase text-slate-400">
+                    Informações de Pagamento &amp; Cupom
+                  </h4>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-500">Subtotal dos Produtos:</span>
+                    <span className="font-bold text-slate-900 dark:text-white">
+                      {formatBRL(selectedOrder.subtotal)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-500">
+                      Frete ({selectedOrder.freight_service_name || 'Entrega'}):
+                    </span>
+                    <span className="font-bold text-slate-900 dark:text-white">
+                      {Number(selectedOrder.freight || 0) <= 0
+                        ? 'Grátis (R$ 0,00)'
+                        : formatBRL(selectedOrder.freight)}
+                    </span>
+                  </div>
+                  {selectedOrder.coupon_code && (
+                    <div className="flex justify-between text-xs text-emerald-600 font-bold">
+                      <span>Cupom Aplicado ({selectedOrder.coupon_code}):</span>
+                      <span>-{formatBRL(selectedOrder.discount_applied)}</span>
+                    </div>
+                  )}
+                  {selectedOrder.residual_coupon_code && (
+                    <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-[11px] text-amber-800 dark:text-amber-300 font-mono">
+                      Novo Cupom Residual Gerado: <strong>{selectedOrder.residual_coupon_code}</strong> (
+                      {formatBRL(selectedOrder.remaining_balance)})
+                    </div>
+                  )}
+                  <div className="flex justify-between text-sm font-extrabold pt-2 border-t border-slate-100 dark:border-slate-800 text-slate-900 dark:text-white">
+                    <span>Valor Total Pago:</span>
+                    <span>{formatBRL(selectedOrder.difference_paid)}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Meio: <strong>{selectedOrder.payment_method || selectedOrder.checkout_mode}</strong>{' '}
+                    {selectedOrder.external_id ? `• Transação: ${selectedOrder.external_id}` : ''}
+                    {selectedOrder.vindi_status_name ? ` • Status Vindi: ${selectedOrder.vindi_status_name}` : ''}
+                  </p>
+                  {(selectedOrder.payment_gateway === 'VINDI' || selectedOrder.vindi_token_transaction) && (
+                    <div className="pt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={syncingVindi}
+                        onClick={() => handleSyncVindiOrders(selectedOrder.id)}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${syncingVindi ? 'animate-spin' : ''}`} />
+                        {syncingVindi ? 'Consultando Vindi...' : 'Consultar / Atualizar Pagamento na Vindi'}
+                      </button>
+                      {selectedOrder.vindi_payment_url && (
+                        <a
+                          href={selectedOrder.vindi_payment_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold inline-flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          Abrir Link Vindi
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Histórico Auditável de Pagamento (PIX / Cartão / Link Vindi) */}
+              {Array.isArray(selectedOrder.payment_history) && selectedOrder.payment_history.length > 0 && (
+                <div className="p-4 rounded-2xl border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-extrabold uppercase tracking-wider text-indigo-900 dark:text-indigo-300">
+                      Histórico de Pagamento &amp; Retorno Vindi ({selectedOrder.payment_history.length}{' '}
+                      {selectedOrder.payment_history.length === 1 ? 'evento' : 'eventos'})
+                    </h4>
+                    {selectedOrder.vindi_token_transaction && (
+                      <span className="text-[11px] font-mono text-slate-500">
+                        Token Vindi: {selectedOrder.vindi_token_transaction}
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-1.5">
+                    {selectedOrder.payment_history.map((ev: any, idx: number) => (
+                      <div
+                        key={idx}
+                        className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                      >
+                        <div>
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            {ev.event === 'PAYMENT_APPROVED'
+                              ? '✓ Pagamento Aprovado'
+                              : ev.event === 'PAYMENT_CANCELED'
+                              ? '✕ Pagamento Cancelado/Reprovado'
+                              : ev.event === 'CHECKOUT_CREATED'
+                              ? '• Transação / Link Gerado no Checkout'
+                              : `• Atualização (${ev.vindi_status_name || ev.event})`}
+                          </span>
+                          <span className="text-slate-500 ml-2">
+                            Meio: <strong>{ev.payment_method || '—'}</strong>
+                            {ev.vindi_status_name ? ` • Vindi: ${ev.vindi_status_name}` : ''}
+                            {ev.transaction_id ? ` • ID: ${ev.transaction_id}` : ''}
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-mono text-slate-400 shrink-0">
+                          {ev.at ? new Date(ev.at).toLocaleString('pt-BR') : '—'} ({ev.source || 'SISTEMA'})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Lista de Itens do Pedido */}
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+                <div className="bg-slate-50 dark:bg-slate-800/60 px-4 py-2.5 text-xs font-bold text-slate-700 dark:text-slate-200">
+                  Itens do Pedido ({selectedOrder.items_count})
+                </div>
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] text-slate-400 uppercase">
+                      <th className="py-2.5 px-4">SKU / ISBN</th>
+                      <th className="py-2.5 px-4">Produto</th>
+                      <th className="py-2.5 px-4 text-center">Qtd</th>
+                      <th className="py-2.5 px-4 text-right">Unitário</th>
+                      <th className="py-2.5 px-4 text-right">Subtotal</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {(selectedOrder.items || []).map((it: any) => (
+                      <tr key={it.id}>
+                        <td className="py-2.5 px-4 font-mono text-slate-500">
+                          {it.ean_isbn || it.sku}
+                        </td>
+                        <td className="py-2.5 px-4 font-bold text-slate-900 dark:text-white">
+                          {it.name}
+                        </td>
+                        <td className="py-2.5 px-4 text-center font-bold">{it.quantity}</td>
+                        <td className="py-2.5 px-4 text-right">{formatBRL(it.unit_price)}</td>
+                        <td className="py-2.5 px-4 text-right font-bold">
+                          {formatBRL(it.total_price)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Dados da Nota Fiscal & Rastreio da Encomenda */}
+              <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Truck className="w-4 h-4 text-indigo-600" />
+                  <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                    Dados da Nota Fiscal &amp; Rastreio da Encomenda
+                  </h4>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                      Número da Nota Fiscal (NF-e)
+                    </label>
+                    <input
+                      type="text"
+                      value={orderEditForm.invoice_number}
+                      onChange={(e) =>
+                        setOrderEditForm({ ...orderEditForm, invoice_number: e.target.value })
+                      }
+                      placeholder="Ex: 00012548"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                      Chave de Acesso NF-e (44 dígitos)
+                    </label>
+                    <input
+                      type="text"
+                      value={orderEditForm.invoice_key}
+                      onChange={(e) =>
+                        setOrderEditForm({ ...orderEditForm, invoice_key: e.target.value })
+                      }
+                      placeholder="Chave da Nota Fiscal"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                      Código de Rastreio (Correios / Transp.)
+                    </label>
+                    <input
+                      type="text"
+                      value={orderEditForm.tracking_code}
+                      onChange={(e) =>
+                        setOrderEditForm({
+                          ...orderEditForm,
+                          tracking_code: e.target.value.toUpperCase(),
+                        })
+                      }
+                      placeholder="Ex: AA123456789BR"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold uppercase"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                      Transportadora / Modalidade
+                    </label>
+                    <input
+                      type="text"
+                      value={orderEditForm.carrier_name}
+                      onChange={(e) =>
+                        setOrderEditForm({ ...orderEditForm, carrier_name: e.target.value })
+                      }
+                      placeholder="Ex: Correios SEDEX / Jadlog"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    disabled={savingOrder}
+                    onClick={() => handleSaveOrderDetails()}
+                    className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm disabled:opacity-50 cursor-pointer"
+                  >
+                    {savingOrder ? 'Salvando...' : 'Salvar Nota Fiscal, Rastreio e Status'}
+                  </button>
+                </div>
+              </div>
             </div>
-            <button
-              onClick={loadAllData}
-              className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold"
-            >
-              Atualizar Lista
-            </button>
+          ) : (
+            <>
+              {/* Régua de Filtro por Status de Pedido B2C */}
+              <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 shadow-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOrderStatusFilter('ALL')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                      orderStatusFilter === 'ALL'
+                        ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                    }`}
+                  >
+                    Todos os Pedidos ({b2cOrders.length})
+                  </button>
+                  {B2C_ORDER_STATUS_STEPS.map((st) => (
+                    <button
+                      key={st.key}
+                      type="button"
+                      onClick={() => setOrderStatusFilter(st.key)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                        orderStatusFilter === st.key
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={orderSearch}
+                      onChange={(e) => setOrderSearch(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && loadAllData()}
+                      placeholder="Buscar por nº do pedido, nome do cliente, CPF, e-mail, NF-e ou rastreio..."
+                      className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={syncingVindi}
+                      onClick={() => handleSyncVindiOrders()}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncingVindi ? 'animate-spin' : ''}`} />
+                      {syncingVindi ? 'Sincronizando Vindi...' : 'Sincronizar Pagamentos Vindi'}
+                    </button>
+                    <button
+                      onClick={loadAllData}
+                      className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold cursor-pointer"
+                    >
+                      Atualizar Lista
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabela Limpa de Pedidos com o Olhinho (Visualizar Detalhes) */}
+              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
+                      <th className="py-3.5 px-4">Pedido</th>
+                      <th className="py-3.5 px-4">Data</th>
+                      <th className="py-3.5 px-4">Cliente</th>
+                      <th className="py-3.5 px-4">Total / Cupom</th>
+                      <th className="py-3.5 px-4">NF-e / Rastreio</th>
+                      <th className="py-3.5 px-4">Status</th>
+                      <th className="py-3.5 px-4 text-right">Detalhes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
+                    {b2cOrders.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-12 text-center text-slate-400">
+                          Nenhum pedido registrado para este filtro.
+                        </td>
+                      </tr>
+                    ) : (
+                      b2cOrders.map((o) => {
+                        const stObj =
+                          B2C_ORDER_STATUS_STEPS.find((s) => s.key === o.status) ||
+                          B2C_ORDER_STATUS_STEPS[0];
+                        return (
+                          <tr
+                            key={o.id}
+                            onClick={() => openOrderDetailsModal(o)}
+                            className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 cursor-pointer"
+                          >
+                            <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">
+                              #{o.id}
+                              <span className="block text-[11px] font-normal text-slate-400">
+                                {o.items_count} {o.items_count === 1 ? 'item' : 'itens'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 text-xs text-slate-600 dark:text-slate-300 font-mono">
+                              {o.created_at ? new Date(o.created_at).toLocaleString('pt-BR') : '—'}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                                {o.customer_name}
+                              </span>
+                              <span className="font-mono text-[11px] text-slate-500">
+                                CPF: {o.customer_cpf}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="font-extrabold text-slate-900 dark:text-white block">
+                                {Number(o.difference_paid || 0) <= 0.009
+                                  ? 'R$ 0,00 (100% Cupom)'
+                                  : formatBRL(o.difference_paid)}
+                              </span>
+                              {o.coupon_code && (
+                                <span className="inline-block mt-0.5 text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                  Cupom: {o.coupon_code} (-{formatBRL(o.discount_applied)})
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-4 text-xs">
+                              {o.invoice_number ? (
+                                <span className="block font-semibold text-slate-700 dark:text-slate-300">
+                                  NF-e: {o.invoice_number}
+                                </span>
+                              ) : (
+                                <span className="block text-slate-400">Sem NF-e</span>
+                              )}
+                              {o.tracking_code ? (
+                                <span className="block font-mono text-[11px] text-indigo-600 dark:text-indigo-400 font-bold">
+                                  Rastreio: {o.tracking_code}
+                                </span>
+                              ) : (
+                                <span className="block text-[11px] text-slate-400">Sem rastreio</span>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span
+                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${stObj.badge}`}
+                              >
+                                {stObj.label}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 text-right">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openOrderDetailsModal(o);
+                                }}
+                                title="Abrir tela de detalhes do pedido"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 dark:bg-slate-800 dark:hover:bg-indigo-950/50 text-xs font-bold text-slate-700 hover:text-indigo-600 dark:text-slate-200 transition-colors cursor-pointer"
+                              >
+                                <Eye className="w-4 h-4 text-indigo-600" />
+                                Ver Pedido
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* VIEW 3: CLIENTES B2C & BANDEIRA "AVISE-ME" (/b2c-storefront/customers)*/}
+      {/* ===================================================================== */}
+      {effectiveSection === 'customers' && (
+        <div className="space-y-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-sm">
+            <div>
+              <h1 className="text-base sm:text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Users className="w-5 h-5 text-indigo-600" />
+                Clientes da Loja &amp; Alertas Avise-me ({b2cCustomers.length})
+              </h1>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Acompanhe os clientes cadastrados no B2C e os produtos sem estoque marcados com a bandeira Avise-me.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setOnlyStockAlerts(false)}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  !onlyStockAlerts
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                Todos os Clientes
+              </button>
+              <button
+                type="button"
+                onClick={() => setOnlyStockAlerts(true)}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  onlyStockAlerts
+                    ? 'bg-amber-600 text-white shadow-sm'
+                    : 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                }`}
+              >
+                <Bell className="w-3.5 h-3.5" />
+                Com Bandeira Avise-me ({pendingAviseMeCount})
+              </button>
+
+              <div className="relative w-full sm:w-64">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Buscar nome, e-mail, CPF ou livro..."
+                  value={customerSearch}
+                  onChange={(e) => setCustomerSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && loadAllData()}
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
+                />
+              </div>
+            </div>
           </div>
 
           <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
-                  <th className="py-3.5 px-4">Pedido / Data</th>
-                  <th className="py-3.5 px-4">Cliente</th>
-                  <th className="py-3.5 px-4">Itens</th>
-                  <th className="py-3.5 px-4">Subtotal &amp; Frete</th>
-                  <th className="py-3.5 px-4">Cupom &amp; Desconto</th>
-                  <th className="py-3.5 px-4">Total Pago</th>
-                  <th className="py-3.5 px-4">Canal de Checkout</th>
+                  <th className="py-3 px-4">Cliente</th>
+                  <th className="py-3 px-4">E-mail / Contato</th>
+                  <th className="py-3 px-4">Itens com Bandeira 🔔 Avise-me</th>
+                  <th className="py-3 px-4 text-center">Pedidos B2C</th>
+                  <th className="py-3 px-4 text-right">Total Comprado</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
-                {b2cOrders.length === 0 ? (
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+                {b2cCustomers.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-slate-400">
-                      Nenhum pedido registrado até o momento.
+                    <td colSpan={5} className="py-12 text-center text-slate-400">
+                      Nenhum cliente ou solicitação Avise-me encontrada.
                     </td>
                   </tr>
                 ) : (
-                  b2cOrders.map((o) => (
-                    <tr key={o.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                      <td className="py-3.5 px-4">
-                        <span className="font-bold text-slate-900 dark:text-white">
-                          Pedido #{o.id}
-                        </span>
-                        <span className="block text-[11px] text-slate-400">
-                          {o.created_at ? new Date(o.created_at).toLocaleString('pt-BR') : ''}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <span className="font-bold text-slate-800 dark:text-slate-200">
-                          {o.customer_name}
-                        </span>
-                        <span className="block font-mono text-[11px] text-slate-500">
-                          CPF: {o.customer_cpf} • {o.customer_email}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 max-w-xs">
-                        <span className="font-semibold text-slate-800 dark:text-slate-200">
-                          {o.items_count} {o.items_count === 1 ? 'item' : 'itens'}
-                        </span>
-                        {o.items && o.items.length > 0 && (
-                          <div
-                            className="text-[11px] text-slate-500 truncate"
-                            title={o.items.map((i: any) => `${i.quantity}x ${i.name}`).join(', ')}
-                          >
-                            {o.items
-                              .slice(0, 2)
-                              .map((i: any) => `${i.quantity}x ${i.name}`)
-                              .join(', ')}
-                            {o.items.length > 2 ? ` +${o.items.length - 2}` : ''}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <span className="font-semibold text-slate-900 dark:text-white">
-                          Prod: {formatBRL(o.subtotal)}
-                        </span>
-                        <span className="block text-[11px] text-slate-400">
-                          Frete: {formatBRL(o.freight)}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {o.coupon_code ? (
-                          <div>
-                            <span className="font-mono font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded">
-                              {o.coupon_code}
-                            </span>
-                            <span className="block text-[11px] text-emerald-600 font-bold mt-0.5">
-                              -{formatBRL(o.discount_applied)}
-                            </span>
-                            {o.residual_coupon_code && (
-                              <span className="block text-[11px] text-amber-600 font-mono">
-                                Residual: <strong>{o.residual_coupon_code}</strong> ({formatBRL(o.remaining_balance)})
+                  b2cCustomers.map((cust) => {
+                    const alerts = Array.isArray(cust.stock_alerts) ? cust.stock_alerts : [];
+                    return (
+                      <tr key={cust.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 align-top">
+                        <td className="py-3.5 px-4">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-slate-900 dark:text-white">{cust.name}</span>
+                            {cust.has_avise_me && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 text-[10px] font-extrabold">
+                                <Bell className="w-3 h-3" />
+                                AVISE-ME
                               </span>
                             )}
                           </div>
-                        ) : (
-                          <span className="text-slate-400 text-xs">Sem cupom</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {Number(o.difference_paid || 0) <= 0.009 ? (
-                          <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 text-[11px] font-bold">
-                            R$ 0,00 (100% Cupom)
-                          </span>
-                        ) : (
-                          <span className="font-extrabold text-slate-900 dark:text-white">
-                            {formatBRL(o.difference_paid)}
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {o.checkout_mode === 'FREE_VOUCHER' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-bold">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Concluído (Cupom Integral)
-                          </span>
-                        )}
-                        {o.checkout_mode === 'TRAY_REDIRECT' && (
-                          <div className="space-y-1">
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-bold">
-                              <ShoppingBag className="w-3.5 h-3.5" /> Checkout Tray
+                          {cust.cpf && (
+                            <span className="block font-mono text-[11px] text-slate-500 mt-0.5">
+                              CPF: {cust.cpf}
                             </span>
-                            {o.tray_cart_url && (
-                              <a
-                                href={o.tray_cart_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="block text-[11px] font-bold text-indigo-600 hover:underline"
-                              >
-                                Abrir Carrinho Tray →
-                              </a>
-                            )}
-                          </div>
-                        )}
-                        {o.checkout_mode !== 'FREE_VOUCHER' && o.checkout_mode !== 'TRAY_REDIRECT' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-xs font-bold">
-                            Gateway Nativo ({o.status})
+                          )}
+                          {(cust.city || cust.state) && (
+                            <span className="block text-[11px] text-slate-400">
+                              {cust.city}/{cust.state}
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-3.5 px-4">
+                          <span className="font-semibold text-slate-800 dark:text-slate-200 block">
+                            {cust.email || '—'}
                           </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
+                          {cust.phone && (
+                            <span className="text-[11px] text-slate-500 block mt-0.5">
+                              Tel: {cust.phone}
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-3.5 px-4">
+                          {alerts.length === 0 ? (
+                            <span className="text-slate-400 text-[11px]">Nenhum item solicitado</span>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {alerts.map((al: any) => {
+                                const isPending = al.status === 'PENDING';
+                                const hasReturnedStock = Number(al.current_stock || 0) > 0;
+                                return (
+                                  <div
+                                    key={al.id}
+                                    className={`p-2 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                                      isPending
+                                        ? 'border-amber-200 bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/30'
+                                        : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/40 opacity-75'
+                                    }`}
+                                  >
+                                    <div>
+                                      <p className="font-bold text-slate-900 dark:text-white text-xs">
+                                        {al.product_name}
+                                      </p>
+                                      <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 mt-0.5">
+                                        <span className="font-mono">SKU/ISBN: {al.ean_gtin || al.sku}</span>
+                                        <span
+                                          className={`font-bold px-1.5 py-0.5 rounded ${
+                                            hasReturnedStock
+                                              ? 'bg-emerald-100 text-emerald-700'
+                                              : 'bg-rose-100 text-rose-700'
+                                          }`}
+                                        >
+                                          Saldo Atual: {al.current_stock || 0} un.
+                                        </span>
+                                      </div>
+                                    </div>
+                                    {isPending ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUpdateStockNotifyStatus(al.id, 'NOTIFIED')}
+                                        className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold shrink-0 cursor-pointer"
+                                      >
+                                        Avisar / Atendido
+                                      </button>
+                                    ) : (
+                                      <span className="text-[10px] font-bold text-emerald-600">
+                                        ✓ Avisado
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-center font-bold">
+                          {cust.orders_count || 0}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-right font-extrabold text-emerald-600">
+                          {formatBRL(cust.total_spent || 0)}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -1160,29 +1917,59 @@ export default function SellerB2CStorefrontManagementPage({
       )}
 
       {/* ===================================================================== */}
-      {/* VIEW 3: FRETE, CHECKOUT & LGPD (/b2c-storefront/settings)             */}
+      {/* VIEW 4: CONFIGURAÇÕES COM SUBMENU LIMPO (/b2c-storefront/settings)    */}
       {/* ===================================================================== */}
       {effectiveSection === 'settings' && (
-        <div className="space-y-6">
+        <div className="space-y-5">
+          {/* Submenu Horizontal de Configurações */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-2 flex flex-wrap items-center gap-2 shadow-sm">
+            {[
+              { id: 'checkout', label: 'Checkout e Pagamento', icon: CreditCard },
+              { id: 'freight', label: 'Frete e Entrega', icon: Truck },
+              { id: 'cache', label: 'Performance e Cache', icon: Database },
+              { id: 'lgpd', label: 'Privacidade e LGPD', icon: ShieldCheck },
+            ].map((tab) => {
+              const IconComp = tab.icon;
+              const isActive = settingsSubTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setSettingsSubTab(tab.id as any)}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    isActive
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <IconComp className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* SUB-ABA 1: CHECKOUT E GATEWAYS DE PAGAMENTO HOMOLOGADOS */}
+          {settingsSubTab === 'checkout' && (
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600">
-                  <Settings className="w-5 h-5" />
+                  <CreditCard className="w-5 h-5" />
                 </div>
                 <div>
                   <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-                    Frete, Checkout &amp; Privacidade (LGPD)
+                    Checkout &amp; Gateways de Pagamento Homologados
                   </h1>
                   <p className="text-xs text-slate-500">
-                    Defina o valor de frete da loja, escolha o modo de pagamento (Gateway Nativo ou Checkout Tray) e configure o termo LGPD.
+                    Escolha o gateway homologado para processar PIX e Cartão de Crédito no checkout padrão da loja B2C.
                   </p>
                 </div>
               </div>
               <button
                 onClick={handleSaveB2CSettings}
                 disabled={savingSettings}
-                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm disabled:opacity-50 shrink-0"
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm disabled:opacity-50 shrink-0 cursor-pointer"
               >
                 {savingSettings ? 'Salvando...' : 'Salvar Configurações'}
               </button>
@@ -1203,36 +1990,11 @@ export default function SellerB2CStorefrontManagementPage({
                     Loja Virtual Aberta ao Público
                   </span>
                   <span className="text-xs text-slate-500">
-                    Permite navegar pelo catálogo, adicionar itens à sacola, aplicar cupom de desconto e concluir o cadastro no checkout.
+                    Permite que clientes naveguem, criem conta com CPF/E-mail e senha segura, calculem o frete e finalizem a compra.
                   </span>
                 </div>
               </label>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Modo de Pagamento no Checkout
-                </label>
-                <select
-                  value={settingsForm.b2c_checkout_mode}
-                  onChange={(e) =>
-                    setSettingsForm({ ...settingsForm, b2c_checkout_mode: e.target.value })
-                  }
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold text-slate-900 dark:text-white"
-                >
-                  <option value="NATIVE_GATEWAY">
-                    Intermediador de Pagamento Nativo ({summary?.settings?.payment_gateway_active || 'PIX / Cartão'})
-                  </option>
-                  <option value="TRAY_REDIRECT">
-                    Enviar Carrinho Pronto + Desconto para Finalizar na Loja Tray
-                  </option>
-                </select>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Quando o cupom cobre 100% do pedido, o sistema conclui o pedido imediatamente sem cobrança adicional.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                   Domínio Próprio da Loja (Ex: loja.suaeditora.com.br)
@@ -1244,21 +2006,101 @@ export default function SellerB2CStorefrontManagementPage({
                     setSettingsForm({ ...settingsForm, b2c_custom_domain: e.target.value })
                   }
                   placeholder="loja.suaeditora.com.br"
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Gateway, credenciais e modo de finalização ficam em Configurações > Pagamentos (fonte única) */}
+            <div className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/60 dark:bg-indigo-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs text-slate-700 dark:text-slate-300 space-y-1">
+                <p className="text-sm font-bold text-slate-900 dark:text-white">Pagamento da loja B2C</p>
+                <p>
+                  Gateway ativo: <strong>{settingsForm.payment_gateway_active || 'EFI'}</strong> · Finalização:{' '}
+                  <strong>
+                    {settingsForm.b2c_checkout_mode === 'TRAY_REDIRECT'
+                      ? 'Carrinho na Tray'
+                      : 'Checkout transparente na própria loja'}
+                  </strong>
+                </p>
+                <p className="text-slate-500">
+                  O gateway (Vindi / Efí), as credenciais e o modo de finalização são configurados em Configurações → Pagamentos.
+                </p>
+              </div>
+              <a
+                href="/settings"
+                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold text-center shrink-0"
+              >
+                Abrir Configurações → Pagamentos
+              </a>
+            </div>
+          </div>
+          )}
+
+          {/* SUB-ABA 2: CONFIGURAÇÕES DE FRETE (CORREIOS DIRETO + TABELA DE TRANSPORTADORA POR PESO E CEP) */}
+          {settingsSubTab === 'freight' && (
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600">
+                  <Truck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                    Frete por CEP e Peso (Correios &amp; Transportadora)
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Configure os Correios (PAC e SEDEX) e sua tabela de transportadora por faixa de CEP/UF e peso (kg).
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleSaveB2CSettings}
+                disabled={savingSettings}
+                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm disabled:opacity-50 cursor-pointer"
+              >
+                {savingSettings ? 'Salvando...' : 'Salvar Frete'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  CEP de Origem da Loja
+                </label>
+                <input
+                  type="text"
+                  value={settingsForm.origin_zip_code}
+                  onChange={(e) =>
+                    setSettingsForm({
+                      ...settingsForm,
+                      origin_zip_code: e.target.value.replace(/\D/g, '').slice(0, 8),
+                    })
+                  }
+                  placeholder="01001000"
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-mono font-bold"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Valor de Frete Padrão (R$)
+                  Peso Padrão por Livro (kg)
                 </label>
-                <CurrencyInput
-                  prefixStr="R$ "
-                  value={settingsForm.b2c_default_freight_value}
-                  onChangeValue={(val) =>
-                    setSettingsForm({ ...settingsForm, b2c_default_freight_value: val })
+                <input
+                  type="number"
+                  step="0.05"
+                  min="0.05"
+                  value={settingsForm.freight_config.default_book_weight_kg}
+                  onChange={(e) =>
+                    setSettingsForm({
+                      ...settingsForm,
+                      freight_config: {
+                        ...settingsForm.freight_config,
+                        default_book_weight_kg: Number(e.target.value || 0.35),
+                      },
+                    })
                   }
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-semibold"
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-bold"
                 />
               </div>
 
@@ -1277,25 +2119,263 @@ export default function SellerB2CStorefrontManagementPage({
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Texto do Termo de Privacidade &amp; Consentimento LGPD (Lei nº 13.709/2018)
-              </label>
-              <textarea
-                rows={3}
-                value={settingsForm.b2c_lgpd_terms_text}
-                onChange={(e) =>
-                  setSettingsForm({ ...settingsForm, b2c_lgpd_terms_text: e.target.value })
-                }
-                placeholder="Ao finalizar seu cadastro e pedido, você autoriza o tratamento dos seus dados pessoais conforme a LGPD..."
-                className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
-              />
+            {/* Correios Direto */}
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settingsForm.freight_config.correios_enabled}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        freight_config: {
+                          ...settingsForm.freight_config,
+                          correios_enabled: e.target.checked,
+                        },
+                      })
+                    }
+                    className="w-4 h-4 rounded text-indigo-600"
+                  />
+                  <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                    Habilitar Cálculo Automático Correios (PAC e SEDEX por CEP e Peso)
+                  </span>
+                </label>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                    Usuário / Contrato Correios (Opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.correios_user}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, correios_user: e.target.value })
+                    }
+                    placeholder="Código Administrativo / Meu Correios"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                     Chave de Acesso / Token Correios (Opcional)
+                  </label>
+                  <input
+                    type="password"
+                    value={settingsForm.correios_password}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, correios_password: e.target.value })
+                    }
+                    placeholder="Token de API Correios"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Tabela de Frete Personalizada / Transportadora (Por UF/CEP e Peso) */}
+            <div className="space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                    Tabela de Transportadora por Faixa de CEP / UF e Peso (kg)
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Adicione faixas de peso e CEP/Estado para disponibilizar opções adicionais de entrega quando o cliente informar o CEP no carrinho.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSettingsForm({
+                      ...settingsForm,
+                      freight_config: {
+                        ...settingsForm.freight_config,
+                        carrier_table: [
+                          ...settingsForm.freight_config.carrier_table,
+                          {
+                            name: 'Transportadora Expressa',
+                            uf: 'ALL',
+                            cep_start: '',
+                            cep_end: '',
+                            weight_min_kg: 0,
+                            weight_max_kg: 5,
+                            price: 18.9,
+                            delivery_days: 4,
+                            active: true,
+                          },
+                        ],
+                      },
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold cursor-pointer self-start"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Adicionar Faixa de Frete
+                </button>
+              </div>
+
+              {settingsForm.freight_config.carrier_table.length === 0 ? (
+                <div className="p-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-400">
+                  Nenhuma faixa de transportadora cadastrada. O sistema utilizará o cálculo dos Correios (PAC e SEDEX).
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {settingsForm.freight_config.carrier_table.map((row: any, idx: number) => (
+                    <div
+                      key={idx}
+                      className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2.5 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40 items-end"
+                    >
+                      <div className="lg:col-span-2">
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                          Nome da Modalidade / Transp.
+                        </label>
+                        <input
+                          type="text"
+                          value={row.name || ''}
+                          onChange={(e) => {
+                            const updated = [...settingsForm.freight_config.carrier_table];
+                            updated[idx] = { ...updated[idx], name: e.target.value };
+                            setSettingsForm({
+                              ...settingsForm,
+                              freight_config: { ...settingsForm.freight_config, carrier_table: updated },
+                            });
+                          }}
+                          placeholder="Ex: Jadlog Package"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                          UF (ALL = Todos)
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={3}
+                          value={row.uf || 'ALL'}
+                          onChange={(e) => {
+                            const updated = [...settingsForm.freight_config.carrier_table];
+                            updated[idx] = { ...updated[idx], uf: e.target.value.toUpperCase() };
+                            setSettingsForm({
+                              ...settingsForm,
+                              freight_config: { ...settingsForm.freight_config, carrier_table: updated },
+                            });
+                          }}
+                          placeholder="ALL ou SP"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono uppercase"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                          Peso Mín (kg)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          value={row.weight_min_kg ?? 0}
+                          onChange={(e) => {
+                            const updated = [...settingsForm.freight_config.carrier_table];
+                            updated[idx] = { ...updated[idx], weight_min_kg: Number(e.target.value) };
+                            setSettingsForm({
+                              ...settingsForm,
+                              freight_config: { ...settingsForm.freight_config, carrier_table: updated },
+                            });
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                          Peso Máx (kg)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0.1"
+                          value={row.weight_max_kg ?? 10}
+                          onChange={(e) => {
+                            const updated = [...settingsForm.freight_config.carrier_table];
+                            updated[idx] = { ...updated[idx], weight_max_kg: Number(e.target.value) };
+                            setSettingsForm({
+                              ...settingsForm,
+                              freight_config: { ...settingsForm.freight_config, carrier_table: updated },
+                            });
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                          Valor do Frete (R$)
+                        </label>
+                        <CurrencyInput
+                          prefixStr="R$ "
+                          value={Number(row.price || 0)}
+                          onChangeValue={(val) => {
+                            const updated = [...settingsForm.freight_config.carrier_table];
+                            updated[idx] = { ...updated[idx], price: val };
+                            setSettingsForm({
+                              ...settingsForm,
+                              freight_config: { ...settingsForm.freight_config, carrier_table: updated },
+                            });
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                            Prazo (dias)
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={row.delivery_days ?? 4}
+                            onChange={(e) => {
+                              const updated = [...settingsForm.freight_config.carrier_table];
+                              updated[idx] = { ...updated[idx], delivery_days: Number(e.target.value) };
+                              setSettingsForm({
+                                ...settingsForm,
+                                freight_config: { ...settingsForm.freight_config, carrier_table: updated },
+                              });
+                            }}
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = settingsForm.freight_config.carrier_table.filter(
+                              (_: any, i: number) => i !== idx
+                            );
+                            setSettingsForm({
+                              ...settingsForm,
+                              freight_config: { ...settingsForm.freight_config, carrier_table: updated },
+                            });
+                          }}
+                          className="p-2 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer mt-4"
+                          title="Remover faixa"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
+          )}
 
-          {/* =================================================================== */}
-          {/* MOTOR DE CACHE & ALTA PERFORMANCE DA VITRINE B2C (SELLER CONTROL)   */}
-          {/* =================================================================== */}
+          {/* SUB-ABA 3: MOTOR DE CACHE & ALTA PERFORMANCE DA VITRINE B2C */}
+          {settingsSubTab === 'cache' && (
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
               <div className="flex items-start sm:items-center gap-3">
@@ -1449,61 +2529,95 @@ export default function SellerB2CStorefrontManagementPage({
               </div>
             </div>
           </div>
+          )}
 
-          {/* Tabela de Auditoria LGPD */}
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
-            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-teal-600" />
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Registro de Consentimento LGPD dos Clientes ({lgpdConsents.length})
-                </h3>
+          {/* SUB-ABA 4: PRIVACIDADE & CONSENTIMENTO LGPD */}
+          {settingsSubTab === 'lgpd' && (
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-4 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Termo de Privacidade &amp; Consentimento LGPD (Lei nº 13.709/2018)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Texto apresentado para aceite obrigatório do cliente no momento do checkout.
+                  </p>
+                </div>
+                <button
+                  onClick={handleSaveB2CSettings}
+                  disabled={savingSettings}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm disabled:opacity-50 cursor-pointer"
+                >
+                  {savingSettings ? 'Salvando...' : 'Salvar Termo LGPD'}
+                </button>
               </div>
+              <textarea
+                rows={3}
+                value={settingsForm.b2c_lgpd_terms_text}
+                onChange={(e) =>
+                  setSettingsForm({ ...settingsForm, b2c_lgpd_terms_text: e.target.value })
+                }
+                placeholder="Ao finalizar seu cadastro e pedido, você autoriza o tratamento dos seus dados pessoais conforme a LGPD..."
+                className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
+              />
             </div>
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
-                  <th className="py-3 px-4">Data / Hora</th>
-                  <th className="py-3 px-4">Cliente (Nome / CPF)</th>
-                  <th className="py-3 px-4">E-mail</th>
-                  <th className="py-3 px-4">IP</th>
-                  <th className="py-3 px-4">Versão</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-                {lgpdConsents.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="py-10 text-center text-slate-400">
-                      Nenhum registro de aceite LGPD ainda.
-                    </td>
+
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+              <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-teal-600" />
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Registro de Consentimento LGPD dos Clientes ({lgpdConsents.length})
+                  </h3>
+                </div>
+              </div>
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
+                    <th className="py-3 px-4">Data / Hora</th>
+                    <th className="py-3 px-4">Cliente (Nome / CPF)</th>
+                    <th className="py-3 px-4">E-mail</th>
+                    <th className="py-3 px-4">IP</th>
+                    <th className="py-3 px-4">Versão</th>
                   </tr>
-                ) : (
-                  lgpdConsents.map((c) => (
-                    <tr key={c.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
-                      <td className="py-3 px-4 font-mono">
-                        {c.accepted_at ? new Date(c.accepted_at).toLocaleString('pt-BR') : '—'}
-                      </td>
-                      <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
-                        {c.customer_name}
-                        <span className="block font-mono text-[11px] font-normal text-slate-500">
-                          CPF: {c.customer_cpf}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">{c.customer_email}</td>
-                      <td className="py-3 px-4 font-mono text-slate-600 dark:text-slate-300">
-                        {c.ip_address}
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300 font-bold">
-                          {c.terms_version}
-                        </span>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+                  {lgpdConsents.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-10 text-center text-slate-400">
+                        Nenhum registro de aceite LGPD ainda.
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    lgpdConsents.map((c) => (
+                      <tr key={c.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                        <td className="py-3 px-4 font-mono">
+                          {c.accepted_at ? new Date(c.accepted_at).toLocaleString('pt-BR') : '—'}
+                        </td>
+                        <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
+                          {c.customer_name}
+                          <span className="block font-mono text-[11px] font-normal text-slate-500">
+                            CPF: {c.customer_cpf}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">{c.customer_email}</td>
+                        <td className="py-3 px-4 font-mono text-slate-600 dark:text-slate-300">
+                          {c.ip_address}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300 font-bold">
+                            {c.terms_version}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
+          )}
         </div>
       )}
 

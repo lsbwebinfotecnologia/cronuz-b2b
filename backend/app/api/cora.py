@@ -35,6 +35,8 @@ from app.models.cora import (
     CORA_CERT_FORMATS, CORA_ENVIRONMENTS, CORA_INTEGRATION_MODES, CORA_NOTIFY_RULES, CORA_PAYMENT_FORMS,
     CoraAccount, CoraConfig,
 )
+from app.models.payments import PayChannelRoute
+from app.payments.catalog import PRIMARY_USAGE_CHANNELS, PROVIDER_CATALOG
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -125,6 +127,96 @@ def _serialize_config(config: Optional[CoraConfig]) -> dict:
     }
 
 
+def _build_usage_channels(db: Session, company_id: int, config: Optional[CoraConfig]) -> List[dict]:
+    routes = db.query(PayChannelRoute).filter(PayChannelRoute.company_id == company_id).all()
+    by_ch_m = {(r.channel, r.method): r.provider for r in routes}
+    forms = config.payment_forms if config else "BANK_SLIP_PIX"
+    cora_methods = ["BOLETO", "PIX"] if forms == "BANK_SLIP_PIX" else ["BOLETO"]
+
+    out: List[dict] = []
+    for ch in PRIMARY_USAGE_CHANNELS:
+        code = ch["code"]
+        boleto_prov = by_ch_m.get((code, "BOLETO"))
+        pix_prov = by_ch_m.get((code, "PIX"))
+        cora_active = (boleto_prov == "CORA") or (pix_prov == "CORA")
+        other_prov = None
+        if boleto_prov and boleto_prov != "CORA":
+            other_prov = boleto_prov
+        elif pix_prov and pix_prov != "CORA" and "PIX" in cora_methods:
+            other_prov = pix_prov
+
+        out.append({
+            "code": code,
+            "name": ch["name"],
+            "description": ch["description"],
+            "enabled": cora_active,
+            "methods": [m for m in cora_methods if by_ch_m.get((code, m)) == "CORA"] if cora_active else cora_methods,
+            "occupied_by_provider": other_prov,
+            "occupied_by_name": PROVIDER_CATALOG.get(other_prov, {}).get("name", other_prov) if other_prov else None,
+        })
+    return out
+
+
+def _sync_cora_usage_channels(
+    db: Session,
+    company_id: int,
+    selected_channels: List[str],
+    payment_forms: str,
+    user_id: Optional[int],
+) -> None:
+    valid_codes = {c["code"]: c["name"] for c in PRIMARY_USAGE_CHANNELS}
+    wanted = {c.strip().upper() for c in (selected_channels or []) if c and c.strip().upper() in valid_codes}
+    cora_methods = ["BOLETO", "PIX"] if (payment_forms or "BANK_SLIP_PIX") == "BANK_SLIP_PIX" else ["BOLETO"]
+
+    existing = {
+        (r.channel, r.method): r
+        for r in db.query(PayChannelRoute).filter(
+            PayChannelRoute.company_id == company_id,
+            PayChannelRoute.channel.in_(list(valid_codes.keys())),
+        ).all()
+    }
+
+    # 1. Trava arquitetural: não permite ativar se outro provedor já ocupa o canal/forma
+    for ch_code in wanted:
+        for method in cora_methods:
+            row = existing.get((ch_code, method))
+            if row and row.provider != "CORA":
+                other_name = PROVIDER_CATALOG.get(row.provider, {}).get("name", row.provider)
+                ch_name = valid_codes.get(ch_code, ch_code)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"O local '{ch_name}' ({method}) já está vinculado a {other_name}. "
+                        f"Por segurança, não é permitido utilizar mais de uma integração para a mesma forma de pagamento no mesmo canal."
+                    ),
+                )
+
+    # 2. Aplica canais marcados e remove canais desmarcados (apenas onde o provedor é CORA)
+    for ch_code in valid_codes:
+        if ch_code in wanted:
+            for method in ("BOLETO", "PIX"):
+                row = existing.get((ch_code, method))
+                if method in cora_methods:
+                    if row is None:
+                        db.add(PayChannelRoute(
+                            company_id=company_id,
+                            channel=ch_code,
+                            method=method,
+                            provider="CORA",
+                            changed_by_user_id=user_id,
+                        ))
+                    elif row.provider == "CORA":
+                        row.changed_by_user_id = user_id
+                else:
+                    if row is not None and row.provider == "CORA":
+                        db.delete(row)
+        else:
+            for method in ("BOLETO", "PIX"):
+                row = existing.get((ch_code, method))
+                if row is not None and row.provider == "CORA":
+                    db.delete(row)
+
+
 def _overview(db: Session, company: Company) -> dict:
     config = db.query(CoraConfig).filter(CoraConfig.company_id == company.id).first()
     accounts = {a.environment: a for a in db.query(CoraAccount).filter(CoraAccount.company_id == company.id).all()}
@@ -135,6 +227,7 @@ def _overview(db: Session, company: Company) -> dict:
             "environment": config.webhook_environment if config else None,
         },
         "config": _serialize_config(config),
+        "usage_channels": _build_usage_channels(db, company.id, config),
         "accounts": {env: _serialize_account(accounts.get(env), env) for env in CORA_ENVIRONMENTS},
         "options": {
             "environments": list(CORA_ENVIRONMENTS),
@@ -165,6 +258,7 @@ class CoraConfigPayload(BaseModel):
     discount_rate: Optional[float] = Field(None, ge=0, le=100)
     notify_enabled: Optional[bool] = None
     notify_rules: Optional[List[str]] = None
+    usage_channels: Optional[List[str]] = None
 
     @field_validator("active_environment")
     @classmethod
@@ -208,6 +302,7 @@ def update_cora_config(
     company = _company_or_404(db, company_id)
     config = _get_or_create_config(db, company_id)
     data = payload.model_dump(exclude_unset=True)
+    usage_channels = data.pop("usage_channels", None)
 
     if data.get("active_environment") == "PRODUCTION":
         prod = db.query(CoraAccount).filter(
@@ -225,6 +320,32 @@ def update_cora_config(
     for field, value in data.items():
         setattr(config, field, value)
     config.updated_by_user_id = current_user.id
+
+    if usage_channels is not None:
+        _sync_cora_usage_channels(db, company_id, usage_channels, config.payment_forms or "BANK_SLIP_PIX", current_user.id)
+    elif "payment_forms" in data:
+        # Sincroniza PIX nos canais já ativos do Cora caso tenha mudado entre Boleto+Pix e Somente Boleto
+        current_active = [c["code"] for c in _build_usage_channels(db, company_id, config) if c["enabled"]]
+        _sync_cora_usage_channels(db, company_id, current_active, config.payment_forms or "BANK_SLIP_PIX", current_user.id)
+
+    db.commit()
+    return _overview(db, company)
+
+
+class CoraChannelsPayload(BaseModel):
+    channels: List[str] = Field(default_factory=list)
+
+
+@router.put("/companies/{company_id}/cora/channels")
+def update_cora_channels(
+    company_id: int,
+    payload: CoraChannelsPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(cora_access),
+):
+    company = _company_or_404(db, company_id)
+    config = _get_or_create_config(db, company_id)
+    _sync_cora_usage_channels(db, company_id, payload.channels, config.payment_forms or "BANK_SLIP_PIX", current_user.id)
     db.commit()
     return _overview(db, company)
 

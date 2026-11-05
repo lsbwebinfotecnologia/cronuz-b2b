@@ -163,34 +163,35 @@ def create_charge(
 
     # Monta código e descrição de serviço enriquecidos conforme a origem (especialmente Horus ERP)
     opts = dict(options or {})
-    if origin_type in ("HORUS_API", "HORUS_SQL") or charge.horus_cod_cli or charge.horus_id_guid:
+    if origin_type in ("HORUS_API", "HORUS_SQL", "HORUS_INVOICE") or charge.horus_cod_cli or charge.horus_id_guid:
         parts_code = ["HORUS"]
+        if charge.invoice_number:
+            parts_code.append(f"NF{charge.invoice_number}")
         if charge.financial_launch_id:
             parts_code.append(f"L{charge.financial_launch_id}")
         if charge.installment_number:
             parts_code.append(f"P{charge.installment_number}")
-        if charge.invoice_number:
-            parts_code.append(f"NF{charge.invoice_number}")
         parts_code.append(str(charge.id))
         charge.code = "-".join(parts_code)[:80]
 
         svc_title_parts = ["ERP Horus"]
-        if charge.financial_launch_id:
-            svc_title_parts.append(f"Lanç. {charge.financial_launch_id}")
         if charge.invoice_number:
-            svc_title_parts.append(f"NF {charge.invoice_number}")
+            p_str = f" Parc. {charge.installment_number}" if charge.installment_number else ""
+            svc_title_parts.append(f"NF {charge.invoice_number}{p_str}")
+        elif charge.financial_launch_id:
+            svc_title_parts.append(f"Lanç. {charge.financial_launch_id}")
         elif charge.order_number:
             svc_title_parts.append(f"Ped. {charge.order_number}")
         opts.setdefault("service_name", " - ".join(svc_title_parts)[:60])
 
         svc_desc_parts = ["ERP Horus"]
-        if charge.financial_launch_id:
-            p_str = f"/{charge.installment_number}" if charge.installment_number else ""
-            svc_desc_parts.append(f"Lanç: {charge.financial_launch_id}{p_str}")
         if charge.invoice_number:
-            svc_desc_parts.append(f"NF: {charge.invoice_number}")
+            p_str = f"/{charge.installment_number}" if charge.installment_number else ""
+            svc_desc_parts.append(f"NF: {charge.invoice_number}{p_str}")
         if charge.order_number:
             svc_desc_parts.append(f"Ped: {charge.order_number}")
+        if charge.financial_launch_id:
+            svc_desc_parts.append(f"Lanç: {charge.financial_launch_id}")
         if len(svc_desc_parts) == 1 and charge.description:
             svc_desc_parts.append(charge.description)
         opts.setdefault("service_description", " | ".join(svc_desc_parts)[:100])
@@ -425,7 +426,7 @@ def query_charges(
     if origin_type:
         ot = origin_type.strip().upper()
         if ot == "HORUS":
-            q = q.filter(PayCharge.origin_type.in_(("HORUS_API", "HORUS_SQL")))
+            q = q.filter(PayCharge.origin_type.in_(("HORUS_API", "HORUS_SQL", "HORUS_INVOICE")))
         elif ot == "ORDER":
             q = q.filter(PayCharge.origin_type.in_(("B2B_ORDER", "B2C_ORDER")))
         else:

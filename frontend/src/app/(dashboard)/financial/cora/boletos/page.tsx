@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Landmark, Search, Loader2, Plus, Copy, ChevronLeft, ChevronRight, X, Send,
-  Calendar, Hash, FileDown, Building2, CheckCircle2, Ban, ExternalLink, RefreshCw, UserCheck,
+  Calendar, Hash, FileDown, Building2, CheckCircle2, Ban, ExternalLink, RefreshCw, UserCheck, FileText,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getUser } from '@/lib/auth';
@@ -26,7 +26,8 @@ const TABS = [
 
 const ORIGIN_FILTER_OPTIONS = [
   { value: '', label: 'Todas as origens' },
-  { value: 'HORUS', label: 'Lançamento Horus ERP' },
+  { value: 'HORUS_INVOICE', label: 'Nota Fiscal Horus (API)' },
+  { value: 'HORUS', label: 'Todos Lançamentos / NFs Horus' },
   { value: 'ORDER', label: 'Pedido (B2B / B2C)' },
   { value: 'PDV', label: 'Cupom de PDV' },
   { value: 'FINANCIAL', label: 'Lançamento Financeiro Cronuz' },
@@ -226,7 +227,10 @@ export default function CoraBoletosPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href="/financial/cora/notas-fiscais" className={`${btnCls} border border-pink-200 bg-pink-50/60 text-pink-700 hover:bg-pink-100/70 dark:border-pink-900 dark:bg-pink-950/30 dark:text-pink-300`}>
+            <FileText className="h-4 w-4" /> Notas Fiscais (Horus)
+          </Link>
           <button type="button" onClick={() => load(page, pageSize)} className={`${btnCls} border border-slate-200 dark:border-slate-700`} title="Atualizar lista">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
           </button>

@@ -122,6 +122,95 @@ def get_payment_customer_open_items(
     )
 
 
+# ── Notas Fiscais Emitidas no Horus ERP (100% via API) ───────────────────────
+
+@router.get("/companies/{company_id}/payments/horus-invoices")
+def list_horus_invoices_for_boletos_endpoint(
+    company_id: int,
+    provider: str = "CORA",
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    cod_ped_venda: Optional[str] = Query(None, max_length=60),
+    nro_nota_fiscal: Optional[str] = Query(None, max_length=60),
+    search: Optional[str] = Query(None, max_length=120),
+    status_filter: str = Query("ALL", pattern="^(ALL|PENDING|EMITTED)$"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    _access(db, current_user, company_id, provider)
+    from app.payments import horus_invoices
+    return horus_invoices.list_horus_invoices_for_boletos(
+        db,
+        company_id,
+        date_from=date_from,
+        date_to=date_to,
+        cod_ped_venda=cod_ped_venda,
+        nro_nota_fiscal=nro_nota_fiscal,
+        search=search,
+        status_filter=status_filter,
+    )
+
+
+class HorusInvoiceInstallmentItemPayload(BaseModel):
+    installment_number: str = Field("1", max_length=20)
+    due_date: date
+    amount: Decimal = Field(..., gt=0, max_digits=12, decimal_places=2)
+    financial_launch_id: Optional[str] = Field(None, max_length=60)
+    origin_ref: Optional[str] = Field(None, max_length=120)
+    description: Optional[str] = Field(None, max_length=255)
+
+
+class EmitHorusInvoiceBoletosPayload(BaseModel):
+    provider: str = "CORA"
+    method: str = Field("BOLETO", pattern="^(BOLETO|PIX)$")
+    nro_nota_fiscal: str = Field(..., min_length=1, max_length=60)
+    serie_fiscal: Optional[str] = Field(None, max_length=20)
+    cod_nf: Optional[str] = Field(None, max_length=40)
+    cod_ped_venda: Optional[str] = Field(None, max_length=60)
+    cod_pedido_origem: Optional[str] = Field(None, max_length=60)
+    horus_cod_cli: Optional[str] = Field(None, max_length=40)
+    horus_id_guid: Optional[str] = Field(None, max_length=100)
+    customer_id: Optional[int] = None
+    issue_date: Optional[date] = None
+    chave_acesso_nfe: Optional[str] = Field(None, max_length=60)
+    payer: "PayerPayload"
+    installments: List[HorusInvoiceInstallmentItemPayload] = Field(..., min_length=1, max_length=36)
+
+
+@router.post("/companies/{company_id}/payments/horus-invoices/emit")
+def emit_horus_invoice_boletos_endpoint(
+    company_id: int,
+    payload: EmitHorusInvoiceBoletosPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    code = _access(db, current_user, company_id, payload.provider)
+    payer = ChargePayer(**payload.payer.model_dump())
+    from app.payments import horus_invoices
+    try:
+        return horus_invoices.emit_boletos_for_horus_invoice(
+            db,
+            company_id,
+            provider_code=code,
+            method=payload.method,
+            nro_nota_fiscal=payload.nro_nota_fiscal,
+            serie_fiscal=payload.serie_fiscal,
+            cod_nf=payload.cod_nf,
+            cod_ped_venda=payload.cod_ped_venda,
+            cod_pedido_origem=payload.cod_pedido_origem,
+            horus_cod_cli=payload.horus_cod_cli,
+            horus_id_guid=payload.horus_id_guid,
+            customer_id=payload.customer_id,
+            issue_date=payload.issue_date,
+            chave_acesso_nfe=payload.chave_acesso_nfe,
+            payer=payer,
+            installments=[i.model_dump() for i in payload.installments],
+            user_id=getattr(current_user, "id", None),
+        )
+    except PaymentProviderError as e:
+        raise _http_error(e)
+
+
 # ── Lista / detalhe ──────────────────────────────────────────────────────────
 
 @router.get("/companies/{company_id}/payments/charges")
@@ -218,6 +307,9 @@ class PayerPayload(BaseModel):
     state: str = Field(..., min_length=2, max_length=2)
     zip_code: str = Field(..., min_length=8, max_length=9)
     complement: Optional[str] = Field(None, max_length=60)
+
+
+EmitHorusInvoiceBoletosPayload.model_rebuild()
 
 
 class ManualChargePayload(BaseModel):

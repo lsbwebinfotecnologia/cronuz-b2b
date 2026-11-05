@@ -8,11 +8,12 @@ Hub de Pagamentos do Master: habilitação de intermediadores e roteamento canal
   PUT   /companies/{id}/payments/routes                 → define a matriz canal × forma (somente MASTER)
 """
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.dependencies import get_current_user, require_master_user
 from app.core.utils import assert_company_ownership
@@ -22,7 +23,7 @@ from app.models.company_settings import CompanySettings
 from app.models.payments import PAY_PROVIDERS, PayChannelRoute, PayProviderEnablement
 from app.payments.base import PaymentProviderError
 from app.payments.catalog import CHANNEL_CATALOG, METHOD_LABELS, PROVIDER_CATALOG, provider_config_status
-from app.payments.registry import enabled_providers, routes_map, validate_route
+from app.payments.registry import default_channel_modes, enabled_providers, routes_map, validate_route
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -50,11 +51,13 @@ def _hub(db: Session, company_id: int) -> dict:
             "enabled": code in enabled,
             **provider_config_status(db, company_id, code, settings),
         })
+    current_routes = routes_map(db, company_id)
     return {
         "providers": providers,
         "channels": CHANNEL_CATALOG,
         "method_labels": METHOD_LABELS,
-        "routes": routes_map(db, company_id),
+        "routes": current_routes,
+        "channel_modes": default_channel_modes(settings, current_routes),
     }
 
 
@@ -112,6 +115,7 @@ class RouteItem(BaseModel):
 
 class RoutesPayload(BaseModel):
     routes: List[RouteItem]
+    channel_modes: Optional[Dict[str, dict]] = None
 
 
 @router.put("/companies/{company_id}/payments/routes")
@@ -119,23 +123,41 @@ def update_payment_routes(
     company_id: int,
     payload: RoutesPayload,
     db: Session = Depends(get_db),
-    current_user=Depends(require_master_user),
+    current_user=Depends(get_current_user),
 ):
+    assert_company_ownership(current_user, company_id)
     _company_or_404(db, company_id)
-    enabled = set(enabled_providers(db, company_id))
+
+    existing_enablements = {
+        r.provider: r
+        for r in db.query(PayProviderEnablement).filter(PayProviderEnablement.company_id == company_id).all()
+    }
     existing = {
         (r.channel, r.method): r
         for r in db.query(PayChannelRoute).filter(PayChannelRoute.company_id == company_id).all()
     }
     for item in payload.routes:
         channel, method = item.channel.upper(), item.method.upper()
-        provider = item.provider.upper() if item.provider else None
+        provider = item.provider.upper().strip() if item.provider and item.provider.strip() else None
         try:
             validate_route(provider, channel, method)
         except PaymentProviderError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        if provider and provider not in enabled:
-            raise HTTPException(status_code=400, detail=f"{PROVIDER_CATALOG[provider]['name']} não está habilitado para este seller.")
+
+        if provider:
+            en_row = existing_enablements.get(provider)
+            if en_row is None:
+                en_row = PayProviderEnablement(
+                    company_id=company_id,
+                    provider=provider,
+                    enabled=True,
+                    changed_by_user_id=current_user.id,
+                )
+                db.add(en_row)
+                existing_enablements[provider] = en_row
+            elif not en_row.enabled:
+                en_row.enabled = True
+                en_row.changed_by_user_id = current_user.id
 
         row = existing.get((channel, method))
         if provider is None:
@@ -147,5 +169,68 @@ def update_payment_routes(
         else:
             db.add(PayChannelRoute(company_id=company_id, channel=channel, method=method,
                                    provider=provider, changed_by_user_id=current_user.id))
+
+    # Persist channel_modes (PER_METHOD vs PAYMENT_LINK vs TRAY_REDIRECT) and sync with B2C settings
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings:
+        settings = CompanySettings(company_id=company_id)
+        db.add(settings)
+        db.flush()
+
+    raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+    current_modes = default_channel_modes(settings, routes_map(db, company_id))
+    if isinstance(payload.channel_modes, dict):
+        for ch_code, ch_cfg in payload.channel_modes.items():
+            if isinstance(ch_cfg, dict):
+                current_modes[ch_code.upper()] = {
+                    **(current_modes.get(ch_code.upper()) or {}),
+                    **ch_cfg,
+                }
+    raw_cfg["payment_channel_modes"] = current_modes
+
+    # Sincroniza B2C_STOREFRONT com os campos principais de checkout B2C
+    b2c_mode_cfg = current_modes.get("B2C_STOREFRONT") or {}
+    b2c_mode = str(b2c_mode_cfg.get("mode") or "PER_METHOD").upper()
+    vindi_cfg = dict(raw_cfg.get("vindi_config") or {}) if isinstance(raw_cfg.get("vindi_config"), dict) else {}
+
+    if b2c_mode == "TRAY_REDIRECT":
+        settings.b2c_checkout_mode = "TRAY_REDIRECT"
+    elif b2c_mode == "PAYMENT_LINK":
+        settings.b2c_checkout_mode = "NATIVE_GATEWAY"
+        link_prov = str(b2c_mode_cfg.get("link_provider") or "VINDI").upper()
+        settings.payment_gateway_active = link_prov
+        if link_prov == "VINDI":
+            vindi_cfg["integration_mode"] = "PAYMENT_LINK"
+            if "express_cpf_only" in b2c_mode_cfg:
+                vindi_cfg["express_cpf_only"] = bool(b2c_mode_cfg.get("express_cpf_only", True))
+        # Garante a rota LINK no banco
+        link_row = existing.get(("B2C_STOREFRONT", "LINK"))
+        if link_row:
+            link_row.provider = link_prov
+        else:
+            db.add(PayChannelRoute(company_id=company_id, channel="B2C_STOREFRONT", method="LINK",
+                                   provider=link_prov, changed_by_user_id=current_user.id))
+    else:
+        settings.b2c_checkout_mode = "NATIVE_GATEWAY"
+        vindi_cfg["integration_mode"] = "TRANSPARENT"
+        # Define o payment_gateway_active legado como o provedor de CARTÃO ou PIX do B2C
+        b2c_routes_now = {
+            item.method.upper(): (item.provider.upper() if item.provider else None)
+            for item in payload.routes
+            if item.channel.upper() == "B2C_STOREFRONT" and item.provider
+        }
+        primary_b2c_prov = b2c_routes_now.get("CARD") or b2c_routes_now.get("PIX") or b2c_routes_now.get("BOLETO")
+        if primary_b2c_prov:
+            settings.payment_gateway_active = primary_b2c_prov
+
+    raw_cfg["vindi_config"] = vindi_cfg
+    settings.b2c_showcases_config = raw_cfg
+    flag_modified(settings, "b2c_showcases_config")
+
     db.commit()
+    try:
+        from app.api.b2c_storefront import _b2c_cache_invalidate
+        _b2c_cache_invalidate(company_id)
+    except Exception:
+        pass
     return _hub(db, company_id)

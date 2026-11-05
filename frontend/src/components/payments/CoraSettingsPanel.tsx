@@ -1,9 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   Landmark, Loader2, ShieldCheck, Upload, CheckCircle2, XCircle, Trash2, Zap, Save,
   AlertTriangle, KeyRound, FileKey2, CalendarClock, Settings2, BellRing, Link2, Clock,
+  Store, ShoppingBag, Wallet, FileText, Lock, ArrowUpRight,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
@@ -41,13 +43,31 @@ interface Config {
   notify_rules: string[];
 }
 
+interface UsageChannel {
+  code: 'B2C_STOREFRONT' | 'B2B_STOREFRONT' | 'FINANCIAL' | 'INVOICES';
+  name: string;
+  description: string;
+  enabled: boolean;
+  methods: string[];
+  occupied_by_provider: string | null;
+  occupied_by_name: string | null;
+}
+
 interface Overview {
   enabled: boolean;
   webhook: { registered: boolean; environment: Env | null };
   config: Config;
+  usage_channels?: UsageChannel[];
   accounts: Record<Env, Account>;
   options: { notify_rules: string[] };
 }
+
+const CHANNEL_ICON: Record<string, any> = {
+  B2C_STOREFRONT: Store,
+  B2B_STOREFRONT: ShoppingBag,
+  FINANCIAL: Wallet,
+  INVOICES: FileText,
+};
 
 const ENV_LABEL: Record<Env, string> = { STAGE: 'Stage (testes)', PRODUCTION: 'Produção' };
 
@@ -138,6 +158,7 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
   // Configuração geral
   const [config, setConfig] = useState<Config | null>(null);
   const [savingConfig, setSavingConfig] = useState(false);
+  const [savingChannelCode, setSavingChannelCode] = useState<string | null>(null);
 
   // Webhook
   const [webhookBase, setWebhookBase] = useState(API.startsWith('https://') ? API : '');
@@ -258,6 +279,32 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
       toast.error(e.message);
     } finally {
       setRemoving(false);
+    }
+  };
+
+  const handleToggleChannel = async (channelCode: string, nextEnabled: boolean) => {
+    if (!company || !data?.usage_channels) return;
+    const currentSelected = data.usage_channels.filter(c => c.enabled).map(c => c.code);
+    const nextChannels = nextEnabled
+      ? Array.from(new Set([...currentSelected, channelCode]))
+      : currentSelected.filter(c => c !== channelCode);
+
+    setSavingChannelCode(channelCode);
+    try {
+      const res = await fetch(`${API}/companies/${company.id}/cora/channels`, {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channels: nextChannels }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof body?.detail === 'string' ? body.detail : 'Erro ao atualizar local de emissão.');
+      setData(body);
+      setConfig(body.config);
+      toast.success(nextEnabled ? 'Local de emissão vinculado ao Banco Cora.' : 'Local de emissão desvinculado do Banco Cora.');
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setSavingChannelCode(null);
     }
   };
 
@@ -465,6 +512,90 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
           </div>
         </div>
       </div>
+
+      {/* Locais de utilização (Onde emitir com o Cora) */}
+      {data.usage_channels && data.usage_channels.length > 0 && (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div className="bg-slate-50 dark:bg-slate-800/50 px-4 md:px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <Store className="h-4 w-4 text-pink-600 dark:text-pink-400" />
+              <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Onde utilizar esta integração (Locais de Emissão)</h2>
+            </div>
+            <span className="text-[11px] font-medium text-slate-500">
+              Trava de segurança ativa: apenas 1 provedor de boleto/Pix por canal
+            </span>
+          </div>
+          <div className="p-4 md:p-5 space-y-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Marque em quais operações do portal o <b>Banco Cora</b> será utilizado para emitir boletos e QR Code Pix. Caso um canal já esteja vinculado a outro banco/intermediador, ele ficará bloqueado para evitar conflito de cobranças.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {data.usage_channels.map(ch => {
+                const ChIcon = CHANNEL_ICON[ch.code] || Landmark;
+                const isOccupied = !!ch.occupied_by_provider;
+                const isBusy = savingChannelCode === ch.code;
+                return (
+                  <div
+                    key={ch.code}
+                    className={`rounded-xl border p-3.5 transition-all flex flex-col justify-between gap-3 ${
+                      ch.enabled
+                        ? 'border-pink-400 bg-pink-50/50 dark:border-pink-800 dark:bg-pink-950/20'
+                        : isOccupied
+                        ? 'border-amber-200 bg-amber-50/40 dark:border-amber-900/50 dark:bg-amber-950/10 opacity-85'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <div className={`mt-0.5 p-2 rounded-lg shrink-0 ${ch.enabled ? 'bg-pink-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}`}>
+                          <ChIcon className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-sm font-bold text-slate-900 dark:text-white">{ch.name}</span>
+                            {ch.enabled && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                                Ativo no Cora
+                              </span>
+                            )}
+                            {isOccupied && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300">
+                                <Lock className="h-3 w-3" /> Em uso por {ch.occupied_by_name}
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{ch.description}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {isBusy && <Loader2 className="h-4 w-4 animate-spin text-pink-600" />}
+                        <Toggle
+                          checked={ch.enabled}
+                          disabled={isOccupied || isBusy}
+                          onChange={v => handleToggleChannel(ch.code, v)}
+                        />
+                      </div>
+                    </div>
+                    {ch.code === 'INVOICES' && ch.enabled && !embedded && (
+                      <div className="pt-2 border-t border-pink-200/60 dark:border-pink-900/40 flex items-center justify-between">
+                        <span className="text-[11px] font-medium text-pink-700 dark:text-pink-300">
+                          Consulta direta de NFs emitidas no Horus ERP (API)
+                        </span>
+                        <Link
+                          href="/financial/cora/notas-fiscais"
+                          className="inline-flex items-center gap-1 text-xs font-bold text-pink-600 hover:text-pink-700 dark:text-pink-400"
+                        >
+                          Abrir tela de Notas Fiscais <ArrowUpRight className="h-3.5 w-3.5" />
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Parâmetros de cobrança */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">

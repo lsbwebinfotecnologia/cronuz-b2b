@@ -29,10 +29,17 @@ import {
   Building2,
   MessageSquare,
   ChevronRight,
+  ChevronLeft,
   Zap,
   Send,
   FolderTree,
   Headset,
+  User,
+  Lock,
+  KeyRound,
+  LogOut,
+  Package,
+  Bell,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getImageUrl } from '@/lib/image_helper';
@@ -79,8 +86,8 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
   const [pageSkip, setPageSkip] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
 
-  // Navigation View: 'catalog' | 'product' | 'contact'
-  const [activeView, setActiveView] = useState<'catalog' | 'product' | 'contact'>('catalog');
+  // Navigation View: 'catalog' | 'product' | 'contact' | 'account'
+  const [activeView, setActiveView] = useState<'catalog' | 'product' | 'contact' | 'account'>('catalog');
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [productDetailQty, setProductDetailQty] = useState<number>(1);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -131,15 +138,85 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
   const [showLgpdModal, setShowLgpdModal] = useState(false);
   const [lgpdBannerDismissed, setLgpdBannerDismissed] = useState(false);
 
+  // Smart Customer Auth, Password Recovery, My Orders & My Coupons State
+  const [b2cCustomer, setB2cCustomer] = useState<any | null>(null);
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [accountTab, setAccountTab] = useState<'login' | 'register' | 'recovery' | 'orders' | 'coupons' | 'profile' | 'security'>('orders');
+  const [identityInput, setIdentityInput] = useState('');
+  const [identityChecking, setIdentityChecking] = useState(false);
+  const [identityChecked, setIdentityChecked] = useState(false);
+  const [identityExists, setIdentityExists] = useState(false);
+  const [identityHasPassword, setIdentityHasPassword] = useState(false);
+  const [identityCustomerName, setIdentityCustomerName] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Password Recovery via Seller SMTP
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [newResetPassword, setNewResetPassword] = useState('');
+  const [recoverySent, setRecoverySent] = useState(false);
+
+  // Customer My Orders & My Coupons
+  const [myOrders, setMyOrders] = useState<any[]>([]);
+  const [loadingMyOrders, setLoadingMyOrders] = useState(false);
+  const [selectedCustomerOrder, setSelectedCustomerOrder] = useState<any | null>(null);
+  const [myCoupons, setMyCoupons] = useState<any[]>([]);
+  const [myRedemptions, setMyRedemptions] = useState<any[]>([]);
+  const [loadingMyCoupons, setLoadingMyCoupons] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [directNewPassword, setDirectNewPassword] = useState('');
+
+  // Checkout Payment Method (PIX vs CREDIT_CARD)
+  const [paymentMethod, setPaymentMethod] = useState<'PIX' | 'CREDIT_CARD'>('PIX');
+  const [cardForm, setCardForm] = useState({
+    holder_name: '',
+    number: '',
+    expiration: '',
+    cvv: '',
+    installments: 1,
+  });
+
   // Checkout result
   const [submittingCheckout, setSubmittingCheckout] = useState(false);
   const [orderResult, setOrderResult] = useState<any>(null);
 
-  // Load persisted cart & LGPD banner
+  const applyAuthenticatedCustomer = (cust: any) => {
+    if (!cust) return;
+    setB2cCustomer(cust);
+    setIdentityChecked(true);
+    setIdentityExists(true);
+    setCouponCpf(cust.cpf || '');
+    setCustomerForm((prev) => ({
+      ...prev,
+      name: cust.name || prev.name,
+      cpf: cust.cpf || prev.cpf,
+      email: cust.email || prev.email,
+      phone: cust.phone || prev.phone,
+      street: cust.address?.street || prev.street,
+      number: cust.address?.number || prev.number,
+      complement: cust.address?.complement || prev.complement,
+      neighborhood: cust.address?.neighborhood || prev.neighborhood,
+      city: cust.address?.city || prev.city,
+      state: cust.address?.state || prev.state,
+    }));
+    if (cust.address?.zip_code) {
+      setZipCode(cust.address.zip_code);
+    }
+    try {
+      localStorage.setItem(`cronuz_b2c_customer_${companyId}`, JSON.stringify(cust));
+    } catch {}
+  };
+
+  // Load persisted cart, customer session & LGPD banner
   useEffect(() => {
     try {
       const savedCart = localStorage.getItem(`cronuz_b2c_cart_${companyId}`);
       if (savedCart) setCart(JSON.parse(savedCart));
+      const savedCust = localStorage.getItem(`cronuz_b2c_customer_${companyId}`);
+      if (savedCust) {
+        const parsedCust = JSON.parse(savedCust);
+        applyAuthenticatedCustomer(parsedCust);
+      }
       const bannerAck = localStorage.getItem(`cronuz_b2c_lgpd_banner_${companyId}`);
       if (bannerAck) setLgpdBannerDismissed(true);
     } catch {}
@@ -239,6 +316,68 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
       handleValidateCoupon(true);
     }
   }, [subtotal, rawFreightValue]);
+
+  // Vindi Commerce Fingerprint Antifraude (https://developers.vindi.com.br/docs/fingerprint)
+  useEffect(() => {
+    if (typeof window === 'undefined' || storeInfo?.payment_gateway_active !== 'VINDI') return;
+    if (checkoutStep !== 'register') return;
+    const initFp = () => {
+      try {
+        const w = window as any;
+        if (w.yapay?.FingerPrint) {
+          w.yapay.FingerPrint(storeInfo?.vindi_sandbox ? { env: 'sandbox' } : {});
+        }
+      } catch {}
+    };
+    const existing = document.getElementById('vindi-yapay-fingerprint-js');
+    if (existing) {
+      initFp();
+      return;
+    }
+    const s = document.createElement('script');
+    s.id = 'vindi-yapay-fingerprint-js';
+    s.src = 'https://static.traycheckout.com.br/js/finger_print.js';
+    s.async = true;
+    s.onload = initFp;
+    document.head.appendChild(s);
+  }, [checkoutStep, storeInfo?.payment_gateway_active, storeInfo?.vindi_sandbox]);
+
+  // Polling automático do status do PIX na tela de sucesso (a cada 5s)
+  useEffect(() => {
+    if (
+      checkoutStep !== 'success' ||
+      !orderResult?.order_id ||
+      !orderResult?.pix_code ||
+      orderResult?.status === 'PAID'
+    ) {
+      return;
+    }
+    const timer = setInterval(async () => {
+      try {
+        const r = await fetch(
+          `${apiBase}/b2c/public/orders/${orderResult.order_id}/payment-status`
+        );
+        if (r.ok) {
+          const st = await r.json();
+          if (st.paid || st.status === 'PAID') {
+            setOrderResult((prev: any) =>
+              prev
+                ? {
+                    ...prev,
+                    status: 'PAID',
+                    status_label: 'Pago',
+                    message: 'Pagamento PIX confirmado com sucesso! Seu pedido já está Pago.',
+                  }
+                : prev
+            );
+            toast.success('Pagamento PIX confirmado com sucesso!');
+            clearInterval(timer);
+          }
+        }
+      } catch {}
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [checkoutStep, orderResult?.order_id, orderResult?.pix_code, orderResult?.status, apiBase]);
 
   const openProductPage = (prod: any) => {
     setSelectedProduct(prod);
@@ -436,19 +575,332 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     }
   };
 
+  const handleCheckIdentity = async (identifierToUse?: string) => {
+    const raw = (identifierToUse ?? identityInput).trim();
+    if (!raw || raw.length < 4) {
+      toast.error('Digite seu E-mail ou CPF para continuar.');
+      return;
+    }
+    setIdentityChecking(true);
+    try {
+      const res = await fetch(`${apiBase}/b2c/public/auth/check-identity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, identifier: raw }),
+      });
+      const data = await res.json();
+      setIdentityChecked(true);
+      if (data.exists) {
+        setIdentityExists(true);
+        setIdentityHasPassword(Boolean(data.has_password));
+        setIdentityCustomerName(data.customer_name || '');
+        if (!data.has_password && data.customer) {
+          // Legacy B2C customer without password: pre-fill data directly
+          applyAuthenticatedCustomer(data.customer);
+          if (data.customer.address?.zip_code) {
+            handleCalculateFreight(data.customer.address.zip_code);
+          }
+          toast.success(`Olá, ${data.customer_name}! Seus dados foram preenchidos.`);
+        }
+      } else {
+        setIdentityExists(false);
+        setIdentityHasPassword(false);
+        setCustomerForm((prev) => ({
+          ...prev,
+          email: data.prefill?.email || prev.email,
+          cpf: data.prefill?.cpf || prev.cpf,
+        }));
+        if (data.prefill?.cpf) setCouponCpf(data.prefill.cpf);
+      }
+    } catch {
+      toast.error('Erro ao verificar cadastro.');
+    } finally {
+      setIdentityChecking(false);
+    }
+  };
+
+  const handleCustomerLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!identityInput.trim() || !loginPassword.trim()) {
+      toast.error('Informe seu E-mail/CPF e sua senha.');
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/b2c/public/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          identifier: identityInput.trim(),
+          password: loginPassword,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Falha no login.');
+      applyAuthenticatedCustomer(data.customer);
+      if (data.customer?.address?.zip_code) {
+        handleCalculateFreight(data.customer.address.zip_code);
+      }
+      setLoginPassword('');
+      toast.success(data.message || 'Login realizado com sucesso!');
+      setAccountTab('orders');
+      fetchMyOrders(data.customer?.cpf);
+      fetchMyCoupons(data.customer?.cpf, data.customer?.email);
+    } catch (err: any) {
+      toast.error(err.message || 'Senha incorreta.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    const idVal = (identityInput || b2cCustomer?.email || b2cCustomer?.cpf || '').trim();
+    if (!idVal) {
+      toast.error('Informe seu E-mail ou CPF para receber o código de recuperação.');
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/b2c/public/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          identifier: idVal,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Não foi possível enviar o código.');
+      setRecoverySent(true);
+      if (!b2cCustomer) setAccountTab('recovery');
+      if (data.dev_recovery_code) {
+        setRecoveryCode(data.dev_recovery_code);
+      }
+      toast.success(data.message);
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao solicitar código.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const idVal = (identityInput || b2cCustomer?.email || b2cCustomer?.cpf || '').trim();
+    if (!recoveryCode.trim() || newResetPassword.trim().length < 6) {
+      toast.error('Informe o código de 6 dígitos e uma nova senha com pelo menos 6 caracteres.');
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/b2c/public/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          identifier: idVal,
+          recovery_code: recoveryCode.trim(),
+          new_password: newResetPassword.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Código inválido.');
+      applyAuthenticatedCustomer(data.customer);
+      setRecoverySent(false);
+      setRecoveryCode('');
+      setNewResetPassword('');
+      toast.success(data.message || 'Senha redefinida com sucesso!');
+      setAccountTab('orders');
+      fetchMyOrders(data.customer?.cpf);
+      fetchMyCoupons(data.customer?.cpf, data.customer?.email);
+    } catch (err: any) {
+      toast.error(err.message || 'Falha ao redefinir senha.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const fetchMyOrders = async (cpfParam?: string) => {
+    const cpfToQuery = (cpfParam || b2cCustomer?.cpf || customerForm.cpf || '').replace(/\D/g, '');
+    if (cpfToQuery.length < 11) return;
+    setLoadingMyOrders(true);
+    try {
+      const res = await fetch(
+        `${apiBase}/b2c/public/my-orders?company_id=${companyId}&customer_cpf=${cpfToQuery}`
+      );
+      if (res.ok) {
+        setMyOrders(await res.json());
+      }
+    } catch {
+    } finally {
+      setLoadingMyOrders(false);
+    }
+  };
+
+  const fetchMyCoupons = async (cpfParam?: string, emailParam?: string) => {
+    const cpfToQuery = (cpfParam || b2cCustomer?.cpf || customerForm.cpf || '').replace(/\D/g, '');
+    const emailToQuery = (emailParam || b2cCustomer?.email || customerForm.email || '').trim();
+    if (!cpfToQuery && !emailToQuery) return;
+    setLoadingMyCoupons(true);
+    try {
+      const params = new URLSearchParams({
+        company_id: String(companyId),
+        ...(cpfToQuery ? { customer_cpf: cpfToQuery } : {}),
+        ...(emailToQuery ? { customer_email: emailToQuery } : {}),
+      });
+      const res = await fetch(`${apiBase}/b2c/public/my-coupons?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setMyCoupons(data.coupons || []);
+        setMyRedemptions(data.redemptions || []);
+      }
+    } catch {
+    } finally {
+      setLoadingMyCoupons(false);
+    }
+  };
+
+  const handleRegisterCustomerAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/b2c/public/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          name: customerForm.name,
+          cpf: customerForm.cpf,
+          email: customerForm.email,
+          phone: customerForm.phone,
+          password: customerForm.password,
+          zip_code: zipCode,
+          street: customerForm.street,
+          number: customerForm.number,
+          complement: customerForm.complement,
+          neighborhood: customerForm.neighborhood,
+          city: customerForm.city,
+          state: customerForm.state,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao criar conta.');
+      applyAuthenticatedCustomer(data.customer);
+      toast.success(data.message || 'Conta criada com sucesso!');
+      setAccountTab('orders');
+      fetchMyOrders(data.customer?.cpf);
+      fetchMyCoupons(data.customer?.cpf, data.customer?.email);
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSaveCustomerProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!b2cCustomer?.cpf && !customerForm.cpf) return;
+    setSavingProfile(true);
+    try {
+      const res = await fetch(`${apiBase}/b2c/public/auth/profile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          cpf: b2cCustomer?.cpf || customerForm.cpf,
+          name: customerForm.name,
+          email: customerForm.email,
+          phone: customerForm.phone,
+          zip_code: zipCode,
+          street: customerForm.street,
+          number: customerForm.number,
+          complement: customerForm.complement,
+          neighborhood: customerForm.neighborhood,
+          city: customerForm.city,
+          state: customerForm.state,
+          new_password: directNewPassword.trim() ? directNewPassword.trim() : null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao atualizar dados.');
+      applyAuthenticatedCustomer(data.customer);
+      setDirectNewPassword('');
+      toast.success(data.message || 'Dados atualizados com sucesso!');
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const openAccountScreen = (initialMenu?: 'login' | 'register' | 'recovery' | 'orders' | 'coupons' | 'profile' | 'security') => {
+    setAccountModalOpen(false);
+    setIsMobileMenuOpen(false);
+    setActiveView('account');
+    if (b2cCustomer) {
+      const target = initialMenu && !['login', 'register', 'recovery'].includes(initialMenu) ? initialMenu : 'orders';
+      setAccountTab(target);
+      fetchMyOrders(b2cCustomer.cpf);
+      fetchMyCoupons(b2cCustomer.cpf, b2cCustomer.email);
+    } else {
+      setAccountTab(initialMenu && ['login', 'register', 'recovery'].includes(initialMenu) ? initialMenu : 'login');
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handleLogoutCustomer = () => {
+    setB2cCustomer(null);
+    setIdentityChecked(false);
+    setIdentityExists(false);
+    setIdentityInput('');
+    setMyOrders([]);
+    setMyCoupons([]);
+    setMyRedemptions([]);
+    setAccountTab('login');
+    try {
+      localStorage.removeItem(`cronuz_b2c_customer_${companyId}`);
+    } catch {}
+    toast.success('Você saiu da sua conta.');
+  };
+
+  const isVindiExpressLink =
+    differenceToPay > 0.009 &&
+    !(storeInfo?.b2c_checkout_mode === 'TRAY_REDIRECT' && storeInfo?.tray_enabled) &&
+    storeInfo?.payment_gateway_active === 'VINDI' &&
+    storeInfo?.vindi_integration_mode === 'PAYMENT_LINK' &&
+    storeInfo?.vindi_express_cpf_only !== false;
+
   const handleFinalizeCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerForm.lgpd_accepted) {
       toast.error('Você precisa aceitar o Termo de Privacidade e Consentimento LGPD para continuar.');
       return;
     }
-    if (!zipCode || zipCode.replace(/\D/g, '').length < 8) {
-      toast.error('Informe o CEP de entrega.');
+    const cleanCpfForCheckout = (customerForm.cpf || couponCpf || '').replace(/\D/g, '');
+    if (cleanCpfForCheckout.length < 11) {
+      toast.error('Informe um CPF válido (11 dígitos) para continuar.');
       return;
+    }
+    if (!isVindiExpressLink) {
+      if (!zipCode || zipCode.replace(/\D/g, '').length < 8) {
+        toast.error('Informe o CEP de entrega.');
+        return;
+      }
+      if (!b2cCustomer && customerForm.password && customerForm.password.trim().length < 6) {
+        toast.error('Crie uma senha segura com pelo menos 6 caracteres.');
+        return;
+      }
     }
 
     setSubmittingCheckout(true);
     try {
+      const fpInput =
+        typeof document !== 'undefined'
+          ? (document.querySelector('input[name="finger_print"]') as HTMLInputElement | null)
+          : null;
       const res = await fetch(`${apiBase}/b2c/public/checkout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -479,6 +931,19 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
           freight_value: freightValue,
           freight_service_name: selectedFreight?.name || 'Entrega Padrão',
           coupon_code: couponResult ? couponResult.code : couponCode || null,
+          payment_method:
+            differenceToPay <= 0.009
+              ? 'VOUCHER_100'
+              : storeInfo?.payment_gateway_active === 'VINDI' &&
+                storeInfo?.vindi_integration_mode === 'PAYMENT_LINK'
+              ? 'PAYMENT_LINK'
+              : paymentMethod,
+          card_holder_name: cardForm.holder_name || customerForm.name,
+          card_number: cardForm.number || null,
+          card_expiration: cardForm.expiration || null,
+          card_cvv: cardForm.cvv || null,
+          card_installments: Number(cardForm.installments || 1),
+          finger_print: fpInput?.value || null,
           lgpd_accepted: customerForm.lgpd_accepted,
           marketing_opt_in: customerForm.marketing_opt_in,
           terms_version: 'v1.0',
@@ -489,6 +954,9 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
         throw new Error(data.detail || 'Não foi possível finalizar o pedido.');
       }
 
+      if (data.customer) {
+        applyAuthenticatedCustomer(data.customer);
+      }
       setOrderResult(data);
       setCheckoutStep('success');
       setCart([]);
@@ -503,6 +971,10 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
         setTimeout(() => {
           window.location.href = data.tray_cart_url;
         }, 1800);
+      } else if (Number(data.difference_to_pay || 0) > 0 && data.vindi_payment_url) {
+        setTimeout(() => {
+          window.location.href = data.vindi_payment_url;
+        }, 1500);
       }
     } catch (err: any) {
       toast.error(err.message || 'Erro ao finalizar pedido.');
@@ -678,6 +1150,44 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
   const freeShippingProgress =
     freeShippingMin > 0 ? Math.min(100, Math.round((subtotal / freeShippingMin) * 100)) : 0;
 
+  // Stock Notification ("Avise-me") state
+  const [aviseMeOpenSku, setAviseMeOpenSku] = useState<string | null>(null);
+  const [aviseMeEmail, setAviseMeEmail] = useState('');
+  const [aviseMeSubmitting, setAviseMeSubmitting] = useState(false);
+
+  const handleSubmitAviseMe = async (prod: any, e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const targetEmail = (aviseMeEmail || b2cCustomer?.email || customerForm.email || '').trim();
+    if (!targetEmail || !targetEmail.includes('@')) {
+      toast.error('Informe um e-mail válido para avisarmos você.');
+      return;
+    }
+    setAviseMeSubmitting(true);
+    try {
+      const res = await fetch(`${apiBase}/b2c/public/stock-notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: domainInfo.company_id,
+          email: targetEmail,
+          name: b2cCustomer?.name || customerForm.name || undefined,
+          product_id: prod.id || null,
+          sku: String(prod.sku || prod.ean_gtin || 'ITEM'),
+          ean_gtin: prod.ean_gtin || null,
+          product_name: prod.name || 'Produto',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao registrar aviso.');
+      toast.success(data.message || 'Pronto! Avisaremos você por e-mail assim que chegar.');
+      setAviseMeOpenSku(null);
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setAviseMeSubmitting(false);
+    }
+  };
+
   // Reusable Product Card renderer (Mobile First)
   const renderProductCard = (prod: any, keyPrefix: string) => {
     const cover = resolveProductCover(prod);
@@ -691,6 +1201,10 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     const discountPct =
       prod.discount_percent ||
       (hasPromo && basePrice > 0 ? Math.round(((basePrice - finalPrice) / basePrice) * 100) : 0);
+    const stockQty = Number(prod.stock_quantity ?? 0);
+    const hasStock = stockQty > 0 && prod.allow_purchase !== false;
+    const prodKey = `${keyPrefix}-${prod.sku || prod.ean_gtin}-${prod.id || ''}`;
+    const isAviseMeOpen = aviseMeOpenSku === prodKey;
 
     return (
       <div
@@ -778,16 +1292,56 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
               )}
             </div>
 
-            {/* Single Unified "Comprar" Button */}
-            <button
-              type="button"
-              onClick={() => handleBuyNow(prod, 1)}
-              style={{ backgroundColor: primaryColor }}
-              className="w-full py-2.5 px-3 rounded-xl hover:opacity-95 active:scale-[0.99] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
-            >
-              <ShoppingBag className="w-4 h-4 shrink-0" />
-              <span>Comprar</span>
-            </button>
+            {/* Stock Control: "Comprar" if in stock, or "Avise-me" if out of stock */}
+            {hasStock ? (
+              <button
+                type="button"
+                onClick={() => handleBuyNow(prod, 1)}
+                style={{ backgroundColor: primaryColor }}
+                className="w-full py-2.5 px-3 rounded-xl hover:opacity-95 active:scale-[0.99] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
+              >
+                <ShoppingBag className="w-4 h-4 shrink-0" />
+                <span>Comprar</span>
+              </button>
+            ) : isAviseMeOpen ? (
+              <form
+                onSubmit={(e) => handleSubmitAviseMe(prod, e)}
+                className="p-2 rounded-xl bg-amber-50 border border-amber-200 space-y-1.5"
+              >
+                <span className="block text-[10px] font-bold text-amber-900">
+                  Receber aviso por e-mail:
+                </span>
+                <div className="flex gap-1">
+                  <input
+                    type="email"
+                    required
+                    value={aviseMeEmail}
+                    onChange={(e) => setAviseMeEmail(e.target.value)}
+                    placeholder="seu@email.com"
+                    className="flex-1 min-w-0 px-2 py-1.5 rounded-lg border border-amber-300 bg-white text-[11px]"
+                  />
+                  <button
+                    type="submit"
+                    disabled={aviseMeSubmitting}
+                    className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold shrink-0 cursor-pointer"
+                  >
+                    {aviseMeSubmitting ? '...' : 'OK'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setAviseMeEmail(b2cCustomer?.email || customerForm.email || '');
+                  setAviseMeOpenSku(prodKey);
+                }}
+                className="w-full py-2.5 px-3 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Bell className="w-3.5 h-3.5 shrink-0" />
+                <span>Avise-me</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -922,6 +1476,15 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
           <div className="hidden md:flex items-center gap-2.5">
             <button
               type="button"
+              onClick={() => openAccountScreen('orders')}
+              className="px-4 py-2.5 rounded-2xl border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <User className="w-4 h-4" style={{ color: primaryColor }} />
+              <span>{b2cCustomer ? `Olá, ${b2cCustomer.name.split(' ')[0]}` : 'Minha Conta'}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => {
                 setActiveView('contact');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1044,6 +1607,18 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                   className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-800 hover:bg-slate-100 cursor-pointer"
                 >
                   <span>🏠 Início</span>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openAccountScreen('orders')}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-800 hover:bg-slate-100 cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <User className="w-4 h-4 text-indigo-600" />
+                    {b2cCustomer ? `Minha Conta (${b2cCustomer.name.split(' ')[0]})` : 'Minha Conta / Meus Pedidos'}
+                  </span>
                   <ChevronRight className="w-4 h-4 text-slate-400" />
                 </button>
 
@@ -1244,9 +1819,15 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                       {selectedProduct.category.name}
                     </button>
                   )}
-                  <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold">
-                    ✓ Em Estoque
-                  </span>
+                  {Number(selectedProduct.stock_quantity ?? 0) > 0 && selectedProduct.allow_purchase !== false ? (
+                    <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold">
+                      ✓ Em Estoque
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold">
+                      🔔 Sem Estoque (Avise-me)
+                    </span>
+                  )}
                 </div>
 
                 <h1 className="text-xl sm:text-3xl font-black text-slate-900 leading-tight">
@@ -1321,41 +1902,73 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                 )}
               </div>
 
-              {/* Quantity + Single "Comprar" Button */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                <div className="flex items-center justify-between sm:justify-start border border-slate-200 rounded-2xl bg-slate-50 px-3 py-2">
-                  <span className="text-xs font-bold text-slate-500 mr-3 sm:hidden">
-                    Quantidade:
-                  </span>
-                  <div className="flex items-center gap-3">
+              {/* Quantity + Single "Comprar" Button or "Avise-me" */}
+              {Number(selectedProduct.stock_quantity ?? 0) > 0 && selectedProduct.allow_purchase !== false ? (
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  <div className="flex items-center justify-between sm:justify-start border border-slate-200 rounded-2xl bg-slate-50 px-3 py-2">
+                    <span className="text-xs font-bold text-slate-500 mr-3 sm:hidden">
+                      Quantidade:
+                    </span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setProductDetailQty((q) => Math.max(1, q - 1))}
+                        className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 cursor-pointer"
+                      >
+                        <Minus className="w-4 h-4" />
+                      </button>
+                      <span className="w-8 text-center font-black text-sm">{productDetailQty}</span>
+                      <button
+                        type="button"
+                        onClick={() => setProductDetailQty((q) => q + 1)}
+                        className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleBuyNow(selectedProduct, productDetailQty)}
+                    style={{ backgroundColor: primaryColor }}
+                    className="flex-1 py-3.5 px-6 rounded-2xl text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-md hover:opacity-95 active:scale-[0.99] transition-all cursor-pointer"
+                  >
+                    <ShoppingBag className="w-4 h-4" />
+                    Comprar
+                  </button>
+                </div>
+              ) : (
+                <form
+                  onSubmit={(e) => handleSubmitAviseMe(selectedProduct, e)}
+                  className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-2.5"
+                >
+                  <div className="flex items-center gap-2 text-xs font-extrabold text-amber-900">
+                    <Bell className="w-4 h-4 text-amber-600" />
+                    Avise-me quando este livro voltar ao estoque
+                  </div>
+                  <p className="text-[11px] text-amber-800">
+                    Digite seu e-mail abaixo e clique em OK para ser avisado assim que estiver disponível:
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="email"
+                      required
+                      value={aviseMeEmail}
+                      onChange={(e) => setAviseMeEmail(e.target.value)}
+                      placeholder="seu@email.com"
+                      className="flex-1 px-3.5 py-2.5 rounded-xl border border-amber-300 bg-white text-xs"
+                    />
                     <button
-                      type="button"
-                      onClick={() => setProductDetailQty((q) => Math.max(1, q - 1))}
-                      className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 cursor-pointer"
+                      type="submit"
+                      disabled={aviseMeSubmitting}
+                      className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer"
                     >
-                      <Minus className="w-4 h-4" />
-                    </button>
-                    <span className="w-8 text-center font-black text-sm">{productDetailQty}</span>
-                    <button
-                      type="button"
-                      onClick={() => setProductDetailQty((q) => q + 1)}
-                      className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 cursor-pointer"
-                    >
-                      <Plus className="w-4 h-4" />
+                      {aviseMeSubmitting ? 'Salvando...' : 'OK'}
                     </button>
                   </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => handleBuyNow(selectedProduct, productDetailQty)}
-                  style={{ backgroundColor: primaryColor }}
-                  className="flex-1 py-3.5 px-6 rounded-2xl text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-md hover:opacity-95 active:scale-[0.99] transition-all cursor-pointer"
-                >
-                  <ShoppingBag className="w-4 h-4" />
-                  Comprar
-                </button>
-              </div>
+                </form>
+              )}
 
               {/* Inline CEP Freight Simulator on Product Page */}
               <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-3">
@@ -1730,6 +2343,1140 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                   Enviar Mensagem
                 </button>
               </form>
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* =======================================================================
+          VIEW 2B: DEDICATED CUSTOMER PORTAL SCREEN (MINHA CONTA — SEM MODAL)
+         ======================================================================= */}
+      {activeView === 'account' && (
+        <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-6 sm:py-8 space-y-6 pb-20">
+          {/* Top Breadcrumb & Back to Store */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-black text-slate-900 flex items-center gap-2.5">
+                <User className="w-6 h-6" style={{ color: primaryColor }} />
+                {b2cCustomer ? `Minha Conta — ${b2cCustomer.name}` : 'Área do Cliente'}
+              </h1>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {b2cCustomer
+                  ? `CPF: ${b2cCustomer.cpf} • ${b2cCustomer.email}`
+                  : 'Acesse sua conta, acompanhe seus pedidos, consulte seus cupons ou redefina sua senha.'}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleResetToHome}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-100 cursor-pointer shadow-sm"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Voltar para a Loja
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* LEFT SIDEBAR MENU FOR CUSTOMER */}
+            <aside className="lg:col-span-3 bg-white rounded-3xl border border-slate-200 p-3 sm:p-4 shadow-sm space-y-1.5">
+              {b2cCustomer ? (
+                <>
+                  {[
+                    { id: 'orders', label: 'Meus Pedidos', icon: Package, badge: myOrders.length },
+                    { id: 'coupons', label: 'Meus Cupons', icon: Ticket, badge: myCoupons.length },
+                    { id: 'profile', label: 'Meus Dados e Endereço', icon: User },
+                    { id: 'security', label: 'Resetar / Alterar Senha', icon: KeyRound },
+                  ].map((item) => {
+                    const IconComp = item.icon;
+                    const isActive = accountTab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setAccountTab(item.id as any);
+                          if (item.id === 'orders') fetchMyOrders(b2cCustomer.cpf);
+                          if (item.id === 'coupons') fetchMyCoupons(b2cCustomer.cpf, b2cCustomer.email);
+                        }}
+                        style={isActive ? { backgroundColor: primaryColor, color: '#ffffff' } : undefined}
+                        className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl text-xs font-bold transition-all cursor-pointer ${
+                          isActive
+                            ? 'shadow-sm'
+                            : 'text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2.5">
+                          <IconComp className="w-4 h-4 shrink-0" />
+                          {item.label}
+                        </span>
+                        {item.badge !== undefined && item.badge > 0 && (
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                              isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {item.badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+
+                  <div className="pt-2 mt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={handleLogoutCustomer}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-3 rounded-2xl text-xs font-bold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                    >
+                      <LogOut className="w-4 h-4 shrink-0" />
+                      Sair da Conta
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {[
+                    { id: 'login', label: 'Entrar na Conta', icon: Lock },
+                    { id: 'register', label: 'Criar Meu Cadastro', icon: User },
+                    { id: 'recovery', label: 'Resetar Minha Senha', icon: KeyRound },
+                  ].map((item) => {
+                    const IconComp = item.icon;
+                    const isActive = accountTab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setAccountTab(item.id as any)}
+                        style={isActive ? { backgroundColor: primaryColor, color: '#ffffff' } : undefined}
+                        className={`w-full flex items-center gap-2.5 px-3.5 py-3 rounded-2xl text-xs font-bold transition-all cursor-pointer ${
+                          isActive ? 'shadow-sm' : 'text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <IconComp className="w-4 h-4 shrink-0" />
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
+            </aside>
+
+            {/* RIGHT CONTENT AREA OF CUSTOMER SCREEN */}
+            <div className="lg:col-span-9 bg-white rounded-3xl border border-slate-200 p-5 sm:p-8 shadow-sm">
+              {!b2cCustomer ? (
+                <>
+                  {/* 1. LOGIN */}
+                  {accountTab === 'login' && (
+                    <form onSubmit={handleCustomerLogin} className="max-w-md space-y-4">
+                      <div>
+                        <h2 className="text-lg font-extrabold text-slate-900">Entrar na Minha Conta</h2>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Informe seu E-mail ou CPF e sua senha cadastrada para ver seus pedidos e cupons.
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          E-mail ou CPF *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={identityInput}
+                          onChange={(e) => setIdentityInput(e.target.value)}
+                          placeholder="Digite seu e-mail ou CPF..."
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Sua Senha *
+                        </label>
+                        <input
+                          type="password"
+                          required
+                          value={loginPassword}
+                          onChange={(e) => setLoginPassword(e.target.value)}
+                          placeholder="Digite sua senha..."
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                        />
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setAccountTab('recovery')}
+                          className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+                        >
+                          Esqueci minha senha
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={authLoading}
+                          style={{ backgroundColor: primaryColor }}
+                          className="px-6 py-2.5 rounded-xl text-white text-xs sm:text-sm font-bold shadow-sm cursor-pointer"
+                        >
+                          {authLoading ? 'Entrando...' : 'Entrar na Conta'}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* 2. REGISTER NEW CUSTOMER */}
+                  {accountTab === 'register' && (
+                    <form onSubmit={handleRegisterCustomerAccount} className="space-y-4 max-w-2xl">
+                      <div>
+                        <h2 className="text-lg font-extrabold text-slate-900">Criar Meu Cadastro</h2>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Cadastre seus dados básicos e uma senha segura para comprar mais rápido.
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Nome Completo *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.name}
+                            onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">CPF *</label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.cpf}
+                            onChange={(e) => setCustomerForm({ ...customerForm, cpf: e.target.value })}
+                            placeholder="000.000.000-00"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Telefone / WhatsApp *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.phone}
+                            onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
+                            placeholder="(11) 99999-9999"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">E-mail *</label>
+                          <input
+                            type="email"
+                            required
+                            value={customerForm.email}
+                            onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
+                            placeholder="seu@email.com"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Criar Senha Segura (mín. 6 caracteres) *
+                          </label>
+                          <input
+                            type="password"
+                            required
+                            minLength={6}
+                            value={customerForm.password}
+                            onChange={(e) => setCustomerForm({ ...customerForm, password: e.target.value })}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={authLoading}
+                        style={{ backgroundColor: primaryColor }}
+                        className="px-6 py-3 rounded-xl text-white text-xs sm:text-sm font-bold shadow-sm cursor-pointer"
+                      >
+                        {authLoading ? 'Criando Conta...' : 'Criar Minha Conta'}
+                      </button>
+                    </form>
+                  )}
+
+                  {/* 3. PASSWORD RECOVERY */}
+                  {accountTab === 'recovery' && (
+                    <form onSubmit={handleResetPassword} className="max-w-md space-y-4">
+                      <div>
+                        <h2 className="text-lg font-extrabold text-slate-900">Resetar Minha Senha</h2>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Informe seu E-mail ou CPF para receber um código de 6 dígitos por e-mail e definir uma nova senha.
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          required
+                          value={identityInput}
+                          onChange={(e) => setIdentityInput(e.target.value)}
+                          placeholder="Seu E-mail ou CPF..."
+                          className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                        />
+                        <button
+                          type="button"
+                          disabled={authLoading}
+                          onClick={handleForgotPassword}
+                          className="px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer shrink-0"
+                        >
+                          Enviar Código
+                        </button>
+                      </div>
+
+                      {recoverySent && (
+                        <>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Código de 6 Dígitos Recebido *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={recoveryCode}
+                              onChange={(e) => setRecoveryCode(e.target.value)}
+                              placeholder="000000"
+                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-mono font-bold tracking-widest"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Nova Senha Segura (mín. 6 caracteres) *
+                            </label>
+                            <input
+                              type="password"
+                              required
+                              minLength={6}
+                              value={newResetPassword}
+                              onChange={(e) => setNewResetPassword(e.target.value)}
+                              placeholder="Digite a nova senha..."
+                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm"
+                            />
+                          </div>
+                          <button
+                            type="submit"
+                            disabled={authLoading}
+                            style={{ backgroundColor: primaryColor }}
+                            className="w-full py-3 rounded-xl text-white text-xs sm:text-sm font-bold cursor-pointer"
+                          >
+                            {authLoading ? 'Salvando...' : 'Confirmar Nova Senha'}
+                          </button>
+                        </>
+                      )}
+                    </form>
+                  )}
+                </>
+              ) : (
+                <>
+                  {/* LOGGED-IN MENU 1: MEUS PEDIDOS + TELA DE DETALHE DO PEDIDO */}
+                  {accountTab === 'orders' && (
+                    <div className="space-y-5">
+                      {selectedCustomerOrder ? (
+                        <div className="space-y-5">
+                          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
+                            <div className="space-y-1">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedCustomerOrder(null)}
+                                className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 cursor-pointer mb-1"
+                              >
+                                <ChevronLeft className="w-4 h-4" />
+                                Voltar para Meus Pedidos
+                              </button>
+                              <div className="flex flex-wrap items-center gap-2.5">
+                                <h2 className="text-lg sm:text-xl font-extrabold text-slate-900">
+                                  Detalhes do Pedido #{selectedCustomerOrder.id}
+                                </h2>
+                                <span className="px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold border border-indigo-200">
+                                  {selectedCustomerOrder.status_label || selectedCustomerOrder.status}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500">
+                                Realizado em{' '}
+                                {selectedCustomerOrder.created_at
+                                  ? new Date(selectedCustomerOrder.created_at).toLocaleString('pt-BR')
+                                  : '—'}
+                              </p>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedCustomerOrder(null)}
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer"
+                            >
+                              ← Lista de Pedidos
+                            </button>
+                          </div>
+
+                          {/* 1. LINHA DO TEMPO / STATUS DO PEDIDO */}
+                          {selectedCustomerOrder.status !== 'CANCELLED' ? (
+                            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">
+                                Acompanhamento do Pedido
+                              </span>
+                              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                                {[
+                                  { key: 'WAITING_PAYMENT', label: 'Aguardando Pagamento' },
+                                  { key: 'PAID', label: 'Pago' },
+                                  { key: 'SEPARATION', label: 'Em Separação' },
+                                  { key: 'FINALIZED', label: 'Finalizado / NF-e' },
+                                  { key: 'DELIVERED', label: 'Entregue' },
+                                ].map((step, idx, arr) => {
+                                  const currentIdx = arr.findIndex(
+                                    (s) => s.key === selectedCustomerOrder.status
+                                  );
+                                  const isDone = currentIdx >= idx;
+                                  const isCurrent = currentIdx === idx;
+                                  return (
+                                    <div
+                                      key={step.key}
+                                      className={`p-3 rounded-xl border text-left transition-all ${
+                                        isCurrent
+                                          ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm'
+                                          : isDone
+                                          ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                                          : 'border-slate-200 bg-white text-slate-400'
+                                      }`}
+                                    >
+                                      <span className="block text-[10px] font-bold uppercase opacity-80">
+                                        Etapa {idx + 1}
+                                      </span>
+                                      <span className="block text-xs font-extrabold mt-0.5">
+                                        {step.label}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold">
+                              Este pedido encontra-se cancelado.
+                            </div>
+                          )}
+
+                          {/* 2. PIX COPIA E COLA (SE AGUARDANDO PAGAMENTO) */}
+                          {selectedCustomerOrder.status === 'WAITING_PAYMENT' &&
+                            selectedCustomerOrder.pix_code && (
+                              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-extrabold text-emerald-950">
+                                    Pagamento Pendente via PIX ({formatBRL(selectedCustomerOrder.total)})
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(selectedCustomerOrder.pix_code);
+                                      toast.success('Código PIX copiado!');
+                                    }}
+                                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                                  >
+                                    <Copy className="w-3.5 h-3.5" />
+                                    Copiar PIX Copia e Cola
+                                  </button>
+                                </div>
+                                <div className="p-2.5 rounded-xl bg-white border border-emerald-200 font-mono text-[11px] text-slate-600 break-all">
+                                  {selectedCustomerOrder.pix_code}
+                                </div>
+                              </div>
+                            )}
+
+                          {/* 3. ENDEREÇO DE ENTREGA + NOTA FISCAL & RASTREIO */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-2 text-xs">
+                              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                                <MapPin className="w-4 h-4 text-indigo-600" />
+                                Endereço de Entrega &amp; Modalidade
+                              </h3>
+                              <p className="font-bold text-slate-900">
+                                {selectedCustomerOrder.customer_name || b2cCustomer.name}
+                              </p>
+                              {selectedCustomerOrder.shipping_address?.street ? (
+                                <p className="text-slate-600 leading-relaxed">
+                                  {selectedCustomerOrder.shipping_address.street},{' '}
+                                  {selectedCustomerOrder.shipping_address.number}
+                                  {selectedCustomerOrder.shipping_address.complement
+                                    ? ` - ${selectedCustomerOrder.shipping_address.complement}`
+                                    : ''}
+                                  <br />
+                                  {selectedCustomerOrder.shipping_address.neighborhood} —{' '}
+                                  {selectedCustomerOrder.shipping_address.city}/
+                                  {selectedCustomerOrder.shipping_address.state}
+                                  <br />
+                                  <span className="font-mono font-semibold">
+                                    CEP: {selectedCustomerOrder.shipping_address.zip_code}
+                                  </span>
+                                </p>
+                              ) : (
+                                <p className="text-slate-500">
+                                  Endereço cadastrado na conta do cliente.
+                                </p>
+                              )}
+                              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                                <span className="text-slate-500">Modalidade de Frete:</span>
+                                <span className="font-bold text-slate-800">
+                                  {selectedCustomerOrder.freight_service_name || 'Entrega Padrão'}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-2.5 text-xs">
+                              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                                <Truck className="w-4 h-4 text-indigo-600" />
+                                Nota Fiscal &amp; Rastreio da Encomenda
+                              </h3>
+
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-slate-500">Número da NF-e:</span>
+                                  <span className="font-bold text-slate-900 font-mono">
+                                    {selectedCustomerOrder.invoice_number || 'Aguardando emissão'}
+                                  </span>
+                                </div>
+                                {selectedCustomerOrder.invoice_key && (
+                                  <div className="p-2 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-[10px] font-bold uppercase text-slate-400">
+                                        Chave de Acesso NF-e
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(
+                                            selectedCustomerOrder.invoice_key
+                                          );
+                                          toast.success('Chave da NF-e copiada!');
+                                        }}
+                                        className="text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer"
+                                      >
+                                        Copiar chave
+                                      </button>
+                                    </div>
+                                    <p className="font-mono text-[11px] text-slate-700 break-all">
+                                      {selectedCustomerOrder.invoice_key}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-slate-500">Transportadora:</span>
+                                  <span className="font-bold text-slate-900">
+                                    {selectedCustomerOrder.carrier_name ||
+                                      selectedCustomerOrder.freight_service_name ||
+                                      'Correios / Transportadora'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-slate-500">Código de Rastreio:</span>
+                                  {selectedCustomerOrder.tracking_code ? (
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono font-extrabold text-indigo-600">
+                                        {selectedCustomerOrder.tracking_code}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(
+                                            selectedCustomerOrder.tracking_code
+                                          );
+                                          toast.success('Código de rastreio copiado!');
+                                        }}
+                                        className="p-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                                        title="Copiar rastreio"
+                                      >
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400">Aguardando postagem</span>
+                                  )}
+                                </div>
+
+                                {selectedCustomerOrder.tracking_url && (
+                                  <a
+                                    href={selectedCustomerOrder.tracking_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    style={{ backgroundColor: primaryColor }}
+                                    className="mt-2 w-full py-2 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
+                                  >
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                    Rastrear Encomenda Online
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* 4. TABELA DE ITENS DO PEDIDO */}
+                          <div className="rounded-2xl border border-slate-200 overflow-hidden bg-white">
+                            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                              <span className="text-xs font-extrabold uppercase tracking-wider text-slate-600">
+                                Itens Comprados ({(selectedCustomerOrder.items || []).length})
+                              </span>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left border-collapse text-xs">
+                                <thead>
+                                  <tr className="border-b border-slate-100 text-[11px] uppercase text-slate-400">
+                                    <th className="py-2.5 px-4">Código / ISBN</th>
+                                    <th className="py-2.5 px-4">Produto</th>
+                                    <th className="py-2.5 px-4 text-center">Qtd</th>
+                                    <th className="py-2.5 px-4 text-right">Unitário</th>
+                                    <th className="py-2.5 px-4 text-right">Subtotal</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {(selectedCustomerOrder.items || []).map((it: any) => (
+                                    <tr key={it.id} className="hover:bg-slate-50/60">
+                                      <td className="py-3 px-4 font-mono text-slate-500">
+                                        {it.ean_isbn || it.sku || '—'}
+                                      </td>
+                                      <td className="py-3 px-4 font-bold text-slate-900">
+                                        {it.name}
+                                      </td>
+                                      <td className="py-3 px-4 text-center font-bold text-slate-700">
+                                        {it.quantity}
+                                      </td>
+                                      <td className="py-3 px-4 text-right text-slate-600">
+                                        {formatBRL(it.unit_price)}
+                                      </td>
+                                      <td className="py-3 px-4 text-right font-extrabold text-slate-900">
+                                        {formatBRL(it.total_price)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          {/* 5. RESUMO FINANCEIRO & CUPOM DO PEDIDO */}
+                          <div className="p-4 sm:p-5 rounded-2xl bg-slate-900 text-white space-y-2.5 text-xs">
+                            <div className="flex items-center justify-between text-slate-300">
+                              <span>Subtotal dos Produtos:</span>
+                              <span className="font-bold">{formatBRL(selectedCustomerOrder.subtotal)}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-slate-300">
+                              <span>
+                                Frete ({selectedCustomerOrder.freight_service_name || 'Entrega'}):
+                              </span>
+                              <span className="font-bold text-emerald-400">
+                                {Number(selectedCustomerOrder.freight || 0) <= 0
+                                  ? 'GRÁTIS (R$ 0,00)'
+                                  : formatBRL(selectedCustomerOrder.freight)}
+                              </span>
+                            </div>
+                            {selectedCustomerOrder.discount_applied > 0 && (
+                              <div className="flex items-center justify-between text-emerald-400 font-bold">
+                                <span>
+                                  Desconto Aplicado
+                                  {selectedCustomerOrder.coupon_code
+                                    ? ` (Cupom ${selectedCustomerOrder.coupon_code})`
+                                    : ''}
+                                  :
+                                </span>
+                                <span>- {formatBRL(selectedCustomerOrder.discount_applied)}</span>
+                              </div>
+                            )}
+                            {selectedCustomerOrder.residual_coupon_code && (
+                              <div className="p-3 rounded-xl bg-amber-500/20 border border-amber-400/40 flex flex-wrap items-center justify-between gap-2 text-amber-200">
+                                <span>
+                                  Novo Cupom Gerado com Saldo Restante (
+                                  <strong>{formatBRL(selectedCustomerOrder.remaining_coupon_balance)}</strong>
+                                  ):{' '}
+                                  <strong className="font-mono text-white">
+                                    {selectedCustomerOrder.residual_coupon_code}
+                                  </strong>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(
+                                      selectedCustomerOrder.residual_coupon_code
+                                    );
+                                    toast.success('Cupom residual copiado!');
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 font-bold text-[11px] cursor-pointer"
+                                >
+                                  Copiar Cupom
+                                </button>
+                              </div>
+                            )}
+                            <div className="pt-2.5 border-t border-slate-700 flex items-center justify-between text-sm sm:text-base font-extrabold">
+                              <span>Valor Total Pago:</span>
+                              <span className="text-emerald-400">
+                                {formatBRL(selectedCustomerOrder.total)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div>
+                              <h2 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
+                                <Package className="w-5 h-5" style={{ color: primaryColor }} />
+                                Meus Pedidos ({myOrders.length})
+                              </h2>
+                              <p className="text-xs text-slate-500">
+                                Clique em qualquer pedido para abrir a tela completa com todos os detalhes, NF-e e rastreio.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => fetchMyOrders(b2cCustomer.cpf)}
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                            >
+                              Atualizar
+                            </button>
+                          </div>
+
+                          {loadingMyOrders ? (
+                            <div className="py-12 text-center text-xs text-slate-400">
+                              Carregando seus pedidos...
+                            </div>
+                          ) : myOrders.length === 0 ? (
+                            <div className="p-8 rounded-2xl border border-dashed border-slate-200 text-center space-y-3">
+                              <Package className="w-10 h-10 text-slate-300 mx-auto" />
+                              <p className="text-sm font-bold text-slate-700">
+                                Você ainda não possui pedidos realizados.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={handleResetToHome}
+                                style={{ backgroundColor: primaryColor }}
+                                className="px-4 py-2 rounded-xl text-white text-xs font-bold cursor-pointer"
+                              >
+                                Começar a Comprar
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="space-y-3.5">
+                              {myOrders.map((ord) => (
+                                <div
+                                  key={ord.id}
+                                  onClick={() => setSelectedCustomerOrder(ord)}
+                                  className="p-4 sm:p-5 rounded-2xl border border-slate-200 hover:border-indigo-300 bg-slate-50/50 hover:bg-white transition-all space-y-3 text-xs cursor-pointer shadow-xs"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-2.5">
+                                    <div>
+                                      <span className="font-extrabold text-slate-900 text-sm">
+                                        Pedido #{ord.id}
+                                      </span>
+                                      <span className="text-slate-400 ml-2.5">
+                                        {ord.created_at
+                                          ? new Date(ord.created_at).toLocaleString('pt-BR')
+                                          : ''}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 font-bold border border-indigo-200">
+                                        {ord.status_label}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedCustomerOrder(ord);
+                                        }}
+                                        style={{ backgroundColor: primaryColor }}
+                                        className="px-3 py-1 rounded-xl text-white font-bold text-xs cursor-pointer"
+                                      >
+                                        Ver Detalhes →
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-1.5">
+                                    {(ord.items || []).map((it: any) => (
+                                      <div key={it.id} className="flex justify-between text-slate-700">
+                                        <span>
+                                          <strong>{it.quantity}x</strong> {it.name}
+                                        </span>
+                                        <span className="font-bold">{formatBRL(it.total_price)}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  <div className="pt-2.5 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-3">
+                                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
+                                      {ord.invoice_number && (
+                                        <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200">
+                                          <strong>NF-e:</strong> {ord.invoice_number}
+                                        </span>
+                                      )}
+                                      {ord.tracking_code && (
+                                        <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 font-mono font-bold">
+                                          🚚 Rastreio: {ord.tracking_code}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-right">
+                                      {ord.discount_applied > 0 && (
+                                        <span className="text-[11px] text-emerald-600 font-bold mr-3">
+                                          Desconto: - {formatBRL(ord.discount_applied)}
+                                        </span>
+                                      )}
+                                      <span className="font-extrabold text-sm text-slate-900">
+                                        Total Pago: {formatBRL(ord.total)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* LOGGED-IN MENU 2: MEUS CUPONS */}
+                  {accountTab === 'coupons' && (
+                    <div className="space-y-5">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div>
+                          <h2 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
+                            <Ticket className="w-5 h-5" style={{ color: primaryColor }} />
+                            Meus Cupons e Saldos
+                          </h2>
+                          <p className="text-xs text-slate-500">
+                            Consulte seus cupons disponíveis, saldos residuais e histórico de utilização.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => fetchMyCoupons(b2cCustomer.cpf, b2cCustomer.email)}
+                          className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                        >
+                          Atualizar
+                        </button>
+                      </div>
+
+                      {loadingMyCoupons ? (
+                        <div className="py-10 text-center text-xs text-slate-400">
+                          Consultando seus cupons...
+                        </div>
+                      ) : myCoupons.length === 0 ? (
+                        <div className="p-8 rounded-2xl border border-dashed border-slate-200 text-center space-y-2">
+                          <Ticket className="w-9 h-9 text-slate-300 mx-auto" />
+                          <p className="text-sm font-bold text-slate-700">
+                            Nenhum cupom nominal vinculado diretamente ao seu CPF no momento.
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            Se você recebeu um código promocional, pode digitá-lo diretamente na sua Sacola de Compras!
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                          {myCoupons.map((cp) => {
+                            const isAvailable =
+                              cp.status === 'AVAILABLE' ||
+                              (cp.status === 'PARTIALLY_USED' && Number(cp.current_balance) > 0);
+                            return (
+                              <div
+                                key={cp.id}
+                                className={`p-4 rounded-2xl border space-y-2.5 ${
+                                  isAvailable
+                                    ? 'border-emerald-200 bg-emerald-50/40'
+                                    : 'border-slate-200 bg-slate-50 opacity-75'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-mono font-black text-base text-slate-900">
+                                    {cp.code}
+                                  </span>
+                                  <span
+                                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                      isAvailable
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-slate-200 text-slate-600'
+                                    }`}
+                                  >
+                                    {isAvailable ? 'Disponível' : 'Utilizado'}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-slate-700 space-y-0.5">
+                                  <p>
+                                    Saldo Disponível:{' '}
+                                    <strong className="text-emerald-700">
+                                      {cp.discount_type === 'PERCENTAGE'
+                                        ? `${cp.initial_value}% OFF`
+                                        : formatBRL(cp.current_balance)}
+                                    </strong>
+                                  </p>
+                                  {cp.allows_freight_discount && (
+                                    <p className="text-[11px] font-bold text-indigo-600">
+                                      ✓ Inclui Frete Grátis
+                                    </p>
+                                  )}
+                                  {cp.valid_until && (
+                                    <p className="text-[11px] text-slate-400">
+                                      Válido até {cp.valid_until}
+                                    </p>
+                                  )}
+                                </div>
+                                {isAvailable && (
+                                  <div className="flex gap-2 pt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setCouponCode(cp.code);
+                                        setCouponCpf(b2cCustomer.cpf || '');
+                                        navigator.clipboard.writeText(cp.code);
+                                        toast.success(`Cupom ${cp.code} copiado e preenchido na sacola!`);
+                                      }}
+                                      style={{ backgroundColor: primaryColor }}
+                                      className="flex-1 py-2 rounded-xl text-white text-xs font-bold cursor-pointer"
+                                    >
+                                      Usar na Sacola
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {myRedemptions.length > 0 && (
+                        <div className="space-y-2.5 pt-3 border-t border-slate-100">
+                          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                            Histórico de Cupons Utilizados
+                          </h3>
+                          <div className="space-y-2">
+                            {myRedemptions.map((r) => (
+                              <div
+                                key={r.id}
+                                className="p-3 rounded-xl border border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-2 text-xs"
+                              >
+                                <div>
+                                  <span className="font-mono font-bold text-slate-900">
+                                    {r.coupon_code}
+                                  </span>
+                                  <span className="text-slate-500 ml-2">
+                                    Pedido #{r.order_id}
+                                  </span>
+                                  {r.residual_coupon_code && (
+                                    <span className="block text-[11px] text-amber-700 font-bold mt-0.5">
+                                      Gerou cupom residual: {r.residual_coupon_code} (
+                                      {formatBRL(r.remaining_balance)})
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="font-bold text-emerald-700">
+                                  Desconto: - {formatBRL(r.discount_applied)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* LOGGED-IN MENU 3: MEUS DADOS E ENDEREÇO */}
+                  {accountTab === 'profile' && (
+                    <form onSubmit={handleSaveCustomerProfile} className="space-y-5 max-w-2xl">
+                      <div className="border-b border-slate-100 pb-3">
+                        <h2 className="text-lg font-extrabold text-slate-900">
+                          Meus Dados Pessoais e Endereço
+                        </h2>
+                        <p className="text-xs text-slate-500">
+                          Mantenha seus dados e endereço de entrega atualizados para agilizar suas compras.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Nome Completo *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.name}
+                            onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">CPF</label>
+                          <input
+                            type="text"
+                            disabled
+                            value={b2cCustomer.cpf}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100 text-sm font-mono text-slate-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            WhatsApp / Telefone *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.phone}
+                            onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                          />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 mb-1">E-mail *</label>
+                          <input
+                            type="email"
+                            required
+                            value={customerForm.email}
+                            onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="pt-3 border-t border-slate-100 space-y-3">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          Endereço de Entrega
+                        </h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">CEP</label>
+                            <input
+                              type="text"
+                              value={zipCode}
+                              onChange={(e) => setZipCode(e.target.value)}
+                              onBlur={() => zipCode.replace(/\D/g, '').length === 8 && handleCalculateFreight(zipCode)}
+                              className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm font-mono"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Rua / Logradouro
+                            </label>
+                            <input
+                              type="text"
+                              value={customerForm.street}
+                              onChange={(e) => setCustomerForm({ ...customerForm, street: e.target.value })}
+                              className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">Número</label>
+                            <input
+                              type="text"
+                              value={customerForm.number}
+                              onChange={(e) => setCustomerForm({ ...customerForm, number: e.target.value })}
+                              className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Complemento
+                            </label>
+                            <input
+                              type="text"
+                              value={customerForm.complement}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, complement: e.target.value })
+                              }
+                              className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">Bairro</label>
+                            <input
+                              type="text"
+                              value={customerForm.neighborhood}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, neighborhood: e.target.value })
+                              }
+                              className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">Cidade</label>
+                            <input
+                              type="text"
+                              value={customerForm.city}
+                              onChange={(e) => setCustomerForm({ ...customerForm, city: e.target.value })}
+                              className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">UF</label>
+                            <input
+                              type="text"
+                              maxLength={2}
+                              value={customerForm.state}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, state: e.target.value.toUpperCase() })
+                              }
+                              className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm uppercase font-mono"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={savingProfile}
+                        style={{ backgroundColor: primaryColor }}
+                        className="px-6 py-3 rounded-xl text-white text-xs sm:text-sm font-bold shadow-sm cursor-pointer"
+                      >
+                        {savingProfile ? 'Salvando...' : 'Salvar Meus Dados'}
+                      </button>
+                    </form>
+                  )}
+
+                  {/* LOGGED-IN MENU 4: RESETAR / ALTERAR SENHA */}
+                  {accountTab === 'security' && (
+                    <div className="space-y-6 max-w-md">
+                      <div className="border-b border-slate-100 pb-3">
+                        <h2 className="text-lg font-extrabold text-slate-900">
+                          Alterar ou Resetar Minha Senha
+                        </h2>
+                        <p className="text-xs text-slate-500">
+                          Defina uma nova senha diretamente abaixo ou solicite um código de verificação por e-mail.
+                        </p>
+                      </div>
+
+                      <form onSubmit={handleSaveCustomerProfile} className="space-y-3.5">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Nova Senha Segura (mínimo 6 caracteres) *
+                          </label>
+                          <input
+                            type="password"
+                            required
+                            minLength={6}
+                            value={directNewPassword}
+                            onChange={(e) => setDirectNewPassword(e.target.value)}
+                            placeholder="Digite sua nova senha..."
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={savingProfile}
+                          style={{ backgroundColor: primaryColor }}
+                          className="px-6 py-2.5 rounded-xl text-white text-xs font-bold shadow-sm cursor-pointer"
+                        >
+                          {savingProfile ? 'Atualizando...' : 'Atualizar Minha Senha'}
+                        </button>
+                      </form>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </main>
@@ -2142,7 +3889,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                 <ShoppingBag className="w-5 h-5" style={{ color: primaryColor }} />
                 <h3 className="text-base font-bold">
                   {checkoutStep === 'cart' && 'Minha Sacola'}
-                  {checkoutStep === 'register' && 'Identificação e Entrega'}
+                  {checkoutStep === 'register' && 'Checkout'}
                   {checkoutStep === 'success' && 'Pedido Concluído!'}
                 </h3>
               </div>
@@ -2477,154 +4224,515 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
               </div>
             )}
 
-            {/* STEP 2: CUSTOMER REGISTRATION + MANDATORY LGPD CONSENT */}
+            {/* STEP 2: SMART IDENTIFICATION + DELIVERY + PAYMENT + LGPD */}
             {checkoutStep === 'register' && (
-              <form onSubmit={handleFinalizeCheckout} className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+              <form
+                onSubmit={handleFinalizeCheckout}
+                data-yapay="payment-form"
+                className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4"
+              >
                 <button
                   type="button"
                   onClick={() => setCheckoutStep('cart')}
-                  className="text-xs font-bold text-slate-500 hover:text-slate-900"
+                  className="text-xs font-bold text-slate-500 hover:text-slate-900 cursor-pointer"
                 >
                   ← Revisar Sacola ({cart.reduce((a, b) => a + b.quantity, 0)} itens • {formatBRL(subtotal)})
                 </button>
 
-                <div className="space-y-3">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Seus Dados Pessoais
-                  </h4>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Nome Completo *</label>
-                    <input
-                      type="text"
-                      required
-                      value={customerForm.name}
-                      onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
-                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm"
-                    />
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* 1. CUSTOMER IDENTIFICATION: MODO EXPRESS CPF (LINK VINDI) vs CADASTRO COMPLETO */}
+                {isVindiExpressLink ? (
+                  <div className="p-4 rounded-2xl border border-indigo-200 bg-indigo-50/40 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
+                        <User className="w-4 h-4 text-indigo-600" />
+                        Identificação Rápida por CPF
+                      </span>
+                      <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                        Checkout Express Vindi
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      Para você não preencher seus dados duas vezes, informe apenas o seu <strong>CPF</strong> aqui. Seus dados pessoais, endereço de entrega e pagamento (PIX ou Cartão) serão solicitados diretamente no ambiente seguro da <strong>Vindi</strong>.
+                    </p>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">CPF *</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Seu CPF (apenas números) *
+                      </label>
                       <input
                         type="text"
                         required
+                        placeholder="000.000.000-00"
                         value={customerForm.cpf || couponCpf}
                         onChange={(e) => {
-                          setCustomerForm({ ...customerForm, cpf: e.target.value });
-                          setCouponCpf(e.target.value);
+                          const val = e.target.value;
+                          setCustomerForm({ ...customerForm, cpf: val });
+                          setCouponCpf(val);
                         }}
-                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">WhatsApp / Celular *</label>
-                      <input
-                        type="text"
-                        required
-                        value={customerForm.phone}
-                        onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
-                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-indigo-300 bg-white text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
                       />
                     </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">E-mail *</label>
-                    <input
-                      type="email"
-                      required
-                      value={customerForm.email}
-                      onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
-                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm"
-                    />
-                  </div>
-                </div>
+                ) : (
+                  <>
+                    {!b2cCustomer ? (
+                      <div className="p-3.5 rounded-2xl border border-indigo-200 bg-indigo-50/40 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
+                            <User className="w-4 h-4 text-indigo-600" />
+                            Já tem cadastro?
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-600">
+                          Informe seu <strong>E-mail ou CPF</strong> para preencher seus dados automaticamente, ou preencha abaixo.
+                        </p>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={identityInput}
+                            onChange={(e) => {
+                              setIdentityInput(e.target.value);
+                              setIdentityChecked(false);
+                            }}
+                            placeholder="Seu E-mail ou CPF..."
+                            className="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold"
+                          />
+                          <button
+                            type="button"
+                            disabled={identityChecking}
+                            onClick={() => handleCheckIdentity()}
+                            style={{ backgroundColor: primaryColor }}
+                            className="px-4 py-2 rounded-xl text-white text-xs font-bold cursor-pointer shrink-0"
+                          >
+                            {identityChecking ? 'Verificando...' : 'Continuar'}
+                          </button>
+                        </div>
 
-                {/* Delivery Address */}
-                <div className="space-y-3 pt-2 border-t border-slate-200">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Endereço de Entrega
-                  </h4>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">CEP *</label>
-                      <input
-                        type="text"
-                        required
-                        value={zipCode}
-                        onChange={(e) => setZipCode(e.target.value)}
-                        onBlur={() => handleCalculateFreight(zipCode)}
-                        placeholder="00000-000"
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-mono"
-                      />
+                        {identityChecked && identityExists && identityHasPassword && (
+                          <div className="p-3 rounded-xl bg-white border border-indigo-200 space-y-2.5">
+                            <p className="text-xs font-bold text-slate-800">
+                              Olá, <span className="text-indigo-600">{identityCustomerName}</span>! Encontramos seu cadastro. Confirme sua senha para carregar seu endereço:
+                            </p>
+                            <div className="flex gap-2">
+                              <input
+                                type="password"
+                                value={loginPassword}
+                                onChange={(e) => setLoginPassword(e.target.value)}
+                                placeholder="Sua senha..."
+                                className="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs"
+                              />
+                              <button
+                                type="button"
+                                disabled={authLoading}
+                                onClick={() => handleCustomerLogin()}
+                                className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer"
+                              >
+                                {authLoading ? '...' : 'Entrar'}
+                              </button>
+                            </div>
+                            <div className="flex items-center justify-between pt-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsCartOpen(false);
+                                  openAccountScreen('recovery');
+                                  handleForgotPassword();
+                                }}
+                                className="text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer"
+                              >
+                                Esqueci minha senha (receber código por e-mail)
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between text-xs">
+                        <div>
+                          <span className="font-bold text-emerald-900 block">
+                            ✓ Conectado como {b2cCustomer.name}
+                          </span>
+                          <span className="text-[11px] text-emerald-700 font-mono">
+                            CPF: {b2cCustomer.cpf} • {b2cCustomer.email}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleLogoutCustomer}
+                          className="text-[11px] font-bold text-slate-500 hover:text-rose-600 underline cursor-pointer"
+                        >
+                          Trocar conta
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                        Seus Dados Pessoais
+                      </h4>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Nome Completo *</label>
+                        <input
+                          type="text"
+                          required
+                          value={customerForm.name}
+                          onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
+                          className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">CPF *</label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.cpf || couponCpf}
+                            onChange={(e) => {
+                              setCustomerForm({ ...customerForm, cpf: e.target.value });
+                              setCouponCpf(e.target.value);
+                            }}
+                            className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">WhatsApp / Celular *</label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.phone}
+                            onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
+                            className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">E-mail *</label>
+                          <input
+                            type="email"
+                            required
+                            value={customerForm.email}
+                            onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
+                            className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm"
+                          />
+                        </div>
+                        {!b2cCustomer && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Criar Senha de Acesso *
+                            </label>
+                            <input
+                              type="password"
+                              required={!b2cCustomer}
+                              minLength={6}
+                              value={customerForm.password}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, password: e.target.value })
+                              }
+                              placeholder="Mínimo 6 caracteres"
+                              className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm"
+                            />
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div className="col-span-2">
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Rua / Logradouro *</label>
-                      <input
-                        type="text"
-                        required
-                        value={customerForm.street}
-                        onChange={(e) => setCustomerForm({ ...customerForm, street: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
-                      />
+
+                    {/* Delivery Address */}
+                    <div className="space-y-3 pt-2 border-t border-slate-200">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                        Endereço de Entrega
+                      </h4>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">CEP *</label>
+                          <input
+                            type="text"
+                            required
+                            value={zipCode}
+                            onChange={(e) => setZipCode(e.target.value)}
+                            onBlur={() => handleCalculateFreight(zipCode)}
+                            placeholder="00000-000"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-mono"
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Rua / Logradouro *</label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.street}
+                            onChange={(e) => setCustomerForm({ ...customerForm, street: e.target.value })}
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Número *</label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.number}
+                            onChange={(e) => setCustomerForm({ ...customerForm, number: e.target.value })}
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Complemento</label>
+                          <input
+                            type="text"
+                            value={customerForm.complement}
+                            onChange={(e) => setCustomerForm({ ...customerForm, complement: e.target.value })}
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Bairro *</label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.neighborhood}
+                            onChange={(e) => setCustomerForm({ ...customerForm, neighborhood: e.target.value })}
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Cidade *</label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.city}
+                            onChange={(e) => setCustomerForm({ ...customerForm, city: e.target.value })}
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">UF *</label>
+                          <input
+                            type="text"
+                            required
+                            maxLength={2}
+                            value={customerForm.state}
+                            onChange={(e) =>
+                              setCustomerForm({ ...customerForm, state: e.target.value.toUpperCase() })
+                            }
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs uppercase font-bold"
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Número *</label>
-                      <input
-                        type="text"
-                        required
-                        value={customerForm.number}
-                        onChange={(e) => setCustomerForm({ ...customerForm, number: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
-                      />
+                  </>
+                )}
+
+                {/* Payment Method Selection (PIX vs Cartão de Crédito via Homologated Gateway Efí / Vindi) */}
+                {differenceToPay > 0.009 &&
+                  !(storeInfo?.b2c_checkout_mode === 'TRAY_REDIRECT' && storeInfo?.tray_enabled) &&
+                  storeInfo?.payment_gateway_active === 'VINDI' &&
+                  storeInfo?.vindi_integration_mode === 'PAYMENT_LINK' && (
+                    <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-1 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-indigo-950 flex items-center gap-1.5">
+                          <CreditCard className="w-4 h-4 text-indigo-600" />
+                          Pagamento via Link Seguro Vindi ({formatBRL(differenceToPay)})
+                        </span>
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
+                          PIX • Cartão • Boleto
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-indigo-800">
+                        Ao clicar em finalizar, você será redirecionado para a página oficial da Vindi para escolher PIX ou Cartão de Crédito com segurança.
+                      </p>
                     </div>
-                    <div className="col-span-2">
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Complemento</label>
-                      <input
-                        type="text"
-                        value={customerForm.complement}
-                        onChange={(e) => setCustomerForm({ ...customerForm, complement: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
-                      />
+                  )}
+
+                {differenceToPay > 0.009 &&
+                  !(storeInfo?.b2c_checkout_mode === 'TRAY_REDIRECT' && storeInfo?.tray_enabled) &&
+                  !(
+                    storeInfo?.payment_gateway_active === 'VINDI' &&
+                    storeInfo?.vindi_integration_mode === 'PAYMENT_LINK'
+                  ) && (
+                    <div className="space-y-3 pt-2 border-t border-slate-200">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          Forma de Pagamento ({formatBRL(differenceToPay)})
+                        </h4>
+                        <span className="text-[10px] font-bold text-emerald-600">
+                          Ambiente Seguro (
+                          {paymentMethod === 'CREDIT_CARD'
+                            ? storeInfo?.b2c_method_providers?.CARD || storeInfo?.payment_gateway_active || 'Efí'
+                            : (paymentMethod as string) === 'BOLETO'
+                            ? storeInfo?.b2c_method_providers?.BOLETO || storeInfo?.payment_gateway_active || 'Cora'
+                            : storeInfo?.b2c_method_providers?.PIX || storeInfo?.payment_gateway_active || 'Efí'}
+                          )
+                        </span>
+                      </div>
+
+                      <div
+                        className={`grid ${
+                          storeInfo?.b2c_method_providers?.BOLETO ? 'grid-cols-3' : 'grid-cols-2'
+                        } gap-2.5`}
+                      >
+                        {(!storeInfo?.b2c_method_providers ||
+                          Object.keys(storeInfo.b2c_method_providers).length === 0 ||
+                          storeInfo?.b2c_method_providers?.PIX) && (
+                          <button
+                            type="button"
+                            onClick={() => setPaymentMethod('PIX')}
+                            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                              paymentMethod === 'PIX'
+                                ? 'border-emerald-600 bg-emerald-50/60 font-bold text-emerald-950'
+                                : 'border-slate-200 bg-white text-slate-700'
+                            }`}
+                          >
+                            <span className="block text-xs font-extrabold">PIX Instantâneo</span>
+                            <span className="block text-[10px] text-slate-500">
+                              QR Code • {storeInfo?.b2c_method_providers?.PIX || storeInfo?.payment_gateway_active || 'Efí'}
+                            </span>
+                          </button>
+                        )}
+
+                        {(!storeInfo?.b2c_method_providers ||
+                          Object.keys(storeInfo.b2c_method_providers).length === 0 ||
+                          storeInfo?.b2c_method_providers?.CARD) && (
+                          <button
+                            type="button"
+                            onClick={() => setPaymentMethod('CREDIT_CARD')}
+                            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                              paymentMethod === 'CREDIT_CARD'
+                                ? 'border-indigo-600 bg-indigo-50/60 font-bold text-indigo-950'
+                                : 'border-slate-200 bg-white text-slate-700'
+                            }`}
+                          >
+                            <span className="block text-xs font-extrabold">Cartão de Crédito</span>
+                            <span className="block text-[10px] text-slate-500">
+                              Aprovação • {storeInfo?.b2c_method_providers?.CARD || storeInfo?.payment_gateway_active || 'Vindi'}
+                            </span>
+                          </button>
+                        )}
+
+                        {storeInfo?.b2c_method_providers?.BOLETO && (
+                          <button
+                            type="button"
+                            onClick={() => setPaymentMethod('BOLETO' as any)}
+                            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                              (paymentMethod as string) === 'BOLETO'
+                                ? 'border-pink-600 bg-pink-50/60 font-bold text-pink-950'
+                                : 'border-slate-200 bg-white text-slate-700'
+                            }`}
+                          >
+                            <span className="block text-xs font-extrabold">Boleto Bancário</span>
+                            <span className="block text-[10px] text-slate-500">
+                              Registrado • {storeInfo?.b2c_method_providers?.BOLETO}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+
+                      {paymentMethod === 'CREDIT_CARD' && (
+                        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                              Nome Impresso no Cartão *
+                            </label>
+                            <input
+                              type="text"
+                              required={paymentMethod === 'CREDIT_CARD'}
+                              value={cardForm.holder_name}
+                              onChange={(e) =>
+                                setCardForm({ ...cardForm, holder_name: e.target.value.toUpperCase() })
+                              }
+                              placeholder="COMO ESTÁ NO CARTÃO"
+                              className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-xs uppercase font-bold"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                              Número do Cartão *
+                            </label>
+                            <input
+                              type="text"
+                              required={paymentMethod === 'CREDIT_CARD'}
+                              value={cardForm.number}
+                              onChange={(e) =>
+                                setCardForm({
+                                  ...cardForm,
+                                  number: e.target.value.replace(/\D/g, '').slice(0, 19),
+                                })
+                              }
+                              placeholder="0000 0000 0000 0000"
+                              className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-xs font-mono"
+                            />
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                Validade *
+                              </label>
+                              <input
+                                type="text"
+                                required={paymentMethod === 'CREDIT_CARD'}
+                                value={cardForm.expiration}
+                                onChange={(e) =>
+                                  setCardForm({ ...cardForm, expiration: e.target.value })
+                                }
+                                placeholder="MM/AAAA"
+                                maxLength={7}
+                                className="w-full px-2.5 py-2 rounded-lg border border-slate-200 bg-white text-xs font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                CVV *
+                              </label>
+                              <input
+                                type="text"
+                                required={paymentMethod === 'CREDIT_CARD'}
+                                value={cardForm.cvv}
+                                onChange={(e) =>
+                                  setCardForm({
+                                    ...cardForm,
+                                    cvv: e.target.value.replace(/\D/g, '').slice(0, 4),
+                                  })
+                                }
+                                placeholder="123"
+                                className="w-full px-2.5 py-2 rounded-lg border border-slate-200 bg-white text-xs font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                Parcelas
+                              </label>
+                              <select
+                                value={cardForm.installments}
+                                onChange={(e) =>
+                                  setCardForm({
+                                    ...cardForm,
+                                    installments: Number(e.target.value),
+                                  })
+                                }
+                                className="w-full px-2 py-2 rounded-lg border border-slate-200 bg-white text-xs font-bold"
+                              >
+                                {Array.from(
+                                  {
+                                    length: Math.max(
+                                      1,
+                                      Math.min(12, Number(storeInfo?.vindi_max_installments || 6))
+                                    ),
+                                  },
+                                  (_, idx) => idx + 1
+                                ).map((n) => (
+                                  <option key={n} value={n}>
+                                    {n}x de {formatBRL(differenceToPay / n)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Bairro *</label>
-                      <input
-                        type="text"
-                        required
-                        value={customerForm.neighborhood}
-                        onChange={(e) => setCustomerForm({ ...customerForm, neighborhood: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Cidade *</label>
-                      <input
-                        type="text"
-                        required
-                        value={customerForm.city}
-                        onChange={(e) => setCustomerForm({ ...customerForm, city: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">UF *</label>
-                      <input
-                        type="text"
-                        required
-                        maxLength={2}
-                        value={customerForm.state}
-                        onChange={(e) =>
-                          setCustomerForm({ ...customerForm, state: e.target.value.toUpperCase() })
-                        }
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs uppercase font-bold"
-                      />
-                    </div>
-                  </div>
-                </div>
+                  )}
 
                 {/* LGPD Mandatory Consent Box */}
                 <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5 text-xs">
@@ -2636,7 +4744,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                     <button
                       type="button"
                       onClick={() => setShowLgpdModal(!showLgpdModal)}
-                      className="text-[11px] font-bold text-slate-600 underline"
+                      className="text-[11px] font-bold text-slate-600 underline cursor-pointer"
                     >
                       {showLgpdModal ? 'Ocultar termo' : 'Ver termo'}
                     </button>
@@ -2669,7 +4777,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                 <button
                   type="submit"
                   disabled={submittingCheckout}
-                  className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50"
+                  className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 cursor-pointer"
                 >
                   {submittingCheckout ? (
                     <>
@@ -2705,7 +4813,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
 
                 <div>
                   <span className="text-xs font-bold uppercase text-emerald-600">
-                    Pedido #{orderResult.order_id} Registrado
+                    Pedido #{orderResult.order_id} • {orderResult.status_label || orderResult.status}
                   </span>
                   <h4 className="text-lg font-extrabold text-slate-900 mt-1">
                     {orderResult.message}
@@ -2733,7 +4841,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                           navigator.clipboard.writeText(orderResult.residual_coupon_code);
                           toast.success('Cupom copiado!');
                         }}
-                        className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold flex items-center gap-1"
+                        className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
                       >
                         <Copy className="w-3.5 h-3.5" />
                         Copiar
@@ -2761,7 +4869,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                             navigator.clipboard.writeText(orderResult.tray_coupon_code);
                             toast.success('Cupom copiado!');
                           }}
-                          className="text-indigo-600 font-bold underline"
+                          className="text-indigo-600 font-bold underline cursor-pointer"
                         >
                           Copiar
                         </button>
@@ -2781,6 +4889,27 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                   </div>
                 )}
 
+                {/* Vindi Payment Link Card */}
+                {orderResult.vindi_payment_url && orderResult.difference_to_pay > 0 && (
+                  <div className="p-4 rounded-2xl bg-indigo-50 border border-indigo-200 text-left space-y-3">
+                    <p className="text-xs font-bold text-indigo-950">
+                      Link de Pagamento Vindi ({formatBRL(orderResult.difference_to_pay)}):
+                    </p>
+                    <p className="text-xs text-indigo-800">
+                      Clique abaixo caso não tenha sido redirecionado automaticamente para escolher PIX ou Cartão de Crédito na página segura da Vindi:
+                    </p>
+                    <a
+                      href={orderResult.vindi_payment_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-md"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Pagar Agora no Ambiente Seguro Vindi
+                    </a>
+                  </div>
+                )}
+
                 {/* Native Gateway Pix Payment Card */}
                 {orderResult.checkout_mode === 'NATIVE_GATEWAY' &&
                   orderResult.difference_to_pay > 0 &&
@@ -2789,6 +4918,13 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                       <p className="text-xs font-bold text-slate-900">
                         Pagamento via PIX ({formatBRL(orderResult.difference_to_pay)}):
                       </p>
+                      {orderResult.pix_qr_code_url && (
+                        <img
+                          src={orderResult.pix_qr_code_url}
+                          alt="QR Code PIX"
+                          className="w-44 h-44 mx-auto rounded-xl border border-slate-200 bg-white"
+                        />
+                      )}
                       <div className="p-2.5 rounded-xl bg-white border border-slate-200 font-mono text-[11px] break-all text-slate-600">
                         {orderResult.pix_code}
                       </div>
@@ -2798,7 +4934,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                           navigator.clipboard.writeText(orderResult.pix_code);
                           toast.success('Código PIX Copia e Cola copiado!');
                         }}
-                        className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+                        className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                       >
                         <Copy className="w-3.5 h-3.5" />
                         Copiar Código PIX
@@ -2806,17 +4942,32 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                     </div>
                   )}
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCartOpen(false);
-                    setCheckoutStep('cart');
-                    setOrderResult(null);
-                  }}
-                  className="w-full py-3 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                >
-                  Continuar Comprando
-                </button>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCartOpen(false);
+                      setCheckoutStep('cart');
+                      setOrderResult(null);
+                      openAccountScreen('orders');
+                    }}
+                    className="w-full py-3 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+                  >
+                    Acompanhar em Meus Pedidos
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCartOpen(false);
+                      setCheckoutStep('cart');
+                      setOrderResult(null);
+                    }}
+                    className="w-full py-3 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                  >
+                    Continuar Comprando
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -2839,7 +4990,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                 localStorage.setItem(`cronuz_b2c_lgpd_banner_${companyId}`, '1');
               } catch {}
             }}
-            className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold shrink-0"
+            className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold shrink-0 cursor-pointer"
           >
             Entendi
           </button>

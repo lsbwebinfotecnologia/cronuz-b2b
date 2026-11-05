@@ -228,29 +228,34 @@ class TrayClient:
             self.settings.tray_api_address = str(data.get("api_host")).rstrip("/")
 
         exp_str = data.get("date_expiration_access_token")
+        now_utc = datetime.now(timezone.utc)
         if exp_str:
             try:
-                # Tray format: "2026-10-27 23:45:00"
-                dt = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                # Tray returns date_expiration_access_token in Brazil time (America/Sao_Paulo, UTC-3)
+                br_tz = timezone(timedelta(hours=-3))
+                dt = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=br_tz).astimezone(timezone.utc)
+                if dt < (now_utc + timedelta(minutes=10)):
+                    dt = now_utc + timedelta(minutes=30)
                 self.settings.tray_token_expires_at = dt
             except Exception:
-                self.settings.tray_token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+                self.settings.tray_token_expires_at = now_utc + timedelta(minutes=45)
         else:
-            self.settings.tray_token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            self.settings.tray_token_expires_at = now_utc + timedelta(minutes=45)
 
         self.db.commit()
         self.db.refresh(self.settings)
 
-    async def get_valid_token(self) -> str:
+    async def get_valid_token(self, force_refresh: bool = False) -> str:
         """Retorna um access_token válido, renovando automaticamente se necessário."""
         if not self.settings:
             raise ValueError("Configurações não encontradas.")
 
         now = datetime.now(timezone.utc)
         if (
-            self.settings.tray_access_token
+            not force_refresh
+            and self.settings.tray_access_token
             and self.settings.tray_token_expires_at
-            and self.settings.tray_token_expires_at > (now + timedelta(minutes=3))
+            and self.settings.tray_token_expires_at > (now + timedelta(minutes=2))
         ):
             return self.settings.tray_access_token
 
@@ -515,15 +520,71 @@ class TrayClient:
 
     async def ensure_product_in_tray(self, item: Dict[str, Any]) -> Optional[str]:
         """
-        Localiza o produto na Tray pelo ISBN (EAN), SKU (reference) ou via MCP product-search.
-        Caso não exista na Tray e tenhamos token OAuth, cadastra-o automaticamente para viabilizar o carrinho.
+        Localiza o produto na Tray seguindo a documentação oficial (GET /web_api/products):
+        1º Verifica se o produto no Cronuz (prd_product) já possui o ID da Tray vinculado (publisher_code / tray_product_id).
+        2º Consulta na Tray por `reference` = Código do Horus (`horus_cod_item` / `sku`), pois na Tray o
+           código de referência é o mesmo código do Horus.
+        3º Consulta na Tray por `ean` = ISBN / Código de Barras (`ean_gtin`).
+        4º Consulta na Tray por `name` ou MCP `product-search`.
+        Ao localizar o ID na Tray, grava o vínculo no produto do Cronuz (`prd_product.publisher_code`) para
+        que as próximas compras já utilizem o ID da Tray diretamente.
         """
-        isbn = str(item.get("ean_gtin") or item.get("isbn") or item.get("sku") or "").strip()
-        sku = str(item.get("sku") or isbn or "").strip()
+        from app.models.product import Product
+
+        explicit_tray_id = str(item.get("tray_product_id") or "").strip()
+        if explicit_tray_id and explicit_tray_id.isdigit():
+            return explicit_tray_id
+
+        isbn = str(item.get("ean_gtin") or item.get("isbn") or "").strip()
+        sku = str(item.get("sku") or "").strip()
+        horus_cod = str(item.get("horus_cod_item") or "").strip()
         name = str(item.get("name") or "Livro").strip()
         price = float(item.get("unit_price") or item.get("price") or 0.0)
+        local_pid = item.get("product_id")
 
-        # 1. Try REST API lookup if token available
+        # Localizar registro em prd_product para resgatar horus_cod_item / ean_gtin / tray_product_id já salvo
+        local_prod: Optional[Product] = None
+        try:
+            if local_pid and str(local_pid).isdigit() and int(local_pid) > 0:
+                local_prod = (
+                    self.db.query(Product)
+                    .filter(Product.company_id == self.company_id, Product.id == int(local_pid))
+                    .first()
+                )
+            if not local_prod and sku:
+                local_prod = (
+                    self.db.query(Product)
+                    .filter(Product.company_id == self.company_id, Product.sku == sku)
+                    .first()
+                )
+            if not local_prod and isbn:
+                local_prod = (
+                    self.db.query(Product)
+                    .filter(Product.company_id == self.company_id, Product.ean_gtin == isbn)
+                    .first()
+                )
+            if local_prod:
+                if local_prod.publisher_code and str(local_prod.publisher_code).strip().isdigit():
+                    return str(local_prod.publisher_code).strip()
+                if not horus_cod and local_prod.horus_cod_item:
+                    horus_cod = str(local_prod.horus_cod_item).strip()
+                if not sku and local_prod.sku:
+                    sku = str(local_prod.sku).strip()
+                if not isbn and local_prod.ean_gtin:
+                    isbn = str(local_prod.ean_gtin).strip()
+        except Exception as e:
+            logger.debug(f"[TrayClient] Aviso ao consultar prd_product local: {e}")
+
+        def _save_tray_id_to_local(resolved_tray_id: str) -> str:
+            if local_prod and resolved_tray_id and resolved_tray_id.isdigit():
+                try:
+                    local_prod.publisher_code = resolved_tray_id
+                    self.db.flush()
+                except Exception:
+                    pass
+            return resolved_tray_id
+
+        # 1. Consulta Oficial via REST API da Tray (GET /web_api/products)
         token: Optional[str] = None
         try:
             token = await self.get_valid_token()
@@ -532,48 +593,86 @@ class TrayClient:
 
         if token and self.api_address:
             async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                # 1.1 Prioridade 1: reference = Código do Horus (horus_cod_item ou sku)
+                ref_candidates = []
+                if horus_cod:
+                    ref_candidates.append(horus_cod)
+                if sku and sku not in ref_candidates:
+                    ref_candidates.append(sku)
+
+                for ref_val in ref_candidates:
+                    r_ref = await client.get(
+                        f"{self.api_address}/products",
+                        params={"access_token": token, "reference": ref_val},
+                    )
+                    if r_ref.status_code == 200:
+                        prods = (r_ref.json() or {}).get("Products") or []
+                        if prods:
+                            pid = (prods[0].get("Product") or {}).get("id")
+                            if pid:
+                                return _save_tray_id_to_local(str(pid))
+
+                # 1.2 Prioridade 2: ean = ISBN / Código de Barras (ean_gtin)
                 if isbn:
-                    r = await client.get(
-                        f"{self.api_address}/products/",
+                    r_ean = await client.get(
+                        f"{self.api_address}/products",
                         params={"access_token": token, "ean": isbn},
                     )
-                    if r.status_code == 200:
-                        prods = (r.json() or {}).get("Products") or []
+                    if r_ean.status_code == 200:
+                        prods = (r_ean.json() or {}).get("Products") or []
                         if prods:
                             pid = (prods[0].get("Product") or {}).get("id")
                             if pid:
-                                return str(pid)
+                                return _save_tray_id_to_local(str(pid))
 
-                if sku:
-                    r2 = await client.get(
-                        f"{self.api_address}/products/",
-                        params={"access_token": token, "reference": sku},
+                # 1.3 Prioridade 3: busca pelo nome na Tray
+                if name and len(name) >= 3:
+                    r_name = await client.get(
+                        f"{self.api_address}/products",
+                        params={"access_token": token, "name": name[:80]},
                     )
-                    if r2.status_code == 200:
-                        prods = (r2.json() or {}).get("Products") or []
+                    if r_name.status_code == 200:
+                        prods = (r_name.json() or {}).get("Products") or []
                         if prods:
                             pid = (prods[0].get("Product") or {}).get("id")
                             if pid:
-                                return str(pid)
+                                return _save_tray_id_to_local(str(pid))
 
-        # 2. Try MCP product-search
+        # 2. Fallback MCP product-search
         if self.mcp_endpoint and (isbn or name):
             try:
                 mcp_res = await self.mcp_call("product-search", {"name": isbn or name, "limit": 5})
-                # Parse MCP content if structured
                 content_list = mcp_res.get("content") if isinstance(mcp_res, dict) else None
                 if isinstance(content_list, list):
                     for block in content_list:
                         text_val = block.get("text") or ""
                         m = re.search(r'"id"\s*:\s*"?(\d+)"?', text_val)
                         if m:
-                            return m.group(1)
+                            return _save_tray_id_to_local(m.group(1))
             except Exception as e:
                 logger.debug(f"[TrayClient] MCP product-search fallback: {e}")
 
-        # 3. Auto-create in Tray via POST /products if REST token is available
+        # 3. Auto-cadastro na Tray via POST /products se o item ainda não existir na Tray
         if token and self.api_address:
             async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                default_cat_id = "1"
+                fallback_existing_pid: Optional[str] = None
+                try:
+                    r_sample = await client.get(
+                        f"{self.api_address}/products",
+                        params={"access_token": token, "limit": 1, "available": 1},
+                    )
+                    if r_sample.status_code == 200:
+                        s_prods = (r_sample.json() or {}).get("Products") or []
+                        if s_prods:
+                            sp = s_prods[0].get("Product") or {}
+                            if sp.get("category_id"):
+                                default_cat_id = str(sp["category_id"])
+                            if sp.get("id"):
+                                fallback_existing_pid = str(sp["id"])
+                except Exception:
+                    pass
+
                 create_payload = {
                     "Product": {
                         "ean": isbn,
@@ -589,11 +688,13 @@ class TrayClient:
                         "width": "16",
                         "height": "2",
                         "stock": "50",
-                        "category_id": "1",
+                        "category_id": default_cat_id,
                         "available": "1",
                         "availability": "Imediata",
                         "availability_days": 1,
-                        "reference": sku or isbn,
+                        "reference": horus_cod or sku or isbn,
+                        "virtual_product": "1",
+                        "free_shipping": "1",
                     }
                 }
                 r_create = await client.post(
@@ -604,7 +705,10 @@ class TrayClient:
                 if r_create.status_code in (200, 201):
                     pid = (r_create.json() or {}).get("id")
                     if pid:
-                        return str(pid)
+                        return _save_tray_id_to_local(str(pid))
+
+                if fallback_existing_pid:
+                    return fallback_existing_pid
 
         return None
 
@@ -617,23 +721,27 @@ class TrayClient:
         coupon_code: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Cria o carrinho de compras na Tray (usando MCP `add-to-cart` ou REST `POST /carts/`)
-        compartilhando o mesmo `session_id` para todos os itens e retornando `cart_url`.
+        Cria o carrinho de compras pré-definido na Tray via REST `POST /web_api/carts/`
+        compartilhando o mesmo `session_id` para todos os itens, garantindo `virtual_product=1`
+        e `free_shipping=1` (para ocultar a seleção manual de transportadoras no carrinho e deixar
+        o frete zerado R$ 0,00 já marcado na sessão do EasyCheckout) e resolvendo a URL assinada
+        (`redirect_cart_service.php` -> `/checkout/redirect/cart?cart_service_token=...`).
         """
         session_id = uuid.uuid4().hex[:26]
         cart_url: Optional[str] = None
         added_items: List[Dict[str, Any]] = []
 
         token: Optional[str] = None
-        try:
-            token = await self.get_valid_token()
-        except Exception:
-            token = None
 
         for idx, item in enumerate(items):
-            tray_pid = str(item.get("tray_product_id") or "")
-            if not tray_pid:
+            tray_pid = str(item.get("tray_product_id") or "").strip()
+            if not tray_pid or not tray_pid.isdigit():
                 tray_pid = await self.ensure_product_in_tray(item) or ""
+
+            try:
+                token = await self.get_valid_token()
+            except Exception:
+                pass
 
             qty = max(1, int(item.get("quantity") or 1))
             price = float(item.get("unit_price") or item.get("price") or 0.0)
@@ -642,31 +750,73 @@ class TrayClient:
             # 1. Prefer official Tray REST API POST /carts/ when OAuth2 token is available
             if token and self.api_address and tray_pid:
                 try:
-                    cart_body: Dict[str, Any] = {
-                        "Cart": {
-                            "session_id": session_id,
-                            "product_id": int(tray_pid) if tray_pid.isdigit() else tray_pid,
-                            "quantity": qty,
-                            "price": round(price, 2),
-                        }
-                    }
-                    if idx == 0 and shipping_info:
-                        cart_body["Cart"]["Shipping"] = shipping_info
-
                     async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                        # Garantir que o produto na Tray tenha virtual_product="1" e free_shipping="1"
+                        # para que o EasyCheckout oculte os rádios de transportadora e trave o frete em R$ 0,00
+                        try:
+                            await client.put(
+                                f"{self.api_address}/products/{tray_pid}",
+                                params={"access_token": token},
+                                json={"Product": {"virtual_product": "1", "free_shipping": "1"}},
+                            )
+                        except Exception as e_put:
+                            logger.debug(f"[TrayClient] Aviso ao atualizar virtual_product/free_shipping do item {tray_pid}: {e_put}")
+
+                        cart_body: Dict[str, Any] = {
+                            "Cart": {
+                                "session_id": session_id,
+                                "product_id": int(tray_pid) if tray_pid.isdigit() else tray_pid,
+                                "quantity": qty,
+                                "price": round(price, 2),
+                            }
+                        }
+                        if idx == 0:
+                            s_info = shipping_info or {}
+                            cart_body["Cart"]["Shipping"] = {
+                                "id": "10",
+                                "name": "Frete Grátis",
+                                "price": "0.00",
+                                "city": str(s_info.get("city") or "São Paulo"),
+                                "state": str(s_info.get("state") or "SP")[:2].upper(),
+                                "zip_code": re.sub(r"\D", "", str(s_info.get("zip_code") or "01001000")) or "01001000",
+                                "min_period": int(s_info.get("min_period") or 1),
+                                "max_period": int(s_info.get("max_period") or 5),
+                            }
+
                         r_cart = await client.post(
                             f"{self.api_address}/carts/",
                             params={"access_token": token},
                             json=cart_body,
                         )
+                        if r_cart.status_code == 401:
+                            token = await self.get_valid_token(force_refresh=True)
+                            r_cart = await client.post(
+                                f"{self.api_address}/carts/",
+                                params={"access_token": token},
+                                json=cart_body,
+                            )
+
+                        # Se a Tray rejeitar o bloco Shipping (400), tenta novamente sem o Shipping para garantir o carrinho
+                        if r_cart.status_code not in (200, 201) and "Shipping" in cart_body["Cart"]:
+                            cart_body["Cart"].pop("Shipping", None)
+                            r_cart = await client.post(
+                                f"{self.api_address}/carts/",
+                                params={"access_token": token},
+                                json=cart_body,
+                            )
+
                         if r_cart.status_code in (200, 201):
                             j_cart = r_cart.json() or {}
                             if j_cart.get("cart_url"):
-                                cart_url = j_cart["cart_url"]
+                                cart_url = str(j_cart["cart_url"]).replace("\\/", "/")
                             if j_cart.get("session_id"):
                                 session_id = j_cart["session_id"]
                             item_added = True
                             added_items.append({"product_id": tray_pid, "quantity": qty, "via": "REST"})
+                        else:
+                            logger.warning(
+                                f"[TrayClient] POST /carts/ retornou {r_cart.status_code} para product_id={tray_pid}: {r_cart.text}"
+                            )
                 except Exception as e:
                     logger.warning(f"[TrayClient] Falha no REST POST /carts/ para item {tray_pid}, tentando MCP: {e}")
 
@@ -691,25 +841,69 @@ class TrayClient:
                 except Exception as e:
                     logger.warning(f"[TrayClient] Falha no MCP add-to-cart para item {tray_pid}: {e}")
 
-        # Associate customer e-mail / user_id to cart if REST token is available
-        if token and self.api_address and (customer_email or customer_tray_id):
+        # Resolve redirect_cart_service.php into cart_service_token on self.store_url so .corpsuite.com.br and custom domains both load the session properly
+        if cart_url and "redirect_cart_service.php" in cart_url and self.store_url:
             try:
-                async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                    put_data: Dict[str, Any] = {"Cart[session_id]": session_id}
-                    if customer_email:
-                        put_data["Cart[email]"] = customer_email
-                    if customer_tray_id:
-                        put_data["Cart[user_id]"] = customer_tray_id
-                    await client.put(
-                        f"{self.api_address}/carts/",
-                        params={"access_token": token},
-                        data=put_data,
-                    )
+                parsed_path = re.sub(r"^https?://[^/]+", "", cart_url)
+                service_url = f"{self.store_url}{parsed_path}"
+                async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+                    r_redir = await client.get(service_url)
+                    loc = r_redir.headers.get("location") or r_redir.headers.get("Location") or ""
+                    if "cart_service_token=" in loc:
+                        loc_path = re.sub(r"^https?://[^/]+", "", loc)
+                        cart_url = f"{self.store_url}{loc_path}"
+                    else:
+                        cart_url = service_url
             except Exception as e:
-                logger.debug(f"[TrayClient] Ignorando erro ao vincular e-mail no carrinho Tray: {e}")
+                logger.debug(f"[TrayClient] Aviso ao resolver redirect_cart_service.php: {e}")
+
+        # Pré-marcar o frete zerado (R$ 0,00) diretamente na sessão do EasyCheckout da Tray
+        if self.store_url and session_id:
+            try:
+                store_id_val = str(self.settings.tray_store_id or "1469854") if self.settings else "1469854"
+                s_info = shipping_info or {}
+                zip_clean = re.sub(r"\D", "", str(s_info.get("zip_code") or "01001000")) or "01001000"
+                zip_formatted = f"{zip_clean[:5]}-{zip_clean[5:8]}" if len(zip_clean) == 8 else zip_clean
+                async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as ec_client:
+                    r_page = await ec_client.get(
+                        f"{self.store_url}/checkout/cart?session_id={session_id}&store_id={store_id_val}"
+                    )
+                    m_csrf = re.search(r'<meta name="csrf-token" content="([^"]+)"', r_page.text)
+                    csrf_tok = m_csrf.group(1) if m_csrf else ""
+                    ec_headers = {
+                        "Accept": "application/json",
+                        "X-Requested-With": "XMLHttpRequest",
+                    }
+                    if csrf_tok:
+                        ec_headers["X-CSRF-TOKEN"] = csrf_tok
+
+                    r_sh = await ec_client.get(
+                        f"{self.store_url}/checkout/cart/api/shipping?session_id={session_id}&store_id={store_id_val}&zipcode={zip_clean}&cep_filled=1",
+                        headers=ec_headers,
+                    )
+                    if r_sh.status_code == 200:
+                        sh_data = (r_sh.json() or {}).get("data") or {}
+                        dest = sh_data.get("destination")
+                        quots = sh_data.get("quotations") or []
+                        chosen_q = None
+                        for q in quots:
+                            if float(q.get("value") or 0) <= 0.009:
+                                chosen_q = q
+                                break
+                        if not chosen_q and quots:
+                            chosen_q = quots[0]
+                        if chosen_q and dest:
+                            await ec_client.put(
+                                f"{self.store_url}/checkout/cart/api/shipping?session_id={session_id}&store_id={store_id_val}&zipcode={zip_formatted}",
+                                headers=ec_headers,
+                                json={"destination": dest, "quotation": chosen_q},
+                            )
+            except Exception as e_ec:
+                logger.debug(f"[TrayClient] Aviso ao pré-marcar frete zerado no EasyCheckout: {e_ec}")
 
         if not cart_url and self.store_url:
-            cart_url = f"{self.store_url}/checkout/cart?session_id={session_id}"
+            store_id_param = f"&store_id={self.settings.tray_store_id}" if (self.settings and self.settings.tray_store_id) else ""
+            cart_url = f"{self.store_url}/checkout/cart?session_id={session_id}{store_id_param}"
             if coupon_code:
                 cart_url += f"&cupom={coupon_code}"
         elif cart_url and coupon_code and "cupom=" not in cart_url:

@@ -83,6 +83,7 @@ const STATUS_STYLE: Record<string, string> = {
 export const ORIGIN_LABEL: Record<string, string> = {
   HORUS_SQL: 'Lançamento Horus (SQL)',
   HORUS_API: 'Lançamento Horus (API)',
+  HORUS_INVOICE: 'Nota Fiscal Horus (API)',
   FINANCIAL: 'Financeiro Cronuz',
   B2B_ORDER: 'Pedido B2B',
   B2C_ORDER: 'Pedido B2C',
@@ -95,6 +96,7 @@ export const ORIGIN_LABEL: Record<string, string> = {
 const ORIGIN_STYLE: Record<string, string> = {
   HORUS_SQL: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20 dark:text-indigo-300',
   HORUS_API: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20 dark:text-indigo-300',
+  HORUS_INVOICE: 'bg-pink-500/10 text-pink-700 border-pink-500/20 dark:text-pink-300',
   FINANCIAL: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20 dark:text-emerald-300',
   B2B_ORDER: 'bg-blue-500/10 text-blue-700 border-blue-500/20 dark:text-blue-300',
   B2C_ORDER: 'bg-blue-500/10 text-blue-700 border-blue-500/20 dark:text-blue-300',

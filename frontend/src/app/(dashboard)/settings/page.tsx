@@ -17,6 +17,7 @@ import { LogisticsTab } from './LogisticsTab';
 import { useCompany } from './context';
 import { CurrencyInput } from '@/components/CurrencyInput';
 import CoraSettingsPanel from '@/components/payments/CoraSettingsPanel';
+import { B2CCheckoutModeSelector, SellerPaymentRoutingMatrix, VindiCheckoutPanel } from './B2CCheckoutSettings';
 
 export default function SettingsPage() {
   const { company } = useCompany();
@@ -27,10 +28,14 @@ export default function SettingsPage() {
   const companyId = currentUser?.company_id;
 
   const [activeTab, setActiveTab] = useState('geral');
+  const [selectedProviderTab, setSelectedProviderTab] = useState<'VINDI' | 'CORA' | 'INTER' | 'EFI' | 'CIELO_REDE'>('VINDI');
   useEffect(() => {
-    // Atalho de outras telas: /settings?tab=pagamentos
-    const t = new URLSearchParams(window.location.search).get('tab');
+    // Atalho de outras telas: /settings?tab=pagamentos&provider=VINDI
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('tab');
+    const p = params.get('provider') as 'VINDI' | 'CORA' | 'INTER' | 'EFI' | 'CIELO_REDE' | null;
     if (t) setActiveTab(t);
+    if (p && ['VINDI', 'CORA', 'INTER', 'EFI', 'CIELO_REDE'].includes(p)) setSelectedProviderTab(p);
   }, []);
   const [testEmail, setTestEmail] = useState('');
   const [testingSmtp, setTestingSmtp] = useState(false);
@@ -119,6 +124,22 @@ export default function SettingsPage() {
     rede_pv: '',
     rede_token: '',
     vindi_api_key: '',
+    vindi_sandbox: true,
+    vindi_integration_mode: 'TRANSPARENT',
+    vindi_express_cpf_only: true,
+    vindi_max_installments: 6,
+    vindi_allow_pix: true,
+    vindi_allow_credit_card: true,
+    vindi_allow_boleto: false,
+    vindi_postal_code_seller: '01001000',
+    vindi_reseller_token: '',
+    vindi_consumer_key: '',
+    vindi_consumer_secret: '',
+    vindi_access_token: '',
+    vindi_return_url: '',
+    b2c_checkout_mode: 'NATIVE_GATEWAY',
+    tray_enabled: false,
+    b2c_showcases_config: null as any,
     freight_gateway_active: 'CORREIOS',
     origin_zip_code: '',
     correios_user: '',
@@ -208,6 +229,22 @@ export default function SettingsPage() {
         rede_pv: data.rede_pv || '',
         rede_token: data.rede_token || '',
         vindi_api_key: data.vindi_api_key || '',
+        vindi_sandbox: data.b2c_showcases_config?.vindi_config?.sandbox !== false,
+        vindi_integration_mode: data.b2c_showcases_config?.vindi_config?.integration_mode || 'TRANSPARENT',
+        vindi_express_cpf_only: data.b2c_showcases_config?.vindi_config?.express_cpf_only !== false,
+        vindi_max_installments: Number(data.b2c_showcases_config?.vindi_config?.max_installments || 6),
+        vindi_allow_pix: data.b2c_showcases_config?.vindi_config?.allow_pix !== false,
+        vindi_allow_credit_card: data.b2c_showcases_config?.vindi_config?.allow_credit_card !== false,
+        vindi_allow_boleto: Boolean(data.b2c_showcases_config?.vindi_config?.allow_boleto),
+        vindi_postal_code_seller: data.b2c_showcases_config?.vindi_config?.postal_code_seller || data.origin_zip_code || '01001000',
+        vindi_reseller_token: data.b2c_showcases_config?.vindi_config?.reseller_token || '',
+        vindi_consumer_key: data.b2c_showcases_config?.vindi_config?.consumer_key || '',
+        vindi_consumer_secret: data.b2c_showcases_config?.vindi_config?.consumer_secret || '',
+        vindi_access_token: data.b2c_showcases_config?.vindi_config?.access_token || '',
+        vindi_return_url: data.b2c_showcases_config?.vindi_config?.return_url || '',
+        b2c_checkout_mode: data.b2c_checkout_mode || 'NATIVE_GATEWAY',
+        tray_enabled: Boolean(data.tray_enabled),
+        b2c_showcases_config: data.b2c_showcases_config || null,
         freight_gateway_active: data.freight_gateway_active || 'CORREIOS',
         origin_zip_code: data.origin_zip_code || '',
         correios_user: data.correios_user || '',
@@ -282,6 +319,41 @@ export default function SettingsPage() {
       delete payloadSettings.inter_cert_path;
       delete payloadSettings.inter_key_path;
       delete payloadSettings.efi_certificate_path;
+      // tray_enabled é gerido na integração Tray; aqui é apenas leitura
+      delete payloadSettings.tray_enabled;
+      // Configurações de Link / Sandbox da Vindi ficam em b2c_showcases_config.vindi_config (preserva o restante do JSON)
+      payloadSettings.b2c_showcases_config = {
+        ...(settings.b2c_showcases_config || {}),
+        vindi_config: {
+          ...(settings.b2c_showcases_config?.vindi_config || {}),
+          sandbox: Boolean(settings.vindi_sandbox),
+          integration_mode: settings.vindi_integration_mode || 'TRANSPARENT',
+          express_cpf_only: settings.vindi_express_cpf_only !== false,
+          max_installments: Number(settings.vindi_max_installments || 6),
+          allow_pix: settings.vindi_allow_pix !== false,
+          allow_credit_card: settings.vindi_allow_credit_card !== false,
+          allow_boleto: Boolean(settings.vindi_allow_boleto),
+          postal_code_seller: (settings.vindi_postal_code_seller || '01001000').replace(/\D/g, '') || '01001000',
+          reseller_token: (settings.vindi_reseller_token || '').trim(),
+          consumer_key: (settings.vindi_consumer_key || '').trim(),
+          consumer_secret: (settings.vindi_consumer_secret || '').trim(),
+          access_token: (settings.vindi_access_token || '').trim(),
+          return_url: (settings.vindi_return_url || '').trim(),
+        },
+      };
+      delete payloadSettings.vindi_sandbox;
+      delete payloadSettings.vindi_integration_mode;
+      delete payloadSettings.vindi_express_cpf_only;
+      delete payloadSettings.vindi_max_installments;
+      delete payloadSettings.vindi_allow_pix;
+      delete payloadSettings.vindi_allow_credit_card;
+      delete payloadSettings.vindi_allow_boleto;
+      delete payloadSettings.vindi_postal_code_seller;
+      delete payloadSettings.vindi_reseller_token;
+      delete payloadSettings.vindi_consumer_key;
+      delete payloadSettings.vindi_consumer_secret;
+      delete payloadSettings.vindi_access_token;
+      delete payloadSettings.vindi_return_url;
 
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/settings`, {
         method: 'PUT',
@@ -897,238 +969,498 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {/* Tab: PAGAMENTOS */}
+              {/* Tab: PAGAMENTOS — Matriz por Canal × Forma de Pagamento + Cofre de Credenciais dos Provedores */}
               {activeTab === 'pagamentos' && (
-                <div className="space-y-8 animate-in fade-in">
+                <div className="space-y-6 animate-in fade-in">
+                  {/* PASSO 1: MATRIZ DE ROTEAMENTO POR FRENTE (B2C, EVENTOS, ASSINATURAS, B2B, HORUS ERP, FINANCEIRO CRONUZ, PDV) */}
                   {companyId && (
-                    <div className="rounded-2xl border border-pink-200 dark:border-pink-900/40 p-3 md:p-5 empty:hidden">
-                      <CoraSettingsPanel companyId={companyId} hideWhenUnavailable embedded />
-                    </div>
+                    <SellerPaymentRoutingMatrix
+                      companyId={companyId}
+                      settings={settings}
+                      setSettings={setSettings}
+                      onJumpToProvider={(provCode) => {
+                        if (provCode === 'CIELO' || provCode === 'REDE') {
+                          setSelectedProviderTab('CIELO_REDE');
+                        } else if (['VINDI', 'CORA', 'INTER', 'EFI'].includes(provCode)) {
+                          setSelectedProviderTab(provCode as any);
+                        }
+                        const el = document.getElementById('provider-credentials-vault');
+                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                      onJumpToPdvTab={() => setActiveTab('pdv')}
+                    />
                   )}
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">
-                      <div className="p-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-lg">
-                        <CreditCard className="h-5 w-5" />
-                      </div>
+
+                  {/* PASSO 2: CREDENCIAIS, CERTIFICADOS & CONSOLE DE HOMOLOGAÇÃO POR PROVEDOR */}
+                  <div
+                    id="provider-credentials-vault"
+                    className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-5 shadow-sm"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3.5">
                       <div>
-                        <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Opções de Checkout</h2>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">Adquirentes e processadores de pagamento da Loja Virtual.</p>
+                        <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                          Passo 2 • Cofre de Credenciais &amp; Homologação dos Provedores
+                        </span>
+                        <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                          Contas Bancárias e Gateways de Pagamento
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Cadastre as chaves, tokens e certificados mTLS uma única vez. Você pode usar cada provedor em diferentes formas de pagamento no Passo 1 acima.
+                        </p>
                       </div>
                     </div>
 
-                    <div className="space-y-1.5 md:w-1/2">
-                      <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Provedor Principal (Ativo)</label>
-                      <select
-                        value={settings.payment_gateway_active}
-                        onChange={e => setSettings({ ...settings, payment_gateway_active: e.target.value })}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500 transition-all font-medium text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-rose-500/50"
-                      >
-                        <option value="EFI">Efí Pay (Boleto/Pix)</option>
-                        <option value="CIELO">Cielo E-commerce</option>
-                        <option value="REDE">Rede / Itaú</option>
-                        <option value="VINDI">Vindi Pagamentos</option>
-                      </select>
+                    {/* Abas de Seleção do Provedor para Configurar Credenciais */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+                      {[
+                        {
+                          id: 'VINDI',
+                          name: 'Vindi Commerce',
+                          desc: 'Cartão, PIX, Boleto e Link',
+                          ready: Boolean(settings.vindi_api_key && settings.vindi_api_key.trim().length >= 8),
+                        },
+                        {
+                          id: 'CORA',
+                          name: 'Banco Cora',
+                          desc: 'Boleto Registrado & PIX mTLS',
+                          ready: true,
+                        },
+                        {
+                          id: 'EFI',
+                          name: 'Efí Bank (Gerencianet)',
+                          desc: 'PIX, Boleto & Cartão (.p12)',
+                          ready: Boolean(settings.efi_client_id && settings.efi_client_secret),
+                        },
+                        {
+                          id: 'INTER',
+                          name: 'Banco Inter',
+                          desc: 'Boletos V2 & V3 BolePix',
+                          ready: Boolean(settings.inter_enabled && settings.inter_client_id),
+                        },
+                        {
+                          id: 'CIELO_REDE',
+                          name: 'Cielo / Rede',
+                          desc: 'Adquirentes de Cartão',
+                          ready: Boolean(settings.cielo_merchant_id || settings.rede_pv),
+                        },
+                      ].map((tab) => {
+                        const active = selectedProviderTab === tab.id;
+                        return (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setSelectedProviderTab(tab.id as any)}
+                            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                              active
+                                ? 'border-indigo-600 bg-indigo-50/70 dark:bg-indigo-950/40 ring-2 ring-indigo-500/20 shadow-sm'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-indigo-300'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
+                                {tab.name}
+                              </span>
+                              <span
+                                className={`w-2 h-2 rounded-full shrink-0 ${
+                                  tab.ready ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'
+                                }`}
+                              />
+                            </div>
+                            <span className="text-[10px] text-slate-500 block mt-0.5 truncate">
+                              {tab.desc}
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
 
-                    {settings.payment_gateway_active === 'CIELO' && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 animate-in fade-in slide-in-from-top-2">
-                        <div className="space-y-1.5">
-                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Merchant ID</label>
-                          <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:ring-2 focus:ring-rose-500 font-mono text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={settings.cielo_merchant_id} onChange={e => setSettings({...settings, cielo_merchant_id: e.target.value})} />
+                    {/* 1. PAINEL VINDI COMMERCE */}
+                    {selectedProviderTab === 'VINDI' && (
+                      <VindiCheckoutPanel settings={settings} setSettings={setSettings} />
+                    )}
+
+                    {/* 2. PAINEL BANCO CORA */}
+                    {selectedProviderTab === 'CORA' && companyId && (
+                      <div className="rounded-2xl border border-pink-200 dark:border-pink-900/40 p-3 md:p-5 bg-white dark:bg-slate-900">
+                        <CoraSettingsPanel companyId={companyId} embedded />
+                      </div>
+                    )}
+
+                    {/* 3. PAINEL EFÍ BANK */}
+                    {selectedProviderTab === 'EFI' && (
+                      <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 space-y-4">
+                        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                          <div className="flex items-center gap-2">
+                            <div className="p-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-lg">
+                              <Receipt className="h-5 w-5" />
+                            </div>
+                            <div>
+                              <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                                Efí Bank / Gerencianet (PIX, Boleto e Cartão)
+                              </h2>
+                              <p className="text-xs text-slate-500 dark:text-slate-400">
+                                Credenciais para emissão de QR Code PIX, Boletos e Cartão nos canais selecionados acima.
+                              </p>
+                            </div>
+                          </div>
+                          <label className="relative flex items-center cursor-pointer shrink-0">
+                            <span className="mr-3 text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase">
+                              Sandbox
+                            </span>
+                            <div className="relative">
+                              <input
+                                type="checkbox"
+                                className="sr-only peer"
+                                checked={settings.efi_sandbox}
+                                onChange={(e) =>
+                                  setSettings({ ...settings, efi_sandbox: e.target.checked })
+                                }
+                              />
+                              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
+                            </div>
+                          </label>
                         </div>
-                        <div className="space-y-1.5">
-                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Client ID</label>
-                          <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:ring-2 focus:ring-rose-500 font-mono text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={settings.cielo_client_id} onChange={e => setSettings({...settings, cielo_client_id: e.target.value})} />
-                        </div>
-                        <div className="space-y-1.5 md:col-span-2">
-                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Client Secret</label>
-                          <input type="password" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:ring-2 focus:ring-rose-500 font-mono text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={settings.cielo_client_secret} onChange={e => setSettings({...settings, cielo_client_secret: e.target.value})} />
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                              Client ID
+                            </label>
+                            <input
+                              type="text"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-xs dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                              placeholder="Client_Id_..."
+                              value={settings.efi_client_id}
+                              onChange={(e) =>
+                                setSettings({ ...settings, efi_client_id: e.target.value })
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                              Client Secret
+                            </label>
+                            <input
+                              type="password"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-xs dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                              placeholder="Client_Secret_..."
+                              value={settings.efi_client_secret}
+                              onChange={(e) =>
+                                setSettings({ ...settings, efi_client_secret: e.target.value })
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                              Identificador de Conta (Payee Code)
+                            </label>
+                            <input
+                              type="text"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-xs dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                              placeholder="Ex: 57C2..."
+                              value={settings.efi_payee_code}
+                              onChange={(e) =>
+                                setSettings({ ...settings, efi_payee_code: e.target.value })
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                              <span>Certificado (.p12 / .pem)</span>
+                              {uploadingCert && (
+                                <Loader2 className="h-3 w-3 animate-spin text-emerald-500" />
+                              )}
+                            </label>
+                            <div className="flex flex-col gap-2">
+                              <input
+                                type="file"
+                                accept=".p12,.pem"
+                                onChange={handleCertificateUpload}
+                                disabled={uploadingCert}
+                                className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100"
+                              />
+                              {settings.efi_certificate_path && (
+                                <p
+                                  className="text-xs text-slate-500 font-mono truncate"
+                                  title={settings.efi_certificate_path}
+                                >
+                                  Salvo em: {settings.efi_certificate_path}
+                                </p>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )}
 
-                    {settings.payment_gateway_active === 'REDE' && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 animate-in fade-in slide-in-from-top-2">
-                        <div className="space-y-1.5">
-                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">PV (Ponto de Venda)</label>
-                          <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:ring-2 focus:ring-rose-500 font-mono text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={settings.rede_pv} onChange={e => setSettings({...settings, rede_pv: e.target.value})} />
-                        </div>
-                        <div className="space-y-1.5">
-                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Token</label>
-                          <input type="password" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:ring-2 focus:ring-rose-500 font-mono text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={settings.rede_token} onChange={e => setSettings({...settings, rede_token: e.target.value})} />
-                        </div>
-                      </div>
-                    )}
-
-                    {settings.payment_gateway_active === 'VINDI' && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 animate-in fade-in slide-in-from-top-2">
-                        <div className="space-y-1.5 md:col-span-2">
-                          <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">API Key (Chave Privada)</label>
-                          <input type="password" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:ring-2 focus:ring-rose-500 font-mono text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={settings.vindi_api_key} onChange={e => setSettings({...settings, vindi_api_key: e.target.value})} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800/60">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/60 pb-3">
-                      <div className="flex items-center gap-2">
-                        <div className="p-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-lg">
-                          <Receipt className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Efí Bank (Boleto/Pix)</h2>
-                          <p className="text-sm text-slate-500 dark:text-slate-400">Credenciais para emissão de Pix e Boletos.</p>
-                        </div>
-                      </div>
-                      <label className="relative flex items-center cursor-pointer shrink-0">
-                        <span className="mr-3 text-sm font-bold text-emerald-600 dark:text-emerald-400 uppercase">Sandbox</span>
-                        <div className="relative">
-                          <input type="checkbox" className="sr-only peer" checked={settings.efi_sandbox} onChange={e => setSettings({ ...settings, efi_sandbox: e.target.checked })} />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 dark:bg-slate-700 dark:border-slate-600"></div>
-                        </div>
-                      </label>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Client ID</label>
-                        <input
-                          type="text"
-                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-emerald-500/50"
-                          placeholder="Client_Id_..."
-                          value={settings.efi_client_id}
-                          onChange={e => setSettings({ ...settings, efi_client_id: e.target.value })}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Client Secret</label>
-                        <input
-                          type="password"
-                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-emerald-500/50"
-                          placeholder="Client_Secret_..."
-                          value={settings.efi_client_secret}
-                          onChange={e => setSettings({ ...settings, efi_client_secret: e.target.value })}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
-                          Identificador de Conta (Payee Code)
-                        </label>
-                        <input
-                          type="text"
-                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-emerald-500/50"
-                          placeholder="Ex: 57C2..."
-                          value={settings.efi_payee_code}
-                          onChange={e => setSettings({ ...settings, efi_payee_code: e.target.value })}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                          <span>Certificado (.p12 / .pem)</span>
-                          {uploadingCert && <Loader2 className="h-3 w-3 animate-spin text-emerald-500" />}
-                        </label>
-                        <div className="flex flex-col gap-2">
-                          <input
-                            type="file"
-                            accept=".p12,.pem"
-                            onChange={handleCertificateUpload}
-                            disabled={uploadingCert}
-                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 dark:file:bg-emerald-900/30 dark:file:text-emerald-400 dark:hover:file:bg-emerald-900/50 disabled:opacity-50"
-                          />
-                          {settings.efi_certificate_path && (
-                            <p className="text-xs text-slate-500 font-mono truncate" title={settings.efi_certificate_path}>
-                              Salvo em: {settings.efi_certificate_path}
+                    {/* 4. PAINEL BANCO INTER */}
+                    {selectedProviderTab === 'INTER' && (
+                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 dark:bg-slate-800/50 dark:border-slate-700">
+                        <div className="flex items-center gap-3 mb-5">
+                          <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center dark:bg-orange-900/40">
+                            <Building2 className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="text-base font-bold text-slate-800 dark:text-white">
+                              Banco Inter (Boletos &amp; BolePix V2/V3)
+                            </h3>
+                            <p className="text-xs text-slate-500 font-medium">
+                              Emissão e conciliação automática de boletos bancários e BolePix via mTLS
                             </p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* BANCO INTER INTEGRATION */}
-                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 dark:bg-slate-800/50 dark:border-slate-700 mt-6">
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center dark:bg-orange-900/40">
-                        <Building2 className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="text-lg font-bold text-slate-800 dark:text-white">Banco Inter (Boletos)</h3>
-                        <p className="text-sm text-slate-500 font-medium">Emissão e conciliação automática de boletos bancários</p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" checked={settings.inter_enabled} onChange={e => setSettings({ ...settings, inter_enabled: e.target.checked })} />
-                        <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300 rounded-full peer dark:bg-slate-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
-                      </label>
-                    </div>
-
-                    {settings.inter_enabled && (
-                      <div className="space-y-6 animate-in fade-in slide-in-from-top-4 relative">
-                        <div className="absolute -left-6 top-0 bottom-0 w-1 bg-orange-500 rounded-r-md"></div>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div className="space-y-1.5">
-                            <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Conta Corrente (Opcional)</label>
-                            <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-orange-500/50" placeholder="Ex: 1234567-8" value={settings.inter_account_number} onChange={e => setSettings({ ...settings, inter_account_number: e.target.value })} />
                           </div>
-                          <div className="space-y-1.5">
-                            <label className="text-sm font-medium text-slate-700 block">Ambiente</label>
-                            <div className="flex bg-slate-200 p-1 rounded-xl">
-                              <button type="button" onClick={() => setSettings({...settings, inter_sandbox: true})} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${settings.inter_sandbox ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Sandbox (Homol)</button>
-                              <button type="button" onClick={() => setSettings({...settings, inter_sandbox: false})} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${!settings.inter_sandbox ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Produção REAL</button>
-                            </div>
-                          </div>
-                          <div className="space-y-1.5 md:col-span-2">
-                            <label className="text-sm font-medium text-slate-700 block">Motor de Emissão (API)</label>
-                            <div className="flex bg-slate-200 p-1 rounded-xl">
-                              <button type="button" onClick={() => setSettings({...settings, inter_api_version: 'V2'})} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${settings.inter_api_version === 'V2' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>V2 Clássica (Síncrono)</button>
-                              <button type="button" onClick={() => setSettings({...settings, inter_api_version: 'V3'})} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${settings.inter_api_version === 'V3' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>V3 BolePix (Assíncrono)</button>
-                            </div>
-                          </div>
-                          
-                          <div className="space-y-1.5 md:col-span-2">
-                            <label className="text-sm font-medium text-slate-700 block">Client ID</label>
-                            <input type="text" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-mono text-sm" placeholder="Client_Id" value={settings.inter_client_id} onChange={e => setSettings({ ...settings, inter_client_id: e.target.value })} />
-                          </div>
-                          <div className="space-y-1.5 md:col-span-2">
-                            <label className="text-sm font-medium text-slate-700 block">Client Secret</label>
-                            <input type="password" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 font-mono text-sm" placeholder="Client_Secret" value={settings.inter_client_secret} onChange={e => setSettings({ ...settings, inter_client_secret: e.target.value })} />
-                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="sr-only peer"
+                              checked={settings.inter_enabled}
+                              onChange={(e) =>
+                                setSettings({ ...settings, inter_enabled: e.target.checked })
+                              }
+                            />
+                            <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300 rounded-full peer dark:bg-slate-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+                          </label>
                         </div>
 
-                        <div className="bg-orange-50 p-4 rounded-xl border border-orange-100">
-                          <h4 className="text-sm font-bold text-orange-900 flex items-center mb-2"><Key className="w-4 h-4 mr-2" /> Certificados de Aplicação (MTLS)</h4>
-                          <p className="text-xs text-orange-800 mb-4">Você precisa fazer upload do arquivo <b>.crt</b> e da chave privada <b>.key</b> gerados no portal do Banco Inter.</p>
-                          
-                          <div className="flex flex-col gap-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="border-2 border-dashed border-orange-300 rounded-xl p-4 bg-white relative hover:bg-orange-50 transition-colors">
-                                <input type="file" accept=".crt,.pem" onChange={e => setInterCertFile(e.target.files?.[0] || null)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                                <div className="flex items-center gap-3">
-                                  <FileText className="w-8 h-8 text-orange-500" />
-                                  <div>
-                                    <p className="font-bold text-sm text-slate-700">{interCertFile ? interCertFile.name : 'Clique para enviar .CRT'}</p>
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="border-2 border-dashed border-orange-300 rounded-xl p-4 bg-white relative hover:bg-orange-50 transition-colors">
-                                <input type="file" accept=".key" onChange={e => setInterKeyFile(e.target.files?.[0] || null)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                                <div className="flex items-center gap-3">
-                                  <Key className="w-8 h-8 text-slate-500" />
-                                  <div>
-                                    <p className="font-bold text-sm text-slate-700">{interKeyFile ? interKeyFile.name : 'Clique para enviar .KEY'}</p>
-                                  </div>
-                                </div>
+                        <div className="space-y-5 relative">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-1.5">
+                              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                                Conta Corrente (Opcional)
+                              </label>
+                              <input
+                                type="text"
+                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 font-mono text-xs dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                                placeholder="Ex: 1234567-8"
+                                value={settings.inter_account_number}
+                                onChange={(e) =>
+                                  setSettings({ ...settings, inter_account_number: e.target.value })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-xs font-bold text-slate-700 block">Ambiente</label>
+                              <div className="flex bg-slate-200 p-1 rounded-xl">
+                                <button
+                                  type="button"
+                                  onClick={() => setSettings({ ...settings, inter_sandbox: true })}
+                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                                    settings.inter_sandbox
+                                      ? 'bg-white text-slate-800 shadow-sm'
+                                      : 'text-slate-500 hover:text-slate-700'
+                                  }`}
+                                >
+                                  Sandbox (Homol)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSettings({ ...settings, inter_sandbox: false })}
+                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                                    !settings.inter_sandbox
+                                      ? 'bg-orange-500 text-white shadow-sm'
+                                      : 'text-slate-500 hover:text-slate-700'
+                                  }`}
+                                >
+                                  Produção REAL
+                                </button>
                               </div>
                             </div>
-                            <button type="button" onClick={handleInterCertUpload} disabled={!interCertFile || !interKeyFile} className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 font-bold rounded-lg text-sm w-full md:w-auto">Enviar e Validar Certificados</button>
+                            <div className="space-y-1.5 md:col-span-2">
+                              <label className="text-xs font-bold text-slate-700 block">
+                                Motor de Emissão (API)
+                              </label>
+                              <div className="flex bg-slate-200 p-1 rounded-xl">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSettings({ ...settings, inter_api_version: 'V2' })
+                                  }
+                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                                    settings.inter_api_version === 'V2'
+                                      ? 'bg-white text-slate-800 shadow-sm'
+                                      : 'text-slate-500 hover:text-slate-700'
+                                  }`}
+                                >
+                                  V2 Clássica (Síncrono)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSettings({ ...settings, inter_api_version: 'V3' })
+                                  }
+                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                                    settings.inter_api_version === 'V3'
+                                      ? 'bg-orange-500 text-white shadow-sm'
+                                      : 'text-slate-500 hover:text-slate-700'
+                                  }`}
+                                >
+                                  V3 BolePix (Assíncrono)
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-xs font-bold text-slate-700 block">
+                                Client ID
+                              </label>
+                              <input
+                                type="text"
+                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 font-mono text-xs"
+                                placeholder="Client_Id"
+                                value={settings.inter_client_id}
+                                onChange={(e) =>
+                                  setSettings({ ...settings, inter_client_id: e.target.value })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-xs font-bold text-slate-700 block">
+                                Client Secret
+                              </label>
+                              <input
+                                type="password"
+                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-slate-900 font-mono text-xs"
+                                placeholder="Client_Secret"
+                                value={settings.inter_client_secret}
+                                onChange={(e) =>
+                                  setSettings({ ...settings, inter_client_secret: e.target.value })
+                                }
+                              />
+                            </div>
                           </div>
-                          
-                          {settings.inter_cert_path && (
-                            <div className="mt-4 flex items-center gap-2 text-xs font-bold text-emerald-600 bg-emerald-50 py-1.5 px-3 rounded-lg w-fit border border-emerald-200">
-                              <CheckCircle className="w-4 h-4" /> Certificados ativos e salvos no servidor
+
+                          <div className="bg-orange-50 p-4 rounded-xl border border-orange-100">
+                            <h4 className="text-xs font-bold text-orange-900 flex items-center mb-1.5">
+                              <Key className="w-4 h-4 mr-2" /> Certificados de Aplicação (mTLS)
+                            </h4>
+                            <p className="text-xs text-orange-800 mb-3">
+                              Faça upload do arquivo <b>.crt</b> e da chave privada <b>.key</b> gerados no portal do Banco Inter.
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                              <div className="border-2 border-dashed border-orange-300 rounded-xl p-3 bg-white relative hover:bg-orange-50 transition-colors">
+                                <input
+                                  type="file"
+                                  accept=".crt,.pem"
+                                  onChange={(e) => setInterCertFile(e.target.files?.[0] || null)}
+                                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                />
+                                <div className="flex items-center gap-2.5">
+                                  <FileText className="w-6 h-6 text-orange-500" />
+                                  <p className="font-bold text-xs text-slate-700">
+                                    {interCertFile ? interCertFile.name : 'Clique para enviar .CRT'}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="border-2 border-dashed border-orange-300 rounded-xl p-3 bg-white relative hover:bg-orange-50 transition-colors">
+                                <input
+                                  type="file"
+                                  accept=".key"
+                                  onChange={(e) => setInterKeyFile(e.target.files?.[0] || null)}
+                                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                />
+                                <div className="flex items-center gap-2.5">
+                                  <Key className="w-6 h-6 text-slate-500" />
+                                  <p className="font-bold text-xs text-slate-700">
+                                    {interKeyFile ? interKeyFile.name : 'Clique para enviar .KEY'}
+                                  </p>
+                                </div>
+                              </div>
                             </div>
-                          )}
+                            <button
+                              type="button"
+                              onClick={handleInterCertUpload}
+                              disabled={!interCertFile || !interKeyFile}
+                              className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white px-4 py-2 font-bold rounded-lg text-xs"
+                            >
+                              Enviar e Validar Certificados
+                            </button>
+                            {settings.inter_cert_path && (
+                              <div className="mt-3 flex items-center gap-2 text-xs font-bold text-emerald-600 bg-emerald-50 py-1.5 px-3 rounded-lg w-fit border border-emerald-200">
+                                <CheckCircle className="w-4 h-4" /> Certificados ativos no servidor
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 5. PAINEL CIELO & REDE */}
+                    {selectedProviderTab === 'CIELO_REDE' && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
+                          <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Cielo E-commerce API 3.0
+                          </h4>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                              Merchant ID
+                            </label>
+                            <input
+                              type="text"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-slate-900 font-mono text-xs dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                              value={settings.cielo_merchant_id}
+                              onChange={(e) =>
+                                setSettings({ ...settings, cielo_merchant_id: e.target.value })
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                              Client ID
+                            </label>
+                            <input
+                              type="text"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-slate-900 font-mono text-xs dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                              value={settings.cielo_client_id}
+                              onChange={(e) =>
+                                setSettings({ ...settings, cielo_client_id: e.target.value })
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                              Client Secret
+                            </label>
+                            <input
+                              type="password"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-slate-900 font-mono text-xs dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                              value={settings.cielo_client_secret}
+                              onChange={(e) =>
+                                setSettings({ ...settings, cielo_client_secret: e.target.value })
+                              }
+                            />
+                          </div>
+                        </div>
+
+                        <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
+                          <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Rede / Itaú (e.Rede)
+                          </h4>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                              PV (Ponto de Venda / Filiação)
+                            </label>
+                            <input
+                              type="text"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-slate-900 font-mono text-xs dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                              value={settings.rede_pv}
+                              onChange={(e) =>
+                                setSettings({ ...settings, rede_pv: e.target.value })
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                              Token de Integração
+                            </label>
+                            <input
+                              type="password"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-slate-900 font-mono text-xs dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                              value={settings.rede_token}
+                              onChange={(e) =>
+                                setSettings({ ...settings, rede_token: e.target.value })
+                              }
+                            />
+                          </div>
                         </div>
                       </div>
                     )}

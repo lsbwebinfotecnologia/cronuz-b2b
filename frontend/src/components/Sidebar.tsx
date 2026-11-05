@@ -378,6 +378,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const coraSubItems = [
     { name: 'Financeiro Cora', href: '/financial/cora', icon: Landmark },
     { name: 'Boletos Cora', href: '/financial/cora/boletos', icon: Receipt },
+    ...(usesHorus ? [{ name: 'Notas Fiscais (Horus)', href: '/financial/cora/notas-fiscais', icon: FileText }] : []),
   ];
 
   if (moduleFinancial) {
@@ -407,6 +408,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        subItems: [
          { name: 'Painel', href: '/financial/cora', icon: BarChart3 },
          { name: 'Boletos', href: '/financial/cora/boletos', icon: Receipt },
+         { name: 'Notas Fiscais (Horus)', href: '/financial/cora/notas-fiscais', icon: FileText },
        ]
     });
   }
@@ -583,13 +585,15 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
       href: '/b2c-storefront',
       icon: Store,
       subItems: [
-        { name: 'Cupons de Desconto', href: '/b2c-storefront', icon: Ticket },
-        { name: 'Promoções e Descontos', href: '/b2c-storefront/promotions', icon: Tag },
-        { name: 'Pedidos e Carrinhos', href: '/b2c-storefront/orders', icon: ShoppingBag },
-        { name: 'Banners e Aparência', href: '/b2c-storefront/banners', icon: Globe },
-        { name: 'Vitrines e Destaques', href: '/b2c-storefront/showcases', icon: Sparkles },
-        { name: 'Categorias e Menu', href: '/b2c-storefront/categories', icon: FolderTree },
-        { name: 'Frete e Checkout', href: '/b2c-storefront/settings', icon: SlidersHorizontal },
+        { name: 'Produtos', href: '/products', icon: Package },
+        { name: 'Categorias', href: '/b2c-storefront/categories', icon: FolderTree },
+        { name: 'Clientes', href: '/b2c-storefront/customers', icon: Users },
+        { name: 'Pedidos', href: '/b2c-storefront/orders', icon: ShoppingBag },
+        { name: 'Cupons', href: '/b2c-storefront', icon: Ticket },
+        { name: 'Promoções', href: '/b2c-storefront/promotions', icon: Tag },
+        { name: 'Vitrines', href: '/b2c-storefront/showcases', icon: Sparkles },
+        { name: 'Banners', href: '/b2c-storefront/banners', icon: Globe },
+        { name: 'Configurações', href: '/b2c-storefront/settings', icon: Settings },
       ]
     });
   }

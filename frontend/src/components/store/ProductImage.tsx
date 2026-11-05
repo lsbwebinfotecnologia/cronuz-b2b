@@ -26,6 +26,7 @@ export function ProductImage({ coverUrl, eanGtin, alt, className = "", iconClass
   const [fallbackLevel, setFallbackLevel] = useState(0);
 
   useEffect(() => {
+    setHasError(false);
     if (coverUrl) {
       setImgSrc(coverUrl.startsWith('http') ? coverUrl : `${apiUrl}${coverUrl}`);
       setFallbackLevel(3); // Custom Image
@@ -39,19 +40,19 @@ export function ProductImage({ coverUrl, eanGtin, alt, className = "", iconClass
 
     // Default Image Strategy 
     // 1. Try external CDN Base URL if exists -> {baseUrl}/{ean}.jpg
-    // 2. Try Cronuz Local Server CDN -> /static/covers/{companyId}/{ean}.jpg
+    // 2. Try Cronuz Local Server CDN -> /uploads/covers/{companyId}/{ean}.jpg
     
     if (coverImageBaseUrl) {
       setImgSrc(`${coverImageBaseUrl.replace(/\/$/, '')}/${eanGtin}.jpg`);
       setFallbackLevel(1);
     } else if (companyId) {
-      setImgSrc(`${apiUrl}/static/covers/${companyId}/${eanGtin}.jpg`);
+      setImgSrc(`${apiUrl}/uploads/covers/${companyId}/${eanGtin}.jpg`);
       setFallbackLevel(2);
     } else {
       setHasError(true);
     }
     
-  }, [eanGtin, coverImageBaseUrl, companyId, apiUrl]);
+  }, [coverUrl, eanGtin, coverImageBaseUrl, companyId, apiUrl]);
 
   const handleError = () => {
     if (fallbackLevel === 3 && eanGtin) {
@@ -60,14 +61,14 @@ export function ProductImage({ coverUrl, eanGtin, alt, className = "", iconClass
          setImgSrc(`${coverImageBaseUrl.replace(/\/$/, '')}/${eanGtin}.jpg`);
          setFallbackLevel(1);
        } else if (companyId) {
-         setImgSrc(`${apiUrl}/static/covers/${companyId}/${eanGtin}.jpg`);
+         setImgSrc(`${apiUrl}/uploads/covers/${companyId}/${eanGtin}.jpg`);
          setFallbackLevel(2);
        } else {
          setHasError(true);
        }
     } else if (fallbackLevel === 1 && companyId) {
       // Fallback from external CDN to local server
-      setImgSrc(`${apiUrl}/static/covers/${companyId}/${eanGtin}.jpg`);
+      setImgSrc(`${apiUrl}/uploads/covers/${companyId}/${eanGtin}.jpg`);
       setFallbackLevel(2);
     } else {
       // Both failed

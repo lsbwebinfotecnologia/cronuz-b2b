@@ -98,11 +98,27 @@ def list_products(
     target_company_id = company_id or (current_user.company_id if current_user and current_user.company_id else 1)
     
     from app.models.company_settings import CompanySettings
+    from app.models.company import Company
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == target_company_id).first()
-    
-    # 1) If Horus is enabled, fetch EXCLUSIVELY from Horus as the Single Source of Truth
-    # A menos que a requisicao seja interna do DBM ou especificamente local
-    if settings and settings.horus_enabled and source not in ("dbm", "local"):
+    company_obj = db.query(Company).filter(Company.id == target_company_id).first()
+    b2c_active = bool(
+        (getattr(company_obj, "module_b2c_storefront", False) if company_obj else False)
+        or (getattr(settings, "b2c_storefront_open", False) if settings else False)
+    )
+    has_local_products = (
+        db.query(Product.id).filter(Product.company_id == target_company_id).first() is not None
+        if source == "admin"
+        else False
+    )
+
+    # 1) If Horus is enabled, fetch EXCLUSIVELY from Horus as the Single Source of Truth for B2B
+    # Exceto quando source for "dbm"/"local", ou na listagem administrativa ("admin") quando já existem produtos sincronizados no Cronuz (prd_product)
+    if (
+        settings
+        and settings.horus_enabled
+        and source not in ("dbm", "local")
+        and not (source == "admin" and (has_local_products or b2c_active and has_local_products))
+    ):
         import asyncio
         from app.integrators.horus_products import HorusProducts
         from app.models.company import Company
@@ -119,19 +135,22 @@ def list_products(
             
             # Determine search option
             search_option = None
-            term = search or ""
+            term = (search or "").strip()
             if term:
                 search_option = "BARRAS_ISBN" if term.isdigit() and len(term) >= 10 else "NOM_ITEM"
                 
             # Determine API Mode from company settings
             api_mode = getattr(settings, "horus_api_mode", "B2B") or "B2B"
             
-            if api_mode == "STANDARD" or source == "admin":
-                # Padrão: Não exige ID_GUID, usa o acervo da filial em vez de tabela do cliente
+            if api_mode == "STANDARD" or source == "admin" or not customer_id:
+                # Padrão / Admin: Não exige ID_GUID, usa o acervo da filial em vez de tabela do cliente.
+                # Quando a busca inicial está vazia, envia "A" pois o endpoint Busca_Acervo do Horus exige ao menos 1 caractere.
+                effective_term = term if len(term) >= 1 else "A"
+                effective_opt = search_option or "NOM_ITEM"
                 horus_response = asyncio.run(horus_client.busca_acervo_padrao(
                     id_doc=company.document or "",
-                    term=term,
-                    search_option=search_option,
+                    term=effective_term,
+                    search_option=effective_opt,
                     offset=skip,
                     limit=limit
                 ))
@@ -184,6 +203,11 @@ def list_products(
             if isinstance(horus_response, list) and len(horus_response) > 0:
                 # FIX: Check if the dictionary has the key 'Falha' instead of hasattr
                 if not ("Falha" in horus_response[0] or "FALHA" in horus_response[0]):
+                    from app.api.upload import STATIC_DIR
+                    from app.api.storefront import parse_horus_price
+                    import re
+                    company_cover_dir = STATIC_DIR / str(target_company_id)
+
                     for h_item in horus_response:
                         mapped = map_horus_product(
                             h_item, target_company_id, allow_backorder,
@@ -193,20 +217,41 @@ def list_products(
                         # PDV expects 'price' and 'stock' fields directly due to legacy mappings
                         mapped["price"] = mapped.get("promotional_price") if mapped.get("promotional_price") else mapped.get("base_price", 0.0)
                         mapped["stock"] = mapped.get("stock_quantity", 0)
+                        raw_peso = parse_horus_price(
+                            str(h_item.get("PESO") or h_item.get("PESO_ITEM") or h_item.get("PESO_BRUTO") or h_item.get("PESO_LIQ") or "0")
+                        )
+                        if raw_peso > 15:
+                            mapped["weight_kg"] = round(raw_peso / 1000.0, 3)
+                        elif raw_peso > 0:
+                            mapped["weight_kg"] = round(raw_peso, 3)
+                        mapped["width_cm"] = parse_horus_price(str(h_item.get("LARGURA") or h_item.get("LARGURA_ITEM") or "0")) or None
+                        mapped["height_cm"] = parse_horus_price(str(h_item.get("ALTURA") or h_item.get("ALTURA_ITEM") or "0")) or None
+                        mapped["length_cm"] = parse_horus_price(str(h_item.get("COMPRIMENTO") or h_item.get("COMPRIMENTO_ITEM") or h_item.get("PROFUNDIDADE") or h_item.get("ESPESSURA") or "0")) or None
+                        isbn_val = str(mapped.get("ean_gtin") or "").strip()
+                        if isbn_val and not mapped.get("cover_url"):
+                            clean_isbn = re.sub(r"[^a-zA-Z0-9_\-]", "", isbn_val)
+                            if clean_isbn:
+                                if (company_cover_dir / f"{clean_isbn}.jpg").exists():
+                                    mapped["cover_url"] = f"/uploads/covers/{target_company_id}/{clean_isbn}.jpg"
+                                elif (company_cover_dir / f"{clean_isbn}.png").exists():
+                                    mapped["cover_url"] = f"/uploads/covers/{target_company_id}/{clean_isbn}.png"
                         # make sure ID doesn't collide with local DB integers on frontend iterators
                         mapped["id"] = f"horus-{mapped.get('id', 'unknown')}"
                         items.append(mapped)
                     
             asyncio.run(horus_client.close())
-            return {
-                "items": items,
-                "total": len(items),
-                "page": 1,
-                "pages": 1
-            }
+            if len(items) > 0:
+                current_page = (skip // limit) + 1
+                estimated_total = skip + len(items) + (limit if len(items) == limit else 0)
+                estimated_pages = max(1, (estimated_total + limit - 1) // limit)
+                return {
+                    "items": items,
+                    "total": estimated_total,
+                    "page": current_page,
+                    "pages": estimated_pages
+                }
         except Exception as e:
             print(f"Error checking Horus integration: {e}")
-            return {"items": [], "total": 0, "page": 1, "pages": 1, "error": str(e)}
 
     # 2) Search in local database EXCLUSIVELY
     query = db.query(Product).filter(Product.company_id == target_company_id)
@@ -256,11 +301,22 @@ def list_products(
     ).offset(skip).limit(limit).all()
     
     # Convert local products to dictionary matching schema
+    from app.api.upload import STATIC_DIR
+    import re
+    company_cover_dir = STATIC_DIR / str(target_company_id)
+
     items = []
     for p in local_products:
         item_dict = ProductResponse.from_orm(p).dict()
         item_dict["price"] = p.promotional_price if p.promotional_price else p.base_price
         item_dict["stock"] = p.stock_quantity
+        if not item_dict.get("cover_url") and p.ean_gtin:
+            clean_isbn = re.sub(r"[^a-zA-Z0-9_\-]", "", p.ean_gtin.strip())
+            if clean_isbn:
+                if (company_cover_dir / f"{clean_isbn}.jpg").exists():
+                    item_dict["cover_url"] = f"/uploads/covers/{target_company_id}/{clean_isbn}.jpg"
+                elif (company_cover_dir / f"{clean_isbn}.png").exists():
+                    item_dict["cover_url"] = f"/uploads/covers/{target_company_id}/{clean_isbn}.png"
         if p.brand_rel and p.brand_rel.name:
             item_dict["brand"] = p.brand_rel.name
         elif not item_dict.get("brand"):
@@ -278,16 +334,219 @@ def list_products(
         "pages": max(1, (local_total + limit - 1) // limit)
     }
 
+def _resolve_or_import_product(db: Session, company_id: int, product_id_str: str) -> Optional[Product]:
+    """
+    Resolve um produto na tabela prd_product tanto por ID numérico quanto por referência
+    do Horus ('horus-1', 'horus-3', etc.). Caso o item venha da listagem do Horus e ainda
+    não exista na tabela prd_product do Cronuz, busca os dados no Horus ERP e grava na
+    tabela prd_product automaticamente para permitir edição de descrição, dimensões,
+    características e upload/coleta de capa sem redundância.
+    """
+    import re
+    from app.api.upload import STATIC_DIR
+    company_cover_dir = STATIC_DIR / str(company_id)
+
+    raw_id = str(product_id_str or "").strip()
+    if not raw_id:
+        return None
+
+    product: Optional[Product] = None
+
+    if raw_id.isdigit():
+        pid = int(raw_id)
+        product = db.query(Product).filter(
+            Product.id == pid,
+            Product.company_id == company_id
+        ).first()
+    elif raw_id.lower().startswith("horus-"):
+        cod_str = raw_id[6:].strip()
+        if cod_str.isdigit():
+            cod_int = int(cod_str)
+            product = db.query(Product).filter(
+                Product.company_id == company_id,
+                (Product.horus_cod_item == cod_int) | (Product.sku == cod_str) | (Product.ean_gtin == cod_str)
+            ).first()
+        else:
+            product = db.query(Product).filter(
+                Product.company_id == company_id,
+                (Product.sku == cod_str) | (Product.ean_gtin == cod_str)
+            ).first()
+
+        if not product and cod_str:
+            # Import on-demand from Horus ERP into prd_product
+            try:
+                import asyncio
+                from app.integrators.horus_products import HorusProducts
+                from app.models.company import Company
+                from app.models.company_settings import CompanySettings
+                from app.models.catalog_support import Category, Brand
+                from app.api.storefront import parse_horus_price
+
+                company = db.query(Company).filter(Company.id == company_id).first()
+                settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+                if company and settings and settings.horus_enabled:
+                    horus_client = HorusProducts(db, company_id)
+                    search_opt = "COD_ITEM" if (cod_str.isdigit() and len(cod_str) < 10) else "BARRAS_ISBN"
+                    h_res = asyncio.run(horus_client.busca_acervo_padrao(
+                        id_doc=company.document or "",
+                        term=cod_str,
+                        search_option=search_opt,
+                        offset=0,
+                        limit=10
+                    ))
+                    asyncio.run(horus_client.close())
+
+                    matched_item = None
+                    if isinstance(h_res, list) and len(h_res) > 0 and not ("Falha" in h_res[0] or "FALHA" in h_res[0]):
+                        for cand in h_res:
+                            c_cod = str(cand.get("COD_ITEM") or "").strip()
+                            c_isbn = str(cand.get("BARRAS_ISBN") or cand.get("COD_BARRA_ITEM") or "").strip()
+                            if c_cod == cod_str or c_isbn == cod_str:
+                                matched_item = cand
+                                break
+                        if not matched_item:
+                            matched_item = h_res[0]
+
+                    if matched_item:
+                        raw_cod = matched_item.get("COD_ITEM")
+                        cod_item = int(raw_cod) if str(raw_cod or "").strip().isdigit() else 0
+                        isbn = str(
+                            matched_item.get("BARRAS_ISBN")
+                            or matched_item.get("COD_BARRA_ITEM")
+                            or matched_item.get("COD_ISBN_ITEM")
+                            or matched_item.get("ISBN")
+                            or ""
+                        ).strip()
+                        sku = str(cod_item if cod_item > 0 else (isbn or cod_str)).strip()
+                        name = str(matched_item.get("NOM_ITEM") or matched_item.get("DESCRICAO") or f"Produto {sku}").strip()
+                        synopsis = str(
+                            matched_item.get("DESC_SINOPSE")
+                            or matched_item.get("SINOPSE")
+                            or matched_item.get("OBS_ITEM")
+                            or ""
+                        ).strip()
+                        author = str(matched_item.get("NOM_AUTOR") or matched_item.get("AUTOR") or "").strip()
+                        publisher = str(matched_item.get("NOM_EDITORA") or matched_item.get("NOM_FANTASIA") or "").strip()
+                        genre = str(
+                            matched_item.get("GENERO_NIVEL_1")
+                            or matched_item.get("DSC_GENERO")
+                            or matched_item.get("NOM_GENERO")
+                            or ""
+                        ).strip()
+
+                        vlr_capa = parse_horus_price(
+                            str(matched_item.get("VLR_CAPA") or matched_item.get("PRECO") or matched_item.get("VLR_PRECO") or "0")
+                        )
+                        vlr_liq = parse_horus_price(
+                            str(matched_item.get("VLR_LIQ_CLI") or matched_item.get("VLR_LIQ_DESCONTO_PDV") or "0")
+                        )
+                        base_price = vlr_capa if vlr_capa > 0 else vlr_liq
+                        promo_price = vlr_liq if (0 < vlr_liq < base_price) else None
+
+                        try:
+                            stock_qty = max(
+                                0,
+                                int(float(str(matched_item.get("SALDO_DISPONIVEL", matched_item.get("SALDO", 0)) or 0).replace(",", "."))),
+                            )
+                        except Exception:
+                            stock_qty = 0
+
+                        raw_peso = parse_horus_price(
+                            str(
+                                matched_item.get("PESO")
+                                or matched_item.get("PESO_ITEM")
+                                or matched_item.get("PESO_BRUTO")
+                                or matched_item.get("PESO_LIQ")
+                                or "0"
+                            )
+                        )
+                        default_weight = float(getattr(settings, "b2c_default_item_weight_kg", 0.35) or 0.35)
+                        if raw_peso > 15:
+                            weight_kg = round(raw_peso / 1000.0, 3)
+                        elif raw_peso > 0:
+                            weight_kg = round(raw_peso, 3)
+                        else:
+                            weight_kg = default_weight
+
+                        width_cm = parse_horus_price(str(matched_item.get("LARGURA") or matched_item.get("LARGURA_ITEM") or "0")) or None
+                        height_cm = parse_horus_price(str(matched_item.get("ALTURA") or matched_item.get("ALTURA_ITEM") or "0")) or None
+                        length_cm = parse_horus_price(str(matched_item.get("COMPRIMENTO") or matched_item.get("COMPRIMENTO_ITEM") or matched_item.get("PROFUNDIDADE") or matched_item.get("ESPESSURA") or "0")) or None
+
+                        cat_id = None
+                        if genre:
+                            cat_obj = db.query(Category).filter(Category.company_id == company_id, Category.name.ilike(genre[:150])).first()
+                            if not cat_obj:
+                                cat_obj = Category(company_id=company_id, name=genre[:150])
+                                db.add(cat_obj)
+                                db.flush()
+                            cat_id = cat_obj.id
+
+                        brand_id = None
+                        if publisher:
+                            brand_obj = db.query(Brand).filter(Brand.company_id == company_id, Brand.name.ilike(publisher[:100])).first()
+                            if not brand_obj:
+                                brand_obj = Brand(company_id=company_id, name=publisher[:100])
+                                db.add(brand_obj)
+                                db.flush()
+                            brand_id = brand_obj.id
+
+                        clean_isbn_file = re.sub(r"[^a-zA-Z0-9_\-]", "", isbn)
+                        local_cover_url = None
+                        if clean_isbn_file:
+                            if (company_cover_dir / f"{clean_isbn_file}.jpg").exists():
+                                local_cover_url = f"/uploads/covers/{company_id}/{clean_isbn_file}.jpg"
+                            elif (company_cover_dir / f"{clean_isbn_file}.png").exists():
+                                local_cover_url = f"/uploads/covers/{company_id}/{clean_isbn_file}.png"
+
+                        product = Product(
+                            company_id=company_id,
+                            sku=sku,
+                            name=name[:255],
+                            short_description=synopsis[:400] if synopsis else None,
+                            long_description=synopsis if synopsis else None,
+                            base_price=base_price,
+                            promotional_price=promo_price,
+                            weight_kg=weight_kg,
+                            width_cm=width_cm,
+                            height_cm=height_cm,
+                            length_cm=length_cm,
+                            brand=publisher[:100] if publisher else None,
+                            model=author[:100] if author else None,
+                            ean_gtin=isbn[:50] if isbn else None,
+                            category_id=cat_id,
+                            brand_id=brand_id,
+                            status="ACTIVE",
+                            stock_quantity=stock_qty,
+                            allow_purchase=stock_qty > 0,
+                            stock_status_label="DISPONÍVEL" if stock_qty > 0 else "SEM ESTOQUE",
+                            cover_url=local_cover_url,
+                            horus_cod_item=cod_item if cod_item > 0 else None,
+                            subject=genre[:150] if genre else None,
+                        )
+                        db.add(product)
+                        db.commit()
+                        db.refresh(product)
+            except Exception as e:
+                print(f"[Products] Erro ao importar produto {raw_id} sob demanda do Horus: {e}")
+
+    if product and not product.cover_url and product.ean_gtin:
+        clean_isbn = re.sub(r"[^a-zA-Z0-9_\-]", "", product.ean_gtin.strip())
+        if clean_isbn:
+            if (company_cover_dir / f"{clean_isbn}.jpg").exists():
+                product.cover_url = f"/uploads/covers/{company_id}/{clean_isbn}.jpg"
+            elif (company_cover_dir / f"{clean_isbn}.png").exists():
+                product.cover_url = f"/uploads/covers/{company_id}/{clean_isbn}.png"
+
+    return product
+
+
 @router.get("/{product_id}", response_model=ProductResponse)
 def get_product(
-    product_id: int,
+    product_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    product = db.query(Product).filter(
-        Product.id == product_id,
-        Product.company_id == current_user.company_id
-    ).first()
+    product = _resolve_or_import_product(db, current_user.company_id, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Produto não encontrado.")
     return product
@@ -295,16 +554,12 @@ def get_product(
 @router.put("/{product_id}", response_model=ProductResponse)
 @router.patch("/{product_id}", response_model=ProductResponse)
 def update_product(
-    product_id: int,
+    product_id: str,
     product_in: ProductUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    db_product = db.query(Product).filter(
-        Product.id == product_id,
-        Product.company_id == current_user.company_id
-    ).first()
-
+    db_product = _resolve_or_import_product(db, current_user.company_id, product_id)
     
     if not db_product:
         raise HTTPException(status_code=404, detail="Produto não encontrado.")
@@ -382,14 +637,11 @@ def update_product(
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(
-    product_id: int,
+    product_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    db_product = db.query(Product).filter(
-        Product.id == product_id,
-        Product.company_id == current_user.company_id
-    ).first()
+    db_product = _resolve_or_import_product(db, current_user.company_id, product_id)
     
     if not db_product:
         raise HTTPException(status_code=404, detail="Produto não encontrado.")
@@ -400,24 +652,21 @@ def delete_product(
 
 @router.get("/{product_id}/history")
 def get_product_history(
-    product_id: int,
+    product_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    product = db.query(Product).filter(
-        Product.id == product_id,
-        Product.company_id == current_user.company_id
-    ).first()
+    product = _resolve_or_import_product(db, current_user.company_id, product_id)
     
     if not product:
         raise HTTPException(status_code=404, detail="Produto não encontrado.")
         
     stock_logs = db.query(StockMovement).filter(
-        StockMovement.product_id == product_id
+        StockMovement.product_id == product.id
     ).order_by(StockMovement.created_at.desc()).all()
     
     price_logs = db.query(PriceHistory).filter(
-        PriceHistory.product_id == product_id
+        PriceHistory.product_id == product.id
     ).order_by(PriceHistory.created_at.desc()).all()
     
     return {

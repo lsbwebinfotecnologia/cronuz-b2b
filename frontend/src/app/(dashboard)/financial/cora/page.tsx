@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Landmark, Loader2, CalendarClock, AlertTriangle, CheckCircle2, XCircle, ListChecks, Plus, Settings2, RefreshCw } from 'lucide-react';
+import { Landmark, Loader2, CalendarClock, AlertTriangle, CheckCircle2, XCircle, ListChecks, Plus, Settings2, RefreshCw, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { getUser } from '@/lib/auth';
 import { brl, paymentsApi } from '@/components/payments/chargeUi';
@@ -62,9 +62,10 @@ export default function FinanceiroCoraPainel() {
           </div>
         </div>
         <div className="grid grid-cols-2 sm:flex gap-2">
+          <Link href="/financial/cora/notas-fiscais" className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-xl text-sm font-semibold border border-pink-200 bg-pink-50/60 text-pink-700 hover:bg-pink-100/70 dark:border-pink-900 dark:bg-pink-950/30 dark:text-pink-300"><FileText className="h-4 w-4" /> Notas Fiscais (Horus)</Link>
           <Link href="/financial/cora/boletos" className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-700"><ListChecks className="h-4 w-4" /> Boletos</Link>
           <Link href="/financial/cora/boletos?novo=1" className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-xl text-sm font-semibold bg-pink-600 hover:bg-pink-700 text-white"><Plus className="h-4 w-4" /> Novo boleto</Link>
-          <Link href="/settings?tab=pagamentos" className="col-span-2 sm:col-span-1 inline-flex items-center justify-center gap-2 h-10 px-4 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-700"><Settings2 className="h-4 w-4" /> Configurações</Link>
+          <Link href="/settings?tab=pagamentos" className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-xl text-sm font-semibold border border-slate-200 dark:border-slate-700"><Settings2 className="h-4 w-4" /> Configurações</Link>
         </div>
       </div>
 

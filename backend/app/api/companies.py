@@ -300,6 +300,12 @@ def update_company_settings(
         
     db.commit()
     db.refresh(settings)
+    # Loja B2C usa cache de "store_info" (gateway / modo de checkout): invalida para refletir na hora
+    try:
+        from app.api.b2c_storefront import _b2c_cache_clear
+        _b2c_cache_clear(company_id)
+    except Exception:
+        pass
     return settings
 
 

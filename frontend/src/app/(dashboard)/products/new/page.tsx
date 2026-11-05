@@ -55,6 +55,49 @@ export default function NewProductPage() {
   const [coverBaseUrl, setCoverBaseUrl] = useState('');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [collectingBookinfo, setCollectingBookinfo] = useState(false);
+
+  const handleCollectBookinfoCover = async () => {
+    if (!product.ean_gtin) {
+      toast.error('Preencha o ISBN (EAN/GTIN) do produto antes de buscar na Bookinfo.');
+      return;
+    }
+    setCollectingBookinfo(true);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${apiBase}/upload/cover/bookinfo`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}`
+        },
+        body: JSON.stringify({
+          isbn: product.ean_gtin
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setImagePreview(`${apiBase}${data.url}?t=${Date.now()}`);
+        setProduct(prev => ({
+          ...prev,
+          cover_url: data.url,
+          long_description: prev.long_description || data.synopsis || prev.long_description,
+          short_description: prev.short_description || (data.synopsis ? String(data.synopsis).slice(0, 300) : prev.short_description),
+          weight_kg: prev.weight_kg || data.weight_kg || prev.weight_kg,
+          width_cm: prev.width_cm || data.width_cm || prev.width_cm,
+          height_cm: prev.height_cm || data.height_cm || prev.height_cm,
+          length_cm: prev.length_cm || data.length_cm || prev.length_cm,
+        }));
+        toast.success(data.message || 'Capa coletada na Bookinfo e salva no servidor com sucesso!');
+      } else {
+        toast.error(data.detail || 'Não foi possível coletar a capa na Bookinfo.');
+      }
+    } catch (e) {
+      toast.error('Erro de conexão ao consultar a Bookinfo.');
+    } finally {
+      setCollectingBookinfo(false);
+    }
+  };
 
   useEffect(() => {
     const fetchSupport = async () => {
@@ -524,48 +567,41 @@ export default function NewProductPage() {
                          )}
 
                          <div className="flex-1">
-                            <h4 className="text-sm font-medium text-slate-900 dark:text-white mb-2">Padrão de Resolução: <span className="font-mono text-indigo-600 dark:text-indigo-400">{product.ean_gtin}.jpg</span></h4>
+                            <h4 className="text-sm font-medium text-slate-900 dark:text-white mb-1">
+                              Arquivo salvo no servidor por ISBN: <span className="font-mono text-indigo-600 dark:text-indigo-400">{product.ean_gtin}.jpg / .png</span>
+                            </h4>
+                            <p className="text-xs text-slate-500 mb-4">
+                              Você pode subir manualmente a capa em <b>JPEG ou PNG</b> (redimensionada automaticamente para o padrão de vitrine <b>600x900px</b>) ou coletar a imagem direto na <b>Bookinfo</b> pelo ISBN.
+                            </p>
                             
-                            {coverBaseUrl ? (
-                               <p className="text-sm text-slate-500 mb-4">
-                                 O sistema tenta carregar a imagem automaticamente baseando-se por prioridade nas configurações gerais.
-                               </p>
-                            ) : (
-                               <p className="text-sm text-slate-500 mb-4">A sua empresa não possui uma URL base configurada nas configurações gerais. Você pode tentar puxar de uma, ou fazer o upload manual abaixo.</p>
-                            )}
-                            
-                            <div className="flex gap-3">
-                              {coverBaseUrl && (
-                                <button type="button" onClick={() => {
-                                  const cUrl = `${coverBaseUrl}/${product.ean_gtin}.jpg`;
-                                  setImagePreview(cUrl);
-                                  setProduct(prev => ({...prev, cover_url: cUrl}));
-                                }} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-xl transition-colors dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                                  Tentar Sincronizar
-                                </button>
-                              )}
-                              
-                              <label className={`px-4 py-2 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-medium rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-2 ${uploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
+                            <div className="flex flex-wrap gap-3">
+                              <label className={`px-4 py-2.5 bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white text-sm font-semibold rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-2 ${uploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
                                 {uploadingImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                                Fazer Upload Manual
+                                Subir Capa (JPG / PNG)
                                 <input type="file" className="hidden" accept="image/jpeg, image/png, image/webp" onChange={async (e) => {
                                   if (!e.target.files?.length) return;
+                                  const fileObj = e.target.files[0];
+                                  if (fileObj.size > 5 * 1024 * 1024) {
+                                    toast.error("O arquivo excede o limite máximo de 5 MB para imagens de capa.");
+                                    return;
+                                  }
                                   setUploadingImage(true);
                                   const formData = new FormData();
-                                  formData.append('file', e.target.files[0]);
+                                  formData.append('file', fileObj);
                                   formData.append('isbn', product.ean_gtin);
                                   
                                   try {
-                                    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/upload/cover`, {
+                                    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+                                    const res = await fetch(`${apiBase}/upload/cover`, {
                                       method: 'POST',
                                       headers: { 'Authorization': `Bearer ${getToken()}` },
                                       body: formData
                                     });
                                     if(res.ok) {
                                       const data = await res.json();
-                                      setImagePreview(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${data.url}`);
+                                      setImagePreview(`${apiBase}${data.url}?t=${Date.now()}`);
                                       setProduct(prev => ({...prev, cover_url: data.url}));
-                                      toast.success("Imagem enviada com sucesso!");
+                                      toast.success(data.message || "Imagem de capa salva com sucesso!");
                                     } else {
                                       const err = await res.json();
                                       toast.error(err.detail || "Erro no upload");
@@ -577,6 +613,16 @@ export default function NewProductPage() {
                                   }
                                 }} />
                               </label>
+
+                              <button
+                                type="button"
+                                onClick={handleCollectBookinfoCover}
+                                disabled={collectingBookinfo}
+                                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm flex items-center gap-2 disabled:opacity-50"
+                              >
+                                {collectingBookinfo ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4" />}
+                                {collectingBookinfo ? 'Coletando na Bookinfo...' : 'Coletar Capa na Bookinfo'}
+                              </button>
                             </div>
                          </div>
                        </div>
