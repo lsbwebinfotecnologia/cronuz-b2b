@@ -211,6 +211,29 @@ def emit_horus_invoice_boletos_endpoint(
         raise _http_error(e)
 
 
+class HorusInvoicePaymentFormsFilterPayload(BaseModel):
+    provider: str = Field("CORA", max_length=30)
+    allowed_payment_forms: List[str] = Field(default_factory=list)
+
+
+@router.put("/companies/{company_id}/payments/horus-invoices/payment-forms-filter")
+def update_horus_invoice_payment_forms_filter_endpoint(
+    company_id: int,
+    payload: HorusInvoicePaymentFormsFilterPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    _access(db, current_user, company_id, payload.provider)
+    from app.payments import horus_invoices
+    saved = horus_invoices.update_invoice_allowed_payment_forms(
+        db,
+        company_id,
+        payload.allowed_payment_forms,
+        user_id=getattr(current_user, "id", None),
+    )
+    return {"allowed_payment_forms": saved}
+
+
 # ── Lista / detalhe ──────────────────────────────────────────────────────────
 
 @router.get("/companies/{company_id}/payments/charges")

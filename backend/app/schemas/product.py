@@ -31,6 +31,7 @@ class ProductBase(BaseModel):
     launch_date: Optional[datetime] = None
     is_pre_sale: Optional[bool] = False
     is_out_of_print: Optional[bool] = False
+    is_ebook: Optional[bool] = False
     additional_isbns: Optional[str] = None
     barcode: Optional[str] = None
     cod_dbm: Optional[str] = None
@@ -82,6 +83,7 @@ class ProductUpdate(BaseModel):
     launch_date: Optional[datetime] = None
     is_pre_sale: Optional[bool] = None
     is_out_of_print: Optional[bool] = None
+    is_ebook: Optional[bool] = None
     additional_isbns: Optional[str] = None
     barcode: Optional[str] = None
     cod_dbm: Optional[str] = None

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   FileText,
+  FileSpreadsheet,
   Search,
   Plus,
   ArrowLeft,
@@ -26,6 +27,7 @@ import {
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
+import * as XLSX from 'xlsx';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -143,6 +145,82 @@ export default function DbmProposalsListPage() {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [phaseFilter, setPhaseFilter] = useState<string>('ALL');
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [exportingId, setExportingId] = useState<number | null>(null);
+
+  const mapOriginLabel = (cat?: string) => {
+    switch ((cat || '').toLowerCase()) {
+      case 'pedido':
+        return 'Pedido';
+      case 'reposicao':
+        return 'Reposição';
+      case 'novidades':
+        return 'Novidade';
+      case 'fundo':
+        return 'Fundo';
+      case 'ultimo_acerto':
+        return 'Últ. Acerto/Venda';
+      default:
+        return 'Pedido';
+    }
+  };
+
+  const handleExportProposalExcel = async (prop: DbmProposalRow, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setExportingId(prop.id);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_URL}/dbm/proposals/${prop.id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        throw new Error('Não foi possível carregar os itens do orçamento.');
+      }
+      const data = await res.json();
+      const rawItems: any[] = Array.isArray(data.items) ? data.items : [];
+      const consolidated = rawItems.filter(
+        (it) => it && (it.tabCategory === 'pedido' || it.isAddedToOrder !== false)
+      );
+
+      if (consolidated.length === 0) {
+        toast.warning(`O orçamento #${prop.local_id} não possui itens no Pedido Consolidado.`);
+        return;
+      }
+
+      const rows = consolidated.map((it) => {
+        const req = Number(it.requestedQty ?? it.quantity ?? 0);
+        const app = Number(it.approvedQty ?? req);
+        const qty = req > 0 ? req : app;
+        return {
+          ISBN: String(it.isbn || it.sku || ''),
+          Título: String(it.title || it.name || ''),
+          Quantidade: qty,
+          Assunto: String(it.subject || 'Geral'),
+          Origem: mapOriginLabel(it.originCategory || it.tabCategory),
+        };
+      });
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet['!cols'] = [
+        { wch: 18 },
+        { wch: 46 },
+        { wch: 12 },
+        { wch: 24 },
+        { wch: 18 },
+      ];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Pedido Consolidado');
+
+      const custSlug = (prop.customer_name || 'Cliente')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .slice(0, 28);
+      XLSX.writeFile(workbook, `Pedido_Consolidado_DBM_${prop.local_id}_${custSlug}.xlsx`);
+      toast.success(`Excel do Pedido Consolidado #${prop.local_id} exportado!`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Erro ao exportar orçamento para Excel.');
+    } finally {
+      setExportingId(null);
+    }
+  };
 
   useEffect(() => {
     const u = getUser();
@@ -375,7 +453,7 @@ export default function DbmProposalsListPage() {
                 <th className="py-2.5 px-3 w-32 text-center">Itens / Peças</th>
                 <th className="py-2.5 px-3 w-32 text-right">Total Líquido</th>
                 <th className="py-2.5 px-3 w-48 text-center">Status</th>
-                <th className="py-2.5 px-3 w-36 text-center">Ações</th>
+                <th className="py-2.5 px-3 w-48 text-center">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-[12px]">
@@ -482,6 +560,17 @@ export default function DbmProposalsListPage() {
                           >
                             <Edit3 className="h-3 w-3" />
                             Abrir
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={exportingId === prop.id}
+                            onClick={(e) => handleExportProposalExcel(prop, e)}
+                            className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-bold text-emerald-700 bg-emerald-50/80 hover:bg-emerald-100 dark:text-emerald-300 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 border border-emerald-200/70 dark:border-emerald-800/60 transition-colors disabled:opacity-40"
+                            title="Exportar Pedido Consolidado para Excel (ISBN, Título, Quantidade, Assunto e Origem)"
+                          >
+                            <FileSpreadsheet className="h-3 w-3" />
+                            {exportingId === prop.id ? '...' : 'Excel'}
                           </button>
 
                           <button

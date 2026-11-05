@@ -124,6 +124,7 @@ def _serialize_config(config: Optional[CoraConfig]) -> dict:
         "discount_rate": dec(config.discount_rate) if config else None,
         "notify_enabled": bool(config.notify_enabled) if config else False,
         "notify_rules": [r for r in (config.notify_rules or "").split(",") if r] if config else [],
+        "invoice_allowed_payment_forms": [f.strip() for f in (config.invoice_allowed_payment_forms or "").split(",") if f.strip()] if config else [],
     }
 
 
@@ -259,6 +260,7 @@ class CoraConfigPayload(BaseModel):
     notify_enabled: Optional[bool] = None
     notify_rules: Optional[List[str]] = None
     usage_channels: Optional[List[str]] = None
+    invoice_allowed_payment_forms: Optional[List[str]] = None
 
     @field_validator("active_environment")
     @classmethod
@@ -316,6 +318,9 @@ def update_cora_config(
             data[field] = Decimal(str(data[field])).quantize(Decimal("0.01")) if data[field] is not None else None
     if "notify_rules" in data:
         data["notify_rules"] = ",".join(data["notify_rules"] or []) or None
+    if "invoice_allowed_payment_forms" in data:
+        cleaned_forms = [str(f).strip() for f in (data["invoice_allowed_payment_forms"] or []) if str(f).strip()]
+        data["invoice_allowed_payment_forms"] = ",".join(dict.fromkeys(cleaned_forms)) or None
 
     for field, value in data.items():
         setattr(config, field, value)

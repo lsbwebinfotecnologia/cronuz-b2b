@@ -139,6 +139,7 @@ def _parse_nfe_xml_base64(xml_b64: Optional[str]) -> Dict[str, Any]:
     dest_el = None
     cobr_el = None
     ide_el = None
+    pag_el = None
     for el in root.iter():
         lt = _local_tag(el)
         if lt == "dest" and dest_el is None:
@@ -147,8 +148,34 @@ def _parse_nfe_xml_base64(xml_b64: Optional[str]) -> Dict[str, Any]:
             cobr_el = el
         elif lt == "ide" and ide_el is None:
             ide_el = el
+        elif lt == "pag" and pag_el is None:
+            pag_el = el
 
     nat_op = _child_text(ide_el, "natOp") if ide_el is not None else None
+
+    tpag_map = {
+        "01": "Dinheiro",
+        "02": "Cheque",
+        "03": "C Credito",
+        "04": "C Debito",
+        "05": "Crédito Loja",
+        "14": "Duplicata Mercantil",
+        "15": "Boleto",
+        "16": "Deposito Bancário",
+        "17": "Pix",
+        "18": "Transferência",
+        "90": "Sem Pagamento",
+        "99": "Outros",
+    }
+    nfe_payment_label: Optional[str] = None
+    if pag_el is not None:
+        for ch in pag_el.iter():
+            if _local_tag(ch) == "detPag":
+                t_pag = _child_text(ch, "tPag").zfill(2) if _child_text(ch, "tPag") else ""
+                x_pag = _child_text(ch, "xPag")
+                nfe_payment_label = x_pag or tpag_map.get(t_pag)
+                if nfe_payment_label:
+                    break
 
     payer: Dict[str, Any] = {}
     if dest_el is not None:
@@ -196,6 +223,7 @@ def _parse_nfe_xml_base64(xml_b64: Optional[str]) -> Dict[str, Any]:
         "duplicatas": duplicatas,
         "fatura": fatura,
         "nat_op": nat_op or None,
+        "nfe_payment_label": nfe_payment_label,
     }
 
 
@@ -239,7 +267,7 @@ async def _fetch_horus_invoices_and_debits_async(
 
     client = HorusClient(db, company_id)
     try:
-        # 1. Métodos de venda
+        # 1. Métodos de venda e Formas de pagamento (Busca_FormaPagto)
         methods_map: Dict[int, str] = {
             1: "Direta",
             2: "Consignação",
@@ -249,11 +277,16 @@ async def _fetch_horus_invoices_and_debits_async(
             6: "Pré-venda",
             7: "E-book",
         }
+        payment_forms_catalog: List[Dict[str, str]] = []
         try:
             m_params: Dict[str, Any] = {}
             if not legacy_pag:
-                m_params = {"OFFSET": 0, "LIMIT": 50}
-            m_res = await client.get("Busca_MetodoVenda", params=m_params)
+                m_params = {"OFFSET": 0, "LIMIT": 100}
+            m_res, fp_res = await asyncio.gather(
+                client.get("Busca_MetodoVenda", params=m_params),
+                client.get("Busca_FormaPagto", params=m_params),
+                return_exceptions=True,
+            )
             if isinstance(m_res, list):
                 parsed_methods = {}
                 for m in m_res:
@@ -264,8 +297,15 @@ async def _fetch_horus_invoices_and_debits_async(
                             pass
                 if parsed_methods:
                     methods_map = parsed_methods
+            if isinstance(fp_res, list):
+                for fp in fp_res:
+                    if isinstance(fp, dict) and not fp.get("Falha") and (fp.get("COD_FORMA") is not None or fp.get("NOM_FORMA")):
+                        c_forma = _clean(fp.get("COD_FORMA"))
+                        n_forma = _clean(fp.get("NOM_FORMA")) or c_forma
+                        if n_forma:
+                            payment_forms_catalog.append({"code": c_forma or n_forma, "name": n_forma})
         except Exception as e:
-            logger.debug("[HorusInvoices] Fallback de Busca_MetodoVenda company=%s: %s", company_id, e)
+            logger.debug("[HorusInvoices] Fallback de Busca_MetodoVenda/Busca_FormaPagto company=%s: %s", company_id, e)
 
         target_methods: List[int] = list(methods_map.keys())
         clean_ped = _clean(cod_ped_venda) if cod_ped_venda else ""
@@ -385,7 +425,7 @@ async def _fetch_horus_invoices_and_debits_async(
             for c_id, d_list in deb_results:
                 debits_by_cli[c_id] = d_list
 
-        return raw_invoices, debits_by_cli, methods_map
+        return raw_invoices, debits_by_cli, methods_map, payment_forms_catalog
     finally:
         await client.close()
 
@@ -406,11 +446,23 @@ def list_horus_invoices_for_boletos(
     com suas respectivas parcelas (`<cobr><dup>` + `Busca_debitos`) e status de emissão de boleto.
     """
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    from app.models.cora import CoraConfig
+    cora_cfg = db.query(CoraConfig).filter(CoraConfig.company_id == company_id).first()
+    saved_allowed_forms = [
+        f.strip()
+        for f in ((cora_cfg.invoice_allowed_payment_forms if cora_cfg else "") or "").split(",")
+        if f.strip()
+    ]
+    allowed_upper_set = {f.upper() for f in saved_allowed_forms}
+
     if not settings or not settings.horus_enabled:
         return {
             "horus_enabled": False,
             "date_from": (date_from or (date.today() - timedelta(days=3))).isoformat(),
             "date_to": (date_to or date.today()).isoformat(),
+            "payment_forms_catalog": [],
+            "allowed_payment_forms": saved_allowed_forms,
+            "hidden_by_payment_form_count": 0,
             "summary": {
                 "total_invoices": 0,
                 "total_installments": 0,
@@ -430,7 +482,7 @@ def list_horus_invoices_for_boletos(
 
     emp, fil = _resolve_horus_emp_fil(settings)
 
-    raw_invoices, debits_by_cli, methods_map = _run_async(
+    raw_invoices, debits_by_cli, methods_map, payment_forms_catalog = _run_async(
         _fetch_horus_invoices_and_debits_async(
             db,
             company_id,
@@ -440,6 +492,15 @@ def list_horus_invoices_for_boletos(
             cod_ped_venda=cod_ped_venda,
         )
     )
+    forms_name_by_code = {fp["code"].upper(): fp["name"] for fp in payment_forms_catalog}
+    forms_code_by_name = {fp["name"].upper(): fp["code"] for fp in payment_forms_catalog}
+    # Expande o conjunto permitido para casar tanto pelo código (ex: "1") quanto pelo nome (ex: "BOLETO")
+    expanded_allowed_upper = set(allowed_upper_set)
+    for token in list(allowed_upper_set):
+        if token in forms_name_by_code:
+            expanded_allowed_upper.add(forms_name_by_code[token].upper())
+        if token in forms_code_by_name:
+            expanded_allowed_upper.add(forms_code_by_name[token].upper())
 
     # Mapa de clientes locais do Cronuz para enriquecer e-mail/endereço/customer_id
     local_customers = (
@@ -493,6 +554,8 @@ def list_horus_invoices_for_boletos(
     emitted_installments = 0
     total_amount_sum = 0.0
     pending_amount_sum = 0.0
+    hidden_by_payment_form_count = 0
+    seen_catalog_names = {fp["name"].upper() for fp in payment_forms_catalog}
 
     for nf in raw_invoices:
         nro_nf = _clean(nf.get("NRO_NOTA_FISCAL"))
@@ -617,7 +680,28 @@ def list_horus_invoices_for_boletos(
             inst_num = _normalize_installment_number(r_inst.get("installment_number"), idx)
             deb = r_inst.get("debit") or {}
             lancto = _clean(deb.get("NRO_LANCTO_CRECEBER")) or None
-            forma = _clean(deb.get("NOM_FORMA") or deb.get("COD_FORMA")) or "Boleto"
+            cod_forma = _clean(deb.get("COD_FORMA"))
+            if deb:
+                forma = (
+                    _clean(deb.get("NOM_FORMA"))
+                    or (forms_name_by_code.get(cod_forma.upper()) if cod_forma else "")
+                    or cod_forma
+                    or "Boleto"
+                )
+            else:
+                forma = xml_info.get("nfe_payment_label") or ("Boleto" if xml_dups else "Sem Lançamento CR")
+            if forma and forma.upper() not in seen_catalog_names:
+                seen_catalog_names.add(forma.upper())
+                payment_forms_catalog.append({"code": cod_forma or forma, "name": forma})
+
+            # Se houver filtro configurado de formas de pagamento, ignora parcelas de outras formas
+            if expanded_allowed_upper:
+                cand_tokens = {forma.upper()}
+                if cod_forma:
+                    cand_tokens.add(cod_forma.upper())
+                if not (cand_tokens & expanded_allowed_upper):
+                    continue
+
             sta_lancto = _clean(deb.get("STA_LANCTO_CRECEBER") or "AB").upper()
 
             pdf_b64 = _clean(deb.get("PDF_Base64") or deb.get("PDF_BASE64"))
@@ -670,6 +754,11 @@ def list_horus_invoices_for_boletos(
                 "existing_our_number": (existing_charge.our_number if existing_charge else None) or horus_nosso or None,
             })
 
+        if not installments_out:
+            hidden_by_payment_form_count += 1
+            continue
+
+        total_parc = len(installments_out)
         if nf_emitted_count == total_parc and total_parc > 0:
             emission_status = "ALL_EMITTED"
         elif nf_emitted_count > 0:
@@ -748,6 +837,9 @@ def list_horus_invoices_for_boletos(
         "horus_enabled": True,
         "date_from": eff_from.isoformat(),
         "date_to": eff_to.isoformat(),
+        "payment_forms_catalog": payment_forms_catalog,
+        "allowed_payment_forms": saved_allowed_forms,
+        "hidden_by_payment_form_count": hidden_by_payment_form_count,
         "summary": {
             "total_invoices": len(items),
             "total_installments": total_installments,
@@ -895,3 +987,31 @@ def emit_boletos_for_horus_invoice(
         "charges": created_charges,
         "skipped": skipped_duplicates,
     }
+
+
+def update_invoice_allowed_payment_forms(
+    db: Session,
+    company_id: int,
+    allowed_forms: List[str],
+    user_id: Optional[int] = None,
+) -> List[str]:
+    cfg = db.query(CoraConfig).filter(CoraConfig.company_id == company_id).first()
+    if not cfg:
+        cfg = CoraConfig(company_id=company_id)
+        db.add(cfg)
+
+    cleaned: List[str] = []
+    seen = set()
+    for item in allowed_forms or []:
+        val = str(item or "").strip()
+        if val and val.upper() not in seen:
+            seen.add(val.upper())
+            cleaned.append(val)
+
+    cfg.invoice_allowed_payment_forms = ",".join(cleaned) if cleaned else None
+    if user_id:
+        cfg.updated_by_id = user_id
+    db.commit()
+    db.refresh(cfg)
+    return cleaned
+

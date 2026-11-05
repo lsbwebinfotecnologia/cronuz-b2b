@@ -36,25 +36,37 @@ export default function ProductsPage() {
   const [orderBy, setOrderBy] = useState<string>('name');
   const [categories, setCategories] = useState<any[]>([]);
 
-  // Horus -> Cronuz Sync Configuration (B2C / Catálogo Local)
+  // Horus -> Cronuz Sync Configuration (Catálogo Local & Estoque Incremental)
   const [showSyncPanel, setShowSyncPanel] = useState(false);
   const [syncingHorus, setSyncingHorus] = useState(false);
-  const [syncingTray, setSyncingTray] = useState(false);
   const [savingSyncConfig, setSavingSyncConfig] = useState(false);
   const [loadingHorusChars, setLoadingHorusChars] = useState(false);
-  const [horusCharsList, setHorusCharsList] = useState<any[]>([]);
+  const [horusApiPreview, setHorusApiPreview] = useState<any | null>(null);
   const [syncConfig, setSyncConfig] = useState({
     horus_enabled: false,
+    horus_url: '',
+    horus_port: '',
+    horus_company: '',
+    horus_branch: '',
+    horus_stock_local: '',
+    horus_legacy_pagination: false,
     b2c_active: false,
+    local_products_count: 0,
     cod_tpo_caract: '',
     cod_caract: '',
     characteristic_type_name: '',
     characteristic_value: '',
-    search_term: '',
     auto_collect_bookinfo_covers: false,
-    max_items: 250,
+    max_items: 10000,
     last_sync_at: null as string | null,
+    last_sync_data_ini: null as string | null,
+    last_sync_data_fim: null as string | null,
+    last_sync_mode: null as string | null,
     last_synced_count: 0,
+    last_created_count: 0,
+    last_updated_count: 0,
+    last_stock_updated_count: 0,
+    last_horus_api_summary: null as any | null,
   });
 
   // Pagination
@@ -110,15 +122,28 @@ export default function ProductsPage() {
         setSyncConfig(prev => ({
           ...prev,
           horus_enabled: Boolean(data.horus_enabled),
+          horus_url: data.horus_url || '',
+          horus_port: data.horus_port || '',
+          horus_company: data.horus_company || '',
+          horus_branch: data.horus_branch || '',
+          horus_stock_local: data.horus_stock_local || '',
+          horus_legacy_pagination: Boolean(data.horus_legacy_pagination),
           b2c_active: Boolean(data.b2c_active),
+          local_products_count: Number(data.local_products_count || 0),
           cod_tpo_caract: data.cod_tpo_caract || '',
           cod_caract: data.cod_caract || '',
           characteristic_type_name: data.characteristic_type_name || '',
           characteristic_value: data.characteristic_value || '',
-          search_term: data.search_term || '',
           auto_collect_bookinfo_covers: Boolean(data.auto_collect_bookinfo_covers),
           last_sync_at: data.last_sync_at || null,
-          last_synced_count: data.last_synced_count || 0,
+          last_sync_data_ini: data.last_sync_data_ini || null,
+          last_sync_data_fim: data.last_sync_data_fim || null,
+          last_sync_mode: data.last_sync_mode || null,
+          last_synced_count: Number(data.last_synced_count || 0),
+          last_created_count: Number(data.last_created_count || 0),
+          last_updated_count: Number(data.last_updated_count || 0),
+          last_stock_updated_count: Number(data.last_stock_updated_count || 0),
+          last_horus_api_summary: data.last_horus_api_summary || null,
         }));
       }
     } catch (e) {
@@ -175,20 +200,29 @@ export default function ProductsPage() {
     setPage(1);
   };
 
-  const handleSaveSyncConfigOnly = async () => {
+  const handleSaveSyncConfigOnly = async (resetLastSync: boolean = false) => {
     setSavingSyncConfig(true);
     try {
+      const payload: any = {
+        cod_tpo_caract: syncConfig.cod_tpo_caract,
+        cod_caract: syncConfig.cod_caract,
+        auto_collect_bookinfo_covers: syncConfig.auto_collect_bookinfo_covers,
+      };
+      if (resetLastSync) {
+        payload.custom_data_ini = '';
+      }
       const res = await fetch(`${apiBase}/b2c/products/sync-config`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${getToken()}`
         },
-        body: JSON.stringify(syncConfig)
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || 'Configuração de característica salva!');
+        toast.success(resetLastSync ? 'Data de execução limpa! A próxima sincronia fará carga completa.' : (data.message || 'Parâmetros do Horus salvos!'));
+        await fetchSyncConfig();
       } else {
         toast.error(data.detail || 'Erro ao salvar configuração.');
       }
@@ -199,32 +233,42 @@ export default function ProductsPage() {
     }
   };
 
-  const handleFetchHorusCharacteristics = async () => {
+  const handleTestHorusApi = async () => {
     setLoadingHorusChars(true);
     try {
-      const q = syncConfig.cod_tpo_caract ? `?cod_tpo_caract=${encodeURIComponent(syncConfig.cod_tpo_caract)}` : '';
-      const res = await fetch(`${apiBase}/b2c/products/horus-characteristics${q}`, {
+      const qs = new URLSearchParams();
+      if (syncConfig.cod_tpo_caract) qs.set('cod_tpo_caract', syncConfig.cod_tpo_caract);
+      if (syncConfig.cod_caract) qs.set('cod_caract', syncConfig.cod_caract);
+      const qStr = qs.toString() ? `?${qs.toString()}` : '';
+      const res = await fetch(`${apiBase}/b2c/products/horus-characteristics${qStr}`, {
         headers: { 'Authorization': `Bearer ${getToken()}` }
       });
       const data = await res.json();
-      if (res.ok) {
-        setHorusCharsList(data.items || []);
-        if ((data.items || []).length === 0) {
-          toast.info(data.warning || 'Nenhuma característica retornada pelo endpoint Busca_Caracteristicas do Horus. Você pode preencher o código manualmente.');
-        } else {
-          toast.success(`${data.items.length} característica(s) localizada(s) no Horus!`);
+      setHorusApiPreview(data);
+      if (res.ok && data.ok) {
+        if (data.detected_type_name || data.detected_char_value) {
+          setSyncConfig(prev => ({
+            ...prev,
+            characteristic_type_name: data.detected_type_name || prev.characteristic_type_name,
+            characteristic_value: data.detected_char_value || prev.characteristic_value,
+          }));
         }
+        toast.success(
+          `API Horus validada com sucesso! ${
+            data.detected_type_name ? `Característica: ${data.detected_type_name} = ${data.detected_char_value}` : ''
+          }`
+        );
       } else {
-        toast.error(data.detail || 'Falha ao consultar características no Horus.');
+        toast.error(data.warning || data.detail || 'O Horus retornou um alerta de parâmetros. Veja o retorno abaixo.');
       }
     } catch (e) {
-      toast.error('Erro de conexão ao consultar características no Horus.');
+      toast.error('Erro de conexão ao consultar a API do Horus.');
     } finally {
       setLoadingHorusChars(false);
     }
   };
 
-  const handleRunHorusSync = async () => {
+  const handleRunHorusSync = async (forceFullSync: boolean = false) => {
     setSyncingHorus(true);
     try {
       const res = await fetch(`${apiBase}/b2c/products/sync-horus`, {
@@ -233,50 +277,41 @@ export default function ProductsPage() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${getToken()}`
         },
-        body: JSON.stringify(syncConfig)
+        body: JSON.stringify({
+          cod_tpo_caract: syncConfig.cod_tpo_caract,
+          cod_caract: syncConfig.cod_caract,
+          auto_collect_bookinfo_covers: syncConfig.auto_collect_bookinfo_covers,
+          full_sync: forceFullSync,
+          max_items: 10000,
+        })
       });
       const data = await res.json();
       if (res.ok) {
-        toast.success(data.message || 'Produtos sincronizados com sucesso!');
+        toast.success(data.message || 'Produtos e estoques sincronizados com sucesso!');
+        if (data.horus_api_summary) {
+          setHorusApiPreview({
+            ok: true,
+            pagination_mode: data.horus_api_summary.pagination,
+            detected_type_name: data.characteristic_type_name,
+            detected_char_value: data.characteristic_value,
+            horus_raw_response: data.horus_api_summary,
+          });
+        }
         await fetchSyncConfig();
         setPage(1);
         await fetchProducts();
       } else {
+        setHorusApiPreview({
+          ok: false,
+          warning: data.detail || 'Falha retornada pela API do Horus.',
+          horus_raw_response: data,
+        });
         toast.error(data.detail || 'Falha ao sincronizar produtos do Horus.');
       }
     } catch (e) {
       toast.error('Erro de conexão durante a sincronização com o Horus.');
     } finally {
       setSyncingHorus(false);
-    }
-  };
-
-  const handleRunTraySync = async () => {
-    setSyncingTray(true);
-    try {
-      const res = await fetch(`${apiBase}/b2c/products/sync-tray`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getToken()}`
-        },
-        body: JSON.stringify({
-          import_missing_from_tray: true,
-          limit: 50
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        toast.success(data.message || 'Vínculos de IDs da Tray atualizados com sucesso!');
-        setPage(1);
-        await fetchProducts();
-      } else {
-        toast.error(data.detail || 'Falha ao vincular/sincronizar com a Tray.');
-      }
-    } catch (e) {
-      toast.error('Erro de conexão ao consultar a API da Tray.');
-    } finally {
-      setSyncingTray(false);
     }
   };
 
@@ -321,7 +356,7 @@ export default function ProductsPage() {
         </div>
       </div>
 
-      {/* Painel de Configuração e Sincronia Horus -> Cronuz (B2C) */}
+      {/* Painel de Sincronização de Produtos & Estoque Horus ERP -> Tabela Cronuz */}
       <AnimatePresence>
         {showSyncPanel && (
           <motion.div
@@ -331,122 +366,141 @@ export default function ProductsPage() {
             className="overflow-hidden"
           >
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 shadow-sm p-5 sm:p-6 space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
                 <div>
                   <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <Database className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                    Sincronização de Produtos Horus ERP → Tabela Cronuz (B2C)
+                    Sincronização de Produtos & Estoque Horus ERP → Cronuz
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    Defina o código/tipo de característica e qual característica utilizar para buscar os produtos no Horus e alimentar a tabela do Cronuz com nome, sinopse, preço, saldo, peso e dimensões.
+                    Importa o cadastro e atualiza o saldo disponível respeitando os filtros de característica (<code className="font-mono">COD_TPO_CARACT</code> e <code className="font-mono">COD_CARACT</code>), paginação <code className="font-mono">OFFSET/LIMIT</code> e a data da última execução com sucesso (<code className="font-mono">DATA_INI</code> / <code className="font-mono">DATA_FIM</code>).
                   </p>
                 </div>
-                {syncConfig.last_sync_at && (
-                  <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-semibold dark:bg-emerald-950/50 dark:text-emerald-300 shrink-0">
-                    <CheckCircle2 className="w-4 h-4" />
-                    Última sincronia: {new Date(syncConfig.last_sync_at).toLocaleString('pt-BR')} ({syncConfig.last_synced_count} itens)
-                  </div>
-                )}
+
+                {/* Badges de Configuração Ativa do Seller no Horus */}
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px] font-mono">
+                    Paginação API: <b>{syncConfig.horus_legacy_pagination ? 'Sem OFFSET/LIMIT (Legado)' : 'Com OFFSET/LIMIT'}</b>
+                  </span>
+                  {(syncConfig.horus_company || syncConfig.horus_branch) && (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px] font-mono">
+                      SD_*: <b>Emp {syncConfig.horus_company || '-'} / Fil {syncConfig.horus_branch || '-'} / Loc {syncConfig.horus_stock_local || '-'}</b>
+                    </span>
+                  )}
+                  {(syncConfig.characteristic_type_name || syncConfig.characteristic_value) && (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-semibold">
+                      Horus: {syncConfig.characteristic_type_name} = {syncConfig.characteristic_value}
+                    </span>
+                  )}
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              {/* Parâmetros do Horus + Controle de Data de Execução com Sucesso */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5">
-                    Cód. Tipo Característica
+                    Cód. Tipo Característica (Opcional)
                   </label>
                   <input
                     type="text"
-                    placeholder="Ex: 1"
+                    placeholder="Ex: 3 (ou vazio se sem restrição)"
                     value={syncConfig.cod_tpo_caract}
                     onChange={(e) => setSyncConfig(prev => ({ ...prev, cod_tpo_caract: e.target.value }))}
                     className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-mono text-slate-900 dark:text-white"
                   />
-                  <span className="text-[11px] text-slate-400 mt-1 block">COD_TPO_CARACT no Horus</span>
+                  <span className="text-[11px] text-slate-400 mt-1 block">
+                    Parâmetro <code className="font-mono">COD_TPO_CARACT</code> na API do Horus
+                  </span>
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5">
-                    Tipo de Característica
+                    Cód. da Característica (Opcional)
                   </label>
                   <input
                     type="text"
-                    placeholder="Ex: Vitrine / Canal / Selo"
-                    value={syncConfig.characteristic_type_name}
-                    onChange={(e) => setSyncConfig(prev => ({ ...prev, characteristic_type_name: e.target.value }))}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-white"
-                  />
-                  <span className="text-[11px] text-slate-400 mt-1 block">Nome salvo em Características</span>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5">
-                    Cód. da Característica
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex: 2"
+                    placeholder="Ex: 235 (obrigatório se informar o Tipo)"
                     value={syncConfig.cod_caract}
                     onChange={(e) => setSyncConfig(prev => ({ ...prev, cod_caract: e.target.value }))}
                     className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-mono text-slate-900 dark:text-white"
                   />
-                  <span className="text-[11px] text-slate-400 mt-1 block">COD_CARACT no Horus</span>
+                  <span className="text-[11px] text-slate-400 mt-1 block">
+                    Parâmetro <code className="font-mono">COD_CARACT</code> na API do Horus
+                  </span>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5">
-                    Qual Característica (Valor)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Loja Virtual B2C / Destaque"
-                    value={syncConfig.characteristic_value}
-                    onChange={(e) => setSyncConfig(prev => ({ ...prev, characteristic_value: e.target.value }))}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-white"
-                  />
-                  <span className="text-[11px] text-slate-400 mt-1 block">Valor vinculado ao produto</span>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5">
-                    Termo / Filtro Opcional
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Nome, ISBN ou vazio"
-                    value={syncConfig.search_term}
-                    onChange={(e) => setSyncConfig(prev => ({ ...prev, search_term: e.target.value }))}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-white"
-                  />
-                  <span className="text-[11px] text-slate-400 mt-1 block">Deixe em branco para usar a característica</span>
+                <div className="bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                      Última Execução com Sucesso
+                    </span>
+                    {syncConfig.last_sync_at && (
+                      <button
+                        type="button"
+                        onClick={() => handleSaveSyncConfigOnly(true)}
+                        className="text-[11px] font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400 underline"
+                        title="Limpa a data da última execução para forçar uma nova carga completa na próxima vez"
+                      >
+                        Resetar data
+                      </button>
+                    )}
+                  </div>
+                  {syncConfig.last_sync_at ? (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="flex items-center gap-1.5 text-sm font-bold text-emerald-700 dark:text-emerald-400 font-mono">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        {new Date(syncConfig.last_sync_at).toLocaleString('pt-BR')}
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Modo: <b>{syncConfig.last_sync_mode === 'INCREMENTAL' ? 'Incremental (DATA_INI/FIM)' : 'Carga Completa'}</b> •{' '}
+                        {syncConfig.last_created_count} novos, {syncConfig.last_updated_count} cadastros, {syncConfig.last_stock_updated_count} estoques
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5">
+                      Nenhuma execução registrada ainda. A 1ª sincronização fará a <b>Carga Completa</b> e gravará a data base para as próximas coletas incrementais.
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {horusCharsList.length > 0 && (
-                <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-3">
-                  <p className="text-xs font-bold text-slate-600 dark:text-slate-400 mb-2">
-                    Clique em uma característica do Horus abaixo para preencher automaticamente:
-                  </p>
-                  <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto">
-                    {horusCharsList.map((hc, idx) => (
+              {/* Box de Diagnóstico / Retorno Real da API Horus */}
+              {(horusApiPreview || syncConfig.last_horus_api_summary) && (
+                <div
+                  className={`rounded-xl border p-3.5 text-xs space-y-2 ${
+                    horusApiPreview && horusApiPreview.ok === false
+                      ? 'bg-rose-50/70 border-rose-200 text-rose-900 dark:bg-rose-950/30 dark:border-rose-900 dark:text-rose-200'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 dark:bg-slate-950 dark:border-slate-800 dark:text-slate-300'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold uppercase tracking-wider text-[11px]">
+                      Retorno da API do Horus ERP {horusApiPreview ? '(Teste / Última Operação)' : '(Última Sincronia)'}
+                    </span>
+                    {horusApiPreview && (
                       <button
-                        key={idx}
                         type="button"
-                        onClick={() => setSyncConfig(prev => ({
-                          ...prev,
-                          cod_tpo_caract: hc.cod_tpo_caract || prev.cod_tpo_caract,
-                          cod_caract: hc.cod_caract || prev.cod_caract,
-                          characteristic_type_name: hc.characteristic_type_name || prev.characteristic_type_name,
-                          characteristic_value: hc.characteristic_value || prev.characteristic_value,
-                        }))}
-                        className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 transition"
+                        onClick={() => setHorusApiPreview(null)}
+                        className="text-[11px] underline opacity-75 hover:opacity-100"
                       >
-                        <span className="font-mono text-indigo-600 dark:text-indigo-400">
-                          [{hc.cod_tpo_caract}:{hc.cod_caract}]
-                        </span>{' '}
-                        {hc.characteristic_type_name} — <b>{hc.characteristic_value}</b>
+                        Ocultar retorno
                       </button>
-                    ))}
+                    )}
                   </div>
+
+                  {horusApiPreview?.warning && (
+                    <p className="font-semibold text-rose-700 dark:text-rose-300">
+                      Mensagem do Horus: {horusApiPreview.warning}
+                    </p>
+                  )}
+
+                  <pre className="text-[11px] font-mono bg-white dark:bg-slate-900 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 overflow-x-auto max-h-48">
+                    {JSON.stringify(
+                      horusApiPreview?.horus_raw_response || horusApiPreview || syncConfig.last_horus_api_summary,
+                      null,
+                      2
+                    )}
+                  </pre>
                 </div>
               )}
 
@@ -459,50 +513,56 @@ export default function ProductsPage() {
                     className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                   />
                   <span>
-                    Coletar capas automaticamente na <b>Bookinfo</b> (salvas com ISBN em tamanho padronizado) durante a sincronia
+                    Coletar capas automaticamente na <b>Bookinfo</b> (quando não houver capa no Horus/local)
                   </span>
                 </label>
 
                 <div className="flex flex-wrap items-center gap-2.5">
                   <button
                     type="button"
-                    onClick={handleFetchHorusCharacteristics}
+                    onClick={handleTestHorusApi}
                     disabled={loadingHorusChars}
                     className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-1.5"
                   >
                     {loadingHorusChars ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ListTree className="w-3.5 h-3.5" />}
-                    Consultar Características no Horus
+                    Testar / Ver Retorno da API Horus
                   </button>
 
                   <button
                     type="button"
-                    onClick={handleSaveSyncConfigOnly}
+                    onClick={() => handleSaveSyncConfigOnly(false)}
                     disabled={savingSyncConfig}
                     className="px-4 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5"
                   >
                     {savingSyncConfig && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Salvar Filtro
+                    Salvar Parâmetros
                   </button>
+
+                  {syncConfig.last_sync_at && (
+                    <button
+                      type="button"
+                      onClick={() => handleRunHorusSync(true)}
+                      disabled={syncingHorus}
+                      className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1.5 disabled:opacity-50"
+                      title="Ignora a data da última execução e reimporta todos os produtos da característica no Horus"
+                    >
+                      {syncingHorus ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+                      Forçar Carga Completa
+                    </button>
+                  )}
 
                   <button
                     type="button"
-                    onClick={handleRunTraySync}
-                    disabled={syncingTray}
-                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 shadow-sm disabled:opacity-50"
-                    title="Consulta GET /web_api/products na Tray usando o Código do Horus (reference) e EAN para vincular o ID do produto na Tray e gerar o carrinho pré-definido"
-                  >
-                    {syncingTray ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                    {syncingTray ? 'Vinculando IDs Tray...' : 'Vincular / Sincronizar IDs Tray'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleRunHorusSync}
+                    onClick={() => handleRunHorusSync(false)}
                     disabled={syncingHorus}
                     className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-2 shadow-sm disabled:opacity-50"
                   >
                     {syncingHorus ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    {syncingHorus ? 'Sincronizando do Horus...' : 'Sincronizar Produtos Agora'}
+                    {syncingHorus
+                      ? 'Sincronizando com o Horus...'
+                      : syncConfig.last_sync_at
+                        ? 'Sincronizar Alterações (Estoque & Cadastro)'
+                        : 'Sincronizar Produtos do Horus'}
                   </button>
                 </div>
               </div>
@@ -660,13 +720,8 @@ export default function ProductsPage() {
                       <div className="flex flex-col gap-0.5">
                         <span className="text-sm font-medium text-slate-700 dark:text-slate-300 font-mono">{product.ean_gtin || 'Sem ISBN'}</span>
                         <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                          Ref. Horus/Tray: {product.horus_cod_item || product.sku}
+                          Cód. Horus: {product.horus_cod_item || product.sku}
                         </span>
-                        {product.publisher_code && (
-                          <span className="inline-flex items-center w-fit px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 text-[10px] font-bold font-mono">
-                            ID Tray: #{product.publisher_code}
-                          </span>
-                        )}
                       </div>
                     </td>
                     <td className="p-4 hidden md:table-cell">

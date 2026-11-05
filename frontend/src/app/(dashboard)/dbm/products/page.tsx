@@ -94,6 +94,7 @@ interface ProductGridItem {
   sales_365?: number;
   sales_90?: number;
   brand?: string;
+  is_ebook?: boolean;
   is_out_of_print?: boolean;
   status?: string;
   is_highlighted_red?: boolean;
@@ -144,6 +145,7 @@ interface DbmBookFormState {
   royalty_rule: string;
   edition_number: string;
   units_per_box: string;
+  is_ebook: boolean;
   is_out_of_print: boolean;
   out_of_print_date: string;
   external_link: string;
@@ -186,6 +188,7 @@ const EMPTY_BOOK_FORM: DbmBookFormState = {
   royalty_rule: 'Sem Royalties',
   edition_number: '1',
   units_per_box: '0',
+  is_ebook: false,
   is_out_of_print: false,
   out_of_print_date: '',
   external_link: '',
@@ -328,6 +331,13 @@ export default function DbmProductsSearchPage() {
   const [filterPublisher, setFilterPublisher] = useState('');
   const [filterLaunchWindow, setFilterLaunchWindow] = useState<'ALL' | 'NOVELTY' | 'EXPIRING' | 'BACKLIST'>('ALL');
   const [onlyOutOfStock, setOnlyOutOfStock] = useState(false);
+  const [hideEbooks, setHideEbooks] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('cronuz_dbm_hide_ebooks');
+      if (saved !== null) return saved === 'true';
+    }
+    return true;
+  });
 
   // Estados de Dados da Planilha Principal
   const [products, setProducts] = useState<ProductGridItem[]>([]);
@@ -441,6 +451,11 @@ export default function DbmProductsSearchPage() {
       royalty_rule: p.royalty_rule || 'Sem Royalties',
       edition_number: p.edition_number || '1',
       units_per_box: p.units_per_box != null ? String(p.units_per_box) : '0',
+      is_ebook: Boolean(
+        p.is_ebook ||
+        String(p.binding_finish || '').toLowerCase() === 'e-book' ||
+        p.name?.toUpperCase().includes('E-BOOK')
+      ),
       is_out_of_print: Boolean(p.is_out_of_print),
       out_of_print_date: p.out_of_print_date || '',
       external_link: p.external_link || '',
@@ -486,6 +501,10 @@ export default function DbmProductsSearchPage() {
         const mapped: ProductGridItem[] = rawList.map((p: any) => {
           const stock = Number(p.stock_quantity || 0);
           const isEsgotado = Boolean(p.is_out_of_print) || p.status === 'INACTIVE';
+          const isEbook =
+            Boolean(p.is_ebook) ||
+            String(p.binding_finish || '').toLowerCase() === 'e-book' ||
+            String(p.name || '').toUpperCase().includes('E-BOOK');
 
           return {
             ...p,
@@ -502,6 +521,7 @@ export default function DbmProductsSearchPage() {
             sales_365: Number(p.sales_365 || 0),
             sales_90: Number(p.sales_90 || 0),
             brand: p.brand?.name || p.brand || 'Própria',
+            is_ebook: isEbook,
             is_out_of_print: isEsgotado,
             status: p.status,
             is_highlighted_red: isEsgotado || stock <= 0,
@@ -886,6 +906,9 @@ export default function DbmProductsSearchPage() {
           return false;
         }
       }
+      if (hideEbooks && item.is_ebook) {
+        return false;
+      }
       if (onlyOutOfStock && item.stock_quantity > 0 && !item.is_out_of_print) {
         return false;
       }
@@ -899,7 +922,7 @@ export default function DbmProductsSearchPage() {
       }
       return true;
     });
-  }, [products, filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, onlyOutOfStock, quickSearchFooter]);
+  }, [products, filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, onlyOutOfStock, quickSearchFooter]);
 
   // Navegação por Teclado estilo Excel na Aba Pesquisa e na Ficha
   useEffect(() => {
@@ -1172,6 +1195,7 @@ export default function DbmProductsSearchPage() {
         units_per_box: bookForm.units_per_box && /^\d+$/.test(bookForm.units_per_box.trim())
           ? parseInt(bookForm.units_per_box.trim(), 10)
           : 0,
+        is_ebook: Boolean(bookForm.is_ebook || bookForm.binding_finish === 'E-book'),
         is_out_of_print: Boolean(bookForm.is_out_of_print),
         out_of_print_date: bookForm.out_of_print_date.trim() || null,
         external_link: bookForm.external_link.trim() || null,
@@ -1455,6 +1479,24 @@ export default function DbmProductsSearchPage() {
                 <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-600 dark:text-slate-300">
                   <input
                     type="checkbox"
+                    checked={hideEbooks}
+                    onChange={(e) => {
+                      const val = e.target.checked;
+                      setHideEbooks(val);
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('cronuz_dbm_hide_ebooks', String(val));
+                      }
+                    }}
+                    className="w-3.5 h-3.5 rounded text-indigo-600 border-slate-300"
+                  />
+                  Não mostrar E-books
+                </label>
+
+                <div className="h-3.5 w-px bg-slate-200 dark:bg-slate-700" />
+
+                <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-600 dark:text-slate-300">
+                  <input
+                    type="checkbox"
                     checked={onlyOutOfStock}
                     onChange={(e) => setOnlyOutOfStock(e.target.checked)}
                     className="w-3.5 h-3.5 rounded text-indigo-600 border-slate-300"
@@ -1488,17 +1530,14 @@ export default function DbmProductsSearchPage() {
 
           {/* Grade Principal Estilo Planilha Excel Moderna */}
           <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white dark:bg-slate-900 relative">
-            <table className="w-full border-collapse text-left table-fixed min-w-[1220px]">
+            <table className="w-full border-collapse text-left table-fixed min-w-[1080px]">
               <thead className="sticky top-0 z-20 bg-slate-100/95 dark:bg-slate-800/95 backdrop-blur-xs border-b border-slate-300 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
                 <tr>
                   <th className="w-9 py-2 px-1.5 border-r border-slate-200 dark:border-slate-700 text-center">#</th>
                   <th className="w-20 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">Cód Horus</th>
-                  <th className="w-32 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">ISBN Principal</th>
-                  <th className="w-44 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 bg-indigo-50/60 dark:bg-indigo-950/30 text-indigo-900 dark:text-indigo-300">
-                    2º ISBN / E-book
-                  </th>
-                  <th className="w-[26%] py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">Título da Obra</th>
-                  <th className="w-28 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">Editora</th>
+                  <th className="w-36 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">ISBN Principal</th>
+                  <th className="w-[34%] py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">Título da Obra</th>
+                  <th className="w-32 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">Editora</th>
                   <th className="w-36 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-center">
                     Lançamento / Status
                   </th>
@@ -1517,14 +1556,14 @@ export default function DbmProductsSearchPage() {
               <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800 text-xs">
                 {loading ? (
                   <tr>
-                    <td colSpan={11} className="py-16 text-center text-slate-500">
+                    <td colSpan={10} className="py-16 text-center text-slate-500">
                       <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
                       Carregando planilha de produtos DBM...
                     </td>
                   </tr>
                 ) : filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="py-16 text-center text-slate-500">
+                    <td colSpan={10} className="py-16 text-center text-slate-500">
                       Nenhum livro encontrado para este filtro. Use{' '}
                       <button
                         type="button"
@@ -1587,38 +1626,14 @@ export default function DbmProductsSearchPage() {
                           {item.ean_gtin || item.isbn || '-'}
                         </td>
 
-                        {/* Coluna 2º ISBN (editável inline se Modo Excel ativo) */}
-                        <td className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 font-mono text-[11px] truncate bg-indigo-50/20">
-                          {excelInlineEditMode ? (
-                            <input
-                              type="text"
-                              value={item.additional_isbns || ''}
-                              onChange={(e) => handleInlineGridChange(item.id, 'additional_isbns', e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  handleSaveInlineRow(item);
-                                }
-                              }}
-                              placeholder="2º ISBN (Enter salva)"
-                              className="w-full px-1.5 py-0.5 text-[11px] font-mono bg-white border border-indigo-300 rounded focus:outline-none focus:border-indigo-600"
-                            />
-                          ) : item.additional_isbns ? (
-                            <span
-                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200"
-                              title={`ISBNs adicionais vinculados: ${item.additional_isbns}`}
-                            >
-                              <Barcode className="w-3 h-3 shrink-0" />
-                              {item.additional_isbns}
-                            </span>
-                          ) : (
-                            <span className="text-slate-300 dark:text-slate-600 text-[10px]">—</span>
-                          )}
-                        </td>
-
                         <td className="py-1.5 px-2.5 border-r border-slate-200/80 dark:border-slate-800 truncate" title={item.name}>
                           <div className="flex items-center gap-1.5 truncate">
                             <span className="truncate font-medium text-slate-900 dark:text-slate-100">{item.name}</span>
+                            {item.is_ebook && (
+                              <span className="px-1.5 py-0.2 bg-indigo-100 text-indigo-700 text-[9px] font-bold rounded shrink-0">
+                                E-book
+                              </span>
+                            )}
                             {item.is_out_of_print && (
                               <span className="px-1.5 py-0.2 bg-rose-100 text-rose-700 text-[9px] font-bold rounded shrink-0">
                                 Esgotado
@@ -2388,8 +2403,32 @@ export default function DbmProductsSearchPage() {
                   </div>
                 </div>
 
-                {/* Controle de Obra Esgotada / Fora de Catálogo */}
-                <div className="pt-2 border-t border-slate-100 space-y-2">
+                {/* Controle de E-book e Obra Esgotada / Fora de Catálogo */}
+                <div className="pt-2 border-t border-slate-100 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-semibold text-indigo-800 dark:text-indigo-300">
+                      <input
+                        type="checkbox"
+                        checked={bookForm.is_ebook}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setBookForm(prev => ({
+                            ...prev,
+                            is_ebook: checked,
+                            binding_finish: checked ? 'E-book' : prev.binding_finish === 'E-book' ? 'Brochura' : prev.binding_finish
+                          }));
+                        }}
+                        className="w-4 h-4 rounded text-indigo-600 border-slate-300"
+                      />
+                      É E-book / Livro Digital
+                    </label>
+                    {bookForm.is_ebook && (
+                      <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold rounded-full">
+                        Digital
+                      </span>
+                    )}
+                  </div>
+
                   <div className="flex items-center justify-between">
                     <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
                       <input
@@ -2400,6 +2439,11 @@ export default function DbmProductsSearchPage() {
                       />
                       Obra Esgotada / Fora de Linha
                     </label>
+                    {bookForm.is_out_of_print && (
+                      <span className="px-2 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold rounded-full">
+                        Esgotado
+                      </span>
+                    )}
                   </div>
                   {bookForm.is_out_of_print && (
                     <div>

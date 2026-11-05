@@ -719,6 +719,14 @@ def import_items_from_horus(
             sinopse = str(item.get("sinopse") or "").strip()
             status_horus = str(item.get("status") or "").strip().upper()
             is_esgotado = "ESGOTADO" in status_horus or "FORA DE LINHA" in status_horus
+            upper_nome_assunto = f"{nome} {assunto_nome}".upper()
+            is_ebook_detected = (
+                bool(item.get("is_ebook"))
+                or "[E-BOOK]" in upper_nome_assunto
+                or "[EBOOK]" in upper_nome_assunto
+                or "E-BOOK" in upper_nome_assunto
+                or "EBOOK" in upper_nome_assunto
+            )
             launch_dt = _parse_launch_dt(item.get("data_lancamento") or item.get("launch_date"))
 
             # Vincula ou cria Editora / Marca
@@ -798,6 +806,8 @@ def import_items_from_horus(
                     existing_product.long_description = sinopse
                 if is_esgotado:
                     existing_product.is_out_of_print = True
+                if is_ebook_detected:
+                    existing_product.is_ebook = True
                 if raw_additional_isbns:
                     existing_product.additional_isbns = _merge_isbns(
                         existing_product.additional_isbns, raw_additional_isbns, isbn
@@ -827,8 +837,9 @@ def import_items_from_horus(
                     subject=assunto_nome if assunto_nome else None,
                     long_description=sinopse if sinopse else None,
                     is_out_of_print=is_esgotado,
+                    is_ebook=is_ebook_detected,
                     additional_isbns=merged_extra_isbns,
-                    binding_finish="E-book" if "[E-BOOK]" in nome.upper() or "[EBOOK]" in nome.upper() else "Brochura",
+                    binding_finish="E-book" if is_ebook_detected else "Brochura",
                     royalty_rule="Sem Royalties",
                     status="ACTIVE"
                 )

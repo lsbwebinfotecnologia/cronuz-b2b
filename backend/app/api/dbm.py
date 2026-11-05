@@ -15,7 +15,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import logging
 import re
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 import openpyxl
@@ -1814,6 +1814,71 @@ def _enrich_items_with_bi_metrics(
     return items_list
 
 
+def _load_seller_product_exclusion_sets(
+    db: Session,
+    seller_id: int,
+    hide_ebooks: bool = True,
+    hide_out_of_print: bool = True,
+) -> set[str]:
+    """
+    Retorna conjunto de chaves (ISBN primário, ISBN de e-book, SKU/Cód Horus) de produtos
+    marcados como E-book e/ou Obra Esgotada no cadastro do Cronuz DBM para filtragem nas pesquisas.
+    """
+    from app.models.product import Product
+    excluded_keys: set[str] = set()
+    if not hide_ebooks and not hide_out_of_print:
+        return excluded_keys
+    try:
+        rows = db.query(
+            Product.ean_gtin,
+            Product.sku,
+            Product.ebook_isbns,
+            Product.name,
+            Product.binding_finish,
+            Product.is_ebook,
+            Product.is_out_of_print,
+        ).filter(Product.company_id == seller_id).all()
+        for ean_gtin, sku, ebook_isbns, name, binding_finish, is_eb, is_oop in rows:
+            eb_flag = bool(is_eb) or str(binding_finish or "").strip().lower() in ("e-book", "ebook", "digital")
+            oop_flag = bool(is_oop)
+            if (hide_ebooks and eb_flag) or (hide_out_of_print and oop_flag):
+                for raw_val in (ean_gtin, sku):
+                    if raw_val:
+                        cl = str(raw_val).strip().replace("-", "").replace(" ", "")
+                        if cl:
+                            excluded_keys.add(cl)
+            # Se esconder e-books estiver ativo, nunca retornar ISBNs secundários de e-book
+            if hide_ebooks and ebook_isbns:
+                for sub in str(ebook_isbns).replace(";", ",").split(","):
+                    cl = sub.strip().replace("-", "").replace(" ", "")
+                    if cl:
+                        excluded_keys.add(cl)
+    except Exception as exc:
+        logger.debug(f"[DBM] Falha ao carregar filtro de e-books/esgotados: {exc}")
+    return excluded_keys
+
+
+def _is_item_excluded_by_dbm_flags(
+    isbn: str,
+    cod_item: Optional[object],
+    title: str,
+    subject: str,
+    excluded_keys: set[str],
+    hide_ebooks: bool = True,
+) -> bool:
+    clean_isbn = str(isbn or "").strip().replace("-", "").replace(" ", "")
+    clean_cod = str(cod_item or "").strip()
+    if clean_isbn and clean_isbn in excluded_keys:
+        return True
+    if clean_cod and clean_cod in excluded_keys:
+        return True
+    if hide_ebooks:
+        t_up = f"{title or ''} {subject or ''}".upper()
+        if "E-BOOK" in t_up or "EBOOK" in t_up or "LIVRO DIGITAL" in t_up:
+            return True
+    return False
+
+
 @router.get("/proposals-desk/catalog-tabs")
 async def get_proposals_desk_catalog_tabs(
     customer_id: int = Query(..., description="ID do cliente selecionado"),
@@ -1821,6 +1886,8 @@ async def get_proposals_desk_catalog_tabs(
     client_sales_days: int = Query(30, ge=1, le=730),
     general_sales_days: int = Query(90, ge=1, le=730),
     limit: int = Query(40, ge=1, le=200),
+    hide_ebooks: bool = Query(True, description="Ocultar e-books nas buscas"),
+    hide_out_of_print: bool = Query(True, description="Ocultar obras esgotadas nas buscas"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1866,6 +1933,7 @@ async def get_proposals_desk_catalog_tabs(
     reposicao_items: list[dict] = []
     fundo_items: list[dict] = []
     seen_isbns: set[str] = set()
+    excluded_keys = _load_seller_product_exclusion_sets(db, seller_id, hide_ebooks=hide_ebooks, hide_out_of_print=hide_out_of_print)
 
     # ── 1. ABA NOVIDADES (-9 meses até +6 meses, APENAS COM SALDO > 0) ────────
     if sql_client:
@@ -1903,6 +1971,15 @@ async def get_proposals_desk_catalog_tabs(
                     continue
                 isbn = str(r.get("isbn") or r.get("cod_item") or "").strip()
                 if not isbn or isbn in seen_isbns:
+                    continue
+                if _is_item_excluded_by_dbm_flags(
+                    isbn=isbn,
+                    cod_item=r.get("cod_item"),
+                    title=str(r.get("nome_item") or ""),
+                    subject=str(r.get("assunto") or ""),
+                    excluded_keys=excluded_keys,
+                    hide_ebooks=hide_ebooks,
+                ):
                     continue
                 seen_isbns.add(isbn)
                 l_dt = _parse_any_datetime(r.get("data_lancamento"))
@@ -1955,8 +2032,14 @@ async def get_proposals_desk_catalog_tabs(
             est_loc = int(p.stock_quantity or 0)
             if est_loc <= 0:
                 continue
+            if hide_out_of_print and getattr(p, "is_out_of_print", False):
+                continue
+            if hide_ebooks and (getattr(p, "is_ebook", False) or (p.binding_finish and "e-book" in p.binding_finish.lower())):
+                continue
             isbn = str(p.ean_gtin or p.sku or p.id).strip()
             if not isbn or isbn in seen_isbns:
+                continue
+            if _is_item_excluded_by_dbm_flags(isbn, p.horus_cod_item, p.name, p.subject or c_name or "", excluded_keys, hide_ebooks):
                 continue
             seen_isbns.add(isbn)
             eff_dt = _parse_any_datetime(p.launch_date or p.created_at)
@@ -2019,6 +2102,15 @@ async def get_proposals_desk_catalog_tabs(
                 isbn = str(r.get("isbn") or r.get("cod_item") or "").strip()
                 if not isbn or isbn in seen_isbns:
                     continue
+                if _is_item_excluded_by_dbm_flags(
+                    isbn=isbn,
+                    cod_item=r.get("cod_item"),
+                    title=str(r.get("nome_item") or ""),
+                    subject=str(r.get("assunto") or ""),
+                    excluded_keys=excluded_keys,
+                    hide_ebooks=hide_ebooks,
+                ):
+                    continue
                 seen_isbns.add(isbn)
                 l_dt = _parse_any_datetime(r.get("data_lancamento"))
                 meta = _compute_launch_metadata(l_dt, now_dt) if l_dt else {}
@@ -2064,8 +2156,14 @@ async def get_proposals_desk_catalog_tabs(
                 est_loc = int(p.stock_quantity or 0)
                 if est_loc <= 0:
                     continue
+                if hide_out_of_print and getattr(p, "is_out_of_print", False):
+                    continue
+                if hide_ebooks and (getattr(p, "is_ebook", False) or (p.binding_finish and "e-book" in p.binding_finish.lower())):
+                    continue
                 isbn = str(p.ean_gtin or p.sku or p.id).strip()
                 if not isbn or isbn in seen_isbns:
+                    continue
+                if _is_item_excluded_by_dbm_flags(isbn, p.horus_cod_item, p.name, p.subject or c_name or "", excluded_keys, hide_ebooks):
                     continue
                 seen_isbns.add(isbn)
                 eff_dt = _parse_any_datetime(p.launch_date)
@@ -2129,6 +2227,8 @@ async def get_proposals_desk_replenishment_items(
     client_sales_days: int = Query(30, ge=1, le=730),
     general_sales_days: int = Query(90, ge=1, le=730),
     exclude_isbns: Optional[str] = Query(None, description="Lista de ISBNs separados por vírgula já presentes em outras abas (ex: Pedido, Novidades)"),
+    hide_ebooks: bool = Query(True, description="Ocultar e-books na busca de reposição"),
+    hide_out_of_print: bool = Query(True, description="Ocultar esgotados na busca de reposição"),
     company_id: Optional[int] = Query(None),
     limit: int = Query(150, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -2164,7 +2264,9 @@ async def get_proposals_desk_replenishment_items(
     legacy_pagination = getattr(settings, "horus_legacy_pagination", False) if settings else False
     default_disc = float(customer.discount or 35.0)
 
-    excluded_set: set[str] = set()
+    excluded_set: set[str] = _load_seller_product_exclusion_sets(
+        db, seller_id, hide_ebooks=hide_ebooks, hide_out_of_print=hide_out_of_print
+    )
     if exclude_isbns:
         for raw_c in exclude_isbns.split(","):
             cl = raw_c.strip().replace("-", "").replace(" ", "")
@@ -2591,6 +2693,15 @@ async def get_proposals_desk_replenishment_items(
         stock_val = int(c_obj.get("stockAvailable") or 0)
         if stock_val <= 0:
             continue
+        if _is_item_excluded_by_dbm_flags(
+            isbn=k,
+            cod_item=c_obj.get("cod_item") or c_obj.get("sku"),
+            title=str(c_obj.get("title") or ""),
+            subject=str(c_obj.get("subject") or ""),
+            excluded_keys=excluded_set,
+            hide_ebooks=hide_ebooks,
+        ):
+            continue
         sold_x = int(c_obj.get("soldInReplenishmentWindow") or 0)
         final_items.append({
             "id": f"rep-{k}",
@@ -2647,6 +2758,8 @@ async def get_proposals_desk_last_operation_items(
     customer_id: int = Query(..., description="ID do cliente selecionado"),
     operation_type: str = Query("ACERTO", description="ACERTO (CFOP 5113/5114/6113/6114) ou VENDA"),
     exclude_isbns: Optional[str] = Query(None, description="ISBNs separados por vírgula já presentes em outras abas"),
+    hide_ebooks: bool = Query(True, description="Ocultar e-books"),
+    hide_out_of_print: bool = Query(True, description="Ocultar esgotados"),
     company_id: Optional[int] = Query(None),
     client_sales_days: int = Query(30, ge=1, le=730),
     general_sales_days: int = Query(90, ge=1, le=730),
@@ -2676,7 +2789,9 @@ async def get_proposals_desk_last_operation_items(
     legacy_pagination = getattr(settings, "horus_legacy_pagination", False) if settings else False
     default_disc = float(customer.discount or 35.0)
 
-    excluded_set: set[str] = set()
+    excluded_set: set[str] = _load_seller_product_exclusion_sets(
+        db, seller_id, hide_ebooks=hide_ebooks, hide_out_of_print=hide_out_of_print
+    )
     if exclude_isbns:
         for raw_c in exclude_isbns.split(","):
             cl = raw_c.strip().replace("-", "").replace(" ", "")
@@ -2788,7 +2903,14 @@ async def get_proposals_desk_last_operation_items(
                         continue
                     isbn = str(r.get("isbn") or r.get("cod_item") or "").strip()
                     clean_isbn = isbn.replace("-", "").replace(" ", "")
-                    if clean_isbn in excluded_set:
+                    if clean_isbn in excluded_set or _is_item_excluded_by_dbm_flags(
+                        isbn=isbn,
+                        cod_item=r.get("cod_item"),
+                        title=str(r.get("nome_item") or ""),
+                        subject=str(r.get("assunto") or ""),
+                        excluded_keys=excluded_set,
+                        hide_ebooks=hide_ebooks,
+                    ):
                         continue
                     excluded_set.add(clean_isbn)
 
@@ -2949,6 +3071,8 @@ async def lookup_proposals_desk_product(
     company_id: Optional[int] = Query(None),
     client_sales_days: int = Query(30, ge=1, le=730),
     general_sales_days: int = Query(90, ge=1, le=730),
+    hide_ebooks: bool = Query(True, description="Ocultar e-books na pesquisa de produtos"),
+    hide_out_of_print: bool = Query(False, description="Ocultar obras esgotadas na pesquisa de produtos"),
     limit: int = Query(15, ge=1, le=50),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -2984,6 +3108,9 @@ async def lookup_proposals_desk_product(
     term = q.strip()
     results: list[dict] = []
     seen_isbns: set[str] = set()
+    excluded_keys = _load_seller_product_exclusion_sets(
+        db, seller_id, hide_ebooks=hide_ebooks, hide_out_of_print=hide_out_of_print
+    )
 
     # 1. Busca no Horus SQL Server
     if sql_client:
@@ -3025,6 +3152,15 @@ async def lookup_proposals_desk_product(
             for r in (rows or []):
                 isbn = str(r.get("isbn") or r.get("cod_item") or "").strip()
                 if not isbn or isbn in seen_isbns:
+                    continue
+                if _is_item_excluded_by_dbm_flags(
+                    isbn=isbn,
+                    cod_item=r.get("cod_item"),
+                    title=str(r.get("nome_item") or ""),
+                    subject=str(r.get("assunto") or ""),
+                    excluded_keys=excluded_keys,
+                    hide_ebooks=hide_ebooks,
+                ):
                     continue
                 seen_isbns.add(isbn)
                 results.append({
@@ -3071,8 +3207,14 @@ async def lookup_proposals_desk_product(
         ).limit(rem).all()
 
         for p, b_name, c_name in q_loc:
+            if hide_out_of_print and getattr(p, "is_out_of_print", False):
+                continue
+            if hide_ebooks and (getattr(p, "is_ebook", False) or (p.binding_finish and "e-book" in p.binding_finish.lower())):
+                continue
             isbn = str(p.ean_gtin or p.sku or p.id).strip()
             if not isbn or isbn in seen_isbns:
+                continue
+            if _is_item_excluded_by_dbm_flags(isbn, p.horus_cod_item, p.name, p.subject or c_name or "", excluded_keys, hide_ebooks):
                 continue
             seen_isbns.add(isbn)
             results.append({
@@ -3418,6 +3560,55 @@ class DbmProposalStatusPatchPayload(BaseModel):
     horus_order_number: Optional[str] = None
 
 
+def _compute_proposal_totals_from_items(items_list: Any) -> dict:
+    """
+    Calcula os totais reais do orçamento (títulos, peças pedidas, peças aprovadas,
+    valor de capa, valor líquido e desconto médio) a partir da lista de itens (items_json).
+    """
+    if not isinstance(items_list, list) or len(items_list) == 0:
+        return {
+            "total_titles": 0,
+            "total_requested_qty": 0,
+            "total_approved_qty": 0,
+            "total_cover_value": 0.0,
+            "total_net_value": 0.0,
+            "average_discount": 0.0,
+        }
+
+    total_titles = len(items_list)
+    total_req = 0
+    total_app = 0
+    total_cover = 0.0
+    total_net = 0.0
+
+    for it in items_list:
+        if not isinstance(it, dict):
+            continue
+        req_q = max(0, int(float(it.get("requestedQty") or it.get("requested_qty") or it.get("quantity") or 0)))
+        raw_app = it.get("approvedQty") if it.get("approvedQty") is not None else it.get("approved_qty")
+        app_q = max(0, int(float(raw_app))) if raw_app is not None else req_q
+        eff_q = app_q if app_q > 0 else req_q
+
+        cover_p = max(0.0, float(it.get("coverPrice") or it.get("cover_price") or it.get("base_price") or 0.0))
+        disc_pct = max(0.0, min(100.0, float(it.get("discountPercent") or it.get("discountPct") or it.get("discount_percent") or 0.0)))
+        net_unit = cover_p * (1.0 - disc_pct / 100.0)
+
+        total_req += req_q
+        total_app += eff_q
+        total_cover += cover_p * eff_q
+        total_net += net_unit * eff_q
+
+    avg_disc = ((total_cover - total_net) / total_cover * 100.0) if total_cover > 0 else 0.0
+    return {
+        "total_titles": total_titles,
+        "total_requested_qty": total_req,
+        "total_approved_qty": total_app,
+        "total_cover_value": round(total_cover, 2),
+        "total_net_value": round(total_net, 2),
+        "average_discount": round(avg_disc, 2),
+    }
+
+
 @router.get("/proposals")
 def list_dbm_proposals(
     company_id: Optional[int] = Query(None),
@@ -3467,6 +3658,14 @@ def list_dbm_proposals(
 
     items_out = []
     for p in rows:
+        calc = _compute_proposal_totals_from_items(p.items_json) if (not p.total_titles or not p.total_net_value) and p.items_json else None
+        tot_titles = int(p.total_titles or (calc["total_titles"] if calc else 0))
+        tot_req = int(p.total_requested_qty or (calc["total_requested_qty"] if calc else 0))
+        tot_app = int(p.total_approved_qty or (calc["total_approved_qty"] if calc else 0))
+        tot_cov = round(float(p.total_cover_value or (calc["total_cover_value"] if calc else 0.0)), 2)
+        tot_net = round(float(p.total_net_value or (calc["total_net_value"] if calc else 0.0)), 2)
+        avg_disc = round(float(p.average_discount or (calc["average_discount"] if calc else 0.0)), 2)
+
         items_out.append({
             "id": p.id,
             "local_id": p.local_id,
@@ -3478,12 +3677,12 @@ def list_dbm_proposals(
             "status_id": p.status_id,
             "status_name": p.status_name,
             "status_phase": p.status_phase,
-            "total_titles": p.total_titles or 0,
-            "total_requested_qty": p.total_requested_qty or 0,
-            "total_approved_qty": p.total_approved_qty or 0,
-            "total_cover_value": round(float(p.total_cover_value or 0.0), 2),
-            "total_net_value": round(float(p.total_net_value or 0.0), 2),
-            "average_discount": round(float(p.average_discount or 0.0), 2),
+            "total_titles": tot_titles,
+            "total_requested_qty": tot_req,
+            "total_approved_qty": tot_app,
+            "total_cover_value": tot_cov,
+            "total_net_value": tot_net,
+            "average_discount": avg_disc,
             "global_discount": round(float(p.global_discount or 0.0), 2),
             "min_order_value": round(float(p.min_order_value or 0.0), 2),
             "horus_order_number": p.horus_order_number,
@@ -3520,6 +3719,8 @@ def get_dbm_proposal(
     if not prop:
         raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
 
+    calc = _compute_proposal_totals_from_items(prop.items_json) if (not prop.total_titles or not prop.total_net_value) and prop.items_json else None
+
     return {
         "id": prop.id,
         "local_id": prop.local_id,
@@ -3531,12 +3732,12 @@ def get_dbm_proposal(
         "status_id": prop.status_id,
         "status_name": prop.status_name,
         "status_phase": prop.status_phase,
-        "total_titles": prop.total_titles or 0,
-        "total_requested_qty": prop.total_requested_qty or 0,
-        "total_approved_qty": prop.total_approved_qty or 0,
-        "total_cover_value": round(float(prop.total_cover_value or 0.0), 2),
-        "total_net_value": round(float(prop.total_net_value or 0.0), 2),
-        "average_discount": round(float(prop.average_discount or 0.0), 2),
+        "total_titles": int(prop.total_titles or (calc["total_titles"] if calc else 0)),
+        "total_requested_qty": int(prop.total_requested_qty or (calc["total_requested_qty"] if calc else 0)),
+        "total_approved_qty": int(prop.total_approved_qty or (calc["total_approved_qty"] if calc else 0)),
+        "total_cover_value": round(float(prop.total_cover_value or (calc["total_cover_value"] if calc else 0.0)), 2),
+        "total_net_value": round(float(prop.total_net_value or (calc["total_net_value"] if calc else 0.0)), 2),
+        "average_discount": round(float(prop.average_discount or (calc["average_discount"] if calc else 0.0)), 2),
         "global_discount": round(float(prop.global_discount or 0.0), 2),
         "min_order_value": round(float(prop.min_order_value or 0.0), 2),
         "horus_order_number": prop.horus_order_number,
@@ -3582,6 +3783,13 @@ def save_dbm_proposal(
         ).first()
 
     user_id = getattr(current_user, "id", None) if not isinstance(current_user, dict) else current_user.get("id")
+    calc = _compute_proposal_totals_from_items(payload.items)
+    eff_titles = int(payload.total_titles or calc["total_titles"])
+    eff_req_qty = int(payload.total_requested_qty or calc["total_requested_qty"])
+    eff_app_qty = int(payload.total_approved_qty or calc["total_approved_qty"])
+    eff_cover_val = round(float(payload.total_cover_value or calc["total_cover_value"]), 2)
+    eff_net_val = round(float(payload.total_net_value or calc["total_net_value"]), 2)
+    eff_avg_disc = round(float(payload.average_discount or calc["average_discount"]), 2)
 
     if existing:
         existing.customer_id = cust.id if cust else payload.customer_id
@@ -3592,14 +3800,14 @@ def save_dbm_proposal(
         existing.status_id = payload.status_id
         existing.status_name = payload.status_name
         existing.status_phase = payload.status_phase
-        existing.total_titles = int(payload.total_titles or 0)
-        existing.total_requested_qty = int(payload.total_requested_qty or 0)
-        existing.total_approved_qty = int(payload.total_approved_qty or 0)
-        existing.total_cover_value = round(float(payload.total_cover_value or 0.0), 2)
-        existing.total_net_value = round(float(payload.total_net_value or 0.0), 2)
-        existing.average_discount = round(float(payload.average_discount or 0.0), 2)
+        existing.total_titles = eff_titles
+        existing.total_requested_qty = eff_req_qty
+        existing.total_approved_qty = eff_app_qty
+        existing.total_cover_value = eff_cover_val
+        existing.total_net_value = eff_net_val
+        existing.average_discount = eff_avg_disc
         existing.global_discount = round(float(payload.global_discount or 0.0), 2)
-        existing.min_order_value = round(float(payload.min_order_value or 0.0), 2)
+        existing.min_order_value = round(float(payload.min_order_value or (cust.min_order_total if cust else 0.0) or 0.0), 2)
         if payload.horus_order_number is not None:
             existing.horus_order_number = payload.horus_order_number
         if payload.notes is not None:
@@ -3625,14 +3833,14 @@ def save_dbm_proposal(
             status_id=payload.status_id,
             status_name=payload.status_name,
             status_phase=payload.status_phase,
-            total_titles=int(payload.total_titles or 0),
-            total_requested_qty=int(payload.total_requested_qty or 0),
-            total_approved_qty=int(payload.total_approved_qty or 0),
-            total_cover_value=round(float(payload.total_cover_value or 0.0), 2),
-            total_net_value=round(float(payload.total_net_value or 0.0), 2),
-            average_discount=round(float(payload.average_discount or 0.0), 2),
+            total_titles=eff_titles,
+            total_requested_qty=eff_req_qty,
+            total_approved_qty=eff_app_qty,
+            total_cover_value=eff_cover_val,
+            total_net_value=eff_net_val,
+            average_discount=eff_avg_disc,
             global_discount=round(float(payload.global_discount or 0.0), 2),
-            min_order_value=round(float(payload.min_order_value or 0.0), 2),
+            min_order_value=round(float(payload.min_order_value or (cust.min_order_total if cust else 0.0) or 0.0), 2),
             horus_order_number=payload.horus_order_number,
             notes=payload.notes,
             items_json=payload.items or [],

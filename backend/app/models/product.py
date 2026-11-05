@@ -47,6 +47,7 @@ class Product(Base):
     # Condition Flags
     is_pre_sale = Column(Boolean, default=False, nullable=False)
     is_out_of_print = Column(Boolean, default=False, nullable=False)
+    is_ebook = Column(Boolean, default=False, nullable=False, server_default="false")
     allow_purchase = Column(Boolean, default=True, nullable=True)
     stock_status_label = Column(String(100), nullable=True)
     cover_url = Column(String(500), nullable=True)

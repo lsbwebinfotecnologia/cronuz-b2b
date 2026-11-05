@@ -180,6 +180,7 @@ try:
     with engine.begin() as _conn:
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS b2c_showcases_config JSON"))
         _conn.execute(_sql_text("ALTER TABLE crm_customer ADD COLUMN IF NOT EXISTS min_order_total DOUBLE PRECISION NOT NULL DEFAULT 0"))
+        _conn.execute(_sql_text("ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS is_ebook BOOLEAN NOT NULL DEFAULT FALSE"))
 except Exception as _ddl_err:
     _main_logger.warning("Auto-DDL warning: %s", _ddl_err)
 

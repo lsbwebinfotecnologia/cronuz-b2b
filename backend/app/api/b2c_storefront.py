@@ -129,7 +129,9 @@ class B2CHorusSyncRequest(BaseModel):
     characteristic_value: Optional[str] = None
     search_term: Optional[str] = None
     auto_collect_bookinfo_covers: bool = False
-    max_items: int = Field(default=250, ge=1, le=2000)
+    full_sync: bool = False
+    custom_data_ini: Optional[str] = None
+    max_items: int = Field(default=10000, ge=1, le=25000)
 
 
 class B2CAppearanceUpdateRequest(BaseModel):
@@ -886,6 +888,45 @@ async def test_vindi_homologation_transaction(
     }
 
 
+def _extract_horus_failures(raw_resp: Any) -> List[str]:
+    """Extrai mensagens de erro/falha reais retornadas pela API do Horus ERP."""
+    msgs: List[str] = []
+    rows = raw_resp if isinstance(raw_resp, list) else ([raw_resp] if isinstance(raw_resp, dict) else [])
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if "Falha" in r or "FALHA" in r or "Erro" in r or "ERRO" in r:
+            falha_lbl = str(r.get("Falha") or r.get("FALHA") or r.get("Erro") or r.get("ERRO") or "Falha Horus").strip()
+            det_msg = str(r.get("Mensagem") or r.get("MENSAGEM") or r.get("mensagem") or "").strip()
+            combined = f"{falha_lbl}: {det_msg}" if det_msg and det_msg != falha_lbl else falha_lbl
+            if combined and combined not in msgs:
+                msgs.append(combined)
+    return msgs
+
+
+def _is_horus_empty_result_message(msgs: List[str]) -> bool:
+    """Identifica quando a mensagem de Falha do Horus significa apenas '0 registros no período'."""
+    if not msgs:
+        return False
+    empty_keywords = (
+        "não foi encontrado",
+        "nao foi encontrado",
+        "nenhum registro",
+        "nenhum item",
+        "sem moviment",
+        "sem registro",
+        "não existem",
+        "nao existem",
+        "registro não encontrado",
+        "registro nao encontrado",
+    )
+    for m in msgs:
+        low = m.lower()
+        if not any(k in low for k in empty_keywords):
+            return False
+    return True
+
+
 @router.get("/products/sync-config")
 def get_b2c_horus_sync_config(
     company_id: Optional[int] = Query(None),
@@ -905,6 +946,12 @@ def get_b2c_horus_sync_config(
     return {
         "company_id": cid,
         "horus_enabled": bool(getattr(settings, "horus_enabled", False)) if settings else False,
+        "horus_url": getattr(settings, "horus_url", None) if settings else None,
+        "horus_port": getattr(settings, "horus_port", None) if settings else None,
+        "horus_company": getattr(settings, "horus_company", None) if settings else None,
+        "horus_branch": getattr(settings, "horus_branch", None) if settings else None,
+        "horus_stock_local": getattr(settings, "horus_stock_local", None) if settings else None,
+        "horus_legacy_pagination": bool(getattr(settings, "horus_legacy_pagination", False)) if settings else False,
         "b2c_active": bool(
             (getattr(company, "module_b2c_storefront", False) if company else False)
             or (getattr(settings, "b2c_storefront_open", False) if settings else False)
@@ -914,10 +961,16 @@ def get_b2c_horus_sync_config(
         "cod_caract": str(raw_sync.get("cod_caract") or ""),
         "characteristic_type_name": str(raw_sync.get("characteristic_type_name") or ""),
         "characteristic_value": str(raw_sync.get("characteristic_value") or ""),
-        "search_term": str(raw_sync.get("search_term") or ""),
         "auto_collect_bookinfo_covers": bool(raw_sync.get("auto_collect_bookinfo_covers", False)),
         "last_sync_at": raw_sync.get("last_sync_at"),
+        "last_sync_data_ini": raw_sync.get("last_sync_data_ini"),
+        "last_sync_data_fim": raw_sync.get("last_sync_data_fim"),
+        "last_sync_mode": raw_sync.get("last_sync_mode"),
         "last_synced_count": int(raw_sync.get("last_synced_count") or 0),
+        "last_created_count": int(raw_sync.get("last_created_count") or 0),
+        "last_updated_count": int(raw_sync.get("last_updated_count") or 0),
+        "last_stock_updated_count": int(raw_sync.get("last_stock_updated_count") or 0),
+        "last_horus_api_summary": raw_sync.get("last_horus_api_summary"),
     }
 
 
@@ -936,82 +989,163 @@ def update_b2c_horus_sync_config(
         db.add(settings)
     raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
     prev_sync = raw_cfg.get("horus_sync_config") if isinstance(raw_cfg.get("horus_sync_config"), dict) else {}
-    raw_cfg["horus_sync_config"] = {
+    updated_sync = {
         **prev_sync,
         "cod_tpo_caract": str(data.cod_tpo_caract or "").strip(),
         "cod_caract": str(data.cod_caract or "").strip(),
-        "characteristic_type_name": str(data.characteristic_type_name or "").strip(),
-        "characteristic_value": str(data.characteristic_value or "").strip(),
-        "search_term": str(data.search_term or "").strip(),
         "auto_collect_bookinfo_covers": bool(data.auto_collect_bookinfo_covers),
     }
+    if data.custom_data_ini is not None:
+        if str(data.custom_data_ini).strip() == "":
+            updated_sync["last_sync_at"] = None
+            updated_sync["last_sync_data_ini"] = None
+        else:
+            updated_sync["last_sync_at"] = str(data.custom_data_ini).strip()
+    raw_cfg["horus_sync_config"] = updated_sync
     settings.b2c_showcases_config = raw_cfg
     flag_modified(settings, "b2c_showcases_config")
     db.commit()
     return {
-        "message": "Configuração de sincronização Horus → Cronuz salva com sucesso!",
+        "message": "Configuração de sincronização do Horus salva com sucesso!",
         **get_b2c_horus_sync_config(company_id=cid, db=db, current_user=current_user),
     }
 
 
 @router.get("/products/horus-characteristics")
 async def list_horus_characteristics(
-    cod_tpo_caract: Optional[str] = Query(None, description="Filtrar por Código do Tipo de Característica"),
+    cod_tpo_caract: Optional[str] = Query(None, description="Código do Tipo de Característica (COD_TPO_CARACT)"),
+    cod_caract: Optional[str] = Query(None, description="Código da Característica (COD_CARACT)"),
     company_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Consulta no Horus ERP as características cadastradas (`Busca_Caracteristicas`),
-    respeitando a configuração de OFFSET/LIMIT (`horus_legacy_pagination`) do seller.
+    Testa e inspeciona diretamente na API do Horus ERP (`Busca_Caracteristicas` e `Busca_Acervo`)
+    os parâmetros `COD_TPO_CARACT` e `COD_CARACT`, respeitando a configuração de OFFSET/LIMIT
+    (`horus_legacy_pagination`) e `SD_*` do seller.
+    Retorna exatamente o que o Horus responde na API para diagnóstico imediato.
     """
     cid = _resolve_seller_company_id(current_user, company_id)
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
     if not settings or not settings.horus_enabled:
-        return {"items": [], "warning": "Integração Horus ERP não está habilitada para este seller."}
+        return {
+            "ok": False,
+            "items": [],
+            "warning": "Integração Horus ERP não está habilitada nas configurações deste seller.",
+            "horus_raw_response": None,
+        }
 
     from app.integrators.horus_products import HorusProducts
     client = HorusProducts(db, cid)
-    params: Dict[str, Any] = {}
-    if cod_tpo_caract and str(cod_tpo_caract).strip().isdigit():
-        params["COD_TPO_CARACT"] = int(str(cod_tpo_caract).strip())
-    if not getattr(settings, "horus_legacy_pagination", False):
-        params["OFFSET"] = 0
-        params["LIMIT"] = 1000
+    legacy_pag = bool(getattr(settings, "horus_legacy_pagination", False))
+
+    tpo_str = str(cod_tpo_caract or "").strip()
+    car_str = str(cod_caract or "").strip()
+
+    params_caract: Dict[str, Any] = {}
+    if tpo_str:
+        params_caract["COD_TPO_CARACT"] = int(tpo_str) if tpo_str.isdigit() else tpo_str
+    if car_str:
+        params_caract["COD_CARACT"] = int(car_str) if car_str.isdigit() else car_str
+    if not legacy_pag:
+        params_caract["OFFSET"] = 0
+        params_caract["LIMIT"] = 10
+
+    params_acervo: Dict[str, Any] = {}
+    if tpo_str:
+        params_acervo["COD_TPO_CARACT"] = int(tpo_str) if tpo_str.isdigit() else tpo_str
+    if car_str:
+        params_acervo["COD_CARACT"] = int(car_str) if car_str.isdigit() else car_str
+    if settings.horus_company:
+        params_acervo["SD_COD_EMPRESA"] = settings.horus_company
+    if settings.horus_branch:
+        params_acervo["SD_COD_FILIAL"] = settings.horus_branch
+    if getattr(settings, "horus_stock_local", None):
+        params_acervo["SD_LOCAL_ESTOQUE"] = settings.horus_stock_local
+    if not legacy_pag:
+        params_acervo["OFFSET"] = 0
+        params_acervo["LIMIT"] = 5
 
     try:
-        resp = await client.get("Busca_Caracteristicas", params=params)
+        resp_caract = await client.get("Busca_Caracteristicas", params=params_caract)
+        resp_acervo = await client.get("Busca_Acervo", params=params_acervo)
         await client.close()
-        raw_list = []
-        if isinstance(resp, list):
-            raw_list = resp
-        elif isinstance(resp, dict):
-            raw_list = resp.get("item", resp.get("itens", resp.get("Caracteristicas", [])))
-            if isinstance(raw_list, dict):
-                raw_list = [raw_list]
 
+        caract_failures = _extract_horus_failures(resp_caract)
+        acervo_failures = _extract_horus_failures(resp_acervo)
+
+        raw_list = resp_caract if isinstance(resp_caract, list) else []
+        detected_type_name = ""
+        detected_char_value = ""
         items = []
         for row in raw_list:
             if not isinstance(row, dict) or "Falha" in row or "FALHA" in row:
                 continue
-            tpo_code = str(row.get("COD_TPO_CARACT") or row.get("COD_TPO_CARACT_EXTRA") or "").strip()
-            caract_code = str(row.get("COD_CARACT") or row.get("COD_CARACT_EXTRA") or "").strip()
-            tpo_desc = str(row.get("DESC_TPO_CARACT") or row.get("NOM_TPO_CARACT") or f"Tipo {tpo_code}").strip()
-            caract_desc = str(row.get("DESC_CARACT") or row.get("NOM_CARACT") or row.get("DESCRICAO") or "").strip()
-            if tpo_code or caract_code or caract_desc:
-                items.append({
-                    "cod_tpo_caract": tpo_code,
-                    "cod_caract": caract_code,
-                    "characteristic_type_name": tpo_desc,
-                    "characteristic_value": caract_desc,
-                })
-        return {"items": items}
+            tpo_c = str(row.get("COD_TPO_CARACT") or "").strip()
+            car_c = str(row.get("COD_CARACT") or "").strip()
+            tpo_d = str(row.get("DESC_TPO_CARACT") or row.get("NOM_TPO_CARACT") or "").strip()
+            car_d = str(row.get("DESC_CARACTERISTICA") or row.get("DESC_CARACT") or row.get("NOM_CARACT") or "").strip()
+            if not detected_type_name and tpo_d:
+                detected_type_name = tpo_d
+            if not detected_char_value and car_d:
+                detected_char_value = car_d
+            items.append({
+                "cod_item": row.get("COD_ITEM"),
+                "nom_item": row.get("NOM_ITEM"),
+                "cod_tpo_caract": tpo_c,
+                "cod_caract": car_c,
+                "characteristic_type_name": tpo_d,
+                "characteristic_value": car_d,
+                "dat_ult_atl": row.get("DAT_ULT_ATL"),
+            })
+
+        acervo_samples = []
+        if isinstance(resp_acervo, list):
+            for a_row in resp_acervo[:5]:
+                if isinstance(a_row, dict) and not ("Falha" in a_row or "FALHA" in a_row):
+                    acervo_samples.append({
+                        "COD_ITEM": a_row.get("COD_ITEM"),
+                        "NOM_ITEM": a_row.get("NOM_ITEM"),
+                        "COD_BARRA_ITEM": a_row.get("COD_BARRA_ITEM") or a_row.get("BARRAS_ISBN"),
+                        "VLR_CAPA": a_row.get("VLR_CAPA"),
+                        "SALDO_DISPONIVEL": a_row.get("SALDO_DISPONIVEL"),
+                        "DAT_ULT_ATL": a_row.get("DAT_ULT_ATL"),
+                    })
+
+        all_warnings = caract_failures + [f for f in acervo_failures if f not in caract_failures]
+        return {
+            "ok": len(all_warnings) == 0,
+            "pagination_mode": "SEM OFFSET/LIMIT (Modo Legado)" if legacy_pag else "COM OFFSET/LIMIT (Padrão Horus)",
+            "params_sent": {
+                "Busca_Caracteristicas": params_caract,
+                "Busca_Acervo": params_acervo,
+            },
+            "detected_type_name": detected_type_name,
+            "detected_char_value": detected_char_value,
+            "horus_messages": all_warnings,
+            "warning": " | ".join(all_warnings) if all_warnings else None,
+            "items": items[:10],
+            "acervo_sample": acervo_samples,
+            "horus_raw_response": {
+                "Busca_Caracteristicas": resp_caract[:5] if isinstance(resp_caract, list) else resp_caract,
+                "Busca_Acervo": acervo_samples if acervo_samples else resp_acervo,
+            },
+        }
     except Exception as e:
         try:
             await client.close()
         except Exception:
             pass
-        return {"items": [], "warning": f"Não foi possível listar características do Horus: {str(e)}"}
+        return {
+            "ok": False,
+            "items": [],
+            "horus_messages": [str(e)],
+            "warning": f"Erro ao consultar API do Horus: {str(e)}",
+            "params_sent": {
+                "Busca_Caracteristicas": params_caract,
+                "Busca_Acervo": params_acervo,
+            },
+        }
 
 
 @router.post("/products/sync-horus")
@@ -1022,12 +1156,19 @@ async def sync_horus_products_to_cronuz(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Sincroniza os produtos do Horus ERP para a tabela `prd_product` do Cronuz (sem criar tabelas redundantes),
-    filtrando pelo Código/Tipo de Característica (`COD_TPO_CARACT_EXTRA`) e Característica (`COD_CARACT_EXTRA`)
-    configurados no seller, respeitando OFFSET/LIMIT (`horus_legacy_pagination`) e `SD_*`.
-    Importa Nome, SKU, ISBN, Descrição/Sinopse, Preço, Saldo Disponível, Peso, Dimensões e Características,
-    e opcionalmente coleta as capas na Bookinfo salvando com o nome do ISBN em `uploads/covers/<company_id>/`.
+    Sincroniza produtos e estoques do Horus ERP para a tabela `prd_product` do Cronuz:
+    1. Considera restrições de acervo por característica (`COD_TPO_CARACT` e `COD_CARACT`) quando configuradas.
+    2. Respeita rigorosamente a configuração de paginação `OFFSET`/`LIMIT` (`horus_legacy_pagination`) e `SD_*` do seller.
+    3. Utiliza a Data de Execução com Sucesso (`last_sync_at` -> `DATA_INI` até `DATA_FIM`):
+       - Na 1ª execução (ou quando `full_sync=True`): realiza a carga completa dos produtos no `Busca_Acervo`.
+       - Nas execuções seguintes (incremental):
+         a) Consulta `Busca_Caracteristicas` (`COD_TPO_CARACT`, `COD_CARACT`, `DATA_INI`, `DATA_FIM`) para identificar produtos que receberam ou sofreram alteração na característica.
+         b) Consulta `Busca_Acervo` (`COD_TPO_CARACT`, `COD_CARACT`, `SD_*`, `DATA_INI`, `DATA_FIM`) para trazer os produtos que sofreram alteração cadastral.
+         c) Consulta `Estoque` (`COD_EMPRESA`, `COD_FILIAL`, `COD_LOCAL_ESTOQUE`, `COD_TPO_CARACT`, `COD_CARACT`, `DATA_INI`, `DATA_FIM`) para atualizar o saldo disponível dos produtos que tiveram movimentação de estoque.
+         d) Coleta o cadastro em `Busca_Acervo` de quaisquer `COD_ITEM` apontados em `Busca_Caracteristicas` ou `Estoque` que ainda não estavam na base local.
+    4. Retorna exatamente a mensagem da API do Horus caso o Horus aponte alguma falha de parâmetro/configuração, e grava `last_sync_at` apenas quando a execução tem sucesso.
     """
+    from datetime import timedelta
     from sqlalchemy.orm.attributes import flag_modified
     from app.integrators.horus_products import HorusProducts
     from app.core.utils import parse_horus_price
@@ -1035,130 +1176,381 @@ async def sync_horus_products_to_cronuz(
     from app.api.upload import STATIC_DIR, collect_bookinfo_cover_for_company
 
     cid = _resolve_seller_company_id(current_user, company_id)
-    company = db.query(Company).filter(Company.id == cid).first()
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
     if not settings or not settings.horus_enabled:
         raise HTTPException(
             status_code=400,
-            detail="A integração com o Horus ERP não está ativa para esta empresa.",
+            detail="A integração com o Horus ERP não está ativa nas configurações desta empresa.",
         )
 
     cod_tpo_str = str(data.cod_tpo_caract or "").strip()
     cod_caract_str = str(data.cod_caract or "").strip()
-    char_type_name = str(data.characteristic_type_name or "").strip()
-    char_val_name = str(data.characteristic_value or "").strip()
-    search_term = str(data.search_term or "").strip()
-    max_items = min(max(1, int(data.max_items or 250)), 2000)
 
-    # Salvar configuração no seller
+    # No Horus ERP, se informar COD_TPO_CARACT é obrigatório informar COD_CARACT (e vice-versa)
+    if (cod_tpo_str and not cod_caract_str) or (cod_caract_str and not cod_tpo_str):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Parâmetros do Horus incompletos: sempre que COD_TPO_CARACT for informado, "
+                "também é obrigatório preencher COD_CARACT (e vice-versa)."
+            ),
+        )
+
+    cod_tpo_int = int(cod_tpo_str) if cod_tpo_str.isdigit() else None
+    cod_caract_int = int(cod_caract_str) if cod_caract_str.isdigit() else None
+    has_caract_filter = cod_tpo_int is not None and cod_caract_int is not None
+
     raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
     prev_sync = raw_cfg.get("horus_sync_config") if isinstance(raw_cfg.get("horus_sync_config"), dict) else {}
     raw_freight = raw_cfg.get("freight_config") if isinstance(raw_cfg.get("freight_config"), dict) else {}
     default_weight = float(raw_freight.get("default_book_weight_kg", 0.35) or 0.35)
 
-    cod_tpo_int = int(cod_tpo_str) if cod_tpo_str.isdigit() else None
-    cod_caract_int = int(cod_caract_str) if cod_caract_str.isdigit() else None
+    # Verificar se os filtros mudaram em relação à última sincronia (se mudou a característica, faz carga completa)
+    prev_tpo = str(prev_sync.get("cod_tpo_caract") or "").strip()
+    prev_car = str(prev_sync.get("cod_caract") or "").strip()
+    filter_changed = (prev_tpo != cod_tpo_str) or (prev_car != cod_caract_str)
+
+    local_existing_count = db.query(func.count(Product.id)).filter(Product.company_id == cid).scalar() or 0
+    prev_last_sync_iso = prev_sync.get("last_sync_at") if not filter_changed else None
+
+    # Fuso horário de Brasília (UTC-3) usado pelo banco SQL Server do Horus
+    br_tz = timezone(timedelta(hours=-3))
+    run_start_utc = datetime.now(timezone.utc)
+    run_start_br = run_start_utc.astimezone(br_tz)
+
+    is_incremental = bool(
+        prev_last_sync_iso
+        and not data.full_sync
+        and local_existing_count > 0
+    )
+
+    data_ini_datetime_str: Optional[str] = None
+    data_fim_datetime_str: Optional[str] = None
+    data_ini_date_str: Optional[str] = None
+    data_fim_date_str: Optional[str] = None
+
+    if is_incremental:
+        try:
+            parsed_last = datetime.fromisoformat(str(prev_last_sync_iso).replace("Z", "+00:00"))
+            if parsed_last.tzinfo is None:
+                parsed_last = parsed_last.replace(tzinfo=timezone.utc)
+            # Margem de segurança de 10 minutos para evitar perda por diferença de relógio com o servidor Horus
+            safe_ini_br = parsed_last.astimezone(br_tz) - timedelta(minutes=10)
+            safe_fim_br = run_start_br + timedelta(hours=1)
+            data_ini_datetime_str = safe_ini_br.strftime("%d/%m/%Y %H:%M:%S")
+            data_fim_datetime_str = safe_fim_br.strftime("%d/%m/%Y %H:%M:%S")
+            data_ini_date_str = safe_ini_br.strftime("%d/%m/%Y")
+            data_fim_date_str = safe_fim_br.strftime("%d/%m/%Y")
+        except Exception:
+            is_incremental = False
+
+    legacy_pag = bool(getattr(settings, "horus_legacy_pagination", False))
+    page_size = 500
+    max_items = min(max(1, int(data.max_items or 10000)), 25000)
 
     horus_client = HorusProducts(db, cid)
-    id_doc = re.sub(r"\D", "", (company.document or "")) if company else ""
-    if not id_doc and settings.horus_company and settings.horus_branch:
-        id_doc = f"{settings.horus_company}{settings.horus_branch}"
 
-    id_guid = (getattr(settings, "horus_default_b2b_guid", None) or "").strip()
-    if not id_guid:
-        cust_with_guid = (
-            db.query(Customer)
-            .filter(Customer.company_id == cid, Customer.id_guid.isnot(None), Customer.id_guid != "")
-            .first()
-        )
-        if cust_with_guid:
-            id_guid = (cust_with_guid.id_guid or "").strip()
+    detected_type_name = str(prev_sync.get("characteristic_type_name") or "").strip()
+    detected_char_val = str(prev_sync.get("characteristic_value") or "").strip()
 
-    extra_kwargs: Dict[str, Any] = {}
-    if cod_tpo_int is not None:
-        extra_kwargs["COD_TPO_CARACT_EXTRA"] = cod_tpo_int
-    if cod_caract_int is not None:
-        extra_kwargs["COD_CARACT_EXTRA"] = cod_caract_int
+    changed_caract_cod_items: set[int] = set()
+    acervo_items_by_cod: Dict[int, Dict[str, Any]] = {}
+    acervo_items_no_cod: List[Dict[str, Any]] = []
+    estoque_changes_by_cod: Dict[int, int] = {}
 
-    horus_items: List[Dict[str, Any]] = []
-    batch_size = min(100, max_items)
-    legacy_pag = bool(getattr(settings, "horus_legacy_pagination", False))
+    api_diagnostics: Dict[str, Any] = {
+        "mode": "INCREMENTAL" if is_incremental else "FULL_LOAD",
+        "pagination": "LEGACY_NO_OFFSET_LIMIT" if legacy_pag else f"OFFSET_LIMIT (page_size={page_size})",
+        "cod_tpo_caract": cod_tpo_int,
+        "cod_caract": cod_caract_int,
+        "sd_empresa": settings.horus_company,
+        "sd_filial": settings.horus_branch,
+        "sd_local_estoque": getattr(settings, "horus_stock_local", None),
+        "data_ini": data_ini_datetime_str,
+        "data_fim": data_fim_datetime_str,
+        "steps": {},
+    }
 
     try:
-        offset = 0
-        while len(horus_items) < max_items:
-            current_limit = min(batch_size, max_items - len(horus_items))
-            raw_resp = None
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 1: Busca_Caracteristicas
+        # - Valida se COD_TPO_CARACT e COD_CARACT existem no Horus e descobre os nomes oficiais
+        # - No modo INCREMENTAL, coleta todos os COD_ITEM cuja característica sofreu alteração no período
+        # ──────────────────────────────────────────────────────────────────────
+        if has_caract_filter:
+            offset_c = 0
+            caract_fetched = 0
+            while True:
+                p_car: Dict[str, Any] = {
+                    "COD_TPO_CARACT": cod_tpo_int,
+                    "COD_CARACT": cod_caract_int,
+                }
+                if is_incremental and data_ini_date_str and data_fim_date_str:
+                    p_car["DATA_INI"] = data_ini_date_str
+                    p_car["DATA_FIM"] = data_fim_date_str
+                if not legacy_pag:
+                    p_car["OFFSET"] = offset_c
+                    p_car["LIMIT"] = page_size if is_incremental else 20
 
-            # 1) Tentar Busca_AcervoB2B se houver ID_GUID configurado (traz SALDO_DISPONIVEL real e suporta COD_TPO_CARACT_EXTRA)
-            if id_guid:
-                try:
-                    raw_resp = await horus_client.busca_acervo_b2b(
-                        id_doc=id_doc,
-                        id_guid=id_guid,
-                        term=search_term if search_term else (None if (cod_tpo_int and cod_caract_int) else "A"),
-                        is_showcase=bool(cod_tpo_int and cod_caract_int),
-                        cod_tpo_caract_extra=cod_tpo_int,
-                        cod_caract_extra=cod_caract_int,
-                        offset=offset,
-                        limit=current_limit,
-                        **extra_kwargs,
+                resp_c = await horus_client.get("Busca_Caracteristicas", params=p_car)
+                c_failures = _extract_horus_failures(resp_c)
+                if c_failures:
+                    if _is_horus_empty_result_message(c_failures):
+                        api_diagnostics["steps"]["Busca_Caracteristicas"] = {
+                            "status": "empty",
+                            "horus_message": " | ".join(c_failures),
+                            "items_count": caract_fetched,
+                        }
+                        break
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Retorno da API Horus em Busca_Caracteristicas: {' | '.join(c_failures)}",
                     )
-                except Exception as e_b2b:
-                    logger.warning(f"[B2C Horus Sync] Busca_AcervoB2B falhou ({e_b2b}), tentando Busca_Acervo padrão...")
-                    raw_resp = None
 
-            # 2) Fallback para Busca_Acervo padrão caso não haja ID_GUID ou Busca_AcervoB2B retorne falha
-            is_failure = (
-                isinstance(raw_resp, list)
-                and len(raw_resp) > 0
-                and isinstance(raw_resp[0], dict)
-                and ("Falha" in raw_resp[0] or "FALHA" in raw_resp[0])
-            )
-            if raw_resp is None or is_failure:
-                std_term = search_term if search_term else (None if (cod_tpo_int and cod_caract_int) else "A")
-                raw_resp = await horus_client.busca_acervo_padrao(
-                    id_doc=id_doc,
-                    term=std_term,
-                    offset=offset,
-                    limit=current_limit,
-                    **extra_kwargs,
+                c_list = resp_c if isinstance(resp_c, list) else []
+                valid_c = [r for r in c_list if isinstance(r, dict) and r.get("COD_ITEM")]
+                for r in valid_c:
+                    if not detected_type_name:
+                        detected_type_name = str(r.get("DESC_TPO_CARACT") or r.get("NOM_TPO_CARACT") or "").strip()
+                    if not detected_char_val:
+                        detected_char_val = str(
+                            r.get("DESC_CARACTERISTICA") or r.get("DESC_CARACT") or r.get("NOM_CARACT") or ""
+                        ).strip()
+                    if is_incremental:
+                        raw_ci = r.get("COD_ITEM")
+                        if str(raw_ci or "").strip().isdigit():
+                            changed_caract_cod_items.add(int(raw_ci))
+                caract_fetched += len(valid_c)
+
+                # Na carga completa precisamos apenas de 1 chamada rápida para validar e obter a descrição;
+                # o Busca_Acervo já traz todos os produtos filtrados por COD_TPO_CARACT + COD_CARACT.
+                if not is_incremental or legacy_pag or len(valid_c) < page_size:
+                    break
+                offset_c += page_size
+
+            api_diagnostics["steps"]["Busca_Caracteristicas"] = {
+                "status": "ok",
+                "detected_type_name": detected_type_name,
+                "detected_char_value": detected_char_val,
+                "changed_items_count": len(changed_caract_cod_items) if is_incremental else caract_fetched,
+            }
+
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 2: Busca_Acervo (Cadastro + SALDO_DISPONIVEL via SD_*)
+        # - Carga Completa: traz todos os produtos (filtrados por COD_TPO_CARACT e COD_CARACT se informados)
+        # - Incremental: traz os produtos cujo cadastro sofreu alteração entre DATA_INI e DATA_FIM
+        # ──────────────────────────────────────────────────────────────────────
+        offset_a = 0
+        while (len(acervo_items_by_cod) + len(acervo_items_no_cod)) < max_items:
+            cur_limit = min(page_size, max_items - (len(acervo_items_by_cod) + len(acervo_items_no_cod)))
+            p_ac: Dict[str, Any] = {}
+            if has_caract_filter:
+                p_ac["COD_TPO_CARACT"] = cod_tpo_int
+                p_ac["COD_CARACT"] = cod_caract_int
+            if settings.horus_company:
+                p_ac["SD_COD_EMPRESA"] = settings.horus_company
+            if settings.horus_branch:
+                p_ac["SD_COD_FILIAL"] = settings.horus_branch
+            if getattr(settings, "horus_stock_local", None):
+                p_ac["SD_LOCAL_ESTOQUE"] = settings.horus_stock_local
+            if is_incremental and data_ini_datetime_str and data_fim_datetime_str:
+                p_ac["DATA_INI"] = data_ini_datetime_str
+                p_ac["DATA_FIM"] = data_fim_datetime_str
+            if not legacy_pag:
+                p_ac["OFFSET"] = offset_a
+                p_ac["LIMIT"] = cur_limit
+
+            resp_a = await horus_client.get("Busca_Acervo", params=p_ac)
+            a_failures = _extract_horus_failures(resp_a)
+            if a_failures:
+                if _is_horus_empty_result_message(a_failures):
+                    api_diagnostics["steps"]["Busca_Acervo"] = {
+                        "status": "empty",
+                        "horus_message": " | ".join(a_failures),
+                        "items_count": len(acervo_items_by_cod) + len(acervo_items_no_cod),
+                    }
+                    break
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Retorno da API Horus em Busca_Acervo: {' | '.join(a_failures)}",
                 )
 
-            page_list = []
-            if isinstance(raw_resp, list):
-                page_list = raw_resp
-            elif isinstance(raw_resp, dict):
-                page_list = raw_resp.get("item", raw_resp.get("itens", raw_resp.get("Acervo", [])))
-                if isinstance(page_list, dict):
-                    page_list = [page_list]
+            a_list = []
+            if isinstance(resp_a, list):
+                a_list = resp_a
+            elif isinstance(resp_a, dict):
+                a_list = resp_a.get("item", resp_a.get("itens", resp_a.get("Acervo", [])))
+                if isinstance(a_list, dict):
+                    a_list = [a_list]
 
-            valid_page = [
-                r for r in page_list
+            valid_a = [
+                r for r in a_list
                 if isinstance(r, dict) and not ("Falha" in r or "FALHA" in r) and (r.get("COD_ITEM") or r.get("NOM_ITEM"))
             ]
-            if not valid_page:
+            if not valid_a:
                 break
 
-            horus_items.extend(valid_page)
-            if legacy_pag or len(valid_page) < current_limit:
+            for r in valid_a:
+                raw_ci = r.get("COD_ITEM")
+                if str(raw_ci or "").strip().isdigit():
+                    acervo_items_by_cod[int(raw_ci)] = r
+                else:
+                    acervo_items_no_cod.append(r)
+
+            if legacy_pag or len(valid_a) < cur_limit:
                 break
-            offset += current_limit
+            offset_a += cur_limit
+
+        api_diagnostics["steps"]["Busca_Acervo"] = {
+            "status": "ok",
+            "items_count": len(acervo_items_by_cod) + len(acervo_items_no_cod),
+        }
+
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 3 (Incremental): Estoque
+        # - Consulta quais produtos com COD_TPO_CARACT e COD_CARACT sofreram alteração de saldo
+        #   no período (DATA_INI .. DATA_FIM)
+        # ──────────────────────────────────────────────────────────────────────
+        if is_incremental:
+            offset_e = 0
+            while True:
+                p_est: Dict[str, Any] = {}
+                if settings.horus_company:
+                    p_est["COD_EMPRESA"] = settings.horus_company
+                if settings.horus_branch:
+                    p_est["COD_FILIAL"] = settings.horus_branch
+                if getattr(settings, "horus_stock_local", None):
+                    p_est["COD_LOCAL_ESTOQUE"] = settings.horus_stock_local
+                if has_caract_filter:
+                    p_est["COD_TPO_CARACT"] = cod_tpo_int
+                    p_est["COD_CARACT"] = cod_caract_int
+                if data_ini_datetime_str and data_fim_datetime_str:
+                    p_est["DATA_INI"] = data_ini_datetime_str
+                    p_est["DATA_FIM"] = data_fim_datetime_str
+                if not legacy_pag:
+                    p_est["OFFSET"] = offset_e
+                    p_est["LIMIT"] = page_size
+
+                resp_e = await horus_client.get("Estoque", params=p_est)
+                e_failures = _extract_horus_failures(resp_e)
+                if e_failures:
+                    if _is_horus_empty_result_message(e_failures):
+                        api_diagnostics["steps"]["Estoque"] = {
+                            "status": "empty",
+                            "horus_message": " | ".join(e_failures),
+                            "items_count": len(estoque_changes_by_cod),
+                        }
+                        break
+                    # Se o endpoint Estoque retornar aviso não fatal, registra no diagnóstico e segue
+                    api_diagnostics["steps"]["Estoque"] = {
+                        "status": "warning",
+                        "horus_message": " | ".join(e_failures),
+                    }
+                    break
+
+                e_list = resp_e if isinstance(resp_e, list) else []
+                valid_e = [
+                    r for r in e_list
+                    if isinstance(r, dict) and not ("Falha" in r or "FALHA" in r) and r.get("COD_ITEM")
+                ]
+                if not valid_e:
+                    break
+
+                for r in valid_e:
+                    raw_ci = r.get("COD_ITEM")
+                    if str(raw_ci or "").strip().isdigit():
+                        ci_int = int(raw_ci)
+                        try:
+                            saldo_val = max(
+                                0,
+                                int(float(str(r.get("SALDO_DISPONIVEL", r.get("SALDO", 0)) or 0).replace(",", "."))),
+                            )
+                        except Exception:
+                            saldo_val = 0
+                        estoque_changes_by_cod[ci_int] = saldo_val
+
+                if legacy_pag or len(valid_e) < page_size:
+                    break
+                offset_e += page_size
+
+            if "Estoque" not in api_diagnostics["steps"]:
+                api_diagnostics["steps"]["Estoque"] = {
+                    "status": "ok",
+                    "items_count": len(estoque_changes_by_cod),
+                }
+
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 4 (Incremental): Buscar no Busca_Acervo qualquer produto que:
+        #   a) Sofreu alteração na característica (Busca_Caracteristicas) mas não veio no Busca_Acervo incremental
+        #   b) Sofreu alteração de estoque (Estoque) mas ainda não existe na tabela local prd_product
+        # ──────────────────────────────────────────────────────────────────────
+        local_products = db.query(Product).filter(Product.company_id == cid).all()
+        by_cod: Dict[int, Product] = {}
+        by_sku: Dict[str, Product] = {}
+        by_ean: Dict[str, Product] = {}
+        for lp in local_products:
+            if lp.horus_cod_item:
+                by_cod[int(lp.horus_cod_item)] = lp
+            if lp.sku:
+                by_sku[lp.sku.strip().upper()] = lp
+            if lp.ean_gtin:
+                by_ean[lp.ean_gtin.strip()] = lp
+
+        missing_cod_items_to_fetch: set[int] = set()
+        for ci in changed_caract_cod_items:
+            if ci not in acervo_items_by_cod:
+                missing_cod_items_to_fetch.add(ci)
+        for ci in estoque_changes_by_cod.keys():
+            if ci not in acervo_items_by_cod and ci not in by_cod:
+                missing_cod_items_to_fetch.add(ci)
+
+        for ci in sorted(missing_cod_items_to_fetch):
+            p_single: Dict[str, Any] = {
+                "COD_ITEM_INI": ci,
+                "COD_ITEM_FIM": ci,
+            }
+            if has_caract_filter:
+                p_single["COD_TPO_CARACT"] = cod_tpo_int
+                p_single["COD_CARACT"] = cod_caract_int
+            if settings.horus_company:
+                p_single["SD_COD_EMPRESA"] = settings.horus_company
+            if settings.horus_branch:
+                p_single["SD_COD_FILIAL"] = settings.horus_branch
+            if getattr(settings, "horus_stock_local", None):
+                p_single["SD_LOCAL_ESTOQUE"] = settings.horus_stock_local
+            if not legacy_pag:
+                p_single["OFFSET"] = 0
+                p_single["LIMIT"] = 5
+
+            try:
+                r_single = await horus_client.get("Busca_Acervo", params=p_single)
+                if isinstance(r_single, list):
+                    for item_s in r_single:
+                        if isinstance(item_s, dict) and not ("Falha" in item_s or "FALHA" in item_s) and item_s.get("COD_ITEM"):
+                            acervo_items_by_cod[int(item_s["COD_ITEM"])] = item_s
+            except Exception:
+                pass
     finally:
         try:
             await horus_client.close()
         except Exception:
             pass
 
-    if not horus_items:
+    horus_items: List[Dict[str, Any]] = list(acervo_items_by_cod.values()) + acervo_items_no_cod
+
+    if not is_incremental and not horus_items:
         raise HTTPException(
             status_code=404,
-            detail="Nenhum produto retornado pelo Horus ERP para os filtros/características informados. Verifique o Código Tipo de Característica / Código da Característica ou o termo de busca.",
+            detail=(
+                f"Nenhum produto retornado pelo Horus ERP para os parâmetros informados "
+                f"(COD_TPO_CARACT={cod_tpo_str or 'vazio'}, COD_CARACT={cod_caract_str or 'vazio'}). "
+                f"Diagnóstico da API Horus: {api_diagnostics}"
+            ),
         )
 
-    # Preparar característica no Cronuz (prd_characteristic) se configurada
-    eff_char_type = char_type_name or (f"Característica Horus Tipo {cod_tpo_str}" if cod_tpo_str else "Origem Catálogo")
-    eff_char_val = char_val_name or (f"Código {cod_caract_str}" if cod_caract_str else "Horus B2C")
+    # Preparar característica no Cronuz (prd_characteristic) com o nome oficial retornado pelo Horus
+    eff_char_type = detected_type_name or (f"Característica Horus Tipo {cod_tpo_str}" if cod_tpo_str else "Origem Catálogo")
+    eff_char_val = detected_char_val or (f"Código {cod_caract_str}" if cod_caract_str else "Horus ERP")
 
     char_obj = (
         db.query(Characteristic)
@@ -1174,7 +1566,6 @@ async def sync_horus_products_to_cronuz(
         db.add(char_obj)
         db.flush()
 
-    # Mapear categorias, marcas e produtos locais já existentes para evitar queries N+1 e redundâncias
     existing_cats = {
         c.name.strip().upper(): c
         for c in db.query(Category).filter(Category.company_id == cid).all()
@@ -1185,35 +1576,18 @@ async def sync_horus_products_to_cronuz(
         for b in db.query(Brand).filter(Brand.company_id == cid).all()
         if b.name
     }
-    local_products = db.query(Product).filter(Product.company_id == cid).all()
-    by_cod: Dict[int, Product] = {}
-    by_sku: Dict[str, Product] = {}
-    by_ean: Dict[str, Product] = {}
-    for lp in local_products:
-        if lp.horus_cod_item:
-            by_cod[int(lp.horus_cod_item)] = lp
-        if lp.sku:
-            by_sku[lp.sku.strip().upper()] = lp
-        if lp.ean_gtin:
-            by_ean[lp.ean_gtin.strip()] = lp
+    existing_pcs = {
+        pc.product_id: pc
+        for pc in db.query(ProductCharacteristic)
+        .filter(ProductCharacteristic.characteristic_id == char_obj.id)
+        .all()
+    }
 
     created_count = 0
     updated_count = 0
+    stock_only_updated_count = 0
     covers_collected = 0
     company_cover_dir = STATIC_DIR / str(cid)
-
-    # Se a Tray estiver ativa no Seller, podemos consultar o ID do produto na Tray (por reference = COD_ITEM do Horus ou ean = ISBN)
-    tray_client_sync: Optional[TrayClient] = None
-    tray_token_sync: Optional[str] = None
-    if getattr(settings, "tray_enabled", False):
-        try:
-            tray_client_sync = TrayClient(db, cid)
-            tray_token_sync = await tray_client_sync.get_valid_token()
-        except Exception:
-            tray_client_sync = None
-            tray_token_sync = None
-
-    tray_linked_count = 0
 
     for h_item in horus_items:
         raw_cod = h_item.get("COD_ITEM")
@@ -1240,6 +1614,7 @@ async def sync_horus_products_to_cronuz(
         publisher = str(h_item.get("NOM_EDITORA") or h_item.get("NOM_FANTASIA") or "").strip()
         genre = str(
             h_item.get("GENERO_NIVEL_1")
+            or h_item.get("NOM_GRUPO_ITEM")
             or h_item.get("DSC_GENERO")
             or h_item.get("NOM_GENERO")
             or ""
@@ -1254,13 +1629,16 @@ async def sync_horus_products_to_cronuz(
         base_price = vlr_capa if vlr_capa > 0 else vlr_liq
         promo_price = vlr_liq if (0 < vlr_liq < base_price) else None
 
-        try:
-            stock_qty = max(
-                0,
-                int(float(str(h_item.get("SALDO_DISPONIVEL", h_item.get("SALDO", 0)) or 0).replace(",", "."))),
-            )
-        except Exception:
-            stock_qty = 0
+        if cod_item and cod_item in estoque_changes_by_cod:
+            stock_qty = estoque_changes_by_cod[cod_item]
+        else:
+            try:
+                stock_qty = max(
+                    0,
+                    int(float(str(h_item.get("SALDO_DISPONIVEL", h_item.get("SALDO", 0)) or 0).replace(",", "."))),
+                )
+            except Exception:
+                stock_qty = 0
 
         # Peso e Dimensões do Horus
         raw_peso = parse_horus_price(
@@ -1334,7 +1712,7 @@ async def sync_horus_products_to_cronuz(
         elif isbn and isbn in by_ean:
             prod = by_ean[isbn]
 
-        # Verificar se já existe capa salva em disco com o ISBN (<ISBN>.jpg ou <ISBN>.png)
+        # Verificar capa local em disco ou URL de capa retornada pelo Horus (IMAGEM_ITEM2)
         clean_isbn_file = re.sub(r"[^a-zA-Z0-9_\-]", "", isbn)
         local_cover_url = None
         if clean_isbn_file:
@@ -1342,6 +1720,12 @@ async def sync_horus_products_to_cronuz(
                 local_cover_url = f"/uploads/covers/{cid}/{clean_isbn_file}.jpg"
             elif (company_cover_dir / f"{clean_isbn_file}.png").exists():
                 local_cover_url = f"/uploads/covers/{cid}/{clean_isbn_file}.png"
+        if not local_cover_url:
+            for img_field in ("IMAGEM_ITEM2", "IMAGEM_ITEM3", "IMAGEM_ITEM"):
+                raw_img = str(h_item.get(img_field) or "").strip()
+                if raw_img.startswith("http://") or raw_img.startswith("https://"):
+                    local_cover_url = raw_img
+                    break
 
         if not prod:
             prod = Product(
@@ -1414,32 +1798,26 @@ async def sync_horus_products_to_cronuz(
                 prod.cover_url = local_cover_url
             updated_count += 1
 
-        # Vincular a característica configurada ao produto (sem duplicar)
-        existing_pc = (
-            db.query(ProductCharacteristic)
-            .filter(
-                ProductCharacteristic.product_id == prod.id,
-                ProductCharacteristic.characteristic_id == char_obj.id,
-            )
-            .first()
-        )
+        # Vincular característica (sem query N+1)
         item_char_val = str(
-            h_item.get("DESC_CARACT")
+            h_item.get("DESC_CARACTERISTICA")
+            or h_item.get("DESC_CARACT")
             or h_item.get("NOM_CARACT")
             or eff_char_val
         ).strip()[:150]
+        existing_pc = existing_pcs.get(prod.id)
         if not existing_pc:
-            db.add(
-                ProductCharacteristic(
-                    product_id=prod.id,
-                    characteristic_id=char_obj.id,
-                    value=item_char_val,
-                )
+            new_pc = ProductCharacteristic(
+                product_id=prod.id,
+                characteristic_id=char_obj.id,
+                value=item_char_val,
             )
+            db.add(new_pc)
+            existing_pcs[prod.id] = new_pc
         else:
             existing_pc.value = item_char_val
 
-        # Coleta opcional na Bookinfo quando não há capa local (limitado a 25 por lote síncrono para alta performance)
+        # Coleta opcional na Bookinfo quando solicitado (limitado a 25 por lote síncrono para alta performance)
         if data.auto_collect_bookinfo_covers and not prod.cover_url and isbn and covers_collected < 25:
             try:
                 await collect_bookinfo_cover_for_company(
@@ -1452,54 +1830,66 @@ async def sync_horus_products_to_cronuz(
             except Exception:
                 pass
 
-        # Vincular automaticamente o ID do produto na Tray (usando reference = COD_ITEM do Horus ou ean = ISBN)
-        if tray_client_sync and tray_token_sync and not (prod.publisher_code and str(prod.publisher_code).isdigit()):
-            try:
-                resolved_tid = await tray_client_sync.ensure_product_in_tray(
-                    {
-                        "product_id": prod.id,
-                        "horus_cod_item": prod.horus_cod_item or cod_item,
-                        "sku": prod.sku,
-                        "ean_gtin": prod.ean_gtin or isbn,
-                        "name": prod.name,
-                        "unit_price": prod.base_price,
-                    }
-                )
-                if resolved_tid and str(resolved_tid).isdigit():
-                    prod.publisher_code = str(resolved_tid)
-                    tray_linked_count += 1
-            except Exception:
-                pass
+    # Aplicar alterações de estoque (Passo 3 - Estoque) para produtos já existentes que não precisaram passar pelo Busca_Acervo
+    for ci_est, new_saldo in estoque_changes_by_cod.items():
+        if ci_est in acervo_items_by_cod:
+            continue
+        prod_est = by_cod.get(ci_est)
+        if prod_est:
+            prod_est.stock_quantity = new_saldo
+            prod_est.allow_purchase = new_saldo > 0
+            prod_est.stock_status_label = "DISPONÍVEL" if new_saldo > 0 else "SEM ESTOQUE"
+            stock_only_updated_count += 1
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    # Gravar a data/hora de execução que teve sucesso (run_start_utc)
+    success_sync_iso = run_start_utc.isoformat()
+    total_processed = created_count + updated_count + stock_only_updated_count
+
     raw_cfg["horus_sync_config"] = {
         **prev_sync,
         "cod_tpo_caract": cod_tpo_str,
         "cod_caract": cod_caract_str,
         "characteristic_type_name": eff_char_type,
         "characteristic_value": eff_char_val,
-        "search_term": search_term,
         "auto_collect_bookinfo_covers": bool(data.auto_collect_bookinfo_covers),
-        "last_sync_at": now_iso,
-        "last_synced_count": created_count + updated_count,
+        "last_sync_at": success_sync_iso,
+        "last_sync_data_ini": data_ini_datetime_str or "CARGA COMPLETA",
+        "last_sync_data_fim": data_fim_datetime_str or run_start_br.strftime("%d/%m/%Y %H:%M:%S"),
+        "last_sync_mode": "INCREMENTAL" if is_incremental else "FULL_LOAD",
+        "last_synced_count": total_processed,
+        "last_created_count": created_count,
+        "last_updated_count": updated_count,
+        "last_stock_updated_count": stock_only_updated_count,
+        "last_horus_api_summary": api_diagnostics,
     }
     settings.b2c_showcases_config = raw_cfg
     flag_modified(settings, "b2c_showcases_config")
     db.commit()
     _b2c_cache_clear(cid)
 
+    mode_label = (
+        f"Sincronização Incremental ({data_ini_datetime_str} → {data_fim_datetime_str})"
+        if is_incremental
+        else "Carga Completa do Horus ERP"
+    )
     return {
         "message": (
-            f"Sincronização Horus → Cronuz concluída com sucesso! "
-            f"{created_count} novo(s) produto(s) cadastrado(s), {updated_count} atualizado(s)"
-            + (f" e {tray_linked_count} vinculado(s) com ID da Tray." if tray_linked_count > 0 else ".")
+            f"{mode_label} concluída com sucesso! "
+            f"{created_count} novo(s) produto(s), {updated_count} cadastro(s) atualizado(s) "
+            f"e {stock_only_updated_count} saldo(s) de estoque atualizado(s)."
         ),
+        "mode": "INCREMENTAL" if is_incremental else "FULL_LOAD",
         "created_count": created_count,
         "updated_count": updated_count,
-        "tray_linked_count": tray_linked_count,
-        "total_processed": created_count + updated_count,
+        "stock_only_updated_count": stock_only_updated_count,
+        "total_processed": total_processed,
         "covers_collected": covers_collected,
-        "last_sync_at": now_iso,
+        "characteristic_type_name": eff_char_type,
+        "characteristic_value": eff_char_val,
+        "last_sync_at": success_sync_iso,
+        "last_sync_data_ini": data_ini_datetime_str or "CARGA COMPLETA",
+        "last_sync_data_fim": data_fim_datetime_str or run_start_br.strftime("%d/%m/%Y %H:%M:%S"),
+        "horus_api_summary": api_diagnostics,
     }
 
 

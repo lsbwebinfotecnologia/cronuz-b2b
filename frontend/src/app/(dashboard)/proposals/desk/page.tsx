@@ -52,6 +52,7 @@ import {
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
 import { getUser, getToken } from '@/lib/auth';
 import { toast } from 'sonner';
+import * as XLSX from 'xlsx';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -73,6 +74,9 @@ export interface ProposalDeskConfig {
   showDiscountInGrid: boolean;
   showIsbnInGrid: boolean;
   showCoverPriceInGrid: boolean;
+  showQuickDiscountInput?: boolean;
+  hideEbooksInSearch?: boolean;
+  hideOutOfPrintInSearch?: boolean;
   clientSalesDays: number;
   generalSalesDays: number;
   replenishmentSalesDays: number;
@@ -276,10 +280,13 @@ export default function ProposalsDeskPage() {
   } | null>(null);
   const [showReplenishmentDiag, setShowReplenishmentDiag] = useState<boolean>(false);
 
-  // ── 3.1 Visibilidade de Colunas no Grid (ISBN, Capa, Desconto) ──────────────
+  // ── 3.1 Visibilidade de Colunas no Grid (ISBN, Capa, Desconto) e Configurações Gerais DBM ─
   const [showIsbnInGrid, setShowIsbnInGrid] = useState<boolean>(true);
   const [showCoverPriceInGrid, setShowCoverPriceInGrid] = useState<boolean>(true);
   const [showDiscountInGrid, setShowDiscountInGrid] = useState<boolean>(true);
+  const [showQuickDiscountInput, setShowQuickDiscountInput] = useState<boolean>(true);
+  const [hideEbooksInSearch, setHideEbooksInSearch] = useState<boolean>(true);
+  const [hideOutOfPrintInSearch, setHideOutOfPrintInSearch] = useState<boolean>(true);
   const [globalDiscountInput, setGlobalDiscountInput] = useState<number>(50.0);
 
   // ── 3.2 Larguras de Colunas Estilo Excel (Persistidas por Usuário) ─────────
@@ -361,6 +368,20 @@ export default function ProposalsDeskPage() {
         if (typeof parsed.showCoverPriceInGrid === 'boolean') {
           setShowCoverPriceInGrid(parsed.showCoverPriceInGrid);
         }
+        if (typeof parsed.showQuickDiscountInput === 'boolean') {
+          setShowQuickDiscountInput(parsed.showQuickDiscountInput);
+        }
+        if (typeof parsed.hideEbooksInSearch === 'boolean') {
+          setHideEbooksInSearch(parsed.hideEbooksInSearch);
+        } else {
+          const sharedHideEbooks = localStorage.getItem('cronuz_dbm_hide_ebooks');
+          if (sharedHideEbooks !== null) {
+            setHideEbooksInSearch(sharedHideEbooks === 'true');
+          }
+        }
+        if (typeof parsed.hideOutOfPrintInSearch === 'boolean') {
+          setHideOutOfPrintInSearch(parsed.hideOutOfPrintInSearch);
+        }
         if (typeof parsed.clientSalesDays === 'number') {
           setClientSalesDays(parsed.clientSalesDays);
         }
@@ -395,6 +416,9 @@ export default function ProposalsDeskPage() {
         showDiscountInGrid,
         showIsbnInGrid,
         showCoverPriceInGrid,
+        showQuickDiscountInput,
+        hideEbooksInSearch,
+        hideOutOfPrintInSearch,
         clientSalesDays,
         generalSalesDays,
         replenishmentSalesDays,
@@ -409,6 +433,9 @@ export default function ProposalsDeskPage() {
       };
 
       localStorage.setItem(key, JSON.stringify(updated));
+      if (typeof updated.hideEbooksInSearch === 'boolean') {
+        localStorage.setItem('cronuz_dbm_hide_ebooks', String(updated.hideEbooksInSearch));
+      }
     } catch (e) {
       console.error('Erro ao gravar configurações no localStorage:', e);
     }
@@ -416,6 +443,9 @@ export default function ProposalsDeskPage() {
     showDiscountInGrid,
     showIsbnInGrid,
     showCoverPriceInGrid,
+    showQuickDiscountInput,
+    hideEbooksInSearch,
+    hideOutOfPrintInSearch,
     clientSalesDays,
     generalSalesDays,
     replenishmentSalesDays,
@@ -642,7 +672,7 @@ export default function ProposalsDeskPage() {
 
     try {
       const resCat = await fetch(
-        `${API_URL}/dbm/proposals-desk/catalog-tabs?customer_id=${custId}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&limit=50`,
+        `${API_URL}/dbm/proposals-desk/catalog-tabs?customer_id=${custId}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&limit=50&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}`,
         { headers: { 'Authorization': `Bearer ${getToken()}` } }
       );
       if (resCat.ok) {
@@ -715,7 +745,7 @@ export default function ProposalsDeskPage() {
         manualSearchInputRef.current?.focus();
       }, 150);
     }
-  }, [clientSalesDays, generalSalesDays, globalDiscountInput, mapApiItemToDbmItem]);
+  }, [clientSalesDays, generalSalesDays, globalDiscountInput, hideEbooksInSearch, hideOutOfPrintInSearch, mapApiItemToDbmItem]);
 
   // Inicializa cliente ou proposta salva via parâmetros da URL (?customer_id= ou ?proposal_id=)
   useEffect(() => {
@@ -775,7 +805,7 @@ export default function ProposalsDeskPage() {
         .join(',');
 
       const res = await fetch(
-        `${API_URL}/dbm/proposals-desk/replenishment-items?customer_id=${customer.id}&replenishment_sales_days=${replenishmentSalesDays}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&exclude_isbns=${encodeURIComponent(existingIsbns)}`,
+        `${API_URL}/dbm/proposals-desk/replenishment-items?customer_id=${customer.id}&replenishment_sales_days=${replenishmentSalesDays}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}&exclude_isbns=${encodeURIComponent(existingIsbns)}`,
         { headers: { 'Authorization': `Bearer ${getToken()}` } }
       );
       if (!res.ok) {
@@ -858,7 +888,7 @@ export default function ProposalsDeskPage() {
         .join(',');
 
       const res = await fetch(
-        `${API_URL}/dbm/proposals-desk/last-operation-items?customer_id=${customer.id}&operation_type=${opType}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&exclude_isbns=${encodeURIComponent(existingIsbns)}`,
+        `${API_URL}/dbm/proposals-desk/last-operation-items?customer_id=${customer.id}&operation_type=${opType}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}&exclude_isbns=${encodeURIComponent(existingIsbns)}`,
         { headers: { 'Authorization': `Bearer ${getToken()}` } }
       );
       if (!res.ok) {
@@ -908,7 +938,7 @@ export default function ProposalsDeskPage() {
       setIsSearchingManual(true);
       try {
         const res = await fetch(
-          `${API_URL}/dbm/proposals-desk/product-lookup?q=${encodeURIComponent(term)}&customer_id=${customer.id}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&limit=12`,
+          `${API_URL}/dbm/proposals-desk/product-lookup?q=${encodeURIComponent(term)}&customer_id=${customer.id}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}&limit=12`,
           { headers: { 'Authorization': `Bearer ${getToken()}` } }
         );
         if (res.ok) {
@@ -967,7 +997,7 @@ export default function ProposalsDeskPage() {
         try {
           setIsSearchingManual(true);
           const res = await fetch(
-            `${API_URL}/dbm/proposals-desk/product-lookup?q=${encodeURIComponent(manualQuery.trim())}&customer_id=${customer.id}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&limit=5`,
+            `${API_URL}/dbm/proposals-desk/product-lookup?q=${encodeURIComponent(manualQuery.trim())}&customer_id=${customer.id}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}&limit=5`,
             { headers: { 'Authorization': `Bearer ${getToken()}` } }
           );
           if (res.ok) {
@@ -1642,6 +1672,44 @@ export default function ProposalsDeskPage() {
     }
   };
 
+  const handleExportConsolidatedExcel = () => {
+    if (proposalItems.length === 0) {
+      toast.warning('Não há itens no Pedido Consolidado para exportar.');
+      return;
+    }
+
+    const rows = proposalItems.map((it) => {
+      const originBadge = getOriginBadge(it.originCategory, it.tabCategory);
+      const qty = it.requestedQty > 0 ? it.requestedQty : it.approvedQty;
+      return {
+        ISBN: it.isbn || '',
+        Título: it.title || '',
+        Quantidade: Number(qty || 0),
+        Assunto: it.subject || '',
+        Origem: originBadge.label,
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet['!cols'] = [
+      { wch: 18 }, // ISBN
+      { wch: 46 }, // Título
+      { wch: 12 }, // Quantidade
+      { wch: 24 }, // Assunto
+      { wch: 18 }, // Origem
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Pedido Consolidado');
+
+    const custSlug = (customer?.name || 'Cliente')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 28);
+    const numLabel = proposalLocalId || proposalId || 'Novo';
+    XLSX.writeFile(workbook, `Pedido_Consolidado_DBM_${numLabel}_${custSlug}.xlsx`);
+    toast.success('Planilha Excel do Pedido Consolidado gerada com sucesso!');
+  };
+
   const handleSaveProposal = async (overrideStatus?: SellerCustomStatus) => {
     if (!customer) {
       toast.error('Selecione um cliente antes de salvar o orçamento.');
@@ -1660,6 +1728,14 @@ export default function ProposalsDeskPage() {
         status_id: statusToSave.id,
         status_name: statusToSave.name,
         status_phase: statusToSave.phase,
+        total_titles: proposalItems.length,
+        total_requested_qty: summary.totalRequestedPieces,
+        total_approved_qty: summary.totalApprovedPieces,
+        total_cover_value: Number(summary.totalCover.toFixed(2)),
+        total_net_value: Number(summary.totalNet.toFixed(2)),
+        average_discount: Number(summary.averageDiscount.toFixed(2)),
+        global_discount: Number(globalDiscountInput || 0),
+        min_order_value: Number(summary.minOrder || 0),
         items: proposalItems,
         notes: customer.observations || null,
       };
@@ -2608,35 +2684,41 @@ export default function ProposalsDeskPage() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      manualDiscInputRef.current?.focus();
-                      manualDiscInputRef.current?.select();
+                      if (showQuickDiscountInput && manualDiscInputRef.current) {
+                        manualDiscInputRef.current.focus();
+                        manualDiscInputRef.current.select();
+                      } else {
+                        handleAddManualProductToOrder();
+                      }
                     }
                   }}
                   className="w-16 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-center text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
                 />
               </div>
 
-              {/* Campo 3: Desconto % */}
-              <div className="flex items-center gap-1">
-                <label className="text-[10px] uppercase font-bold text-slate-500">Desc%:</label>
-                <input
-                  ref={manualDiscInputRef}
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={0.5}
-                  disabled={!customer}
-                  value={manualDiscount}
-                  onChange={(e) => setManualDiscount(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleAddManualProductToOrder();
-                    }
-                  }}
-                  className="w-16 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-right text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
-                />
-              </div>
+              {/* Campo 3: Desconto % (Ocultável nas Configurações da Mesa) */}
+              {showQuickDiscountInput && (
+                <div className="flex items-center gap-1">
+                  <label className="text-[10px] uppercase font-bold text-slate-500">Desc%:</label>
+                  <input
+                    ref={manualDiscInputRef}
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.5}
+                    disabled={!customer}
+                    value={manualDiscount}
+                    onChange={(e) => setManualDiscount(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddManualProductToOrder();
+                      }
+                    }}
+                    className="w-16 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-right text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+                  />
+                </div>
+              )}
 
               <button
                 type="button"
@@ -2650,7 +2732,9 @@ export default function ProposalsDeskPage() {
             </div>
 
             <span className="text-[10px] text-slate-400 font-mono hidden xl:inline">
-              ⌨️ Fluxo contínuo: Digite ISBN/Título ➔ Enter ➔ Qtd ➔ Enter ➔ Desc% ➔ Enter
+              {showQuickDiscountInput
+                ? '⌨️ Fluxo contínuo: Digite ISBN/Título ➔ Enter ➔ Qtd ➔ Enter ➔ Desc% ➔ Enter'
+                : '⌨️ Fluxo contínuo: Digite ISBN/Título ➔ Enter ➔ Qtd ➔ Enter'}
             </span>
           </div>
         )}
@@ -2946,13 +3030,24 @@ export default function ProposalsDeskPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2.5 flex-wrap">
               <div className="text-right hidden sm:block">
                 <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-medium">Total Consolidado</span>
                 <span className="text-xs font-mono font-bold text-slate-800 dark:text-slate-100">
                   {summary.totalApprovedPieces} un • {summary.totalNet.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                 </span>
               </div>
+
+              <button
+                type="button"
+                onClick={handleExportConsolidatedExcel}
+                disabled={proposalItems.length === 0}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white dark:bg-slate-900 hover:bg-emerald-50 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-700 text-xs font-bold shadow-2xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                title="Exportar Pedido Consolidado para Excel (ISBN, Título, Quantidade, Assunto e Origem)"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+                <span>Exportar Excel</span>
+              </button>
 
               <button
                 type="button"
@@ -3846,7 +3941,7 @@ export default function ProposalsDeskPage() {
                   <span>Colunas Visíveis na Grade (Todas as Abas)</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <label className="flex items-center justify-between p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 cursor-pointer text-xs font-semibold">
                     <span>Coluna ISBN</span>
                     <input
@@ -3866,7 +3961,7 @@ export default function ProposalsDeskPage() {
                     />
                   </label>
                   <label className="flex items-center justify-between p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 cursor-pointer text-xs font-semibold">
-                    <span>Colunas Desconto</span>
+                    <span>Colunas Desconto (Grade)</span>
                     <input
                       type="checkbox"
                       checked={showDiscountInGrid}
@@ -3874,6 +3969,43 @@ export default function ProposalsDeskPage() {
                       className="h-4 w-4 rounded text-indigo-600"
                     />
                   </label>
+                  <label className="flex items-center justify-between p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 cursor-pointer text-xs font-semibold">
+                    <span>Campo DESC% na Digitação Rápida</span>
+                    <input
+                      type="checkbox"
+                      checked={showQuickDiscountInput}
+                      onChange={(e) => setShowQuickDiscountInput(e.target.checked)}
+                      className="h-4 w-4 rounded text-indigo-600"
+                    />
+                  </label>
+                </div>
+
+                {/* Configuração Geral de Pesquisa DBM (E-books & Esgotados) */}
+                <div className="pt-2 border-t border-slate-200/80 dark:border-slate-700/80 space-y-2">
+                  <div className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                    <Filter className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Configuração Geral de Pesquisa DBM</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <label className="flex items-center justify-between p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 cursor-pointer text-xs font-semibold">
+                      <span>Não mostrar E-books nas pesquisas</span>
+                      <input
+                        type="checkbox"
+                        checked={hideEbooksInSearch}
+                        onChange={(e) => setHideEbooksInSearch(e.target.checked)}
+                        className="h-4 w-4 rounded text-indigo-600"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 cursor-pointer text-xs font-semibold">
+                      <span>Não mostrar Esgotados nas pesquisas</span>
+                      <input
+                        type="checkbox"
+                        checked={hideOutOfPrintInSearch}
+                        onChange={(e) => setHideOutOfPrintInSearch(e.target.checked)}
+                        className="h-4 w-4 rounded text-indigo-600"
+                      />
+                    </label>
+                  </div>
                 </div>
 
                 {/* Parâmetros Padrão de Dias */}
@@ -3983,6 +4115,9 @@ export default function ProposalsDeskPage() {
                   setShowDiscountInGrid(true);
                   setShowIsbnInGrid(true);
                   setShowCoverPriceInGrid(true);
+                  setShowQuickDiscountInput(true);
+                  setHideEbooksInSearch(true);
+                  setHideOutOfPrintInSearch(true);
                   setClientSalesDays(30);
                   setGeneralSalesDays(90);
                   setReplenishmentSalesDays(90);
@@ -4010,12 +4145,18 @@ export default function ProposalsDeskPage() {
                       showDiscountInGrid,
                       showIsbnInGrid,
                       showCoverPriceInGrid,
+                      showQuickDiscountInput,
+                      hideEbooksInSearch,
+                      hideOutOfPrintInSearch,
                       clientSalesDays,
                       generalSalesDays,
                       replenishmentSalesDays,
                       globalDiscountInput,
                       columnWidths
                     });
+                    if (customer?.id) {
+                      loadCustomerDeskData(customer.id);
+                    }
                     setSaveSuccessMessage('Configurações salvas e gravadas com sucesso para seu usuário!');
                     setTimeout(() => {
                       setSaveSuccessMessage(null);
