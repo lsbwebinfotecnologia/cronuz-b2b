@@ -2526,6 +2526,16 @@ def update_b2c_appearance(
     # Automatically clear B2C cache for this seller so changes appear immediately
     _b2c_cache_clear(cid)
 
+    # Em produção, garante de forma assíncrona que o subdomínio *.{slug}.cronuzb2b.com.br e o vhost Nginx cubram b2c.{slug}.*
+    try:
+        saved_slug = (current_cfg.get("branding") or {}).get("store_slug") or company.domain
+        if saved_slug:
+            import threading
+            from app.core.ssl_authors import ensure_author_portal_ssl
+            threading.Thread(target=ensure_author_portal_ssl, args=(saved_slug,), daemon=True).start()
+    except Exception:
+        pass
+
     return {
         "message": "Configurações da Loja B2C salvas e cache atualizado com sucesso!",
         **_build_b2c_appearance_config(company, settings, db),
@@ -3696,13 +3706,20 @@ def resolve_public_b2c_store_slug(
     slug: str = Query(..., description="Slug amigável, domínio ou ID da loja B2C"),
     db: Session = Depends(get_db),
 ):
-    clean = slug.strip().lower()
+    clean = re.sub(r"^https?://", "", (slug or "").strip().lower()).split("/")[0].split(":")[0]
     if not clean:
         raise HTTPException(status_code=404, detail="Loja não encontrada.")
 
+    # Suporte ao subdomínio oficial b2c.{seller}.horusb2b.com.br ou b2c.{seller}.cronuzb2b.com.br
+    b2c_sub_match = re.match(
+        r"^b2c\.([a-z0-9_-]+)\.(horusb2b\.com\.br|cronuzb2b\.com\.br|cronuz\.com\.br|localhost|horusb2b\.localhost|cronuzb2b\.localhost)$",
+        clean,
+    )
+    seller_slug = b2c_sub_match.group(1) if b2c_sub_match else clean
+
     # 1. If numeric ID
-    if clean.isdigit():
-        comp = db.query(Company).filter(Company.id == int(clean), Company.active == True).first()
+    if seller_slug.isdigit():
+        comp = db.query(Company).filter(Company.id == int(seller_slug), Company.active == True).first()
         if comp:
             return get_public_b2c_storefront_info(company_id=comp.id, db=db)
 
@@ -3713,9 +3730,13 @@ def resolve_public_b2c_store_slug(
             Company.active == True,
             or_(
                 func.lower(Company.b2c_custom_domain) == clean,
+                func.lower(Company.b2c_custom_domain) == seller_slug,
                 func.lower(Company.custom_domain) == clean,
+                func.lower(Company.custom_domain) == seller_slug,
                 func.lower(Company.domain) == clean,
-                func.lower(Company.custom_domain).like(f"{clean}.%"),
+                func.lower(Company.domain) == seller_slug,
+                func.lower(Company.custom_domain).like(f"{seller_slug}.%"),
+                func.lower(Company.b2c_custom_domain).like(f"b2c.{seller_slug}.%"),
             ),
         )
         .first()
@@ -3723,14 +3744,18 @@ def resolve_public_b2c_store_slug(
     if comp:
         return get_public_b2c_storefront_info(company_id=comp.id, db=db)
 
-    # 3. Match by store_slug inside b2c_showcases_config or slugified company name
+    # 3. Match by store_slug inside b2c_showcases_config or slugified company name (including compact match)
+    compact_target = re.sub(r"[^a-z0-9]", "", seller_slug)
     active_companies = db.query(Company).filter(Company.active == True).all()
     for c in active_companies:
         s = db.query(CompanySettings).filter(CompanySettings.company_id == c.id).first()
         cfg = _build_b2c_appearance_config(c, s, db)
         cfg_slug = (cfg.get("branding", {}).get("store_slug") or "").strip().lower()
         name_slug = _slugify_store_name(c.name, c.id)
-        if clean in (cfg_slug, name_slug):
+        domain_slug = (c.domain or "").strip().lower()
+        candidates = [x for x in (cfg_slug, name_slug, domain_slug) if x]
+        compact_candidates = [re.sub(r"[^a-z0-9]", "", x) for x in candidates]
+        if seller_slug in candidates or (compact_target and compact_target in compact_candidates):
             return get_public_b2c_storefront_info(company_id=c.id, db=db)
 
     raise HTTPException(status_code=404, detail="Loja não encontrada para esta URL amigável.")

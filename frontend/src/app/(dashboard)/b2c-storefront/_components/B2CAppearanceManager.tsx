@@ -404,9 +404,15 @@ export default function B2CAppearanceManager({
     }
   };
 
-  // Friendly Storefront URL computation
+  // Friendly Storefront URL & Official Multi-Tenant Subdomain computation
   const originUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
-  const friendlyStoreUrl = `${originUrl}/loja/${branding.store_slug || companyId || 'loja'}`;
+  const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+  const isHorusTenant = currentHost.includes('horus');
+  const baseTenantDomain = isHorusTenant ? 'horusb2b.com.br' : 'cronuzb2b.com.br';
+  const effectiveSlug = branding.store_slug || String(companyId || 'loja');
+  const officialB2cSubdomain = `b2c.${effectiveSlug}.${baseTenantDomain}`;
+  const officialB2cSubdomainUrl = `https://${officialB2cSubdomain}`;
+  const friendlyStoreUrl = `${originUrl}/loja/${effectiveSlug}`;
 
   const handleCopyStoreLink = () => {
     navigator.clipboard.writeText(friendlyStoreUrl);
@@ -762,7 +768,13 @@ export default function B2CAppearanceManager({
                     />
                   </div>
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Link pronto para enviar aos colaboradores: <strong className="text-indigo-600">{friendlyStoreUrl}</strong>
+                    Link imediato: <strong className="text-indigo-600">{friendlyStoreUrl}</strong>
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Subdomínio padrão B2C:{' '}
+                    <strong className="font-mono text-emerald-600 dark:text-emerald-400">
+                      {officialB2cSubdomainUrl}
+                    </strong>
                   </p>
                 </div>
 
@@ -774,11 +786,15 @@ export default function B2CAppearanceManager({
                     type="text"
                     value={b2cCustomDomain}
                     onChange={(e) => setB2cCustomDomain(e.target.value)}
-                    placeholder="ex: beneficios.suaeditora.com.br"
+                    placeholder={`ex: loja.suaeditora.com.br ou ${officialB2cSubdomain}`}
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm text-slate-900 dark:text-white"
                   />
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Caso aponte um CNAME próprio para o servidor Cronuz.
+                    Para usar domínio próprio, aponte um registro <strong>CNAME</strong> para{' '}
+                    <code className="font-mono text-indigo-600 dark:text-indigo-400">
+                      {officialB2cSubdomain}
+                    </code>{' '}
+                    (ou registro <strong>A</strong> para <code className="font-mono">64.23.182.183</code>).
                   </p>
                 </div>
               </div>

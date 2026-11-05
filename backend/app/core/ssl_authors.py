@@ -47,12 +47,17 @@ def _update_nginx_server_names(domains: List[str]):
         with open(NGINX_CONF_PATH, "r") as f:
             content = f.read()
 
-        wildcards = [d for d in domains if d.startswith("*.") or d.startswith("autores.")]
-        base_names = ["*.seller.cronuzb2b.com.br", "autores.seller.cronuzb2b.com.br"]
+        wildcards = [d for d in domains if d.startswith("*.") or d.startswith("autores.") or d.startswith("b2c.")]
+        base_names = [
+            "*.seller.cronuzb2b.com.br",
+            "autores.seller.cronuzb2b.com.br",
+            "b2c.seller.cronuzb2b.com.br",
+            "b2c.seller.horusb2b.com.br",
+        ]
         server_names_str = " ".join(sorted(list(set(wildcards + base_names))))
 
         pattern = r"server_name ~[^;]+;"
-        replacement = f"server_name ~^autores\\..+\\.cronuzb2b\\.com\\.br$ {server_names_str};"
+        replacement = f"server_name ~^(autores|b2c)\\..+\\.(cronuzb2b|horusb2b)\\.com\\.br$ {server_names_str};"
         new_content = re.sub(pattern, replacement, content)
 
         if new_content != content:
@@ -129,7 +134,15 @@ def sync_all_active_author_portals(db=None) -> Dict[str, Any]:
 
     try:
         from app.models.company import Company
-        active_companies = db.query(Company).filter(Company.modulo_autores_ativo == True).all()
+        from app.models.company_settings import CompanySettings
+        from sqlalchemy import or_
+        active_companies = db.query(Company).filter(
+            Company.active == True,
+            or_(
+                Company.modulo_autores_ativo == True,
+                Company.module_b2c_storefront == True,
+            ),
+        ).all()
 
         target_wildcards = ["*.seller.cronuzb2b.com.br"]
         for c in active_companies:
@@ -137,6 +150,17 @@ def sync_all_active_author_portals(db=None) -> Dict[str, Any]:
             slug = sanitize_slug(raw.split(".")[0])
             if slug and slug not in ("www", "app", "api"):
                 target_wildcards.append(f"*.{slug}.cronuzb2b.com.br")
+            # Também inclui o store_slug do B2C (ex: movimento-literario)
+            s_cfg = db.query(CompanySettings).filter(CompanySettings.company_id == c.id).first()
+            if s_cfg and isinstance(s_cfg.b2c_showcases_config, dict):
+                b2c_slug = sanitize_slug(
+                    str((s_cfg.b2c_showcases_config.get("branding") or {}).get("store_slug") or "")
+                )
+                if b2c_slug and b2c_slug not in ("www", "app", "api"):
+                    target_wildcards.append(f"*.{b2c_slug}.cronuzb2b.com.br")
+            name_slug = sanitize_slug(c.name or "")
+            if name_slug and name_slug not in ("www", "app", "api"):
+                target_wildcards.append(f"*.{name_slug}.cronuzb2b.com.br")
 
         target_wildcards = sorted(list(set(target_wildcards)))
         current_domains = get_current_cert_domains()

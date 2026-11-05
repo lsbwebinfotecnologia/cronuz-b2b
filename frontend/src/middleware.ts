@@ -87,6 +87,35 @@ export function middleware(request: NextRequest) {
     });
   }
 
+  // A2. Loja B2C Oficial (Multi-Tenant Subdomain Routing: b2c.[seller].horusb2b.com.br | b2c.[seller].cronuzb2b.com.br | b2c.[seller].localhost)
+  const b2cSubdomainMatch = hostname.match(
+    /^b2c\.([a-zA-Z0-9_-]+)\.(horusb2b\.com\.br|cronuzb2b\.com\.br|cronuz\.com\.br|localhost|horusb2b\.localhost|cronuzb2b\.localhost)$/i
+  );
+  if (b2cSubdomainMatch) {
+    const sellerSlug = b2cSubdomainMatch[1].toLowerCase();
+    requestHeaders.set('x-seller-slug', sellerSlug);
+    requestHeaders.set('x-portal-type', 'b2c');
+
+    if (url.pathname.startsWith(`/loja/${sellerSlug}`)) {
+      return NextResponse.rewrite(url, {
+        request: { headers: requestHeaders }
+      });
+    }
+
+    if (url.pathname.startsWith('/loja/')) {
+      const remainingPath = url.pathname.replace(/^\/loja\/[^/]+/, '');
+      url.pathname = `/loja/${sellerSlug}${remainingPath}`;
+      return NextResponse.rewrite(url, {
+        request: { headers: requestHeaders }
+      });
+    }
+
+    url.pathname = `/loja/${sellerSlug}${url.pathname === '/' ? '' : url.pathname}`;
+    return NextResponse.rewrite(url, {
+      request: { headers: requestHeaders }
+    });
+  }
+
   // B. Marketing Site (Public)
   if (marketingDomains.includes(hostname)) {
     // se formos adicionar outras rotas como /marketing/contato, podemos fazer rewrite também

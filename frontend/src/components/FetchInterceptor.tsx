@@ -12,7 +12,10 @@ export function FetchInterceptor() {
       const url = args[0] instanceof Request ? args[0].url : String(args[0]);
       
       // Endpoints tratados localmente — não interceptar 401/erros
-      const isSilentEndpoint = url.includes('/seller/mobile/');
+      const isSilentEndpoint =
+        url.includes('/seller/mobile/') ||
+        url.includes('/b2c/public/') ||
+        url.includes('/storefront/domain/');
 
       try {
         const response = await originalFetch(...args);

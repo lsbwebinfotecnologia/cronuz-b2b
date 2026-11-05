@@ -309,6 +309,9 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
       ? 0
       : rawFreightValue;
   const totalCart = subtotal + freightValue;
+  const discountApplied = couponResult ? Number(couponResult.discount_applied || 0) : 0;
+  const differenceToPay = Math.max(0, totalCart - discountApplied);
+  const remainingCouponBalance = couponResult ? Number(couponResult.remaining_coupon_balance || 0) : 0;
 
   // Re-validate coupon automatically when cart subtotal or freight changes
   useEffect(() => {
@@ -1015,10 +1018,6 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
       setSendingContact(false);
     }
   };
-
-  const discountApplied = couponResult ? Number(couponResult.discount_applied || 0) : 0;
-  const differenceToPay = Math.max(0, totalCart - discountApplied);
-  const remainingCouponBalance = couponResult ? Number(couponResult.remaining_coupon_balance || 0) : 0;
 
   // Appearance & Branding from Seller Settings
   const appearance = storeInfo?.appearance || (domainInfo as any)?.appearance || {};

@@ -1997,7 +1997,7 @@ export default function SellerB2CStorefrontManagementPage({
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Domínio Próprio da Loja (Ex: loja.suaeditora.com.br)
+                  Domínio Próprio ou Subdomínio B2C (Ex: loja.suaeditora.com.br)
                 </label>
                 <input
                   type="text"
@@ -2008,6 +2008,17 @@ export default function SellerB2CStorefrontManagementPage({
                   placeholder="loja.suaeditora.com.br"
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
                 />
+                <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                  Padrão de subdomínio multi-tenant suportado automaticamente:{' '}
+                  <strong className="font-mono text-indigo-600 dark:text-indigo-400">
+                    b2c.{'{slug}'}.horusb2b.com.br
+                  </strong>{' '}
+                  ou{' '}
+                  <strong className="font-mono text-indigo-600 dark:text-indigo-400">
+                    b2c.{'{slug}'}.cronuzb2b.com.br
+                  </strong>
+                  . Caso utilize domínio próprio, basta apontar o registro <strong>CNAME</strong> para o subdomínio acima ou registro <strong>A</strong> para <code className="font-mono">64.23.182.183</code>.
+                </p>
               </div>
             </div>
 

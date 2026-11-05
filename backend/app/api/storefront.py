@@ -111,35 +111,68 @@ def get_storefront_domain_info(
     db: Session = Depends(get_db)
 ):
     from app.models.company import Company
-    
+    from app.models.company_settings import CompanySettings
+    import re as _re
+
+    clean_domain = domain_name.split(":")[0].lower().strip()
     is_b2c_domain = False
 
     # 1. Check dedicated B2C custom domain first
     company = db.query(Company).filter(
-        Company.b2c_custom_domain == domain_name,
+        Company.b2c_custom_domain == clean_domain,
         Company.active == True
     ).first()
     if company:
         is_b2c_domain = True
 
+    # 1b. Support standardized B2C subdomains: b2c.{seller}.horusb2b.com.br | b2c.{seller}.cronuzb2b.com.br
+    if not company and clean_domain.startswith("b2c."):
+        b2c_match = _re.match(
+            r"^b2c\.([a-z0-9_-]+)\.(horusb2b\.com\.br|cronuzb2b\.com\.br|cronuz\.com\.br|localhost|horusb2b\.localhost|cronuzb2b\.localhost)$",
+            clean_domain,
+        )
+        if b2c_match:
+            seller_slug = b2c_match.group(1)
+            from app.api.b2c_storefront import _slugify_store_name, _build_b2c_appearance_config
+            if seller_slug.isdigit():
+                company = db.query(Company).filter(Company.id == int(seller_slug), Company.active == True).first()
+            if not company:
+                company = db.query(Company).filter(
+                    Company.active == True,
+                    (Company.domain == seller_slug) | (Company.b2c_custom_domain == seller_slug)
+                ).first()
+            if not company:
+                compact_slug = _re.sub(r"[^a-z0-9]", "", seller_slug)
+                for c in db.query(Company).filter(Company.active == True).all():
+                    s_cfg = db.query(CompanySettings).filter(CompanySettings.company_id == c.id).first()
+                    app_cfg = _build_b2c_appearance_config(c, s_cfg, db)
+                    cfg_slug = (app_cfg.get("branding", {}).get("store_slug") or "").strip().lower()
+                    name_slug = _slugify_store_name(c.name, c.id)
+                    cands = [x for x in (cfg_slug, name_slug, (c.domain or "").strip().lower()) if x]
+                    compact_cands = [_re.sub(r"[^a-z0-9]", "", x) for x in cands]
+                    if seller_slug in cands or (compact_slug and compact_slug in compact_cands):
+                        company = c
+                        break
+            if company:
+                is_b2c_domain = True
+
     # 2. Check custom_domain
     if not company:
         company = db.query(Company).filter(
-            Company.custom_domain == domain_name,
+            Company.custom_domain == clean_domain,
             Company.active == True
         ).first()
     
     # 3. Fallback to internal app domain
     if not company:
         company = db.query(Company).filter(
-            Company.domain == domain_name,
+            Company.domain == clean_domain,
             Company.active == True
         ).first()
         
     if not company:
         raise HTTPException(status_code=404, detail="Domínio não encontrado")
         
-    from app.models.company_settings import CompanySettings
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
     business_model = settings.business_model if settings else "B2B_CRONUZ"
     b2c_open = bool(getattr(settings, "b2c_storefront_open", False)) if settings else False
