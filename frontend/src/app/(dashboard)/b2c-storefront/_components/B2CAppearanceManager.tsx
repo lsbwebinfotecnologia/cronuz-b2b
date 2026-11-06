@@ -198,6 +198,31 @@ export default function B2CAppearanceManager({
     business_hours: 'Segunda a Sexta, das 09h às 18h',
     about_text: '',
   });
+  const [seoConfig, setSeoConfig] = useState<{
+    home_title: string;
+    home_description: string;
+    product_title_template: string;
+    product_description_template: string;
+    category_title_template: string;
+    category_description_template: string;
+    showcase_title_template: string;
+    showcase_description_template: string;
+    google_site_verification: string;
+    auto_json_ld: boolean;
+  }>({
+    home_title: '',
+    home_description: '',
+    product_title_template: '{nome} - ISBN {isbn} | {autor} | {loja}',
+    product_description_template:
+      'Compre o livro {nome} (ISBN {isbn}) de {autor}, editora {editora} na {loja}. Confira sinopse, preço e envio rápido para todo o Brasil.',
+    category_title_template: '{categoria} - Livros em Oferta | {loja}',
+    category_description_template:
+      'Explore os melhores livros de {categoria} na {loja}. Obras selecionadas com pronta entrega.',
+    showcase_title_template: '{vitrine} | Seleção Especial {loja}',
+    showcase_description_template: '{subtitulo} - Confira a vitrine {vitrine} na {loja}.',
+    google_site_verification: '',
+    auto_json_ld: true,
+  });
 
   // New Promotion Form State
   const [promoName, setPromoName] = useState('');
@@ -261,6 +286,7 @@ export default function B2CAppearanceManager({
       setCategories(Array.isArray(data.categories) ? data.categories : []);
       setPromotions(Array.isArray(data.promotions) ? data.promotions : []);
       if (data.footer_info) setFooterInfo((prev) => ({ ...prev, ...data.footer_info }));
+      if (data.seo_config) setSeoConfig((prev) => ({ ...prev, ...data.seo_config }));
     } catch (e: any) {
       toast.error(e.message || 'Erro ao carregar aparência da loja B2C.');
     } finally {
@@ -271,6 +297,16 @@ export default function B2CAppearanceManager({
   useEffect(() => {
     fetchAppearance();
   }, []);
+
+  useEffect(() => {
+    if (
+      (activeSection === 'categories' || activeSection === 'promotions') &&
+      availableCatalogMeta.categories.length === 0 &&
+      !loadingAvailableCategories
+    ) {
+      fetchAvailableCategories();
+    }
+  }, [activeSection]);
 
   const persistAppearance = async (overridePromotions?: B2CPromotionRule[]) => {
     setSaving(true);
@@ -289,6 +325,7 @@ export default function B2CAppearanceManager({
           categories,
           promotions: overridePromotions !== undefined ? overridePromotions : promotions,
           footer_info: footerInfo,
+          seo_config: seoConfig,
           b2c_custom_domain: b2cCustomDomain,
         }),
       });
@@ -297,6 +334,7 @@ export default function B2CAppearanceManager({
       if (data.branding) setBranding(data.branding);
       if (Array.isArray(data.promotions)) setPromotions(data.promotions);
       if (data.footer_info) setFooterInfo((prev) => ({ ...prev, ...data.footer_info }));
+      if (data.seo_config) setSeoConfig((prev) => ({ ...prev, ...data.seo_config }));
       toast.success(data.message || 'Configurações da Loja B2C salvas com sucesso!');
     } catch (e: any) {
       toast.error(e.message);
@@ -1342,6 +1380,176 @@ export default function B2CAppearanceManager({
                 </div>
               </div>
             </div>
+
+            {/* 5. SEO Dinâmico para o Google (Home, Produtos com ISBN, Categorias, Vitrines & Sitemap) */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-emerald-600" />
+                    5. SEO para Buscas do Google (ISBN Automático, Categorias, Vitrines e Home)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    O sistema já preenche automaticamente o Nome do Livro, ISBN (GTIN-13), Autor, Editora e Preço para o Google. Personalize os padrões abaixo se desejar.
+                  </p>
+                </div>
+                {companyId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const smUrl = `${API_URL}/b2c/public/sitemap.xml?company_id=${companyId}`;
+                      navigator.clipboard.writeText(smUrl);
+                      toast.success('URL do Sitemap XML copiada para o Google Search Console!');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    Copiar Sitemap XML (Google)
+                  </button>
+                )}
+              </div>
+
+              {/* Variables helper bar */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-300 space-y-1">
+                <span className="font-bold text-slate-800 dark:text-white block">
+                  Variáveis automáticas disponíveis nos modelos:
+                </span>
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {['{nome}', '{isbn}', '{autor}', '{editora}', '{categoria}', '{vitrine}', '{preco}', '{loja}'].map((v) => (
+                    <code
+                      key={v}
+                      className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-indigo-600 dark:text-indigo-400 font-bold"
+                    >
+                      {v}
+                    </code>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Título SEO da Página Inicial (Home)
+                  </label>
+                  <input
+                    type="text"
+                    value={seoConfig.home_title}
+                    onChange={(e) => setSeoConfig({ ...seoConfig, home_title: e.target.value })}
+                    placeholder="{loja} | Livraria e Loja Oficial"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Descrição SEO da Página Inicial (Meta Description)
+                  </label>
+                  <input
+                    type="text"
+                    value={seoConfig.home_description}
+                    onChange={(e) => setSeoConfig({ ...seoConfig, home_description: e.target.value })}
+                    placeholder="Compre livros na loja oficial {loja}..."
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Padrão de Título das Páginas de Livro (com ISBN automático)
+                  </label>
+                  <input
+                    type="text"
+                    value={seoConfig.product_title_template}
+                    onChange={(e) =>
+                      setSeoConfig({ ...seoConfig, product_title_template: e.target.value })
+                    }
+                    placeholder="{nome} - ISBN {isbn} | {autor} | {loja}"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Padrão de Descrição das Páginas de Livro
+                  </label>
+                  <input
+                    type="text"
+                    value={seoConfig.product_description_template}
+                    onChange={(e) =>
+                      setSeoConfig({ ...seoConfig, product_description_template: e.target.value })
+                    }
+                    placeholder="Compre o livro {nome} (ISBN {isbn}) de {autor}, editora {editora} na {loja}."
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Padrão de Título das Categorias
+                  </label>
+                  <input
+                    type="text"
+                    value={seoConfig.category_title_template}
+                    onChange={(e) =>
+                      setSeoConfig({ ...seoConfig, category_title_template: e.target.value })
+                    }
+                    placeholder="{categoria} - Livros em Oferta | {loja}"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Padrão de Título das Vitrines
+                  </label>
+                  <input
+                    type="text"
+                    value={seoConfig.showcase_title_template}
+                    onChange={(e) =>
+                      setSeoConfig({ ...seoConfig, showcase_title_template: e.target.value })
+                    }
+                    placeholder="{vitrine} | Seleção Especial {loja}"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center pt-1">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Código de Verificação Google Search Console (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={seoConfig.google_site_verification}
+                    onChange={(e) =>
+                      setSeoConfig({ ...seoConfig, google_site_verification: e.target.value })
+                    }
+                    placeholder="Ex: google-site-verification=..."
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+                <label className="flex items-start gap-2.5 p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={seoConfig.auto_json_ld !== false}
+                    onChange={(e) =>
+                      setSeoConfig({ ...seoConfig, auto_json_ld: e.target.checked })
+                    }
+                    className="mt-0.5 rounded text-emerald-600"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-emerald-950 dark:text-emerald-200 block">
+                      Dados Estruturados Google (Schema.org Book + ISBN)
+                    </span>
+                    <span className="text-[11px] text-emerald-800 dark:text-emerald-300">
+                      Envia automaticamente ISBN/GTIN-13, Preço, Autor, Editora e Disponibilidade de Estoque para os resultados ricos do Google.
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </div>
           </div>
 
           {/* Right Column: Live Interactive Storefront Preview */}
@@ -1421,12 +1629,6 @@ export default function B2CAppearanceManager({
 
               {/* Mini Category Pills */}
               <div className="px-4 py-2.5 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto">
-                <span
-                  className="px-2.5 py-1 rounded-full text-[10px] font-bold text-white shrink-0"
-                  style={{ backgroundColor: branding.primary_color }}
-                >
-                  Início
-                </span>
                 {(categories.length > 0
                   ? categories.slice(0, 4)
                   : [
@@ -2025,6 +2227,57 @@ export default function B2CAppearanceManager({
                           </div>
 
                           <div className="flex items-center gap-1 shrink-0">
+                            <label className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-700 dark:text-slate-300 cursor-pointer mr-1">
+                              <input
+                                type="checkbox"
+                                checked={cat.active !== false}
+                                onChange={(e) =>
+                                  setCategories((prev) =>
+                                    prev.map((x) =>
+                                      x.id === cat.id ? { ...x, active: e.target.checked } : x
+                                    )
+                                  )
+                                }
+                                className="rounded text-indigo-600"
+                              />
+                              <span>No Topo</span>
+                            </label>
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => {
+                                if (idx === 0) return;
+                                setCategories((prev) => {
+                                  const copy = [...prev];
+                                  const tmp = copy[idx - 1];
+                                  copy[idx - 1] = copy[idx];
+                                  copy[idx] = tmp;
+                                  return copy;
+                                });
+                              }}
+                              className="p-1.5 text-slate-500 hover:bg-white rounded-lg disabled:opacity-30"
+                              title="Subir posição no menu"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === categories.length - 1}
+                              onClick={() => {
+                                if (idx >= categories.length - 1) return;
+                                setCategories((prev) => {
+                                  const copy = [...prev];
+                                  const tmp = copy[idx + 1];
+                                  copy[idx + 1] = copy[idx];
+                                  copy[idx] = tmp;
+                                  return copy;
+                                });
+                              }}
+                              className="p-1.5 text-slate-500 hover:bg-white rounded-lg disabled:opacity-30"
+                              title="Descer posição no menu"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
                             <button
                               type="button"
                               onClick={() => {
@@ -2184,21 +2437,53 @@ export default function B2CAppearanceManager({
                   {availableCatalogMeta.categories.length > 0 && (
                     <div className="space-y-2">
                       <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider block">
-                        Gêneros / Categorias do Horus ERP ({availableCatalogMeta.categories.length})
+                        Selecionar Categorias do Catálogo para o Topo ({availableCatalogMeta.categories.length})
                       </span>
                       <div className="flex flex-wrap gap-1.5">
-                        {availableCatalogMeta.categories.map((hc, i) => (
-                          <button
-                            key={`horus-cat-${i}`}
-                            type="button"
-                            onClick={() =>
-                              handleAddCategoryFilter(hc.label, hc.code, 'COD_GENERO')
-                            }
-                            className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-indigo-600 hover:text-white text-slate-700 dark:text-slate-300 text-xs font-medium transition-colors"
-                          >
-                            + {hc.label}
-                          </button>
-                        ))}
+                        {availableCatalogMeta.categories.map((hc, i) => {
+                          const isAdded = categories.some(
+                            (c) =>
+                              c.label.toLowerCase() === String(hc.label || '').toLowerCase() ||
+                              c.code.toLowerCase() === String(hc.code || '').toLowerCase()
+                          );
+                          return (
+                            <button
+                              key={`horus-cat-${i}`}
+                              type="button"
+                              onClick={() => {
+                                if (isAdded) {
+                                  setCategories((prev) =>
+                                    prev.filter(
+                                      (c) =>
+                                        c.label.toLowerCase() !== String(hc.label || '').toLowerCase() &&
+                                        c.code.toLowerCase() !== String(hc.code || '').toLowerCase()
+                                    )
+                                  );
+                                  toast.info(`"${hc.label}" removida do menu do topo.`);
+                                } else {
+                                  handleAddCategoryFilter(hc.label, hc.code, 'COD_GENERO');
+                                }
+                              }}
+                              className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                                isAdded
+                                  ? 'border-indigo-600 bg-indigo-600 text-white shadow-2xs'
+                                  : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-indigo-600 hover:text-white text-slate-700 dark:text-slate-300'
+                              }`}
+                            >
+                              {isAdded ? '✓ ' : '+ '}
+                              {hc.label}
+                              {hc.products_count ? (
+                                <span
+                                  className={`ml-1.5 text-[10px] font-normal ${
+                                    isAdded ? 'text-indigo-100' : 'text-slate-400'
+                                  }`}
+                                >
+                                  ({hc.products_count})
+                                </span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

@@ -83,11 +83,23 @@ export function ProductImage({
   // Se todos falharem -> exibe "Sem Capa"
   const candidates = useMemo(() => {
     const list: string[] = [];
+    const wrapProxyIfNeeded = (rawUrl: string) => {
+      if (
+        rawUrl.startsWith('http://') &&
+        !rawUrl.startsWith('http://localhost') &&
+        !rawUrl.startsWith('http://127.0.0.1')
+      ) {
+        return `${apiUrl}/b2c/public/cover-proxy?url=${encodeURIComponent(rawUrl)}`;
+      }
+      return rawUrl;
+    };
     const addUnique = (url: string | null | undefined) => {
       if (!url) return;
       const trimmed = url.trim();
-      if (trimmed && !list.includes(trimmed)) {
-        list.push(trimmed);
+      if (!trimmed) return;
+      const finalUrl = wrapProxyIfNeeded(trimmed);
+      if (!list.includes(finalUrl)) {
+        list.push(finalUrl);
       }
     };
 

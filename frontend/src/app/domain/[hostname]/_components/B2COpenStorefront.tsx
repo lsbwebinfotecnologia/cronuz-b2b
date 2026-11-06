@@ -446,10 +446,22 @@ export default function B2COpenStorefront({
   const resolveProductCoverCandidates = (prod: any): string[] => {
     if (!prod) return [];
     const list: string[] = [];
+    const wrapProxyIfNeeded = (rawUrl: string) => {
+      if (
+        rawUrl.startsWith('http://') &&
+        !rawUrl.startsWith('http://localhost') &&
+        !rawUrl.startsWith('http://127.0.0.1')
+      ) {
+        return `${apiBase}/b2c/public/cover-proxy?url=${encodeURIComponent(rawUrl)}`;
+      }
+      return rawUrl;
+    };
     const addUnique = (u: string | null | undefined) => {
       if (!u) return;
       const trimmed = u.trim();
-      if (trimmed && !list.includes(trimmed)) list.push(trimmed);
+      if (!trimmed) return;
+      const finalUrl = wrapProxyIfNeeded(trimmed);
+      if (!list.includes(finalUrl)) list.push(finalUrl);
     };
     if (prod.cover_url) addUnique(getImageUrl(prod.cover_url));
     const isbn = String(prod.ean_gtin || prod.sku || '').trim();
@@ -1678,23 +1690,50 @@ export default function B2COpenStorefront({
   }, [selectedProduct, productRelatedList, products, activeShowcases]);
 
   // Cross-sell Suggestions inside Cart Drawer ("Aproveite e leve também")
+  // Prioritizes: 1) Only in-stock items, 2) Same Author or Category as cart items, 3) Active Vitrines/Promos, 4) Same Publisher
   const cartSuggestions = useMemo(() => {
     const cartSkus = new Set(cart.map((c) => String(c.sku)));
-    const pool = [...products];
+    const cartAuthors = new Set(
+      cart
+        .map((c) => String(c.author || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const cartBrands = new Set(
+      cart
+        .map((c) => String(c.brand || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+
+    const showcasePool: any[] = [];
     for (const sc of activeShowcases) {
-      if (Array.isArray(sc.items)) pool.push(...sc.items);
+      if (Array.isArray(sc.items)) showcasePool.push(...sc.items);
     }
-    const out: any[] = [];
+    const pool = [...showcasePool, ...products];
+    const uniqueCandidates: any[] = [];
     const seen = new Set<string>();
+
     for (const p of pool) {
-      const k = String(p.sku || p.ean_gtin);
-      if (k && !cartSkus.has(k) && !seen.has(k)) {
+      const k = String(p.sku || p.ean_gtin || '');
+      const hasStock = Number(p.stock_quantity ?? 0) > 0 && p.allow_purchase !== false;
+      if (k && hasStock && !cartSkus.has(k) && !seen.has(k)) {
         seen.add(k);
-        out.push(p);
+        uniqueCandidates.push(p);
       }
-      if (out.length >= 4) break;
     }
-    return out;
+
+    const scoreCandidate = (p: any) => {
+      let score = 0;
+      const pAuthor = String(p.author || '').trim().toLowerCase();
+      const pBrand = String(p.brand || '').trim().toLowerCase();
+      if (pAuthor && cartAuthors.has(pAuthor)) score += 50;
+      if (showcasePool.includes(p)) score += 30;
+      if (p.promotional_price && Number(p.promotional_price) < Number(p.base_price || 0)) score += 20;
+      if (pBrand && cartBrands.has(pBrand)) score += 10;
+      return score;
+    };
+
+    uniqueCandidates.sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
+    return uniqueCandidates.slice(0, 3);
   }, [cart, products, activeShowcases]);
 
   // Numbered Pagination Computation
@@ -1932,6 +1971,144 @@ export default function B2COpenStorefront({
   };
 
   const themeTemplate = branding.theme_template || 'editorial_modern';
+  const seoCfg = appearance?.seo_config || {};
+
+  const seoDynamicMeta = useMemo(() => {
+    const storeName = domainInfo.name || 'Loja Oficial';
+    const renderTpl = (tpl: string, map: Record<string, string>) => {
+      let out = String(tpl || '');
+      for (const [k, v] of Object.entries(map)) {
+        out = out.replace(new RegExp(`\\{${k}\\}`, 'gi'), String(v || '').trim());
+      }
+      return out
+        .replace(/\(\s*ISBN\s*\)/gi, '')
+        .replace(/\s+\|\s+\|/g, ' |')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+    };
+
+    if (activeView === 'product' && selectedProduct) {
+      const isbnVal = String(selectedProduct.ean_gtin || selectedProduct.sku || '').trim();
+      const authorVal = String(selectedProduct.author || selectedProduct.brand || storeName).trim();
+      const brandVal = String(selectedProduct.brand || storeName).trim();
+      const catVal = String(selectedProduct.category?.name || 'Livros').trim();
+      const priceVal = Number(selectedProduct.promotional_price ?? selectedProduct.base_price ?? 0);
+      const stockQty = Number(selectedProduct.stock_quantity ?? 0);
+      const map = {
+        nome: selectedProduct.name || 'Livro',
+        isbn: isbnVal,
+        autor: authorVal,
+        editora: brandVal,
+        categoria: catVal,
+        preco: formatBRL(priceVal),
+        loja: storeName,
+      };
+      const title = renderTpl(
+        seoCfg.product_title_template || '{nome} - ISBN {isbn} | {autor} | {loja}',
+        map
+      );
+      const description = renderTpl(
+        seoCfg.product_description_template ||
+          'Compre o livro {nome} (ISBN {isbn}) de {autor}, editora {editora} na {loja}. Confira sinopse, preço e envio rápido.',
+        map
+      );
+      const jsonLd = {
+        '@context': 'https://schema.org',
+        '@type': ['Product', 'Book'],
+        name: selectedProduct.name,
+        sku: String(selectedProduct.sku || isbnVal),
+        isbn: isbnVal,
+        gtin13: isbnVal.length === 13 ? isbnVal : undefined,
+        description: description.slice(0, 300),
+        image: resolveProductCover(selectedProduct) || undefined,
+        author: { '@type': 'Person', name: authorVal },
+        publisher: { '@type': 'Organization', name: brandVal },
+        brand: { '@type': 'Brand', name: brandVal },
+        offers: {
+          '@type': 'Offer',
+          priceCurrency: 'BRL',
+          price: priceVal.toFixed(2),
+          availability:
+            stockQty > 0 ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+          seller: { '@type': 'Organization', name: storeName },
+        },
+      };
+      return { title, description, jsonLd };
+    }
+
+    if (activeView === 'category' && selectedCategoryObj) {
+      const catLabel = selectedCategoryObj.headline || selectedCategoryObj.label || selectedCategoryLabel || 'Catálogo';
+      const map = { categoria: catLabel, loja: storeName };
+      const title = renderTpl(
+        seoCfg.category_title_template || '{categoria} - Livros em Oferta | {loja}',
+        map
+      );
+      const description =
+        selectedCategoryObj.description ||
+        renderTpl(
+          seoCfg.category_description_template ||
+            'Explore os melhores livros de {categoria} na {loja}. Obras selecionadas com pronta entrega.',
+          map
+        );
+      return { title, description, jsonLd: null };
+    }
+
+    if (activeView === 'showcase' && selectedShowcaseObj) {
+      const scTitle = selectedShowcaseObj.title || 'Vitrine';
+      const scSub = selectedShowcaseObj.description || selectedShowcaseObj.subtitle || scTitle;
+      const map = { vitrine: scTitle, subtitulo: scSub, loja: storeName };
+      const title = renderTpl(
+        seoCfg.showcase_title_template || '{vitrine} | Seleção Especial {loja}',
+        map
+      );
+      const description = renderTpl(
+        seoCfg.showcase_description_template || '{subtitulo} - Confira a vitrine {vitrine} na {loja}.',
+        map
+      );
+      return { title, description, jsonLd: null };
+    }
+
+    const title = renderTpl(
+      seoCfg.home_title || `${storeName} | Livraria e Loja Oficial`,
+      { loja: storeName }
+    );
+    const description = renderTpl(
+      seoCfg.home_description ||
+        `Compre livros na loja oficial ${storeName}. Acervo completo com ISBN, lançamentos e entrega rápida para todo o Brasil.`,
+      { loja: storeName }
+    );
+    const jsonLd = {
+      '@context': 'https://schema.org',
+      '@type': 'BookStore',
+      name: storeName,
+      description,
+    };
+    return { title, description, jsonLd };
+  }, [
+    activeView,
+    selectedProduct,
+    selectedCategoryObj,
+    selectedCategoryLabel,
+    selectedShowcaseObj,
+    domainInfo.name,
+    seoCfg,
+  ]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (seoDynamicMeta.title) {
+      document.title = seoDynamicMeta.title;
+    }
+    if (seoDynamicMeta.description) {
+      let metaDesc = document.querySelector('meta[name="description"]');
+      if (!metaDesc) {
+        metaDesc = document.createElement('meta');
+        metaDesc.setAttribute('name', 'description');
+        document.head.appendChild(metaDesc);
+      }
+      metaDesc.setAttribute('content', seoDynamicMeta.description);
+    }
+  }, [seoDynamicMeta]);
 
   return (
     <div
@@ -1944,6 +2121,12 @@ export default function B2COpenStorefront({
       }`}
       style={{ '--b2c-primary': primaryColor, '--b2c-secondary': secondaryColor } as any}
     >
+      {seoDynamicMeta.jsonLd && seoCfg.auto_json_ld !== false && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(seoDynamicMeta.jsonLd) }}
+        />
+      )}
       {/* Top E-commerce Trust Bar */}
       <div className="text-white text-xs py-2 px-3 sm:px-6" style={{ backgroundColor: secondaryColor }}>
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
@@ -2123,18 +2306,6 @@ export default function B2COpenStorefront({
         {(effectiveCategories.length > 0 || activePromotions.length > 0 || activeShowcases.length > 0) && (
           <div className="border-t border-slate-100 bg-slate-50/90">
             <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar">
-              <button
-                type="button"
-                onClick={() => handleResetToHome()}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all shrink-0 cursor-pointer ${
-                  activeView === 'catalog' && selectedCategoryId === 'ALL' && !onlyPromoFilter
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                Início
-              </button>
-
               {activePromotions.length > 0 && (
                 <button
                   type="button"
@@ -5857,12 +6028,21 @@ export default function B2COpenStorefront({
                   </div>
                 ) : (
                   <>
-                    {/* Items List */}
-                    <div className="space-y-3">
+                    {/* Items List clearly separated with header */}
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between px-1">
+                        <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                          Itens na sua sacola ({cart.reduce((a, b) => a + b.quantity, 0)})
+                        </span>
+                        <span className="text-[11px] font-bold text-slate-700">
+                          Subtotal: {formatBRL(subtotal)}
+                        </span>
+                      </div>
+
                       {cart.map((item) => (
                         <div
                           key={item.sku}
-                          className="p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3 bg-slate-50/50"
+                          className="p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3 bg-white shadow-2xs"
                         >
                           <div className="min-w-0 flex-1">
                             <p className="text-xs font-bold text-slate-900 truncate">{item.name}</p>
@@ -5901,41 +6081,6 @@ export default function B2COpenStorefront({
                         </div>
                       ))}
                     </div>
-
-                    {/* Smart Cross-Sell Suggestions inside Cart ("Aproveite e leve também") */}
-                    {cartSuggestions.length > 0 && (
-                      <div className="p-3.5 rounded-2xl border border-indigo-100 bg-indigo-50/40 space-y-2.5">
-                        <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
-                          <Sparkles className="w-3.5 h-3.5" style={{ color: primaryColor }} />
-                          Aproveite e leve também:
-                        </span>
-                        <div className="space-y-2">
-                          {cartSuggestions.slice(0, 2).map((sug) => (
-                            <div
-                              key={`cart-sug-${sug.sku || sug.ean_gtin}`}
-                              className="p-2 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-2"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <p className="text-xs font-bold text-slate-900 truncate">
-                                  {sug.name}
-                                </p>
-                                <p className="text-[11px] font-extrabold text-emerald-700">
-                                  {formatBRL(sug.promotional_price ?? sug.base_price)}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => addToCart(sug, 1)}
-                                style={{ backgroundColor: primaryColor }}
-                                className="px-2.5 py-1.5 rounded-lg text-white text-[11px] font-bold shrink-0"
-                              >
-                                + Adicionar
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
 
                     {/* Freight Calculator */}
                     <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50 space-y-3">
@@ -6099,7 +6244,7 @@ export default function B2COpenStorefront({
                         style={{ backgroundColor: primaryColor }}
                         className="w-full py-3.5 rounded-2xl hover:opacity-95 text-white text-sm font-bold flex items-center justify-center gap-2 shadow-lg cursor-pointer"
                       >
-                        Ir para o Checkout Seguro
+                        Ir para Pagamento
                         <ArrowRight className="w-4 h-4" />
                       </button>
 
@@ -6111,6 +6256,69 @@ export default function B2COpenStorefront({
                         Continuar Comprando
                       </button>
                     </div>
+
+                    {/* Smart Cross-Sell Suggestions clearly separated below Action Buttons */}
+                    {cartSuggestions.length > 0 && (
+                      <div className="pt-3 border-t border-dashed border-slate-200 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5" style={{ color: primaryColor }} />
+                            Aproveite e leve também
+                          </span>
+                          <span className="text-[10px] font-medium text-slate-400">
+                            Sugestões do mesmo autor/acervo
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2">
+                          {cartSuggestions.slice(0, 2).map((sug) => {
+                            const sugCover = resolveProductCover(sug);
+                            return (
+                              <div
+                                key={`cart-sug-${sug.sku || sug.ean_gtin}`}
+                                className="p-2.5 rounded-xl bg-slate-50/80 border border-slate-200/80 flex items-center justify-between gap-2.5"
+                              >
+                                <div
+                                  onClick={() => {
+                                    setIsCartOpen(false);
+                                    openProductPage(sug);
+                                  }}
+                                  className="w-9 h-12 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 cursor-pointer"
+                                >
+                                  {sugCover ? (
+                                    <img
+                                      src={sugCover}
+                                      alt={sug.name}
+                                      className="max-h-full max-w-full object-contain"
+                                      onError={(e) => handleCoverImgError(e, sug)}
+                                    />
+                                  ) : (
+                                    <BookOpen className="w-4 h-4 text-slate-300" />
+                                  )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-bold text-slate-800 truncate">
+                                    {sug.name}
+                                  </p>
+                                  <p className="text-[10px] text-slate-500 truncate">
+                                    {sug.author || sug.brand || 'Disponível em estoque'}
+                                  </p>
+                                  <p className="text-xs font-extrabold text-emerald-700">
+                                    {formatBRL(sug.promotional_price ?? sug.base_price)}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => addToCart(sug, 1)}
+                                  className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-900 hover:text-white hover:border-slate-900 text-slate-700 text-[11px] font-bold transition-colors shrink-0 cursor-pointer"
+                                >
+                                  + Adicionar
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
               </div>

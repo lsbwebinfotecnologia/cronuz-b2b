@@ -9,7 +9,7 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, and_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from app.integrators.horus_clients import HorusClients
@@ -146,6 +146,7 @@ class B2CAppearanceUpdateRequest(BaseModel):
     categories: Optional[List[Dict[str, Any]]] = None
     promotions: Optional[List[Dict[str, Any]]] = None
     footer_info: Optional[Dict[str, Any]] = None
+    seo_config: Optional[Dict[str, Any]] = None
     b2c_custom_domain: Optional[str] = None
 
 
@@ -3073,6 +3074,20 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
         "about_text": raw_footer.get("about_text") or f"Loja oficial {company.name}. Catálogo editorial completo com entrega rápida e segura para todo o Brasil.",
     }
 
+    raw_seo = raw_cfg.get("seo_config") if isinstance(raw_cfg.get("seo_config"), dict) else {}
+    seo_config = {
+        "home_title": raw_seo.get("home_title") or f"{company.name} | Livraria e Loja Oficial",
+        "home_description": raw_seo.get("home_description") or f"Compre livros na loja oficial {company.name}. Acervo completo com ISBN, lançamentos e entrega rápida para todo o Brasil.",
+        "product_title_template": raw_seo.get("product_title_template") or "{nome} - ISBN {isbn} | {autor} | {loja}",
+        "product_description_template": raw_seo.get("product_description_template") or "Compre o livro {nome} (ISBN {isbn}) de {autor}, editora {editora} na {loja}. Confira sinopse, preço e envio rápido para todo o Brasil.",
+        "category_title_template": raw_seo.get("category_title_template") or "{categoria} - Livros em Oferta | {loja}",
+        "category_description_template": raw_seo.get("category_description_template") or "Explore os melhores livros de {categoria} na {loja}. Obras selecionadas com pronta entrega.",
+        "showcase_title_template": raw_seo.get("showcase_title_template") or "{vitrine} | Seleção Especial {loja}",
+        "showcase_description_template": raw_seo.get("showcase_description_template") or "{subtitulo} - Confira a vitrine {vitrine} na {loja}.",
+        "google_site_verification": raw_seo.get("google_site_verification") or "",
+        "auto_json_ld": bool(raw_seo.get("auto_json_ld", True)),
+    }
+
     return {
         "branding": branding,
         "banners": banners,
@@ -3080,6 +3095,7 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
         "categories": categories,
         "promotions": promotions,
         "footer_info": footer_info,
+        "seo_config": seo_config,
     }
 
 
@@ -3144,6 +3160,8 @@ def update_b2c_appearance(
         current_cfg["promotions"] = data.promotions
     if data.footer_info is not None:
         current_cfg["footer_info"] = {**current_cfg.get("footer_info", {}), **data.footer_info}
+    if data.seo_config is not None:
+        current_cfg["seo_config"] = {**current_cfg.get("seo_config", {}), **data.seo_config}
 
     if data.b2c_custom_domain is not None:
         clean_dom = data.b2c_custom_domain.strip().lower()
@@ -3153,7 +3171,7 @@ def update_b2c_appearance(
     # Preserve all existing internal/payment/cache keys in b2c_showcases_config
     existing_raw = getattr(settings, "b2c_showcases_config", None)
     if isinstance(existing_raw, dict):
-        appearance_keys = {"branding", "banners", "showcases", "categories", "promotions", "footer_info"}
+        appearance_keys = {"branding", "banners", "showcases", "categories", "promotions", "footer_info", "seo_config"}
         for k, v in existing_raw.items():
             if k not in appearance_keys:
                 current_cfg[k] = v
@@ -3339,7 +3357,69 @@ async def get_b2c_available_categories(
     categories: List[Dict[str, Any]] = []
     brands: List[Dict[str, Any]] = []
     tray_categories: List[Dict[str, Any]] = []
+    seen_cats: set[str] = set()
+    seen_brands: set[str] = set()
 
+    # 1. Sempre carregar imediatamente as Categorias e Editoras já presentes no Catálogo Local do Seller (com contagem de produtos)
+    try:
+        from app.models.catalog_support import Category, Brand
+
+        cat_counts = dict(
+            db.query(Category.name, func.count(Product.id))
+            .outerjoin(Product, and_(Product.category_id == Category.id, Product.company_id == cid, Product.status == "ACTIVE"))
+            .filter(Category.company_id == cid)
+            .group_by(Category.name)
+            .all()
+        )
+        subj_counts = dict(
+            db.query(Product.subject, func.count(Product.id))
+            .filter(Product.company_id == cid, Product.status == "ACTIVE", Product.subject.isnot(None), Product.subject != "")
+            .group_by(Product.subject)
+            .all()
+        )
+        merged_local_cats: Dict[str, int] = {}
+        for k_name, cnt in cat_counts.items():
+            clean_n = str(k_name or "").strip()
+            if clean_n and clean_n.lower() != "geral":
+                merged_local_cats[clean_n] = max(merged_local_cats.get(clean_n, 0), int(cnt or 0))
+        for s_name, cnt in subj_counts.items():
+            clean_s = str(s_name or "").strip()
+            if clean_s and clean_s.lower() != "geral":
+                merged_local_cats[clean_s] = max(merged_local_cats.get(clean_s, 0), int(cnt or 0))
+
+        for c_name, cnt in sorted(merged_local_cats.items(), key=lambda x: (-x[1], x[0].lower())):
+            seen_cats.add(c_name.lower())
+            categories.append({
+                "code": c_name,
+                "label": c_name.title() if c_name.isupper() else c_name,
+                "products_count": cnt,
+                "filter_type": "COD_GENERO",
+                "source": "CATALOGO_LOCAL",
+            })
+
+        brand_counts = (
+            db.query(Product.brand, func.count(Product.id))
+            .filter(Product.company_id == cid, Product.status == "ACTIVE", Product.brand.isnot(None), Product.brand != "")
+            .group_by(Product.brand)
+            .order_by(func.count(Product.id).desc())
+            .limit(120)
+            .all()
+        )
+        for b_name, b_cnt in brand_counts:
+            clean_b = str(b_name or "").strip()
+            if clean_b and clean_b.lower() not in seen_brands:
+                seen_brands.add(clean_b.lower())
+                brands.append({
+                    "code": clean_b,
+                    "label": clean_b.title() if clean_b.isupper() else clean_b,
+                    "products_count": int(b_cnt or 0),
+                    "filter_type": "NOM_EDITORA",
+                    "source": "CATALOGO_LOCAL",
+                })
+    except Exception as e_loc:
+        logger.warning(f"[B2C Categories] Aviso ao ler categorias locais: {e_loc}")
+
+    # 2. Complementar com árvore de gêneros do Horus ERP se houver categorias extras
     if settings and settings.horus_enabled:
         try:
             from app.integrators.horus_products import HorusProducts
@@ -3354,25 +3434,16 @@ async def get_b2c_available_categories(
                     cat_id = gen.get("COD_SECAO") or gen.get("COD_GENERO") or gen.get("ID_GENERO") or gen.get("ID")
                     cat_nome = gen.get("DESCRICAO") or gen.get("NOM_SECAO") or gen.get("NOM_GENERO") or gen.get("NOME")
                     if cat_id and cat_nome:
-                        categories.append({
-                            "code": str(cat_nome).strip(),
-                            "raw_id": str(cat_id).strip(),
-                            "label": str(cat_nome).strip().title(),
-                            "filter_type": "COD_GENERO",
-                            "source": "HORUS_ERP",
-                        })
-
-            horus_editoras = await client.busca_editoras(id_doc=id_doc)
-            if isinstance(horus_editoras, list) and len(horus_editoras) > 0 and not horus_editoras[0].get("Falha"):
-                for ed in horus_editoras[:150]:
-                    ed_nome = ed.get("NOM_FANTASIA") or ed.get("NOM_EDITORA") or ed.get("NOME")
-                    if ed_nome:
-                        brands.append({
-                            "code": str(ed_nome).strip(),
-                            "label": str(ed_nome).strip().title(),
-                            "filter_type": "NOM_EDITORA",
-                            "source": "HORUS_ERP",
-                        })
+                        clean_hn = str(cat_nome).strip()
+                        if clean_hn.lower() not in seen_cats:
+                            seen_cats.add(clean_hn.lower())
+                            categories.append({
+                                "code": clean_hn,
+                                "raw_id": str(cat_id).strip(),
+                                "label": clean_hn.title(),
+                                "filter_type": "COD_GENERO",
+                                "source": "HORUS_ERP",
+                            })
         except Exception as e:
             logger.warning(f"[B2C Categories] Aviso ao consultar gêneros/editoras no Horus: {e}")
 
@@ -3401,28 +3472,6 @@ async def get_b2c_available_categories(
                         })
         except Exception as e:
             logger.warning(f"[B2C Categories] Aviso ao consultar categorias na Tray: {e}")
-
-    if not categories:
-        try:
-            from app.models.catalog_support import Category, Brand
-            local_cats = db.query(Category).filter(Category.company_id == cid).all()
-            for c in local_cats:
-                categories.append({
-                    "code": c.name,
-                    "label": c.name,
-                    "filter_type": "COD_GENERO",
-                    "source": "CRONUZ",
-                })
-            local_brands = db.query(Brand).filter(Brand.company_id == cid).all()
-            for b in local_brands:
-                brands.append({
-                    "code": b.name,
-                    "label": b.name,
-                    "filter_type": "NOM_EDITORA",
-                    "source": "CRONUZ",
-                })
-        except Exception:
-            pass
 
     return {
         "categories": categories,
@@ -7625,3 +7674,362 @@ async def sync_b2c_orders_with_vindi(
             else "Nenhum pedido pendente de confirmação de pagamento foi encontrado."
         ),
     }
+
+
+# ==============================================================================
+# PROXY HTTPS PARA LINKS ALTERNATIVOS DE CAPAS HTTP COM PORTA (ex: http://host:8060/capas)
+# E MOTOR DE SEO DINÂMICO PARA O GOOGLE (SSR METADATA + JSON-LD + SITEMAP XML)
+# ==============================================================================
+@router.get("/public/cover-proxy")
+async def proxy_external_cover_image(url: str = Query(..., description="URL HTTP/HTTPS da capa externa")):
+    """
+    Evita bloqueio de Mixed Content nos navegadores quando o Seller configura um servidor
+    de capas em HTTP puro ou com porta customizada (ex: http://ip:8060/capas/97885...jpg).
+    Tenta também variações de extensão (.jpg, .JPG, .png) caso o servidor IIS/Horus seja case-sensitive.
+    """
+    from fastapi.responses import Response
+    import httpx
+
+    raw_url = str(url or "").strip()
+    if not raw_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="URL de capa inválida.")
+
+    candidate_urls = [raw_url]
+    if raw_url.endswith(".jpg"):
+        base_no_ext = raw_url[:-4]
+        candidate_urls.append(f"{base_no_ext}.JPG")
+        candidate_urls.append(f"{base_no_ext}.png")
+    elif raw_url.endswith(".JPG"):
+        base_no_ext = raw_url[:-4]
+        candidate_urls.append(f"{base_no_ext}.jpg")
+        candidate_urls.append(f"{base_no_ext}.png")
+
+    try:
+        async with httpx.AsyncClient(timeout=7.0, follow_redirects=True, verify=False) as client:
+            for cand in candidate_urls:
+                try:
+                    resp = await client.get(cand)
+                    if resp.status_code == 200 and resp.content and len(resp.content) > 100:
+                        ctype = (resp.headers.get("content-type") or "image/jpeg").lower()
+                        if "text/html" in ctype:
+                            continue
+                        if not ctype.startswith("image/"):
+                            ctype = "image/jpeg"
+                        return Response(
+                            content=resp.content,
+                            media_type=ctype,
+                            headers={"Cache-Control": "public, max-age=86400"},
+                        )
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    raise HTTPException(status_code=404, detail="Capa não encontrada no servidor externo.")
+
+
+def _resolve_b2c_company_by_host_or_slug(
+    db: Session, hostname: Optional[str] = None, slug: Optional[str] = None, company_id: Optional[int] = None
+) -> Optional[Company]:
+    if company_id:
+        return db.query(Company).filter(Company.id == company_id).first()
+
+    clean_host = (hostname or "").split(":")[0].lower().strip()
+    clean_slug = (slug or "").lower().strip()
+
+    if clean_host and clean_host not in ("localhost", "127.0.0.1", "app.horusb2b.com.br", "cronuzb2b.com.br"):
+        comp = (
+            db.query(Company)
+            .filter(func.lower(Company.b2c_custom_domain) == clean_host)
+            .first()
+        )
+        if comp:
+            return comp
+        comp = (
+            db.query(Company)
+            .filter(
+                (func.lower(Company.custom_domain) == clean_host)
+                | (func.lower(Company.domain) == clean_host)
+            )
+            .first()
+        )
+        if comp:
+            return comp
+        if clean_host.startswith("b2c-"):
+            clean_slug = clean_host.split(".")[0].replace("b2c-", "")
+
+    target_slug = clean_slug or clean_host
+    if target_slug:
+        if target_slug.isdigit():
+            comp = db.query(Company).filter(Company.id == int(target_slug)).first()
+            if comp:
+                return comp
+        all_Wait = db.query(Company).filter(Company.active == True).all()
+        for c in all_Wait:
+            c_settings = db.query(CompanySettings).filter(CompanySettings.company_id == c.id).first()
+            cfg = _build_b2c_appearance_config(c, c_settings, db)
+            st_slug = (cfg.get("branding") or {}).get("store_slug") or _slugify_store_name(c.name, c.id)
+            if st_slug.lower() == target_slug:
+                return c
+    return None
+
+
+def _render_seo_template(tpl: str, mapping: Dict[str, str]) -> str:
+    out = str(tpl or "")
+    for k, v in mapping.items():
+        out = out.replace(f"{{{k}}}", str(v or "").strip())
+    out = re.sub(r"\s+\|\s+\|", " |", out)
+    out = re.sub(r"\(\s*ISBN\s*\)", "", out)
+    out = re.sub(r"\s{2,}", " ", out).strip(" |-")
+    return out
+
+
+@router.get("/public/seo-metadata")
+def get_public_b2c_seo_metadata(
+    hostname: Optional[str] = Query(None),
+    slug: Optional[str] = Query(None),
+    company_id: Optional[int] = Query(None),
+    path: Optional[str] = Query(""),
+    db: Session = Depends(get_db),
+):
+    """
+    Gera metadados de SEO dinâmicos para o Google Search (Title, Description, Canonical, OpenGraph e Schema.org JSON-LD)
+    para a Home, Páginas de Produto (com ISBN/EAN, Autor, Editora, Preço e Estoque), Categorias e Vitrines.
+    """
+    company = _resolve_b2c_company_by_host_or_slug(db, hostname=hostname, slug=slug, company_id=company_id)
+    if not company:
+        return {
+            "title": "Loja Virtual Oficial",
+            "description": "Catálogo completo de livros com envio para todo o Brasil.",
+            "json_ld": None,
+        }
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
+    cfg = _build_b2c_appearance_config(company, settings, db)
+    seo_cfg = cfg.get("seo_config") or {}
+    branding = cfg.get("branding") or {}
+    store_name = company.name
+
+    base_url = (
+        f"https://{company.b2c_custom_domain}"
+        if getattr(company, "b2c_custom_domain", None)
+        else f"https://app.horusb2b.com.br/loja/{branding.get('store_slug') or company.id}"
+    )
+
+    clean_path = str(path or "").strip("/")
+    segments = [s for s in clean_path.split("/") if s]
+    first = segments[0].lower() if len(segments) >= 1 else ""
+    second = segments[1] if len(segments) >= 2 else ""
+
+    title = _render_seo_template(seo_cfg.get("home_title") or f"{store_name} | Livraria e Loja Oficial", {"loja": store_name})
+    description = _render_seo_template(
+        seo_cfg.get("home_description") or f"Compre livros na loja oficial {store_name}.",
+        {"loja": store_name},
+    )
+    og_image = branding.get("logo_url") or branding.get("hero_banner_url") or ""
+    canonical_url = f"{base_url}/{clean_path}".rstrip("/") if clean_path else base_url
+
+    json_ld: Any = {
+        "@context": "https://schema.org",
+        "@type": "BookStore",
+        "name": store_name,
+        "url": base_url,
+        "potentialAction": {
+            "@type": "SearchAction",
+            "target": f"{base_url}/busca?q={{search_term_string}}",
+            "query-input": "required name=search_term_string",
+        },
+    }
+
+    if first in ("produto", "p") and second:
+        clean_code = second.strip()
+        prod = (
+            db.query(Product)
+            .filter(
+                Product.company_id == company.id,
+                (Product.ean_gtin == clean_code) | (Product.sku == clean_code),
+            )
+            .first()
+        )
+        if not prod and clean_code.isdigit():
+            prod = db.query(Product).filter(Product.company_id == company.id, Product.id == int(clean_code)).first()
+
+        if prod:
+            isbn_val = str(prod.ean_gtin or prod.sku or "").strip()
+            author_val = str(getattr(prod, "author", None) or prod.brand or store_name).strip()
+            brand_val = str(prod.brand or store_name).strip()
+            cat_val = str(prod.category.name if getattr(prod, "category", None) else (getattr(prod, "subject", None) or "Livros")).strip()
+            price_val = float(prod.promotional_price or prod.base_price or 0)
+            stock_qty = int(prod.stock_quantity or 0)
+            synopsis = re.sub(r"<[^>]+>", " ", str(prod.short_description or prod.long_description or "")).strip()
+
+            mapping = {
+                "nome": prod.name,
+                "isbn": isbn_val,
+                "autor": author_val,
+                "editora": brand_val,
+                "categoria": cat_val,
+                "preco": f"R$ {price_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                "loja": store_name,
+            }
+            title = _render_seo_template(
+                seo_cfg.get("product_title_template") or "{nome} - ISBN {isbn} | {autor} | {loja}",
+                mapping,
+            )
+            desc_tpl = seo_cfg.get("product_description_template") or "Compre o livro {nome} (ISBN {isbn}) de {autor}, editora {editora} na {loja}."
+            rendered_desc = _render_seo_template(desc_tpl, mapping)
+            if synopsis:
+                description = f"{rendered_desc} Sinopse: {synopsis[:180]}"
+            else:
+                description = rendered_desc
+
+            if prod.cover_url:
+                og_image = prod.cover_url
+
+            canonical_url = f"{base_url}/produto/{isbn_val or prod.sku}"
+            json_ld = {
+                "@context": "https://schema.org",
+                "@type": ["Product", "Book"],
+                "name": prod.name,
+                "sku": str(prod.sku or isbn_val),
+                "isbn": isbn_val,
+                "gtin13": isbn_val if len(isbn_val) == 13 and isbn_val.isdigit() else undefined_or_none(isbn_val),
+                "description": description[:300],
+                "image": og_image or undefined_or_none(None),
+                "author": {"@type": "Person", "name": author_val},
+                "publisher": {"@type": "Organization", "name": brand_val},
+                "brand": {"@type": "Brand", "name": brand_val},
+                "offers": {
+                    "@type": "Offer",
+                    "url": canonical_url,
+                    "priceCurrency": "BRL",
+                    "price": f"{price_val:.2f}",
+                    "availability": "https://schema.org/InStock" if stock_qty > 0 else "https://schema.org/OutOfStock",
+                    "seller": {"@type": "Organization", "name": store_name},
+                },
+            }
+            json_ld = {k: v for k, v in json_ld.items() if v is not None}
+
+    elif first in ("categoria", "c") and second:
+        target_slug = _slugify_store_name(second, 0)
+        cat_label = second.replace("-", " ").title()
+        cat_desc = ""
+        for c in (cfg.get("categories") or []):
+            if str(c.get("slug") or "").lower() == target_slug or _slugify_store_name(c.get("label"), 0) == target_slug:
+                cat_label = c.get("headline") or c.get("label") or cat_label
+                cat_desc = c.get("description") or ""
+                if c.get("banner_url"):
+                    og_image = c.get("banner_url")
+                break
+        mapping = {"categoria": cat_label, "loja": store_name}
+        title = _render_seo_template(
+            seo_cfg.get("category_title_template") or "{categoria} - Livros em Oferta | {loja}",
+            mapping,
+        )
+        description = cat_desc or _render_seo_template(
+            seo_cfg.get("category_description_template") or "Explore os melhores livros de {categoria} na {loja}.",
+            mapping,
+        )
+
+    elif first == "vitrine" and second:
+        target_slug = _slugify_store_name(second, 0)
+        sc_title = second.replace("-", " ").title()
+        sc_sub = ""
+        for sc in (cfg.get("showcases") or []):
+            if str(sc.get("slug") or "").lower() == target_slug or str(sc.get("id") or "").lower() == second.lower():
+                sc_title = sc.get("title") or sc_title
+                sc_sub = sc.get("description") or sc.get("subtitle") or ""
+                if sc.get("banner_url"):
+                    og_image = sc.get("banner_url")
+                break
+        mapping = {"vitrine": sc_title, "subtitulo": sc_sub or sc_title, "loja": store_name}
+        title = _render_seo_template(
+            seo_cfg.get("showcase_title_template") or "{vitrine} | Seleção Especial {loja}",
+            mapping,
+        )
+        description = sc_sub or _render_seo_template(
+            seo_cfg.get("showcase_description_template") or "Confira a seleção especial {vitrine} na {loja}.",
+            mapping,
+        )
+
+    return {
+        "company_id": company.id,
+        "store_name": store_name,
+        "title": title,
+        "description": description,
+        "canonical_url": canonical_url,
+        "og_image": og_image,
+        "google_site_verification": seo_cfg.get("google_site_verification") or "",
+        "json_ld": json_ld if seo_cfg.get("auto_json_ld", True) else None,
+    }
+
+
+def undefined_or_none(val: Any) -> Optional[Any]:
+    return val if val else None
+
+
+@router.get("/public/sitemap.xml")
+def get_public_b2c_sitemap_xml(
+    hostname: Optional[str] = Query(None),
+    slug: Optional[str] = Query(None),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Gera o Sitemap XML dinâmico da Loja B2C com a Home, Categorias, Vitrines e todos os Produtos ativos (por ISBN/SKU)
+    para indexação automática no Google Search Console.
+    """
+    from fastapi.responses import Response
+    from xml.sax.saxutils import escape as xml_escape
+
+    company = _resolve_b2c_company_by_host_or_slug(db, hostname=hostname, slug=slug, company_id=company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Loja não encontrada.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
+    cfg = _build_b2c_appearance_config(company, settings, db)
+    branding = cfg.get("branding") or {}
+    base_url = (
+        f"https://{company.b2c_custom_domain}"
+        if getattr(company, "b2c_custom_domain", None)
+        else f"https://app.horusb2b.com.br/loja/{branding.get('store_slug') or company.id}"
+    ).rstrip("/")
+
+    today_iso = date.today().isoformat()
+    urls: List[tuple[str, str, str]] = [(base_url, "daily", "1.0")]
+
+    for cat in (cfg.get("categories") or []):
+        if isinstance(cat, dict) and cat.get("active") is not False:
+            c_slug = cat.get("slug") or _slugify_store_name(cat.get("label") or cat.get("code"), 0)
+            if c_slug:
+                urls.append((f"{base_url}/categoria/{c_slug}", "daily", "0.9"))
+
+    for sc in (cfg.get("showcases") or []):
+        if isinstance(sc, dict) and sc.get("active") is not False:
+            s_slug = sc.get("slug") or sc.get("id")
+            if s_slug:
+                urls.append((f"{base_url}/vitrine/{s_slug}", "daily", "0.8"))
+
+    prods = (
+        db.query(Product.sku, Product.ean_gtin)
+        .filter(Product.company_id == company.id, Product.status == ProductStatus.ACTIVE)
+        .limit(10000)
+        .all()
+    )
+    for p in prods:
+        code = str(p.ean_gtin or p.sku or "").strip()
+        if code:
+            urls.append((f"{base_url}/produto/{code}", "weekly", "0.8"))
+
+    xml_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ]
+    for loc, freq, prio in urls:
+        xml_lines.append(
+            f"  <url><loc>{xml_escape(loc)}</loc><lastmod>{today_iso}</lastmod><changefreq>{freq}</changefreq><priority>{prio}</priority></url>"
+        )
+    xml_lines.append("</urlset>")
+
+    return Response(content="\n".join(xml_lines), media_type="application/xml")
+
