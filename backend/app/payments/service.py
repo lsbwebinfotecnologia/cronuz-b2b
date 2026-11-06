@@ -254,7 +254,7 @@ def sync_charge(db: Session, charge: PayCharge, provider: Optional[PaymentProvid
         _event(db, charge, source, charge.status.lower() if changed else "notified", old=old, external_id=external_id)
     if commit:
         db.commit()
-    if changed:
+    if changed or (charge.status == "PAID" and source == "USER"):
         _notify_origin(db, charge, old, charge.status)
     return changed
 
@@ -558,3 +558,10 @@ def dashboard(db: Session, company_id: int, provider: Optional[str] = None, mont
         },
         "series": series,
     }
+
+
+# Registra os handlers de baixa automática (Cronuz Nativo + Horus ERP com trava de dependência)
+from app.payments.settlement import register_all_settlement_handlers
+
+register_all_settlement_handlers(register_origin_handler)
+

@@ -379,6 +379,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     { name: 'Financeiro Cora', href: '/financial/cora', icon: Landmark },
     { name: 'Boletos Cora', href: '/financial/cora/boletos', icon: Receipt },
     ...(usesHorus ? [{ name: 'Notas Fiscais (Horus)', href: '/financial/cora/notas-fiscais', icon: FileText }] : []),
+    { name: 'Monitor de Retorno', href: '/financial/cora/monitor', icon: RefreshCw },
   ];
 
   if (moduleFinancial) {
@@ -409,6 +410,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
          { name: 'Painel', href: '/financial/cora', icon: BarChart3 },
          { name: 'Boletos', href: '/financial/cora/boletos', icon: Receipt },
          { name: 'Notas Fiscais (Horus)', href: '/financial/cora/notas-fiscais', icon: FileText },
+         { name: 'Monitor de Retorno', href: '/financial/cora/monitor', icon: RefreshCw },
        ]
     });
   }

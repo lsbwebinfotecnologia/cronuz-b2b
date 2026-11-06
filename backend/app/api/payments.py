@@ -652,3 +652,261 @@ async def cora_webhook(company_id: int, secret: str, request: Request, backgroun
         background_tasks.add_task(_process_cora_webhook, company_id, str(invoice_id),
                                   event_id[:120] if event_id else None)
     return {"status": "received"}
+
+
+# ── Monitor de Retorno, Conciliação Automática e Baixas (Horus / Cronuz) ─────
+
+@router.get("/companies/{company_id}/payments/monitor")
+def get_payments_monitor(
+    company_id: int,
+    provider: str = "CORA",
+    limit: int = Query(100, ge=10, le=200),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from sqlalchemy import func
+    from app.models.company_settings import CompanySettings
+    from app.models.cora import CoraConfig
+
+    code = _access(db, current_user, company_id, provider)
+    cora_cfg = db.query(CoraConfig).filter(CoraConfig.company_id == company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+
+    open_monitored_qty = db.query(func.count(PayCharge.id)).filter(
+        PayCharge.company_id == company_id,
+        PayCharge.provider == code,
+        PayCharge.is_active.is_(True),
+        PayCharge.status.in_(service.OPEN_STATUSES),
+    ).scalar() or 0
+
+    last_sync_at = db.query(func.max(PayCharge.last_synced_at)).filter(
+        PayCharge.company_id == company_id,
+        PayCharge.provider == code,
+    ).scalar()
+
+    paid_rows = (
+        db.query(PayCharge)
+        .filter(PayCharge.company_id == company_id, PayCharge.provider == code, PayCharge.status == "PAID")
+        .order_by(PayCharge.paid_at.desc().nullslast(), PayCharge.id.desc())
+        .limit(limit)
+        .all()
+    )
+    paid_ids = [c.id for c in paid_rows]
+
+    events_by_charge = {}
+    if paid_ids:
+        ev_rows = (
+            db.query(PayChargeEvent)
+            .filter(PayChargeEvent.company_id == company_id, PayChargeEvent.charge_id.in_(paid_ids))
+            .order_by(PayChargeEvent.created_at.desc(), PayChargeEvent.id.desc())
+            .all()
+        )
+        for ev in ev_rows:
+            events_by_charge.setdefault(ev.charge_id, []).append(ev)
+
+    settled_qty = 0
+    pending_settlement_qty = 0
+    error_settlement_qty = 0
+    paid_charges_out = []
+
+    for c in paid_rows:
+        c_evs = events_by_charge.get(c.id, [])
+        settle_ev = next(
+            (e for e in c_evs if e.event_type in ("horus_settled", "cronuz_settled", "horus_settle_error", "horus_settle_skipped")),
+            None,
+        )
+        paid_ev = next((e for e in c_evs if e.event_type == "paid" or e.status_after == "PAID"), None)
+
+        if settle_ev and settle_ev.event_type == "horus_settled":
+            settle_status = "SETTLED_HORUS"
+            settled_qty += 1
+        elif settle_ev and settle_ev.event_type == "cronuz_settled":
+            settle_status = "SETTLED_CRONUZ"
+            settled_qty += 1
+        elif settle_ev and settle_ev.event_type in ("horus_settle_error", "horus_settle_skipped"):
+            settle_status = "ERROR"
+            error_settlement_qty += 1
+        else:
+            settle_status = "PENDING"
+            pending_settlement_qty += 1
+
+        item = service.serialize_charge(c)
+        item["settlement"] = {
+            "status": settle_status,
+            "event_type": settle_ev.event_type if settle_ev else None,
+            "message": settle_ev.message if settle_ev else None,
+            "settled_at": settle_ev.created_at.isoformat() if (settle_ev and settle_ev.created_at) else None,
+            "paid_detected_by": paid_ev.source if paid_ev else "SYNC",
+        }
+        paid_charges_out.append(item)
+
+    recent_events_rows = (
+        db.query(PayChargeEvent, PayCharge)
+        .join(PayCharge, PayCharge.id == PayChargeEvent.charge_id)
+        .filter(PayChargeEvent.company_id == company_id, PayChargeEvent.provider == code)
+        .order_by(PayChargeEvent.created_at.desc(), PayChargeEvent.id.desc())
+        .limit(limit)
+        .all()
+    )
+    events_out = [
+        {
+            "id": ev.id,
+            "charge_id": ev.charge_id,
+            "source": ev.source,
+            "event_type": ev.event_type,
+            "status_before": ev.status_before,
+            "status_after": ev.status_after,
+            "message": ev.message,
+            "created_at": ev.created_at.isoformat() if ev.created_at else None,
+            "payer_name": ch.payer_name,
+            "amount": float(ch.amount or 0),
+            "invoice_number": ch.invoice_number,
+            "financial_launch_id": ch.financial_launch_id,
+            "installment_number": ch.installment_number,
+            "order_number": ch.order_number,
+            "origin_type": ch.origin_type,
+        }
+        for ev, ch in recent_events_rows
+    ]
+
+    horus_enabled = bool(settings and (settings.horus_enabled or settings.horus_sql_enabled))
+    horus_sql_enabled = bool(settings and settings.horus_sql_enabled)
+    horus_baixa_enabled = bool(cora_cfg and getattr(cora_cfg, "horus_baixa_enabled", False))
+    horus_bank_summary = None
+    if cora_cfg and getattr(cora_cfg, "horus_cod_banco", None):
+        horus_bank_summary = (
+            f"Banco {cora_cfg.horus_cod_banco} · Ag. {cora_cfg.horus_cod_agencia or '-'} · C/C {cora_cfg.horus_cod_contac or '-'}"
+            + (f" · Forma #{cora_cfg.horus_cod_forma}" if getattr(cora_cfg, "horus_cod_forma", None) else "")
+        )
+
+    return {
+        "status": {
+            "job_interval_minutes": 30,
+            "active_environment": cora_cfg.active_environment if cora_cfg else "STAGE",
+            "webhook_registered": bool(cora_cfg and cora_cfg.webhook_endpoint_ids),
+            "webhook_environment": cora_cfg.webhook_environment if cora_cfg else None,
+            "horus_enabled": horus_enabled,
+            "horus_sql_enabled": horus_sql_enabled,
+            "horus_baixa_enabled": horus_baixa_enabled,
+            "horus_bank_summary": horus_bank_summary,
+            "cronuz_baixa_enabled": bool(getattr(cora_cfg, "cronuz_baixa_enabled", True)) if cora_cfg else True,
+            "open_monitored_qty": int(open_monitored_qty),
+            "last_sync_at": last_sync_at.isoformat() if last_sync_at else None,
+            "paid_total_qty": len(paid_charges_out),
+            "settled_qty": settled_qty,
+            "pending_settlement_qty": pending_settlement_qty,
+            "error_settlement_qty": error_settlement_qty,
+        },
+        "paid_charges": paid_charges_out,
+        "events": events_out,
+    }
+
+
+@router.post("/companies/{company_id}/payments/monitor/run-sync")
+def run_payments_monitor_sync(
+    company_id: int,
+    provider: str = "CORA",
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Executa sob demanda a varredura de conciliação da empresa:
+    1) Sincroniza no Cora os boletos em aberto;
+    2) Processa a baixa no Horus ERP / Cronuz para qualquer boleto PAID pendente de baixa.
+    """
+    from collections import defaultdict
+    from app.payments.settlement import handle_charge_status_change
+
+    code = _access(db, current_user, company_id, provider)
+    open_charges = (
+        db.query(PayCharge)
+        .filter(
+            PayCharge.company_id == company_id,
+            PayCharge.provider == code,
+            PayCharge.is_active.is_(True),
+            PayCharge.provider_charge_id.isnot(None),
+            PayCharge.status.in_(service.OPEN_STATUSES),
+        )
+        .order_by(PayCharge.due_date.asc().nullslast())
+        .limit(100)
+        .all()
+    )
+
+    by_env = defaultdict(list)
+    for c in open_charges:
+        by_env[c.environment].append(c)
+
+    checked = 0
+    changed = 0
+    for env, items in by_env.items():
+        try:
+            with get_provider(db, company_id, code, environment=env) as prov:
+                for c in items:
+                    checked += 1
+                    if service.sync_charge(db, c, provider=prov, source="USER"):
+                        changed += 1
+        except PaymentProviderError as e:
+            logger.warning("[Monitor Sync] company=%s %s/%s: %s", company_id, code, env, e)
+
+    # Reprocessa baixas pendentes em boletos já pagos
+    settled_subq = db.query(PayChargeEvent.charge_id).filter(
+        PayChargeEvent.company_id == company_id,
+        PayChargeEvent.event_type.in_(("horus_settled", "cronuz_settled")),
+    )
+    pending_paid = (
+        db.query(PayCharge)
+        .filter(
+            PayCharge.company_id == company_id,
+            PayCharge.provider == code,
+            PayCharge.status == "PAID",
+            ~PayCharge.id.in_(settled_subq),
+        )
+        .order_by(PayCharge.paid_at.desc().nullslast())
+        .limit(50)
+        .all()
+    )
+    reprocessed = 0
+    for pc in pending_paid:
+        handle_charge_status_change(db, pc, "OPEN", "PAID")
+        reprocessed += 1
+
+    return {
+        "checked_open": checked,
+        "status_changed": changed,
+        "settlement_triggered": reprocessed,
+        "message": f"Varredura concluída: {checked} boleto(s) aberto(s) verificado(s), {changed} atualizado(s) e {reprocessed} baixa(s) processada(s).",
+    }
+
+
+@router.post("/companies/{company_id}/payments/charges/{charge_id}/settle")
+def settle_single_paid_charge(
+    company_id: int,
+    charge_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Dispara manualmente a baixa (Horus ERP ou Cronuz Nativo) para um boleto já pago (PAID)."""
+    from app.payments.settlement import handle_charge_status_change
+
+    charge = _charge_or_404(db, company_id, charge_id)
+    _access(db, current_user, company_id, charge.provider)
+    if charge.status != "PAID":
+        raise HTTPException(status_code=400, detail="Apenas cobranças com status Pago (PAID) podem ser baixadas.")
+
+    handle_charge_status_change(db, charge, "OPEN", "PAID")
+    last_ev = (
+        db.query(PayChargeEvent)
+        .filter(
+            PayChargeEvent.company_id == company_id,
+            PayChargeEvent.charge_id == charge.id,
+            PayChargeEvent.source == "SETTLEMENT",
+        )
+        .order_by(PayChargeEvent.id.desc())
+        .first()
+    )
+    return {
+        "charge_id": charge.id,
+        "event_type": last_ev.event_type if last_ev else None,
+        "message": (last_ev.message if last_ev else "Rotina de baixa executada. Verifique se a baixa automática está ativa nas configurações do Cora."),
+    }
+

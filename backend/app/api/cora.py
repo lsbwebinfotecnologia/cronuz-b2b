@@ -31,17 +31,45 @@ from app.db.session import get_db
 from app.integrators.cora.certificates import CoraCertificateError, load_pem_pair, load_pfx
 from app.integrators.cora.client import CoraAPIError, CoraClient, CoraConfigError
 from app.models.company import Company
+from app.models.company_settings import CompanySettings
 from app.models.cora import (
     CORA_CERT_FORMATS, CORA_ENVIRONMENTS, CORA_INTEGRATION_MODES, CORA_NOTIFY_RULES, CORA_PAYMENT_FORMS,
     CoraAccount, CoraConfig,
 )
+from app.models.financial import FinancialAccount
 from app.models.payments import PayChannelRoute
 from app.payments.catalog import PRIMARY_USAGE_CHANNELS, PROVIDER_CATALOG
+from sqlalchemy import text as sa_text
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 MAX_CERT_FILE_BYTES = 1 * 1024 * 1024  # certificados reais têm poucos KB; teto de 1 MB por arquivo
+_CORA_SETTLEMENT_COLUMNS_CHECKED = False
+
+
+def _ensure_cora_settlement_columns(db: Session) -> None:
+    """Garante defensivamente que as colunas de baixa de retorno (Cronuz e Horus) existam em fin_cora_config."""
+    global _CORA_SETTLEMENT_COLUMNS_CHECKED
+    if _CORA_SETTLEMENT_COLUMNS_CHECKED:
+        return
+    try:
+        db.execute(sa_text(
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS cronuz_baixa_enabled BOOLEAN NOT NULL DEFAULT TRUE; "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS cronuz_account_id INTEGER REFERENCES fin_account(id) ON DELETE SET NULL; "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_baixa_enabled BOOLEAN NOT NULL DEFAULT FALSE; "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cod_banco VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cod_agencia VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cod_contac VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_nro_carteira VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cod_forma VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_tarifa_boleto NUMERIC(10, 2);"
+        ))
+        db.commit()
+        _CORA_SETTLEMENT_COLUMNS_CHECKED = True
+    except Exception as e:
+        db.rollback()
+        logger.warning("[Cora] Falha ao verificar/criar colunas de baixa em fin_cora_config: %s", e)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -70,6 +98,7 @@ def _company_or_404(db: Session, company_id: int) -> Company:
 
 
 def _get_or_create_config(db: Session, company_id: int) -> CoraConfig:
+    _ensure_cora_settlement_columns(db)
     config = db.query(CoraConfig).filter(CoraConfig.company_id == company_id).first()
     if not config:
         config = CoraConfig(company_id=company_id)
@@ -125,6 +154,15 @@ def _serialize_config(config: Optional[CoraConfig]) -> dict:
         "notify_enabled": bool(config.notify_enabled) if config else False,
         "notify_rules": [r for r in (config.notify_rules or "").split(",") if r] if config else [],
         "invoice_allowed_payment_forms": [f.strip() for f in (config.invoice_allowed_payment_forms or "").split(",") if f.strip()] if config else [],
+        "cronuz_baixa_enabled": bool(getattr(config, "cronuz_baixa_enabled", True)) if config else True,
+        "cronuz_account_id": getattr(config, "cronuz_account_id", None) if config else None,
+        "horus_baixa_enabled": bool(getattr(config, "horus_baixa_enabled", False)) if config else False,
+        "horus_cod_banco": (getattr(config, "horus_cod_banco", None) or "") if config else "",
+        "horus_cod_agencia": (getattr(config, "horus_cod_agencia", None) or "") if config else "",
+        "horus_cod_contac": (getattr(config, "horus_cod_contac", None) or "") if config else "",
+        "horus_nro_carteira": (getattr(config, "horus_nro_carteira", None) or "") if config else "",
+        "horus_cod_forma": (getattr(config, "horus_cod_forma", None) or "") if config else "",
+        "horus_tarifa_boleto": dec(getattr(config, "horus_tarifa_boleto", None)) if config else None,
     }
 
 
@@ -219,10 +257,34 @@ def _sync_cora_usage_channels(
 
 
 def _overview(db: Session, company: Company) -> dict:
+    _ensure_cora_settlement_columns(db)
     config = db.query(CoraConfig).filter(CoraConfig.company_id == company.id).first()
     accounts = {a.environment: a for a in db.query(CoraAccount).filter(CoraAccount.company_id == company.id).all()}
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
+    cora_enabled = bool(is_enabled(db, company.id, "CORA"))
+    horus_enabled = bool(settings and (settings.horus_enabled or settings.horus_sql_enabled))
+    horus_sql_enabled = bool(settings and settings.horus_sql_enabled)
+    cronuz_accounts = [
+        {
+            "id": a.id,
+            "name": a.name,
+            "type": a.type,
+            "current_balance": float(a.current_balance or 0),
+        }
+        for a in db.query(FinancialAccount)
+        .filter(FinancialAccount.company_id == company.id, FinancialAccount.active.is_(True))
+        .order_by(FinancialAccount.name.asc())
+        .all()
+    ]
     return {
-        "enabled": is_enabled(db, company.id, "CORA"),
+        "enabled": cora_enabled,
+        "integrations": {
+            "cora_enabled": cora_enabled,
+            "horus_enabled": horus_enabled,
+            "horus_sql_enabled": horus_sql_enabled,
+            "can_use_horus_baixa": bool(cora_enabled and horus_sql_enabled),
+        },
+        "cronuz_accounts": cronuz_accounts,
         "webhook": {
             "registered": bool(config and config.webhook_endpoint_ids),
             "environment": config.webhook_environment if config else None,
@@ -248,6 +310,88 @@ def get_cora_overview(company_id: int, db: Session = Depends(get_db), current_us
     return _overview(db, company)
 
 
+@router.get("/companies/{company_id}/cora/horus-bank-options")
+def get_cora_horus_bank_options(company_id: int, db: Session = Depends(get_db), current_user=Depends(cora_access)):
+    """
+    Consulta somente-leitura opcional no Horus SQL para auxiliar o seller a visualizar
+    as Contas Bancárias (BCONTAC_GERAL / BCONTAC_CARTEIRA) e Formas de Pagamento (FORMA_PAGTO)
+    cadastradas no Horus ERP.
+    """
+    _company_or_404(db, company_id)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings or not settings.horus_sql_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="A conexão Horus SQL não está habilitada para esta empresa.",
+        )
+
+    from app.integrators.horus_sql import HorusSQLClient
+
+    bank_accounts = []
+    payment_forms = []
+    try:
+        with HorusSQLClient(settings) as sql:
+            rows_acc = sql.fetch_all("""
+                SELECT
+                    cg.COD_EMPRESA,
+                    cg.COD_FILIAL,
+                    cg.COD_BANCO,
+                    b.NOME_BANCO,
+                    cg.COD_AGENCIA,
+                    ag.NOME_AGENCIA,
+                    cg.COD_CONTAC,
+                    cg.NUM_CC,
+                    cg.DIG_CC,
+                    cg.NOME_CONTAC,
+                    cart.NRO_CARTEIRA
+                FROM BCONTAC_GERAL cg
+                LEFT JOIN BBANCOS b ON b.COD_BANCO = cg.COD_BANCO
+                LEFT JOIN BAGENCIAS ag ON ag.COD_BANCO = cg.COD_BANCO AND ag.COD_AGENCIA = cg.COD_AGENCIA
+                LEFT JOIN BCONTAC_CARTEIRA cart
+                    ON cart.COD_BANCO = cg.COD_BANCO
+                   AND cart.COD_AGENCIA = cg.COD_AGENCIA
+                   AND cart.COD_CONTAC = cg.COD_CONTAC
+                ORDER BY cg.COD_BANCO, cg.COD_AGENCIA, cg.COD_CONTAC
+            """)
+            for r in rows_acc:
+                bank_accounts.append({
+                    "cod_empresa": str(r.get("COD_EMPRESA") or "").strip(),
+                    "cod_filial": str(r.get("COD_FILIAL") or "").strip(),
+                    "cod_banco": str(r.get("COD_BANCO") or "").strip(),
+                    "nome_banco": str(r.get("NOME_BANCO") or "").strip(),
+                    "cod_agencia": str(r.get("COD_AGENCIA") or "").strip(),
+                    "nome_agencia": str(r.get("NOME_AGENCIA") or "").strip(),
+                    "cod_contac": str(r.get("COD_CONTAC") or "").strip(),
+                    "num_cc": str(r.get("NUM_CC") or "").strip(),
+                    "dig_cc": str(r.get("DIG_CC") or "").strip(),
+                    "nome_contac": str(r.get("NOME_CONTAC") or "").strip(),
+                    "nro_carteira": str(r.get("NRO_CARTEIRA") or "").strip(),
+                })
+
+            rows_fp = sql.fetch_all("""
+                SELECT COD_FORMA, NOM_FORMA, TIPO_FORMA_PAGTO
+                FROM FORMA_PAGTO
+                ORDER BY COD_FORMA
+            """)
+            for f in rows_fp:
+                payment_forms.append({
+                    "cod_forma": str(f.get("COD_FORMA") or "").strip(),
+                    "nom_forma": str(f.get("NOM_FORMA") or "").strip(),
+                    "tipo_forma_pagto": str(f.get("TIPO_FORMA_PAGTO") or "").strip(),
+                })
+    except Exception as e:
+        logger.warning("[Cora] Falha ao consultar contas/formas no Horus SQL company=%s: %s", company_id, e)
+        raise HTTPException(
+            status_code=400,
+            detail="Não foi possível consultar as tabelas bancárias do Horus no momento. Você pode preencher os códigos diretamente nos campos abaixo.",
+        )
+
+    return {
+        "bank_accounts": bank_accounts,
+        "payment_forms": payment_forms,
+    }
+
+
 # ── Configuração geral ───────────────────────────────────────────────────────
 
 class CoraConfigPayload(BaseModel):
@@ -261,6 +405,15 @@ class CoraConfigPayload(BaseModel):
     notify_rules: Optional[List[str]] = None
     usage_channels: Optional[List[str]] = None
     invoice_allowed_payment_forms: Optional[List[str]] = None
+    cronuz_baixa_enabled: Optional[bool] = None
+    cronuz_account_id: Optional[int] = None
+    horus_baixa_enabled: Optional[bool] = None
+    horus_cod_banco: Optional[str] = Field(None, max_length=20)
+    horus_cod_agencia: Optional[str] = Field(None, max_length=20)
+    horus_cod_contac: Optional[str] = Field(None, max_length=20)
+    horus_nro_carteira: Optional[str] = Field(None, max_length=20)
+    horus_cod_forma: Optional[str] = Field(None, max_length=20)
+    horus_tarifa_boleto: Optional[float] = Field(None, ge=0, le=99999)
 
     @field_validator("active_environment")
     @classmethod
@@ -313,7 +466,42 @@ def update_cora_config(
         if not (prod and prod.client_id and prod.cert_content and prod.key_content):
             raise HTTPException(status_code=400, detail="Cadastre as credenciais de Produção antes de ativar esse ambiente.")
 
-    for field in ("fine_rate", "interest_rate", "discount_rate"):
+    # Validação da Conta Bancária nativa do Cronuz (se informada)
+    if "cronuz_account_id" in data and data["cronuz_account_id"] is not None:
+        acc = db.query(FinancialAccount).filter(
+            FinancialAccount.id == data["cronuz_account_id"],
+            FinancialAccount.company_id == company_id,
+        ).first()
+        if not acc:
+            raise HTTPException(status_code=400, detail="Conta bancária do Cronuz inválida para esta empresa.")
+
+    # Sanitiza campos textuais do Horus
+    for h_str_field in ("horus_cod_banco", "horus_cod_agencia", "horus_cod_contac", "horus_nro_carteira", "horus_cod_forma"):
+        if h_str_field in data:
+            val = (data[h_str_field] or "").strip()
+            data[h_str_field] = val or None
+
+    # Trava arquitetural de dependência: Baixa no Horus exige Cora ativo + Horus SQL ativo + Banco/Agência/Conta preenchidos
+    next_horus_baixa = data.get("horus_baixa_enabled", bool(getattr(config, "horus_baixa_enabled", False)))
+    if next_horus_baixa:
+        settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+        cora_active = is_enabled(db, company_id, "CORA")
+        horus_sql_active = bool(settings and settings.horus_sql_enabled)
+        if not (cora_active and horus_sql_active):
+            raise HTTPException(
+                status_code=400,
+                detail="A baixa automática no Horus ERP só pode ser ativada quando a empresa possui o Banco Cora e a integração Horus SQL habilitados simultaneamente.",
+            )
+        eff_banco = data.get("horus_cod_banco", getattr(config, "horus_cod_banco", None))
+        eff_agencia = data.get("horus_cod_agencia", getattr(config, "horus_cod_agencia", None))
+        eff_contac = data.get("horus_cod_contac", getattr(config, "horus_cod_contac", None))
+        if not (eff_banco and eff_agencia and eff_contac):
+            raise HTTPException(
+                status_code=400,
+                detail="Informe os códigos obrigatórios do Horus (Código do Banco, Código da Agência e Código da Conta Corrente) antes de ativar a baixa automática no Horus ERP.",
+            )
+
+    for field in ("fine_rate", "interest_rate", "discount_rate", "horus_tarifa_boleto"):
         if field in data:
             data[field] = Decimal(str(data[field])).quantize(Decimal("0.01")) if data[field] is not None else None
     if "notify_rules" in data:

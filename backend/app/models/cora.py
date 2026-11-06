@@ -56,11 +56,26 @@ class CoraConfig(Base):
     webhook_endpoint_ids = Column(String(500), nullable=True)        # ids dos endpoints criados no Cora (csv)
     webhook_environment = Column(String(20), nullable=True)          # ambiente em que o webhook foi registrado
 
+    # Baixa de Retorno & Conciliação Nativa Cronuz (independente do Horus)
+    cronuz_baixa_enabled = Column(Boolean, nullable=False, default=True)
+    cronuz_account_id = Column(Integer, ForeignKey("fin_account.id", ondelete="SET NULL"), nullable=True)
+
+    # Baixa de Retorno & Lançamento Bancário no Horus ERP (BLANCTOS via TRG_IMP_LANCTO_CRECEBER)
+    # 100% isolado da rotina da Vindi — exige Cora ativo E Horus SQL ativo para o seller
+    horus_baixa_enabled = Column(Boolean, nullable=False, default=False)
+    horus_cod_banco = Column(String(20), nullable=True)              # COD_BANCO em BCONTAC_GERAL / LANCTOS_CRECEBERA
+    horus_cod_agencia = Column(String(20), nullable=True)            # COD_AGENCIA em BCONTAC_GERAL / LANCTOS_CRECEBERA
+    horus_cod_contac = Column(String(20), nullable=True)             # COD_CONTAC em BCONTAC_GERAL / LANCTOS_CRECEBERA
+    horus_nro_carteira = Column(String(20), nullable=True)           # NRO_CARTEIRA em BCONTAC_CARTEIRA / LANCTOS_CRECEBERA
+    horus_cod_forma = Column(String(20), nullable=True)              # COD_FORMA em FORMA_PAGTO (ex: 30 = BOLETO CORA)
+    horus_tarifa_boleto = Column(Numeric(10, 2), nullable=True)      # VLR_TARIF_BOL padrão (R$) por boleto liquidado
+
     updated_by_user_id = Column(Integer, ForeignKey("usr_user.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     company = relationship("Company", foreign_keys=[company_id])
+    cronuz_account = relationship("FinancialAccount", foreign_keys=[cronuz_account_id])
     updated_by = relationship("User", foreign_keys=[updated_by_user_id])
 
 

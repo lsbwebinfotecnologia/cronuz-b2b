@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   Landmark, Loader2, ShieldCheck, Upload, CheckCircle2, XCircle, Trash2, Zap, Save,
   AlertTriangle, KeyRound, FileKey2, CalendarClock, Settings2, BellRing, Link2, Clock,
-  Store, ShoppingBag, Wallet, FileText, Lock, ArrowUpRight,
+  Store, ShoppingBag, Wallet, FileText, Lock, ArrowUpRight, Database, RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
@@ -41,6 +41,42 @@ interface Config {
   discount_rate: number | null;
   notify_enabled: boolean;
   notify_rules: string[];
+  cronuz_baixa_enabled?: boolean;
+  cronuz_account_id?: number | null;
+  horus_baixa_enabled?: boolean;
+  horus_cod_banco?: string;
+  horus_cod_agencia?: string;
+  horus_cod_contac?: string;
+  horus_nro_carteira?: string;
+  horus_cod_forma?: string;
+  horus_tarifa_boleto?: number | null;
+}
+
+interface CronuzAccountOption {
+  id: number;
+  name: string;
+  type: string;
+  current_balance: number;
+}
+
+interface HorusBankAccountOption {
+  cod_empresa: string;
+  cod_filial: string;
+  cod_banco: string;
+  nome_banco: string;
+  cod_agencia: string;
+  nome_agencia: string;
+  cod_contac: string;
+  num_cc: string;
+  dig_cc: string;
+  nome_contac: string;
+  nro_carteira: string;
+}
+
+interface HorusPaymentFormOption {
+  cod_forma: string;
+  nom_forma: string;
+  tipo_forma_pagto: string;
 }
 
 interface UsageChannel {
@@ -55,6 +91,13 @@ interface UsageChannel {
 
 interface Overview {
   enabled: boolean;
+  integrations?: {
+    cora_enabled: boolean;
+    horus_enabled: boolean;
+    horus_sql_enabled: boolean;
+    can_use_horus_baixa: boolean;
+  };
+  cronuz_accounts?: CronuzAccountOption[];
   webhook: { registered: boolean; environment: Env | null };
   config: Config;
   usage_channels?: UsageChannel[];
@@ -159,6 +202,9 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
   const [config, setConfig] = useState<Config | null>(null);
   const [savingConfig, setSavingConfig] = useState(false);
   const [savingChannelCode, setSavingChannelCode] = useState<string | null>(null);
+  const [loadingHorusOptions, setLoadingHorusOptions] = useState(false);
+  const [horusBankAccounts, setHorusBankAccounts] = useState<HorusBankAccountOption[]>([]);
+  const [horusPaymentForms, setHorusPaymentForms] = useState<HorusPaymentFormOption[]>([]);
 
   // Webhook
   const [webhookBase, setWebhookBase] = useState(API.startsWith('https://') ? API : '');
@@ -308,6 +354,25 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
     }
   };
 
+  const handleLoadHorusBankOptions = async () => {
+    if (!company) return;
+    setLoadingHorusOptions(true);
+    try {
+      const res = await fetch(`${API}/companies/${company.id}/cora/horus-bank-options`, {
+        headers: authHeaders(),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof body?.detail === 'string' ? body.detail : 'Erro ao consultar bancos do Horus.');
+      setHorusBankAccounts(body.bank_accounts || []);
+      setHorusPaymentForms(body.payment_forms || []);
+      toast.success(`Consultado no Horus: ${(body.bank_accounts || []).length} conta(s) e ${(body.payment_forms || []).length} forma(s).`);
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setLoadingHorusOptions(false);
+    }
+  };
+
   const handleSaveConfig = async () => {
     if (!company || !config) return;
     setSavingConfig(true);
@@ -324,6 +389,15 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
           discount_rate: config.discount_rate ?? 0,
           notify_enabled: config.notify_enabled,
           notify_rules: config.notify_rules,
+          cronuz_baixa_enabled: config.cronuz_baixa_enabled ?? true,
+          cronuz_account_id: config.cronuz_account_id ?? null,
+          horus_baixa_enabled: config.horus_baixa_enabled ?? false,
+          horus_cod_banco: config.horus_cod_banco ?? '',
+          horus_cod_agencia: config.horus_cod_agencia ?? '',
+          horus_cod_contac: config.horus_cod_contac ?? '',
+          horus_nro_carteira: config.horus_nro_carteira ?? '',
+          horus_cod_forma: config.horus_cod_forma ?? '',
+          horus_tarifa_boleto: config.horus_tarifa_boleto ?? 0,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -652,6 +726,217 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
               })}
             </div>
           )}
+
+          {/* Baixa Automática e Parametrização Bancária de Retorno */}
+          <div className="pt-4 border-t border-slate-200 dark:border-slate-700 space-y-4">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
+                <Database className="h-4 w-4 text-pink-600 dark:text-pink-400" />
+                <h3 className="text-sm font-semibold text-slate-800 dark:text-white">
+                  Baixa Automática de Retorno e Conciliação Bancária
+                </h3>
+              </div>
+              <span className="text-[11px] font-medium text-slate-500">
+                Executada automaticamente quando o boleto é liquidado (PAID) no Cora
+              </span>
+            </div>
+
+            {/* Cenário 1: Baixa Nativa Cronuz B2B */}
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800 dark:text-white">
+                    Baixa automática no Financeiro Nativo (Cronuz B2B)
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Liquida automaticamente a parcela nativa no Cronuz e lança a entrada no livro caixa da conta selecionada.
+                  </p>
+                </div>
+                <Toggle
+                  checked={config.cronuz_baixa_enabled ?? true}
+                  onChange={v => setCfg('cronuz_baixa_enabled', v)}
+                />
+              </div>
+
+              {(config.cronuz_baixa_enabled ?? true) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div className="space-y-1">
+                    <label className={labelCls}>Conta Bancária de Destino no Cronuz (Livro Caixa)</label>
+                    <select
+                      className={inputCls}
+                      value={config.cronuz_account_id ?? ''}
+                      onChange={e => setCfg('cronuz_account_id', e.target.value ? Number(e.target.value) : null)}
+                    >
+                      <option value="">Baixar apenas a parcela (sem movimentar saldo de conta)</option>
+                      {(data.cronuz_accounts || []).map(acc => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.name} ({acc.type})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Cenário 2: Baixa Automática & Lançamento Bancário no Horus ERP (Exclusivo quando Horus está habilitado para o Seller) */}
+            {data.integrations?.horus_enabled && (
+              <div className="rounded-xl border border-pink-200 dark:border-pink-900/50 p-4 space-y-4 bg-pink-50/30 dark:bg-pink-950/10">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-bold text-slate-900 dark:text-white">
+                        Baixa Automática & Lançamento Bancário no Horus ERP
+                      </p>
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                        data.integrations?.can_use_horus_baixa
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                          : 'bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                      }`}>
+                        <ShieldCheck className="h-3 w-3" />
+                        {data.integrations?.can_use_horus_baixa
+                          ? 'Vínculo Cora + Horus SQL Ativo'
+                          : 'Requer Horus SQL habilitado'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Parametrização exclusiva do <b>Banco Cora</b> (100% isolada da Vindi). Ao confirmar o pagamento do boleto, o sistema baixa o título em <code className="font-mono text-[11px]">LANCTOS_CRECEBERA</code> / <code className="font-mono text-[11px]">LANCTOS_CRECEBER</code> com estes códigos obrigatórios e gera o lançamento aberto em <code className="font-mono text-[11px]">BLANCTOS</code> (<code className="font-mono text-[11px]">STA_FECHADO = &apos;N&apos;</code>) para o fechamento de banco no Horus.
+                    </p>
+                  </div>
+                  <Toggle
+                    checked={!!config.horus_baixa_enabled}
+                    disabled={!data.integrations?.can_use_horus_baixa}
+                    onChange={v => setCfg('horus_baixa_enabled', v)}
+                  />
+                </div>
+
+                {/* Campos de parametrização direta dos códigos obrigatórios do Horus */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <label className={labelCls}>Código do Banco no Horus (COD_BANCO) *</label>
+                    <input
+                      className={`${inputCls} font-mono`}
+                      value={config.horus_cod_banco || ''}
+                      onChange={e => setCfg('horus_cod_banco', e.target.value)}
+                      placeholder="Ex: 403"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className={labelCls}>Código da Agência no Horus (COD_AGENCIA) *</label>
+                    <input
+                      className={`${inputCls} font-mono`}
+                      value={config.horus_cod_agencia || ''}
+                      onChange={e => setCfg('horus_cod_agencia', e.target.value)}
+                      placeholder="Ex: 1"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className={labelCls}>Código da Conta no Horus (COD_CONTAC) *</label>
+                    <input
+                      className={`${inputCls} font-mono`}
+                      value={config.horus_cod_contac || ''}
+                      onChange={e => setCfg('horus_cod_contac', e.target.value)}
+                      placeholder="Ex: 10 (código em BCONTAC_GERAL)"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className={labelCls}>Carteira no Horus (NRO_CARTEIRA)</label>
+                    <input
+                      className={`${inputCls} font-mono`}
+                      value={config.horus_nro_carteira || ''}
+                      onChange={e => setCfg('horus_nro_carteira', e.target.value)}
+                      placeholder="Ex: 1 ou CORA"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className={labelCls}>Forma de Pagto no Horus (COD_FORMA)</label>
+                    <input
+                      className={`${inputCls} font-mono`}
+                      value={config.horus_cod_forma || ''}
+                      onChange={e => setCfg('horus_cod_forma', e.target.value)}
+                      placeholder="Ex: 30 (BOLETO CORA)"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className={labelCls}>Tarifa do Boleto (VLR_TARIF_BOL)</label>
+                    <CurrencyInput
+                      value={config.horus_tarifa_boleto ?? 0}
+                      onChangeValue={v => setCfg('horus_tarifa_boleto', v)}
+                      prefixStr="R$ "
+                      className={inputCls}
+                    />
+                  </div>
+                </div>
+
+                {/* Auxiliar opcional: Consultar tabelas do Horus para autopreencher */}
+                {data.integrations?.can_use_horus_baixa && (
+                  <div className="pt-2 border-t border-pink-200/60 dark:border-pink-900/40 space-y-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="text-[11px] text-slate-600 dark:text-slate-400">
+                        Você pode digitar os códigos diretamente acima ou consultar as contas e formas já cadastradas no Horus ERP:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleLoadHorusBankOptions}
+                        disabled={loadingHorusOptions}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-pink-300 dark:border-pink-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-pink-700 dark:text-pink-300 hover:bg-pink-50 transition-colors self-start sm:self-auto"
+                      >
+                        {loadingHorusOptions ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                        Consultar contas no Horus
+                      </button>
+                    </div>
+
+                    {(horusBankAccounts.length > 0 || horusPaymentForms.length > 0) && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-white dark:bg-slate-900 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
+                        {horusBankAccounts.length > 0 && (
+                          <div className="space-y-1">
+                            <label className={labelCls}>Selecionar Conta do Horus (preenche Banco/Agência/Conta/Carteira)</label>
+                            <select
+                              className={inputCls}
+                              defaultValue=""
+                              onChange={e => {
+                                const idx = Number(e.target.value);
+                                const acc = horusBankAccounts[idx];
+                                if (!acc) return;
+                                setCfg('horus_cod_banco', acc.cod_banco);
+                                setCfg('horus_cod_agencia', acc.cod_agencia);
+                                setCfg('horus_cod_contac', acc.cod_contac);
+                                if (acc.nro_carteira) setCfg('horus_nro_carteira', acc.nro_carteira);
+                              }}
+                            >
+                              <option value="">Escolha uma conta cadastrada no Horus...</option>
+                              {horusBankAccounts.map((acc, i) => (
+                                <option key={`${acc.cod_banco}-${acc.cod_agencia}-${acc.cod_contac}-${i}`} value={i}>
+                                  Banco {acc.cod_banco} ({acc.nome_banco || 'S/N'}) · Ag {acc.cod_agencia} · C/C {acc.cod_contac} ({acc.nome_contac || acc.num_cc}) {acc.nro_carteira ? `· Cart. ${acc.nro_carteira}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        {horusPaymentForms.length > 0 && (
+                          <div className="space-y-1">
+                            <label className={labelCls}>Selecionar Forma de Pagamento do Horus (preenche COD_FORMA)</label>
+                            <select
+                              className={inputCls}
+                              value={config.horus_cod_forma || ''}
+                              onChange={e => setCfg('horus_cod_forma', e.target.value)}
+                            >
+                              <option value="">Manter forma original do título ou selecione...</option>
+                              {horusPaymentForms.map(fp => (
+                                <option key={fp.cod_forma} value={fp.cod_forma}>
+                                  #{fp.cod_forma} - {fp.nom_forma}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="flex justify-end">
             <button type="button" onClick={handleSaveConfig} disabled={savingConfig} className={`${btnCls} bg-pink-600 hover:bg-pink-700 text-white w-full sm:w-auto`}>
