@@ -170,9 +170,12 @@ def update_company(
     update_data = company_update.model_dump(exclude_unset=True)
     
     # Handle empty strings to avoid Postgres UNIQUE constraint errors
-    for field in ["custom_domain", "login_background_url", "logo", "zip_code", "street", "number", "complement", "neighborhood", "city", "state"]:
-        if field in update_data and update_data[field] == "":
-            update_data[field] = None
+    for field in ["custom_domain", "b2c_custom_domain", "login_background_url", "logo", "zip_code", "street", "number", "complement", "neighborhood", "city", "state"]:
+        if field in update_data and isinstance(update_data[field], str):
+            val = update_data[field].strip()
+            if field in ("custom_domain", "b2c_custom_domain") and val:
+                val = val.lower().replace("https://", "").replace("http://", "").split("/")[0].strip()
+            update_data[field] = val if val != "" else None
             
     for key, value in update_data.items():
         setattr(company, key, value)
@@ -187,6 +190,18 @@ def update_company(
             
     db.commit()
     db.refresh(company)
+
+    # Se salvou um domínio próprio B2C ou B2B, dispara provisionamento automático de vhost + SSL em background
+    for dom_field in ("b2c_custom_domain", "custom_domain"):
+        dom_val = getattr(company, dom_field, None)
+        if dom_val:
+            try:
+                import threading
+                from app.core.ssl_authors import ensure_custom_b2c_domain_ssl
+                threading.Thread(target=ensure_custom_b2c_domain_ssl, args=(dom_val,), daemon=True).start()
+            except Exception:
+                pass
+
     return company
 
 

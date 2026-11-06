@@ -2313,9 +2313,12 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
     if not isinstance(raw_cfg, dict):
         raw_cfg = {}
 
+    raw_dom = re.sub(r"^https?://", "", (company.domain or "").strip().lower())
+    raw_dom_no_www = re.sub(r"^www\.", "", raw_dom)
+    dom_prefix = raw_dom_no_www.split("@")[0].split(".")[0] if raw_dom_no_www else ""
     default_slug = (
-        (company.custom_domain or "").split(".")[0].strip().lower()
-        if company.custom_domain and "." not in (company.custom_domain or "")
+        dom_prefix
+        if dom_prefix and dom_prefix not in ("www", "http", "https", "loja")
         else _slugify_store_name(company.name, company.id)
     )
 
@@ -2546,13 +2549,15 @@ def update_b2c_appearance(
     # Automatically clear B2C cache for this seller so changes appear immediately
     _b2c_cache_clear(cid)
 
-    # Em produção, garante de forma assíncrona que o subdomínio *.{slug}.cronuzb2b.com.br e o vhost Nginx cubram b2c.{slug}.*
+    # Em produção, garante de forma assíncrona que o subdomínio e eventual domínio próprio B2C tenham SSL ativo
     try:
+        import threading
+        from app.core.ssl_authors import ensure_author_portal_ssl, ensure_custom_b2c_domain_ssl
         saved_slug = (current_cfg.get("branding") or {}).get("store_slug") or company.domain
         if saved_slug:
-            import threading
-            from app.core.ssl_authors import ensure_author_portal_ssl
             threading.Thread(target=ensure_author_portal_ssl, args=(saved_slug,), daemon=True).start()
+        if getattr(company, "b2c_custom_domain", None):
+            threading.Thread(target=ensure_custom_b2c_domain_ssl, args=(company.b2c_custom_domain,), daemon=True).start()
     except Exception:
         pass
 
@@ -3789,7 +3794,7 @@ def resolve_public_b2c_store_slug(
         _B2C_SLUG_CACHE[clean] = {"company_id": comp.id, "ts": now_ts}
         return get_public_b2c_storefront_info(company_id=comp.id, db=db)
 
-    # 3. Match by store_slug inside b2c_showcases_config or slugified company name (including compact match)
+    # 3. Match by store_slug inside b2c_showcases_config or slugified company name (including compact match & domain prefix without www.)
     compact_target = re.sub(r"[^a-z0-9]", "", seller_slug)
     active_companies = db.query(Company).filter(Company.active == True).all()
     for c in active_companies:
@@ -3797,8 +3802,10 @@ def resolve_public_b2c_store_slug(
         cfg = _build_b2c_appearance_config(c, s, db)
         cfg_slug = (cfg.get("branding", {}).get("store_slug") or "").strip().lower()
         name_slug = _slugify_store_name(c.name, c.id)
-        domain_slug = (c.domain or "").strip().lower()
-        candidates = [x for x in (cfg_slug, name_slug, domain_slug) if x]
+        domain_slug = re.sub(r"^https?://", "", (c.domain or "").strip().lower())
+        domain_no_www = re.sub(r"^www\.", "", domain_slug)
+        domain_prefix = domain_no_www.split("@")[0].split(".")[0] if domain_no_www else ""
+        candidates = [x for x in (cfg_slug, name_slug, domain_slug, domain_no_www, domain_prefix) if x]
         compact_candidates = [re.sub(r"[^a-z0-9]", "", x) for x in candidates]
         if seller_slug in candidates or (compact_target and compact_target in compact_candidates):
             _B2C_SLUG_CACHE[clean] = {"company_id": c.id, "ts": now_ts}

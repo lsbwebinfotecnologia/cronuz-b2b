@@ -118,9 +118,21 @@ export default function MasterB2CSettingsPage() {
     if (companyId) loadData();
   }, [companyId, loadData]);
 
-  const slug = ((company?.domain || '').split('.')[0] || `empresa-${companyId}`).toLowerCase();
-  const autoSubdomain = `b2c.${slug}.horusb2b.com.br`;
+  const rawDom = (company?.domain || '')
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '');
+  const slug = (rawDom.split(/[.@]/)[0] || `empresa-${companyId}`).toLowerCase();
+  const autoSubdomain = `b2c-${slug}.horusb2b.com.br`;
   const publicStorePath = `/loja/${slug}`;
+  const isLocalHost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  const openStoreHref = isLocalHost
+    ? publicStorePath
+    : b2cDomain
+    ? `https://${b2cDomain}`
+    : `https://${autoSubdomain}`;
 
   const handleToggleB2CModule = async () => {
     if (!company) return;
@@ -351,13 +363,13 @@ export default function MasterB2CSettingsPage() {
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           <a
-            href={publicStorePath}
+            href={openStoreHref}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 transition-colors"
           >
             <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
-            Abrir Loja B2C ({publicStorePath})
+            Abrir Loja B2C ({isLocalHost ? publicStorePath : b2cDomain || autoSubdomain})
           </a>
         </div>
       </div>
@@ -418,9 +430,14 @@ export default function MasterB2CSettingsPage() {
                 Subdomínio Pré-Configurado (CNAME Destino)
               </span>
               <div className="flex items-center justify-between gap-2">
-                <code className="text-xs sm:text-sm font-mono font-bold text-indigo-600 dark:text-indigo-400 break-all">
+                <a
+                  href={`https://${autoSubdomain}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs sm:text-sm font-mono font-bold text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+                >
                   {autoSubdomain}
-                </code>
+                </a>
                 <button
                   type="button"
                   onClick={() => {
@@ -434,7 +451,7 @@ export default function MasterB2CSettingsPage() {
                 </button>
               </div>
               <p className="text-[11px] text-slate-500">
-                Rota interna equivalente: <code className="font-mono">{publicStorePath}</code>
+                SSL HTTPS automático ativo • Rota interna: <code className="font-mono">{publicStorePath}</code>
               </p>
             </div>
 

@@ -125,10 +125,10 @@ def get_storefront_domain_info(
     if company:
         is_b2c_domain = True
 
-    # 1b. Support standardized B2C subdomains: b2c.{seller}.horusb2b.com.br | b2c.{seller}.cronuzb2b.com.br
-    if not company and clean_domain.startswith("b2c."):
+    # 1b. Support standardized B2C subdomains: b2c-{seller}.horusb2b.com.br | b2c.{seller}.horusb2b.com.br | b2c-{seller}.cronuzb2b.com.br
+    if not company and (clean_domain.startswith("b2c.") or clean_domain.startswith("b2c-")):
         b2c_match = _re.match(
-            r"^b2c\.([a-z0-9_-]+)\.(horusb2b\.com\.br|cronuzb2b\.com\.br|cronuz\.com\.br|localhost|horusb2b\.localhost|cronuzb2b\.localhost)$",
+            r"^b2c[.-]([a-z0-9_-]+)\.(horusb2b\.com\.br|cronuzb2b\.com\.br|cronuz\.com\.br|localhost|horusb2b\.localhost|cronuzb2b\.localhost)$",
             clean_domain,
         )
         if b2c_match:
@@ -148,7 +148,10 @@ def get_storefront_domain_info(
                     app_cfg = _build_b2c_appearance_config(c, s_cfg, db)
                     cfg_slug = (app_cfg.get("branding", {}).get("store_slug") or "").strip().lower()
                     name_slug = _slugify_store_name(c.name, c.id)
-                    cands = [x for x in (cfg_slug, name_slug, (c.domain or "").strip().lower()) if x]
+                    raw_dom = _re.sub(r"^https?://", "", (c.domain or "").strip().lower())
+                    raw_dom_no_www = _re.sub(r"^www\.", "", raw_dom)
+                    dom_prefix = raw_dom_no_www.split("@")[0].split(".")[0] if raw_dom_no_www else ""
+                    cands = [x for x in (cfg_slug, name_slug, raw_dom, raw_dom_no_www, dom_prefix) if x]
                     compact_cands = [_re.sub(r"[^a-z0-9]", "", x) for x in cands]
                     if seller_slug in cands or (compact_slug and compact_slug in compact_cands):
                         company = c

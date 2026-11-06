@@ -2009,13 +2009,13 @@ export default function SellerB2CStorefrontManagementPage({
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
                 />
                 <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
-                  Padrão de subdomínio multi-tenant suportado automaticamente:{' '}
+                  Padrão de subdomínio multi-tenant suportado automaticamente (SSL imediato):{' '}
                   <strong className="font-mono text-indigo-600 dark:text-indigo-400">
-                    b2c.{'{slug}'}.horusb2b.com.br
+                    b2c-{'{slug}'}.horusb2b.com.br
                   </strong>{' '}
                   ou{' '}
                   <strong className="font-mono text-indigo-600 dark:text-indigo-400">
-                    b2c.{'{slug}'}.cronuzb2b.com.br
+                    b2c-{'{slug}'}.cronuzb2b.com.br
                   </strong>
                   . Caso utilize domínio próprio, basta apontar o registro <strong>CNAME</strong> para o subdomínio acima ou registro <strong>A</strong> para <code className="font-mono">64.23.182.183</code>.
                 </p>

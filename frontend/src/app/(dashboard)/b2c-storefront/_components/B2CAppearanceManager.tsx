@@ -428,8 +428,10 @@ export default function B2CAppearanceManager({
   const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
   const isHorusTenant = currentHost.includes('horus');
   const baseTenantDomain = isHorusTenant ? 'horusb2b.com.br' : 'cronuzb2b.com.br';
-  const effectiveSlug = branding.store_slug || String(companyId || 'loja');
-  const officialB2cSubdomain = `b2c.${effectiveSlug}.${baseTenantDomain}`;
+  const effectiveSlug = (branding.store_slug || String(companyId || 'loja'))
+    .toLowerCase()
+    .replace(/^www\./, '');
+  const officialB2cSubdomain = `b2c-${effectiveSlug}.${baseTenantDomain}`;
   const officialB2cSubdomainUrl = `https://${officialB2cSubdomain}`;
   const friendlyStoreUrl = `${originUrl}/loja/${effectiveSlug}`;
 

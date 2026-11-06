@@ -432,7 +432,15 @@ export default function CompanyProfilePage() {
                 id: 'B2C',
                 title: 'B2C (Loja Virtual Aberta)',
                 desc: 'Domínio próprio B2C, zona DNS, sincronização Horus ERP e checkout para consumidor final.',
-                badge: formData.b2c_custom_domain || `b2c.${(formData.domain || '').split('.')[0] || 'loja'}.horusb2b.com.br`,
+                badge:
+                  formData.b2c_custom_domain ||
+                  `b2c-${
+                    (formData.domain || '')
+                      .toLowerCase()
+                      .replace(/^https?:\/\//, '')
+                      .replace(/^www\./, '')
+                      .split(/[.@]/)[0] || 'loja'
+                  }.horusb2b.com.br`,
                 icon: ShoppingBag,
               },
               {

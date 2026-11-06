@@ -109,7 +109,13 @@ export default function CompanyIntegrationsPage() {
         : 'Módulo Desativado',
       detail: company.b2c_custom_domain
         ? `Domínio: ${company.b2c_custom_domain}`
-        : `Subdomínio: b2c.${(company.domain || `seller${company.id}`).split('.')[0]}.horusb2b.com.br`,
+        : `Subdomínio: b2c-${
+            (company.domain || `seller${company.id}`)
+              .toLowerCase()
+              .replace(/^https?:\/\//, '')
+              .replace(/^www\./, '')
+              .split(/[.@]/)[0]
+          }.horusb2b.com.br`,
       href: `/companies/${companyId}/tray`,
       sellerInfo: 'Gerenciado pelo Seller no menu B2C & Produtos',
     },
