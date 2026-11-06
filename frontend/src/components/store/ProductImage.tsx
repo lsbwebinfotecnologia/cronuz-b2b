@@ -11,7 +11,7 @@ interface ProductImageProps {
   iconClassName?: string;
   baseUrl?: string | null;
   secondaryBaseUrl?: string | null;
-  companyIdProp?: number;
+  companyIdProp?: number | null;
   coverUrl?: string | null;
 }
 

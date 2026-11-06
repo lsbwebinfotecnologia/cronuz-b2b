@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, FileText, Image as ImageIcon, Save, CheckCircle2, XCircle, Calendar, AlertTriangle, DollarSign, ChevronDown } from 'lucide-react';
+import { Loader2, Globe, FileText, Image as ImageIcon, Save, CheckCircle2, XCircle, Calendar, AlertTriangle, DollarSign, ChevronDown, Store, Building2, Database, Landmark, Boxes, ShoppingBag } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { getImageUrl } from '@/lib/image_helper';
@@ -16,6 +17,7 @@ export default function CompanyProfilePage() {
   
   const [savingGlobal, setSavingGlobal] = useState(false);
   const [togglingStatus, setTogglingStatus] = useState(false);
+  const [selectedMasterOp, setSelectedMasterOp] = useState<'B2C' | 'B2B' | 'PDV' | 'HORUS' | 'PAYMENTS' | 'ECOSYSTEM'>('B2C');
 
   const [formData, setFormData] = useState({
     name: '',
@@ -82,13 +84,15 @@ export default function CompanyProfilePage() {
 
   useEffect(() => {
     if (company) {
+      const cleanCustomB2b = (company.custom_domain || '').includes('@') ? '' : (company.custom_domain || '');
+      const cleanCustomB2c = (company.b2c_custom_domain || '').includes('@') ? '' : (company.b2c_custom_domain || '');
       setFormData(prev => ({
         ...prev,
         name: company.name || '',
         document: maskCNPJ(company.document || ''),
         domain: company.domain || '',
-        custom_domain: company.custom_domain || '',
-        b2c_custom_domain: company.b2c_custom_domain || '',
+        custom_domain: cleanCustomB2b,
+        b2c_custom_domain: cleanCustomB2c,
         tenant_id: company.tenant_id || 'cronuz',
         zip_code: company.zip_code || '',
         street: company.street || '',
@@ -387,7 +391,7 @@ export default function CompanyProfilePage() {
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full overflow-y-auto">
       <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-10">
          <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center justify-between">
-           Detalhes do Cliente (Perfil)
+           Central de Operações &amp; Perfil do Cliente
            
            <button
              onClick={handleToggleStatus}
@@ -403,14 +407,278 @@ export default function CompanyProfilePage() {
            </button>
          </h2>
          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-           Informações principais da conta master.
+           Selecione abaixo o tipo de operação para abrir diretamente suas configurações ou gerencie o cadastro principal da empresa.
          </p>
       </div>
 
       <div className="p-6 space-y-8">
-        {/* Identificação Section */}
+        {/* BLOCO 1: SELETOR DE OPERAÇÕES NO MASTER (EXPERIÊNCIA AUTOEXPLICATIVA) */}
+        <section className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 space-y-4">
+          <div>
+            <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+              Navegação Guiada • Selecione a Operação do Parceiro
+            </span>
+            <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+              Qual frente operacional você deseja configurar neste cliente?
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Clique na operação (<strong>Storefront B2C</strong>, <strong>Storefront B2B</strong>, <strong>PDV</strong>, <strong>Horus ERP</strong>, <strong>Pagamentos</strong> ou <strong>Módulos</strong>) para ver os detalhes e abrir a tela de configuração correspondente.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            {[
+              {
+                id: 'B2C',
+                title: 'B2C (Loja Virtual Aberta)',
+                desc: 'Domínio próprio B2C, zona DNS, sincronização Horus ERP e checkout para consumidor final.',
+                badge: formData.b2c_custom_domain || `b2c.${(formData.domain || '').split('.')[0] || 'loja'}.horusb2b.com.br`,
+                icon: ShoppingBag,
+              },
+              {
+                id: 'B2B',
+                title: 'Storefront B2B (Atacado)',
+                desc: 'Portal B2B, links primário e secundário de capas, vitrines B2B e estoque.',
+                badge: formData.custom_domain || formData.domain || 'Domínio B2B',
+                icon: Building2,
+              },
+              {
+                id: 'PAYMENTS',
+                title: 'Pagamentos & Bancos',
+                desc: 'Roteamento por operação (B2C, B2B, PDV, Eventos, Assinaturas) e credenciais (Vindi, Cora, Efí, Inter).',
+                badge: 'Matriz de Canais & Gateways',
+                icon: Landmark,
+              },
+              {
+                id: 'HORUS',
+                title: 'Horus ERP & SQL Direct',
+                desc: 'Configuração da API REST Horus (OFFSET/LIMIT, SD_*, AC_*), SQL Direct e Agente Bridge.',
+                badge: company.module_horus_erp ? 'Horus ERP Ativo ✓' : 'Configurar ERP',
+                icon: Database,
+              },
+              {
+                id: 'PDV',
+                title: 'Frente de Caixa (PDV) & Módulos',
+                desc: 'Ativação de módulos contratados (PDV, Eventos Escolares, CRM, Editorial, B2C).',
+                badge: 'Licenças & Funcionalidades',
+                icon: Boxes,
+              },
+              {
+                id: 'ECOSYSTEM',
+                title: 'Bookinfo, Dropship & Distribuidores',
+                desc: 'Hub Bookinfo, fornecedores de Dropship, distribuidores e webhooks externos.',
+                badge: 'Ecossistema & Catálogo',
+                icon: Store,
+              },
+            ].map((op) => {
+              const isSelected = selectedMasterOp === op.id;
+              const IconComp = op.icon;
+              return (
+                <button
+                  key={op.id}
+                  type="button"
+                  onClick={() => setSelectedMasterOp(op.id as any)}
+                  className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                    isSelected
+                      ? 'border-indigo-600 bg-white dark:bg-slate-900 ring-2 ring-indigo-500/20 shadow-sm'
+                      : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/50 hover:border-indigo-300'
+                  }`}
+                >
+                  <div>
+                    <span className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <IconComp className={`w-4 h-4 ${isSelected ? 'text-indigo-600' : 'text-slate-400'}`} />
+                      {op.title}
+                    </span>
+                    <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{op.desc}</p>
+                  </div>
+                  <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-mono font-bold text-indigo-600 dark:text-indigo-400 truncate">
+                      {op.badge}
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400 shrink-0">
+                      {isSelected ? 'Selecionado ✓' : 'Ver opções →'}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* PAINEL DE AÇÃO RÁPIDA DA OPERAÇÃO SELECIONADA NO MASTER */}
+          <div className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-white dark:bg-slate-900 shadow-sm">
+            {selectedMasterOp === 'B2C' && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                    Operação Selecionada • B2C (Loja Virtual Aberta)
+                  </span>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    Configure o domínio e apontamento DNS da loja B2C, sincronização de produtos Horus e meios de pagamento do checkout B2C.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <Link
+                    href={`/companies/${companyId}/tray`}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                  >
+                    Abrir Configurações B2C →
+                  </Link>
+                  <Link
+                    href={`/companies/${companyId}/payments`}
+                    className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                  >
+                    Configurar Pagamentos B2C →
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {selectedMasterOp === 'B2B' && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                    Operação Selecionada • Storefront B2B (Atacado)
+                  </span>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    Configure servidores de capas (primário e secundário), visibilidade de estoque B2B, vitrines e pagamentos do atacado.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <Link
+                    href={`/companies/${companyId}/settings`}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                  >
+                    Abrir Capas &amp; Configurações Gerais B2B →
+                  </Link>
+                  <Link
+                    href={`/companies/${companyId}/payments`}
+                    className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                  >
+                    Configurar Pagamentos B2B →
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {selectedMasterOp === 'PAYMENTS' && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                    Operação Selecionada • Pagamentos &amp; Bancos
+                  </span>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    Defina por canal (B2C, B2B, PDV, Eventos, Assinaturas, Financeiro Horus) qual provedor processa Cartão, PIX, Boleto ou Link no final da venda.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <Link
+                    href={`/companies/${companyId}/payments`}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                  >
+                    Abrir Central de Pagamentos &amp; Bancos →
+                  </Link>
+                  <Link
+                    href={`/companies/${companyId}/invoices`}
+                    className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                  >
+                    Ver Faturas SaaS →
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {selectedMasterOp === 'HORUS' && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                    Operação Selecionada • Horus ERP &amp; SQL Direct
+                  </span>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    Configure a API Horus B2B (URL, Empresa, Filial, Local de Estoque, paginação OFFSET/LIMIT), conexão SQL Direct e Agente Bridge.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <Link
+                    href={`/companies/${companyId}/horus`}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                  >
+                    Abrir Horus ERP (API REST) →
+                  </Link>
+                  <Link
+                    href={`/companies/${companyId}/horus-sql`}
+                    className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                  >
+                    Abrir Horus SQL Direct →
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {selectedMasterOp === 'PDV' && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                    Operação Selecionada • Frente de Caixa (PDV) &amp; Módulos
+                  </span>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    Habilite ou desabilite módulos para esta empresa (PDV, Loja B2C, Eventos Escolares, Horus Direct DBM, Financeiro, etc.) e gerencie usuários.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <Link
+                    href={`/companies/${companyId}/modules`}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                  >
+                    Abrir Módulos &amp; Licenças →
+                  </Link>
+                  <Link
+                    href={`/companies/${companyId}/users`}
+                    className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                  >
+                    Acessos e Logins →
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {selectedMasterOp === 'ECOSYSTEM' && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                    Operação Selecionada • Bookinfo, Dropship &amp; Distribuidores
+                  </span>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    Acesse as configurações de integração com Bookinfo, regras de Dropship, distribuidores parceiros e webhooks.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <Link
+                    href={`/companies/${companyId}/bookinfo`}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                  >
+                    Abrir Bookinfo →
+                  </Link>
+                  <Link
+                    href={`/companies/${companyId}/dropship`}
+                    className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                  >
+                    Abrir Dropship →
+                  </Link>
+                  <Link
+                    href={`/companies/${companyId}/distributors`}
+                    className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                  >
+                    Distribuidores →
+                  </Link>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Identificação & Domínios das Operações */}
         <section className="space-y-4">
-           <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">Identificação</h3>
+           <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">Identificação &amp; Domínios das Operações</h3>
            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800/60 dark:bg-slate-900/40">
               <div className="space-y-1.5 md:col-span-1">
                 <label className="text-xs font-medium text-slate-700 dark:text-slate-300">CNPJ / Documento</label>
@@ -443,6 +711,8 @@ export default function CompanyProfilePage() {
                   <input
                     type="text"
                     name="domain"
+                    autoComplete="off"
+                    data-lpignore="true"
                     value={formData.domain}
                     onChange={handleInputChange}
                     className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
@@ -456,9 +726,17 @@ export default function CompanyProfilePage() {
                   <input
                     type="text"
                     name="custom_domain"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    spellCheck={false}
                     placeholder="Ex: b2b.minhaeditora.com.br"
                     value={formData.custom_domain}
-                    onChange={handleInputChange}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v.includes('@')) return;
+                      handleInputChange(e);
+                    }}
                     className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-[var(--color-primary-base)] focus:border-transparent dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
                   />
                 </div>
@@ -470,9 +748,17 @@ export default function CompanyProfilePage() {
                   <input
                     type="text"
                     name="b2c_custom_domain"
-                    placeholder="Ex: loja.minhaeditora.com.br"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    spellCheck={false}
+                    placeholder="Ex: parceria.movimentoliterario.com.br"
                     value={formData.b2c_custom_domain}
-                    onChange={handleInputChange}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v.includes('@')) return;
+                      handleInputChange(e);
+                    }}
                     className="w-full rounded-xl border border-fuchsia-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-900 font-medium focus:ring-2 focus:ring-fuchsia-500 focus:border-transparent dark:border-fuchsia-900/50 dark:bg-slate-900/50 dark:text-slate-200"
                   />
                 </div>
@@ -496,7 +782,7 @@ export default function CompanyProfilePage() {
                       <option value="B2B_CRONUZ">B2B Cronuz (Padrão)</option>
                       <option value="B2B_HORUS">B2B Horus Emissor (ERP)</option>
                       <option value="CRONUZ_COMMERCE">Cronuz Commerce (Virtual Store)</option>
-                      <option value="B2C_STOREFRONT">Storefront Aberto B2C (Vouchers &amp; Tray)</option>
+                      <option value="B2C_STOREFRONT">Storefront Aberto B2C (Vouchers &amp; Loja Virtual)</option>
                       <option value="SUPORTE_HORUS">Suporte Horus</option>
                     </select>
                     <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />

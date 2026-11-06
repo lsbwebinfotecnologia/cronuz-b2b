@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Terminal,
   Sparkles,
+  Settings2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
@@ -27,64 +28,27 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 /** Modo de finalização do carrinho da loja B2C (configurado pelo seller). */
 export function B2CCheckoutModeSelector({ settings, setSettings }: Props) {
-  const mode = settings.b2c_checkout_mode === 'TRAY_REDIRECT' ? 'TRAY_REDIRECT' : 'NATIVE_GATEWAY';
   const isVindiLink =
     settings.payment_gateway_active === 'VINDI' &&
     settings.vindi_integration_mode === 'PAYMENT_LINK';
 
-  const options = [
-    {
-      id: 'NATIVE_GATEWAY',
-      title: isVindiLink
-        ? 'Finalizar com Vindi (Link de Pagamento Hospedado)'
-        : 'Finalizar com Gateway da Loja (Checkout Transparente Vindi / Efí)',
-      desc: isVindiLink
-        ? 'Gera o pedido no Cronuz e redireciona o cliente para o Link de Pagamento Seguro da Vindi (PIX, Cartão ou Boleto).'
-        : 'O cliente finaliza a compra com PIX (QR Code + Copia e Cola) ou Cartão de Crédito diretamente dentro da página da loja B2C.',
-    },
-    {
-      id: 'TRAY_REDIRECT',
-      title: 'Criar Carrinho na Tray via API e Redirecionar',
-      desc: settings.tray_enabled
-        ? 'Cria o carrinho na Tray via API e envia o cliente para concluir o pagamento na Tray.'
-        : 'Integração Tray não está habilitada para esta empresa.',
-    },
-  ];
   return (
     <div className="space-y-2">
       <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
         Modo de Finalização do Carrinho na Loja B2C
       </label>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {options.map((o) => {
-          const active = mode === o.id;
-          const disabled = o.id === 'TRAY_REDIRECT' && !settings.tray_enabled;
-          return (
-            <button
-              key={o.id}
-              type="button"
-              disabled={disabled}
-              onClick={() => setSettings({ ...settings, b2c_checkout_mode: o.id })}
-              className={`p-4 rounded-xl border text-left transition-all ${
-                disabled
-                  ? 'opacity-50 cursor-not-allowed border-slate-200 dark:border-slate-800'
-                  : active
-                  ? 'border-rose-500 bg-rose-50/60 dark:bg-rose-950/30 ring-2 ring-rose-500/20 cursor-pointer'
-                  : 'border-slate-200 dark:border-slate-700 hover:border-rose-300 cursor-pointer'
-              }`}
-            >
-              <span className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
-                <span
-                  className={`w-3.5 h-3.5 rounded-full border-2 ${
-                    active ? 'border-rose-500 bg-rose-500' : 'border-slate-300'
-                  }`}
-                />
-                {o.title}
-              </span>
-              <span className="block mt-1 text-xs text-slate-500">{o.desc}</span>
-            </button>
-          );
-        })}
+      <div className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-950/30">
+        <span className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+          <span className="w-3.5 h-3.5 rounded-full border-2 border-indigo-600 bg-indigo-600" />
+          {isVindiLink
+            ? 'Finalizar com Link de Pagamento Hospedado no Final da Venda'
+            : 'Finalizar por Forma de Pagamento na Loja (Checkout Transparente)'}
+        </span>
+        <span className="block mt-1 text-xs text-slate-500">
+          {isVindiLink
+            ? 'Gera o pedido no Cronuz e redireciona o cliente para o Link de Pagamento Seguro (PIX, Cartão ou Boleto).'
+            : 'O cliente escolhe PIX, Cartão de Crédito ou Boleto diretamente dentro da página da loja B2C.'}
+        </span>
       </div>
     </div>
   );
@@ -936,23 +900,26 @@ export function VindiCheckoutPanel({ settings, setSettings }: Props) {
 
 type RoutingMatrixProps = {
   companyId: number;
-  settings: any;
-  setSettings: (s: any) => void;
+  settings?: any;
+  setSettings?: (s: any) => void;
   onJumpToProvider?: (providerCode: string) => void;
   onJumpToPdvTab?: () => void;
+  activeProviderDrawer?: string | null;
 };
 
 /**
  * Matriz Unificada de Roteamento por Canal × Forma de Pagamento (ou Link no Fim da Venda).
- * Permite ao Seller escolher 1 provedor para cada forma (ex: Cartão -> Vindi, PIX -> Efí, Boleto -> Cora)
- * OU definir que o canal finaliza com Link de Pagamento no final da venda (sem amarrar na forma).
+ * Permite ao Seller ou Master escolher 1 provedor para cada forma (ex: Cartão -> Vindi, PIX -> Efí, Boleto -> Cora)
+ * OU definir que o canal finaliza com Link de Pagamento no final da venda (sem amarrar na forma),
+ * com botão direto para abrir a configuração do provedor selecionado sob demanda.
  */
 export function SellerPaymentRoutingMatrix({
   companyId,
-  settings,
+  settings = {},
   setSettings,
   onJumpToProvider,
   onJumpToPdvTab,
+  activeProviderDrawer,
 }: RoutingMatrixProps) {
   const [hub, setHub] = useState<any | null>(null);
   const [loadingHub, setLoadingHub] = useState(true);
@@ -991,11 +958,13 @@ export function SellerPaymentRoutingMatrix({
       if (providerCode) chMap[methodCode] = providerCode;
       else delete chMap[methodCode];
       const nextRoutes = { ...prev, [channelCode]: chMap };
-      setSettings((sPrev: any) => ({
-        ...sPrev,
-        _hub_routes: nextRoutes,
-        _hub_channels: hub?.channels || [],
-      }));
+      if (setSettings) {
+        setSettings((sPrev: any) => ({
+          ...sPrev,
+          _hub_routes: nextRoutes,
+          _hub_channels: hub?.channels || [],
+        }));
+      }
       return nextRoutes;
     });
   };
@@ -1011,35 +980,35 @@ export function SellerPaymentRoutingMatrix({
         [channelCode]: updatedCh,
       };
 
-      // Sincroniza imediatamente com o estado principal do SettingsPage
-      setSettings((sPrev: any) => {
-        const nextShowcases = {
-          ...(sPrev.b2c_showcases_config || {}),
-          payment_channel_modes: nextModes,
-        };
-        const patch: any = {
-          ...sPrev,
-          b2c_showcases_config: nextShowcases,
-          _hub_channel_modes: nextModes,
-          _hub_routes: routes,
-          _hub_channels: hub?.channels || [],
-        };
-        if (channelCode === 'B2C_STOREFRONT') {
-          if (updatedCh.mode === 'TRAY_REDIRECT') {
-            patch.b2c_checkout_mode = 'TRAY_REDIRECT';
-          } else if (updatedCh.mode === 'PAYMENT_LINK') {
-            const lp = updatedCh.link_provider || 'VINDI';
-            patch.b2c_checkout_mode = 'NATIVE_GATEWAY';
-            patch.payment_gateway_active = lp;
-            patch.vindi_integration_mode = 'PAYMENT_LINK';
-            patch.vindi_express_cpf_only = updatedCh.express_cpf_only !== false;
-          } else {
-            patch.b2c_checkout_mode = 'NATIVE_GATEWAY';
-            patch.vindi_integration_mode = 'TRANSPARENT';
+      // Sincroniza imediatamente com o estado principal do SettingsPage quando presente
+      if (setSettings) {
+        setSettings((sPrev: any) => {
+          const nextShowcases = {
+            ...(sPrev.b2c_showcases_config || {}),
+            payment_channel_modes: nextModes,
+          };
+          const patch: any = {
+            ...sPrev,
+            b2c_showcases_config: nextShowcases,
+            _hub_channel_modes: nextModes,
+            _hub_routes: routes,
+            _hub_channels: hub?.channels || [],
+          };
+          if (channelCode === 'B2C_STOREFRONT') {
+            if (updatedCh.mode === 'PAYMENT_LINK') {
+              const lp = updatedCh.link_provider || 'VINDI';
+              patch.b2c_checkout_mode = 'NATIVE_GATEWAY';
+              patch.payment_gateway_active = lp;
+              patch.vindi_integration_mode = 'PAYMENT_LINK';
+              patch.vindi_express_cpf_only = updatedCh.express_cpf_only !== false;
+            } else {
+              patch.b2c_checkout_mode = 'NATIVE_GATEWAY';
+              patch.vindi_integration_mode = 'TRANSPARENT';
+            }
           }
-        }
-        return patch;
-      });
+          return patch;
+        });
+      }
 
       return nextModes;
     });
@@ -1047,7 +1016,7 @@ export function SellerPaymentRoutingMatrix({
 
   // Mantém a matriz sincronizada se o usuário clicar na modalidade dentro do VindiCheckoutPanel abaixo
   useEffect(() => {
-    if (!hub || loadingHub) return;
+    if (!hub || loadingHub || !settings || !settings.vindi_integration_mode) return;
     setChannelModes((prev) => {
       const curB2c = prev.B2C_STOREFRONT || {
         mode: 'PER_METHOD',
@@ -1055,9 +1024,7 @@ export function SellerPaymentRoutingMatrix({
         express_cpf_only: true,
       };
       const targetMode =
-        settings.b2c_checkout_mode === 'TRAY_REDIRECT'
-          ? 'TRAY_REDIRECT'
-          : settings.vindi_integration_mode === 'PAYMENT_LINK'
+        settings.vindi_integration_mode === 'PAYMENT_LINK'
           ? 'PAYMENT_LINK'
           : 'PER_METHOD';
       const targetExpress = settings.vindi_express_cpf_only !== false;
@@ -1074,7 +1041,7 @@ export function SellerPaymentRoutingMatrix({
         },
       };
     });
-  }, [settings.vindi_integration_mode, settings.vindi_express_cpf_only, settings.b2c_checkout_mode]);
+  }, [settings?.vindi_integration_mode, settings?.vindi_express_cpf_only]);
 
   const handleSaveMatrix = async () => {
     if (!companyId || !hub) return;
@@ -1107,49 +1074,42 @@ export function SellerPaymentRoutingMatrix({
       setChannelModes(data.channel_modes || {});
 
       // Sincroniza estado local do settings para o B2C (incluindo payment_channel_modes em b2c_showcases_config)
-      const b2cCfg = (data.channel_modes || {}).B2C_STOREFRONT || {};
-      const b2cRoutes = (data.routes || {}).B2C_STOREFRONT || {};
-      const nextShowcases = {
-        ...(settings.b2c_showcases_config || {}),
-        payment_channel_modes: data.channel_modes || channelModes,
-      };
-      if (b2cCfg.mode === 'TRAY_REDIRECT') {
-        setSettings({
-          ...settings,
-          b2c_checkout_mode: 'TRAY_REDIRECT',
-          b2c_showcases_config: nextShowcases,
-          _hub_channel_modes: data.channel_modes || channelModes,
-          _hub_routes: data.routes || routes,
-          _hub_channels: data.channels || hub?.channels || [],
-        });
-      } else if (b2cCfg.mode === 'PAYMENT_LINK') {
-        const lp = b2cCfg.link_provider || 'VINDI';
-        setSettings({
-          ...settings,
-          b2c_checkout_mode: 'NATIVE_GATEWAY',
-          payment_gateway_active: lp,
-          vindi_integration_mode: 'PAYMENT_LINK',
-          vindi_express_cpf_only: b2cCfg.express_cpf_only !== false,
-          b2c_showcases_config: nextShowcases,
-          _hub_channel_modes: data.channel_modes || channelModes,
-          _hub_routes: data.routes || routes,
-          _hub_channels: data.channels || hub?.channels || [],
-        });
-      } else {
-        const primary = b2cRoutes.CARD || b2cRoutes.PIX || b2cRoutes.BOLETO || settings.payment_gateway_active;
-        setSettings({
-          ...settings,
-          b2c_checkout_mode: 'NATIVE_GATEWAY',
-          payment_gateway_active: primary,
-          vindi_integration_mode: 'TRANSPARENT',
-          b2c_showcases_config: nextShowcases,
-          _hub_channel_modes: data.channel_modes || channelModes,
-          _hub_routes: data.routes || routes,
-          _hub_channels: data.channels || hub?.channels || [],
-        });
+      if (setSettings) {
+        const b2cCfg = (data.channel_modes || {}).B2C_STOREFRONT || {};
+        const b2cRoutes = (data.routes || {}).B2C_STOREFRONT || {};
+        const nextShowcases = {
+          ...(settings.b2c_showcases_config || {}),
+          payment_channel_modes: data.channel_modes || channelModes,
+        };
+        if (b2cCfg.mode === 'PAYMENT_LINK') {
+          const lp = b2cCfg.link_provider || 'VINDI';
+          setSettings({
+            ...settings,
+            b2c_checkout_mode: 'NATIVE_GATEWAY',
+            payment_gateway_active: lp,
+            vindi_integration_mode: 'PAYMENT_LINK',
+            vindi_express_cpf_only: b2cCfg.express_cpf_only !== false,
+            b2c_showcases_config: nextShowcases,
+            _hub_channel_modes: data.channel_modes || channelModes,
+            _hub_routes: data.routes || routes,
+            _hub_channels: data.channels || hub?.channels || [],
+          });
+        } else {
+          const primary = b2cRoutes.CARD || b2cRoutes.PIX || b2cRoutes.BOLETO || settings.payment_gateway_active;
+          setSettings({
+            ...settings,
+            b2c_checkout_mode: 'NATIVE_GATEWAY',
+            payment_gateway_active: primary,
+            vindi_integration_mode: 'TRANSPARENT',
+            b2c_showcases_config: nextShowcases,
+            _hub_channel_modes: data.channel_modes || channelModes,
+            _hub_routes: data.routes || routes,
+            _hub_channels: data.channels || hub?.channels || [],
+          });
+        }
       }
 
-      toast.success('Regras de pagamento por canal e forma salvas com sucesso!');
+      toast.success('Regras de pagamento por operação salvas com sucesso!');
     } catch (e: any) {
       toast.error(e.message || 'Falha ao salvar matriz de pagamentos.');
     } finally {
@@ -1186,9 +1146,6 @@ export function SellerPaymentRoutingMatrix({
 
   const summarizeChannel = (ch: any) => {
     const cm = channelModes[ch.code]?.mode || 'PER_METHOD';
-    if (ch.supports_checkout_finisher && cm === 'TRAY_REDIRECT') {
-      return 'Redirect Carrinho Tray';
-    }
     if (ch.supports_checkout_finisher && cm === 'PAYMENT_LINK') {
       const lp = channelModes[ch.code]?.link_provider || 'VINDI';
       return `Link no Fim da Venda (${lp})`;
@@ -1258,30 +1215,42 @@ export function SellerPaymentRoutingMatrix({
         </div>
 
         {/* Grade de Cards dos Canais (B2C, Eventos, Assinaturas, B2B, Horus ERP, Financeiro Cronuz, PDV) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
           {visibleChannels.map((ch: any) => {
             const isSelected = ch.code === activeChCode;
             const summary = summarizeChannel(ch);
+            const isConfigured = summary !== 'Não definido';
             return (
               <button
                 key={ch.code}
                 type="button"
                 onClick={() => setSelectedChannel(ch.code)}
-                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between min-w-0 ${
                   isSelected
                     ? 'border-indigo-600 bg-indigo-50/70 dark:bg-indigo-950/40 ring-2 ring-indigo-500/20 shadow-sm'
                     : 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/40 hover:border-indigo-300'
                 }`}
               >
-                <div>
-                  <span className="text-xs font-extrabold text-slate-900 dark:text-white block">
-                    {ch.short_name || ch.name}
-                  </span>
-                  <span className="text-[11px] text-slate-500 line-clamp-2 mt-0.5 block">
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
+                      {ch.short_name || ch.name}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                        isConfigured
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                          : 'bg-slate-200/70 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                      }`}
+                    >
+                      {isConfigured ? 'Ativo' : 'Pendente'}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 line-clamp-2 mt-1 block">
                     {ch.description}
                   </span>
                 </div>
-                <div className="mt-2.5 pt-2 border-t border-slate-200/70 dark:border-slate-800 flex items-center justify-between gap-1">
+                <div className="mt-2.5 pt-2 border-t border-slate-200/70 dark:border-slate-800 flex items-center justify-between gap-1 min-w-0">
                   <span className="text-[10px] font-mono font-bold text-indigo-700 dark:text-indigo-300 truncate">
                     {summary}
                   </span>
@@ -1310,7 +1279,6 @@ export function SellerPaymentRoutingMatrix({
                   const cm = channelModes[ch.code]?.mode || 'PER_METHOD';
                   const r = routes[ch.code] || {};
                   const isLink = ch.supports_checkout_finisher && cm === 'PAYMENT_LINK';
-                  const isTray = ch.supports_checkout_finisher && cm === 'TRAY_REDIRECT';
                   return (
                     <tr
                       key={ch.code}
@@ -1321,11 +1289,7 @@ export function SellerPaymentRoutingMatrix({
                         {ch.short_name || ch.name}
                       </td>
                       <td className="py-2.5 px-3">
-                        {isTray ? (
-                          <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-bold text-[10px]">
-                            Redirect Tray
-                          </span>
-                        ) : isLink ? (
+                        {isLink ? (
                           <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold text-[10px]">
                             Link no Fim da Venda
                           </span>
@@ -1336,13 +1300,13 @@ export function SellerPaymentRoutingMatrix({
                         )}
                       </td>
                       <td className="py-2.5 px-3 font-mono">
-                        {isLink || isTray ? 'Definido no Link' : r.CARD || '—'}
+                        {isLink ? 'Definido no Link' : r.CARD || '—'}
                       </td>
                       <td className="py-2.5 px-3 font-mono">
-                        {isLink || isTray ? 'Definido no Link' : r.PIX || '—'}
+                        {isLink ? 'Definido no Link' : r.PIX || '—'}
                       </td>
                       <td className="py-2.5 px-3 font-mono">
-                        {isLink || isTray ? 'Definido no Link' : r.BOLETO || '—'}
+                        {isLink ? 'Definido no Link' : r.BOLETO || '—'}
                       </td>
                       <td className="py-2.5 px-3 font-mono">
                         {isLink ? channelModes[ch.code]?.link_provider || r.LINK || 'VINDI' : r.LINK || '—'}
@@ -1406,11 +1370,7 @@ export function SellerPaymentRoutingMatrix({
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 block">
                   Como a venda é finalizada em &ldquo;{activeChannelObj.short_name || activeChannelObj.name}&rdquo;?
                 </label>
-                <div
-                  className={`grid grid-cols-1 ${
-                    activeChCode === 'B2C_STOREFRONT' ? 'md:grid-cols-3' : 'md:grid-cols-2'
-                  } gap-3`}
-                >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {/* OPÇÃO A: POR FORMA DE PAGAMENTO (CHECKOUT TRANSPARENTE) */}
                   <button
                     type="button"
@@ -1458,36 +1418,6 @@ export function SellerPaymentRoutingMatrix({
                       <strong>Não amarra na forma de pagamento</strong>: no fim da venda o pedido gera o Link Oficial (ex: Vindi) e o cliente escolhe PIX, Cartão ou Boleto lá dentro.
                     </p>
                   </button>
-
-                  {/* OPÇÃO C (EXCLUSIVA B2C): REDIRECIONAR CARRINHO TRAY */}
-                  {activeChCode === 'B2C_STOREFRONT' && (
-                    <button
-                      type="button"
-                      disabled={!settings.tray_enabled}
-                      onClick={() => setChannelModeField('B2C_STOREFRONT', 'mode', 'TRAY_REDIRECT')}
-                      className={`p-3.5 rounded-xl border text-left transition-all ${
-                        !settings.tray_enabled
-                          ? 'opacity-50 cursor-not-allowed border-slate-200 dark:border-slate-800 bg-slate-100/50'
-                          : activeMode === 'TRAY_REDIRECT'
-                          ? 'border-amber-600 bg-white dark:bg-slate-900 ring-2 ring-amber-500/20 shadow-sm cursor-pointer'
-                          : 'border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-900/50 hover:border-amber-300 cursor-pointer'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
-                          3. Criar Carrinho na Tray via API
-                        </span>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
-                          Redirect Tray
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 leading-relaxed">
-                        {settings.tray_enabled
-                          ? 'No final da venda cria o carrinho e cupom residual na Tray via API e envia o cliente para pagar lá.'
-                          : 'Integração Tray não habilitada para esta empresa.'}
-                      </p>
-                    </button>
-                  )}
                 </div>
               </div>
             )}
@@ -1495,8 +1425,8 @@ export function SellerPaymentRoutingMatrix({
             {/* CONTEÚDO QUANDO MODO = LINK DE PAGAMENTO NO FINAL DA VENDA */}
             {activeChannelObj.supports_checkout_finisher && activeMode === 'PAYMENT_LINK' ? (
               <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800 space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
-                  <div className="space-y-1.5">
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+                  <div className="space-y-2.5 min-w-0">
                     <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
                       Provedor do Link de Pagamento (Acionado no Final da Venda)
                     </label>
@@ -1510,12 +1440,22 @@ export function SellerPaymentRoutingMatrix({
                     >
                       {getProvidersForMethod('LINK').map((p: any) => (
                         <option key={p.code} value={p.code}>
-                          {p.name} — Link de Pagamento Hospedado ({p.configured ? 'Configurado ✓' : 'Configurar abaixo'})
+                          {p.name} — Link Hospedado ({p.configured ? 'Configurado ✓' : 'Pendente'})
                         </option>
                       ))}
                     </select>
+                    {onJumpToProvider && (
+                      <button
+                        type="button"
+                        onClick={() => onJumpToProvider(activeChModeObj.link_provider || 'VINDI')}
+                        className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer shadow-sm inline-flex items-center justify-center gap-1.5"
+                      >
+                        <Settings2 className="w-3.5 h-3.5 shrink-0" />
+                        <span>Abrir Configurações ({activeChModeObj.link_provider || 'VINDI'}) →</span>
+                      </button>
+                    )}
                   </div>
-                  <div className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 text-xs text-emerald-900 dark:text-emerald-200">
+                  <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 text-xs text-emerald-900 dark:text-emerald-200 leading-relaxed min-w-0">
                     <strong>Como funciona:</strong> Como este canal está em <em>Link de Pagamento no Final da Venda</em>, não há amarração individual por forma na tela da loja. O cliente vai para o ambiente seguro da{' '}
                     <strong>{activeChModeObj.link_provider || 'VINDI'}</strong> e lá escolhe PIX, Cartão de Crédito ou Boleto.
                   </div>
@@ -1544,88 +1484,102 @@ export function SellerPaymentRoutingMatrix({
                     </label>
                   )}
               </div>
-            ) : activeChannelObj.supports_checkout_finisher && activeMode === 'TRAY_REDIRECT' ? (
-              <div className="p-4 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200">
-                <strong>Modo Redirect Tray Ativo:</strong> No final da venda o pedido cria automaticamente o carrinho (e eventual cupom de desconto/vale-livro) via API na Tray e redireciona o cliente para concluir o pagamento lá.
-              </div>
             ) : (
               /* CONTEÚDO QUANDO MODO = POR FORMA DE PAGAMENTO (1 ÚNICO PROVEDOR POR FORMA) */
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                   <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700 dark:text-slate-200">
-                    Selecione 1 Único Provedor para Cada Forma de Pagamento em &ldquo;{activeChannelObj.short_name || activeChannelObj.name}&rdquo;
+                    Selecione o Provedor de Cada Forma e Clique para Abrir as Configurações
                   </span>
                   <span className="text-[11px] text-slate-500">
                     Ex: Cartão → Vindi | PIX → Efí | Boleto → Cora
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
                   {METHOD_CARDS.filter((mc) => (activeChannelObj.methods || []).includes(mc.code)).map(
                     (mc) => {
                       const selectedProv = routes[activeChCode]?.[mc.code] || '';
                       const provMeta = getProviderMeta(selectedProv);
                       const availableProviders = getProvidersForMethod(mc.code);
+                      const isDrawerOpen =
+                        activeProviderDrawer &&
+                        (activeProviderDrawer === selectedProv ||
+                          (activeProviderDrawer === 'CIELO_REDE' &&
+                            (selectedProv === 'CIELO' || selectedProv === 'REDE')));
                       return (
                         <div
                           key={mc.code}
-                          className={`p-3.5 rounded-xl border transition-all space-y-2.5 ${
+                          className={`p-3.5 rounded-xl border transition-all flex flex-col justify-between space-y-3 min-w-0 ${
                             selectedProv
                               ? 'border-indigo-300 dark:border-indigo-800 bg-white dark:bg-slate-900 shadow-sm'
                               : 'border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/50'
                           }`}
                         >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <span className="text-xs font-extrabold text-slate-900 dark:text-white block">
-                                {mc.title}
+                          <div className="space-y-2.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="text-xs font-extrabold text-slate-900 dark:text-white block">
+                                  {mc.title}
+                                </span>
+                                <span className="text-[11px] text-slate-500 block">{mc.subtitle}</span>
+                              </div>
+                              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 shrink-0">
+                                {mc.code}
                               </span>
-                              <span className="text-[11px] text-slate-500 block">{mc.subtitle}</span>
                             </div>
-                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 shrink-0">
-                              {mc.code}
-                            </span>
+
+                            <select
+                              value={selectedProv}
+                              onChange={(e) => setMethodProvider(activeChCode, mc.code, e.target.value)}
+                              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                            >
+                              <option value="">Desativado nesta operação</option>
+                              {availableProviders.map((p: any) => (
+                                <option key={p.code} value={p.code}>
+                                  {p.name} {p.configured ? '✓ (Configurado)' : '(Pendente de chave)'}
+                                </option>
+                              ))}
+                            </select>
                           </div>
 
-                          <select
-                            value={selectedProv}
-                            onChange={(e) => setMethodProvider(activeChCode, mc.code, e.target.value)}
-                            className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                          >
-                            <option value="">Desativado neste canal</option>
-                            {availableProviders.map((p: any) => (
-                              <option key={p.code} value={p.code}>
-                                {p.name} {p.configured ? '✓ (Configurado)' : '(Configurar chave abaixo)'}
-                              </option>
-                            ))}
-                          </select>
-
-                          {selectedProv && provMeta && (
-                            <div className="flex items-center justify-between text-[11px] pt-1">
-                              <span
-                                className={`font-semibold flex items-center gap-1 ${
-                                  provMeta.configured ? 'text-emerald-600' : 'text-amber-600'
-                                }`}
-                              >
-                                {provMeta.configured ? (
-                                  <>
-                                    <CheckCircle2 className="w-3.5 h-3.5" /> Credenciais ativas
-                                  </>
-                                ) : (
-                                  <>
-                                    <AlertTriangle className="w-3.5 h-3.5" /> Requer configurar chave
-                                  </>
-                                )}
-                              </span>
+                          {selectedProv && provMeta ? (
+                            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span
+                                  className={`font-semibold flex items-center gap-1 ${
+                                    provMeta.configured ? 'text-emerald-600' : 'text-amber-600'
+                                  }`}
+                                >
+                                  {provMeta.configured ? (
+                                    <>
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> Credenciais ativas
+                                    </>
+                                  ) : (
+                                    <>
+                                      <AlertTriangle className="w-3.5 h-3.5" /> Requer configurar chave
+                                    </>
+                                  )}
+                                </span>
+                              </div>
                               {onJumpToProvider && (
                                 <button
                                   type="button"
                                   onClick={() => onJumpToProvider(selectedProv)}
-                                  className="text-indigo-600 hover:underline font-bold cursor-pointer"
+                                  className={`w-full px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                                    isDrawerOpen
+                                      ? 'bg-indigo-600 text-white shadow-sm'
+                                      : 'bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                                  }`}
                                 >
-                                  Ver credenciais →
+                                  <Settings2 className="w-3.5 h-3.5" />
+                                  Abrir Configurações ({provMeta.short_name || selectedProv}) →
                                 </button>
                               )}
+                            </div>
+                          ) : (
+                            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-400">
+                              Selecione um provedor acima para liberar e configurar esta forma de pagamento.
                             </div>
                           )}
                         </div>

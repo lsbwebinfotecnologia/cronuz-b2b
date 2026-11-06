@@ -13,6 +13,7 @@ export default function DashboardLayout({
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const pathname = usePathname();
   const isFullWidthRoute = pathname?.startsWith('/proposals/desk') || pathname?.startsWith('/orders/intake');
+  const isWideSplitRoute = pathname?.startsWith('/companies/') || pathname?.startsWith('/settings');
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50">
@@ -29,7 +30,9 @@ export default function DashboardLayout({
         }`}>
           {/* Subtle background glow */}
           <div className="pointer-events-none absolute -top-40 left-0 right-0 h-96 bg-[var(--color-primary-base)]/10 blur-[120px] rounded-full" />
-          <div className={`relative w-full ${isFullWidthRoute ? 'max-w-none' : 'max-w-7xl mx-auto'}`}>
+          <div className={`relative w-full ${
+            isFullWidthRoute ? 'max-w-none' : isWideSplitRoute ? 'max-w-[1640px] mx-auto' : 'max-w-7xl mx-auto'
+          }`}>
             {children}
           </div>
         </main>

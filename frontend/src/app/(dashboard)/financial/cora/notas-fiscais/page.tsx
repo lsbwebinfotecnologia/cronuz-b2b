@@ -1,17 +1,18 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
-  Landmark, Search, Loader2, FileText, Calendar, Hash, RefreshCw, CheckCircle2,
+  Search, Loader2, FileText, Calendar, Hash, RefreshCw, CheckCircle2,
   Lock, ChevronDown, ChevronUp, FileDown, Copy, ExternalLink, Send, X, Building2,
-  AlertTriangle, ListChecks, CheckSquare, Square, SlidersHorizontal,
+  AlertTriangle, ListChecks, CheckSquare, Square, SlidersHorizontal, Printer, Play, Pause,
+  Zap, Trash2, ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getUser } from '@/lib/auth';
 import { CurrencyInput } from '@/components/CurrencyInput';
 import {
-  Charge, StatusBadge, brl, copyText, fmtDate, maskDoc, paymentsApi,
+  Charge, StatusBadge, brl, copyText, fmtDate, maskDoc, openMergedChargesPdf, paymentsApi,
 } from '@/components/payments/chargeUi';
 
 interface InvoiceInstallment {
@@ -66,6 +67,9 @@ interface HorusInvoiceItem {
   pending_count: number;
   pending_amount: number;
   emission_status: 'ALL_EMITTED' | 'PARTIAL' | 'PENDING';
+  cora_charge_ids?: number[];
+  auto_emit_ready?: boolean;
+  auto_emit_issues?: string[];
   installments: InvoiceInstallment[];
 }
 
@@ -80,6 +84,7 @@ interface HorusInvoicesResponse {
   date_to: string;
   payment_forms_catalog?: PaymentFormCatalogItem[];
   allowed_payment_forms?: string[];
+  auto_emit_enabled?: boolean;
   hidden_by_payment_form_count?: number;
   summary: {
     total_invoices: number;
@@ -88,12 +93,14 @@ interface HorusInvoicesResponse {
     emitted_installments: number;
     total_amount: number;
     pending_amount: number;
+    auto_emit_ready_invoices?: number;
+    auto_emit_ready_installments?: number;
   };
   items: HorusInvoiceItem[];
 }
 
 const inputCls = 'w-full h-10 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-xs md:text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-pink-500/40';
-const btnCls = 'inline-flex items-center justify-center gap-2 h-10 px-4 rounded-xl text-xs md:text-sm font-semibold transition-colors disabled:opacity-50';
+const btnCls = 'inline-flex items-center justify-center gap-2 h-10 px-3.5 rounded-xl text-xs md:text-sm font-semibold transition-colors disabled:opacity-50';
 
 const isoDate = (d: Date) => {
   const y = d.getFullYear();
@@ -118,11 +125,78 @@ export default function CoraHorusInvoicesPage() {
   const [data, setData] = useState<HorusInvoicesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [expandedNfs, setExpandedNfs] = useState<Record<string, boolean>>({});
-  const [pdfBusyId, setPdfBusyId] = useState<number | null>(null);
+  const [pdfBusyId, setPdfBusyId] = useState<number | string | null>(null);
   const [emitModalInvoice, setEmitModalInvoice] = useState<HorusInvoiceItem | null>(null);
   const [showPaymentFormsModal, setShowPaymentFormsModal] = useState(false);
+  const [showBatchEmitModal, setShowBatchEmitModal] = useState(false);
+  const [showPrintQueueModal, setShowPrintQueueModal] = useState(false);
 
-  const load = useCallback(async (overrideDates?: { from: string; to: string }) => {
+  // Fila de Impressão local + persistente por empresa
+  const [printQueue, setPrintQueue] = useState<Charge[]>([]);
+  const [autoRunning, setAutoRunning] = useState(false);
+  const [togglingAuto, setTogglingAuto] = useState(false);
+  const autoProcessedRefs = useRef<Set<string>>(new Set());
+
+  const queueStorageKey = companyId ? `cora_nf_print_queue_${companyId}` : null;
+
+  useEffect(() => {
+    if (!queueStorageKey) return;
+    try {
+      const raw = localStorage.getItem(queueStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) setPrintQueue(parsed);
+      }
+    } catch {
+      // ignore
+    }
+  }, [queueStorageKey]);
+
+  const appendToPrintQueue = useCallback((newCharges: Charge[]) => {
+    if (!newCharges?.length) return;
+    setPrintQueue(prev => {
+      const byId = new Map<number, Charge>();
+      prev.forEach(c => byId.set(c.id, c));
+      newCharges.forEach(c => byId.set(c.id, c));
+      const next = Array.from(byId.values());
+      if (queueStorageKey) {
+        try {
+          localStorage.setItem(queueStorageKey, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+      }
+      return next;
+    });
+  }, [queueStorageKey]);
+
+  const removeFromPrintQueue = useCallback((idsToRemove: number[]) => {
+    const rmSet = new Set(idsToRemove);
+    setPrintQueue(prev => {
+      const next = prev.filter(c => !rmSet.has(c.id));
+      if (queueStorageKey) {
+        try {
+          localStorage.setItem(queueStorageKey, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+      }
+      return next;
+    });
+  }, [queueStorageKey]);
+
+  const clearPrintQueue = useCallback(() => {
+    setPrintQueue([]);
+    if (queueStorageKey) {
+      try {
+        localStorage.removeItem(queueStorageKey);
+      } catch {
+        // ignore
+      }
+    }
+  }, [queueStorageKey]);
+
+  const load = useCallback(async (overrideDates?: { from: string; to: string }, forceRefresh = false) => {
     if (!companyId) return;
     setLoading(true);
     try {
@@ -134,10 +208,10 @@ export default function CoraHorusInvoicesPage() {
       if (codPedVenda.trim()) qs.set('cod_ped_venda', codPedVenda.trim());
       if (nroNotaFiscal.trim()) qs.set('nro_nota_fiscal', nroNotaFiscal.trim());
       if (search.trim()) qs.set('search', search.trim());
+      if (forceRefresh) qs.set('force_refresh', 'true');
 
       const res = await paymentsApi<HorusInvoicesResponse>(companyId, `/horus-invoices?${qs.toString()}`);
       setData(res);
-      // Expande automaticamente se vier poucas notas ou notas com múltiplas parcelas
       const autoExpand: Record<string, boolean> = {};
       res.items.slice(0, 5).forEach(it => {
         if (it.installments_count > 1) autoExpand[it.nro_nota_fiscal] = true;
@@ -153,6 +227,151 @@ export default function CoraHorusInvoicesPage() {
   useEffect(() => {
     load();
   }, [statusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Rotina Automática (Play): quando habilitada e houver notas prontas elegíveis ainda não processadas, emite e envia para a Fila de Impressão
+  useEffect(() => {
+    if (!companyId || !data?.auto_emit_enabled || autoRunning || loading) return;
+    if (!data.allowed_payment_forms?.length) return;
+
+    const todayIso = isoDate(new Date());
+    const eligibleInvoices = data.items.filter(inv => {
+      if (!inv.auto_emit_ready || inv.pending_count === 0) return false;
+      const pendingNew = inv.installments.filter(
+        inst =>
+          !inst.has_existing_boleto &&
+          inst.amount > 0 &&
+          inst.due_date >= todayIso &&
+          !autoProcessedRefs.current.has(inst.origin_ref)
+      );
+      return pendingNew.length > 0;
+    });
+
+    if (eligibleInvoices.length === 0) return;
+
+    let cancelled = false;
+    const runAutoBatch = async () => {
+      setAutoRunning(true);
+      try {
+        const payloadInvoices = eligibleInvoices.map(inv => {
+          const pendingNew = inv.installments.filter(
+            inst =>
+              !inst.has_existing_boleto &&
+              inst.amount > 0 &&
+              inst.due_date >= todayIso &&
+              !autoProcessedRefs.current.has(inst.origin_ref)
+          );
+          pendingNew.forEach(inst => autoProcessedRefs.current.add(inst.origin_ref));
+          return {
+            nro_nota_fiscal: inv.nro_nota_fiscal,
+            serie_fiscal: inv.serie_fiscal,
+            cod_nf: inv.cod_nf,
+            cod_ped_venda: inv.cod_ped_venda,
+            cod_pedido_origem: inv.cod_pedido_origem,
+            horus_cod_cli: inv.cod_cli,
+            horus_id_guid: inv.horus_id_guid,
+            customer_id: inv.customer_id,
+            issue_date: inv.issue_date,
+            chave_acesso_nfe: inv.chave_acesso_nfe,
+            payer: {
+              ...inv.payer,
+              email: inv.payer.email || null,
+              complement: inv.payer.complement || null,
+            },
+            installments: pendingNew.map(r => ({
+              installment_number: r.installment_number,
+              due_date: r.due_date,
+              amount: r.amount,
+              financial_launch_id: r.financial_launch_id,
+              origin_ref: r.origin_ref,
+              description: r.description,
+            })),
+          };
+        });
+
+        const res = await paymentsApi<{
+          created_count: number;
+          error_count: number;
+          charges: Charge[];
+          errors: { nro_nota_fiscal: string; error: string }[];
+        }>(companyId, '/horus-invoices/emit-batch', {
+          method: 'POST',
+          body: JSON.stringify({
+            provider: 'CORA',
+            method: 'BOLETO',
+            invoices: payloadInvoices,
+          }),
+        });
+
+        if (!cancelled) {
+          if (res.charges?.length) {
+            appendToPrintQueue(res.charges);
+            toast.success(
+              `Rotina Automática: ${res.created_count} boleto(s) emitido(s) e enviado(s) para a Fila de Impressão!`
+            );
+          }
+          if (res.error_count > 0) {
+            toast.warning(`${res.error_count} nota(s) apresentaram alerta na emissão automática.`);
+          }
+          load(undefined, false);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          toast.error(e.message || 'Erro ao executar ciclo automático de emissão.');
+        }
+      } finally {
+        if (!cancelled) setAutoRunning(false);
+      }
+    };
+
+    runAutoBatch();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, data, autoRunning, loading, appendToPrintQueue, load]);
+
+  // Ciclo periódico a cada 180s enquanto o botão Play (Modo Automático) estiver ativo
+  useEffect(() => {
+    if (!data?.auto_emit_enabled) return;
+    const timer = setInterval(() => {
+      if (!loading && !autoRunning) {
+        load(undefined, true);
+      }
+    }, 180000);
+    return () => clearInterval(timer);
+  }, [data?.auto_emit_enabled, loading, autoRunning, load]);
+
+  const toggleAutoEmit = async () => {
+    if (!companyId || !data) return;
+    const nextEnabled = !data.auto_emit_enabled;
+    if (nextEnabled && !data.allowed_payment_forms?.length) {
+      toast.warning(
+        'Por segurança, configure primeiro quais Formas de Pagamento (ex.: Boleto Cora) devem ser exibidas antes de ativar o Modo Automático.'
+      );
+      setShowPaymentFormsModal(true);
+      return;
+    }
+    setTogglingAuto(true);
+    try {
+      const res = await paymentsApi<{ auto_emit_enabled: boolean }>(
+        companyId,
+        '/horus-invoices/auto-emit',
+        {
+          method: 'PUT',
+          body: JSON.stringify({ provider: 'CORA', enabled: nextEnabled }),
+        }
+      );
+      setData(prev => (prev ? { ...prev, auto_emit_enabled: res.auto_emit_enabled } : prev));
+      toast.success(
+        res.auto_emit_enabled
+          ? 'Modo Automático (Play) ATIVADO! As notas elegíveis serão emitidas e enviadas para a Fila de Impressão.'
+          : 'Modo Automático PAUSADO.'
+      );
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao alternar Modo Automático.');
+    } finally {
+      setTogglingAuto(false);
+    }
+  };
 
   const handlePreset = (p: 'today' | '3d' | '7d') => {
     const now = new Date();
@@ -186,16 +405,46 @@ export default function CoraHorusInvoicesPage() {
     }
   };
 
+  const printMultipleCharges = async (chargeIds: number[], busyKey: string | number) => {
+    if (!companyId || !chargeIds.length) return;
+    setPdfBusyId(busyKey);
+    try {
+      await openMergedChargesPdf(companyId, chargeIds);
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao gerar PDF unificado para impressão.');
+    } finally {
+      setPdfBusyId(null);
+    }
+  };
+
   const copy = async (text: string | null, label: string) => {
     if (await copyText(text)) toast.success(`${label} copiado(a).`);
   };
 
   const s = data?.summary;
+  const readyInvoicesCount = s?.auto_emit_ready_invoices ?? 0;
+  const readyInstallmentsCount = s?.auto_emit_ready_installments ?? 0;
+
+  // Coleta todos os boletos Cora emitidos no período visível (para importar rapidamente na fila de impressão se desejado)
+  const periodCoraCharges: Charge[] = React.useMemo(() => {
+    if (!data?.items) return [];
+    const list: Charge[] = [];
+    const seen = new Set<number>();
+    data.items.forEach(nf => {
+      nf.installments.forEach(inst => {
+        if (inst.existing_charge && !seen.has(inst.existing_charge.id)) {
+          seen.add(inst.existing_charge.id);
+          list.push(inst.existing_charge);
+        }
+      });
+    });
+    return list;
+  }, [data]);
 
   return (
     <div className="p-3 md:p-6 space-y-4 max-w-7xl mx-auto">
-      {/* Cabeçalho */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      {/* Cabeçalho + Central de Operação Rápida (Play / Emissão em Lote / Fila de Impressão) */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
           <Link href="/financial/cora" className="p-2.5 rounded-2xl bg-pink-500/10 border border-pink-500/20 text-pink-600">
             <FileText className="h-6 w-6" />
@@ -203,15 +452,89 @@ export default function CoraHorusInvoicesPage() {
           <div>
             <h1 className="text-lg md:text-2xl font-bold text-slate-900 dark:text-white">Notas Fiscais Emitidas (Horus ERP)</h1>
             <p className="text-xs md:text-sm text-slate-500">
-              Consulta 100% via API Horus das últimas notas faturadas com parcelas do XML/Contas a Receber e trava contra emissão duplicada
+              Emissão inteligente 100% via API Horus com geração em lote, modo automático e impressão unificada
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Botão Play / Pause (Modo Automático) */}
+          <button
+            type="button"
+            onClick={toggleAutoEmit}
+            disabled={togglingAuto || loading}
+            title={
+              data?.auto_emit_enabled
+                ? 'Modo Automático ATIVO: emite automaticamente as notas elegíveis e envia para a Fila de Impressão. Clique para pausar.'
+                : 'Ativar Modo Automático (Play): emite boletos das notas filtradas automaticamente e envia para a Fila de Impressão.'
+            }
+            className={`${btnCls} border ${
+              data?.auto_emit_enabled
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            {togglingAuto || autoRunning ? (
+              <Loader2 className="h-4 w-4 animate-spin text-emerald-600" />
+            ) : data?.auto_emit_enabled ? (
+              <>
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <Pause className="h-3.5 w-3.5" />
+                <span>Automático: Ativo</span>
+              </>
+            ) : (
+              <>
+                <Play className="h-3.5 w-3.5 text-emerald-600 fill-emerald-600" />
+                <span>Modo Automático</span>
+              </>
+            )}
+          </button>
+
+          {/* Botão Seguro de Emissão em Lote quando houver notas pendentes elegíveis */}
+          {readyInstallmentsCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowBatchEmitModal(true)}
+              className={`${btnCls} bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm`}
+            >
+              <Zap className="h-4 w-4" />
+              Emitir Pendentes ({readyInstallmentsCount})
+            </button>
+          )}
+
+          {/* Botão da Fila de Impressão Unificada */}
+          <button
+            type="button"
+            onClick={() => setShowPrintQueueModal(true)}
+            className={`${btnCls} relative border ${
+              printQueue.length > 0
+                ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300'
+                : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+            }`}
+          >
+            <Printer className="h-4 w-4" />
+            <span>Fila de Impressão</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-[11px] font-mono font-bold ${
+                printQueue.length > 0
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+              }`}
+            >
+              {printQueue.length}
+            </span>
+          </button>
+
           <Link href="/financial/cora/boletos" className={`${btnCls} border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200`}>
-            <ListChecks className="h-4 w-4" /> Boletos Emitidos
+            <ListChecks className="h-4 w-4" /> Boletos
           </Link>
-          <button type="button" onClick={() => load()} disabled={loading} className={`${btnCls} bg-pink-600 hover:bg-pink-700 text-white`}>
+
+          <button
+            type="button"
+            onClick={() => load(undefined, true)}
+            disabled={loading}
+            className={`${btnCls} bg-pink-600 hover:bg-pink-700 text-white`}
+          >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Consultar Horus
           </button>
         </div>
@@ -222,17 +545,51 @@ export default function CoraHorusInvoicesPage() {
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Notas fiscais no período</p>
           <p className="mt-1 text-base md:text-xl font-bold text-slate-900 dark:text-white">{brl(s?.total_amount)}</p>
-          <p className="text-xs text-slate-500">{s?.total_invoices ?? 0} nota(s) · {s?.total_installments ?? 0} parcela(s)</p>
+          <p className="text-xs text-slate-500">
+            {s?.total_invoices ?? 0} nota(s) · {s?.total_installments ?? 0} parcela(s)
+            {!!data?.allowed_payment_forms?.length && (
+              <span className="ml-1 text-pink-600 dark:text-pink-400 font-medium">
+                (Filtro: {data.allowed_payment_forms.join(', ')})
+              </span>
+            )}
+          </p>
         </div>
-        <div className="rounded-2xl border border-pink-200/80 dark:border-pink-900/50 bg-pink-50/40 dark:bg-pink-950/20 p-3.5">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-pink-700 dark:text-pink-300">Pendentes de boleto</p>
-          <p className="mt-1 text-base md:text-xl font-bold text-pink-900 dark:text-pink-100">{brl(s?.pending_amount)}</p>
-          <p className="text-xs text-pink-700/80 dark:text-pink-300/80">{s?.pending_installments ?? 0} parcela(s) pronta(s) para emitir</p>
+        <div className="rounded-2xl border border-pink-200/80 dark:border-pink-900/50 bg-pink-50/40 dark:bg-pink-950/20 p-3.5 flex items-center justify-between gap-2">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-pink-700 dark:text-pink-300">Pendentes de boleto</p>
+            <p className="mt-1 text-base md:text-xl font-bold text-pink-900 dark:text-pink-100">{brl(s?.pending_amount)}</p>
+            <p className="text-xs text-pink-700/80 dark:text-pink-300/80">
+              {s?.pending_installments ?? 0} parcela(s) · {readyInvoicesCount} NF(s) validada(s) p/ lote
+            </p>
+          </div>
+          {readyInstallmentsCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowBatchEmitModal(true)}
+              className="shrink-0 px-3 py-2 rounded-xl bg-pink-600 hover:bg-pink-700 text-white text-xs font-semibold shadow-sm"
+            >
+              Emitir Lote
+            </button>
+          )}
         </div>
-        <div className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20 p-3.5">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Parcelas já com boleto</p>
-          <p className="mt-1 text-base md:text-xl font-bold text-emerald-900 dark:text-emerald-100">{s?.emitted_installments ?? 0}</p>
-          <p className="text-xs text-emerald-700/80 dark:text-emerald-300/80">Bloqueadas contra emissão duplicada</p>
+        <div className="rounded-2xl border border-emerald-200/70 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20 p-3.5 flex items-center justify-between gap-2">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Parcelas já com boleto</p>
+            <p className="mt-1 text-base md:text-xl font-bold text-emerald-900 dark:text-emerald-100">{s?.emitted_installments ?? 0}</p>
+            <p className="text-xs text-emerald-700/80 dark:text-emerald-300/80">Bloqueadas contra emissão duplicada</p>
+          </div>
+          {periodCoraCharges.length > 0 && (
+            <button
+              type="button"
+              disabled={pdfBusyId === 'period-all'}
+              onClick={() => printMultipleCharges(periodCoraCharges.map(c => c.id), 'period-all')}
+              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm disabled:opacity-50"
+              title="Abrir um único PDF com todos os boletos Cora emitidos neste período"
+            >
+              {pdfBusyId === 'period-all' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />}
+              Imprimir ({periodCoraCharges.length})
+            </button>
+          )}
         </div>
       </div>
 
@@ -378,7 +735,11 @@ export default function CoraHorusInvoicesPage() {
         ) : !data?.items.length ? (
           <div className="p-10 text-center space-y-1">
             <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">Nenhuma Nota Fiscal localizada no período ou filtro informado.</p>
-            <p className="text-xs text-slate-500">Tente ampliar o período de datas ou pesquisar diretamente pelo código de pedido Horus (COD_PED_VENDA).</p>
+            <p className="text-xs text-slate-500">
+              {data?.hidden_by_payment_form_count
+                ? `${data.hidden_by_payment_form_count} nota(s) foram ocultadas pelo filtro de Formas de Pagamento configurado.`
+                : 'Tente ampliar o período de datas ou pesquisar diretamente pelo código de pedido Horus (COD_PED_VENDA).'}
+            </p>
           </div>
         ) : (
           <table className="w-full text-left text-xs md:text-sm">
@@ -390,12 +751,14 @@ export default function CoraHorusInvoicesPage() {
                 <th className="px-3 py-3">Cliente / Destinatário</th>
                 <th className="px-3 py-3 text-center">Parcelas (XML / CR)</th>
                 <th className="px-3 py-3 text-right">Valor Líquido NF</th>
-                <th className="px-3 py-3 text-right">Emissão de Boleto</th>
+                <th className="px-3 py-3 text-right">Emissão / Impressão</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {data.items.map(nf => {
                 const isExpanded = !!expandedNfs[nf.nro_nota_fiscal];
+                const coraIds = nf.cora_charge_ids || [];
+                const nfPrintBusyKey = `nf-${nf.nro_nota_fiscal}`;
                 return (
                   <React.Fragment key={`${nf.cod_nf}-${nf.nro_nota_fiscal}`}>
                     <tr className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
@@ -471,20 +834,43 @@ export default function CoraHorusInvoicesPage() {
                         {brl(nf.vlr_liquido_nf)}
                       </td>
                       <td className="px-3 py-3 text-right whitespace-nowrap">
-                        {nf.pending_count > 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => setEmitModalInvoice(nf)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-pink-600 hover:bg-pink-700 text-white text-xs font-semibold shadow-sm transition-colors"
-                          >
-                            <Send className="h-3.5 w-3.5" />
-                            Emitir {nf.pending_count === 1 ? '1 boleto' : `${nf.pending_count} boletos`}
-                          </button>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-bold">
-                            <CheckCircle2 className="h-3.5 w-3.5" /> Boleto(s) emitido(s)
-                          </span>
-                        )}
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          {coraIds.length > 0 && (
+                            <button
+                              type="button"
+                              disabled={pdfBusyId === nfPrintBusyKey}
+                              onClick={() => printMultipleCharges(coraIds, nfPrintBusyKey)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 text-xs font-semibold transition-colors disabled:opacity-50"
+                              title={
+                                coraIds.length === 1
+                                  ? 'Imprimir boleto desta Nota Fiscal'
+                                  : `Imprimir todos os ${coraIds.length} boletos desta Nota Fiscal de uma só vez (PDF único)`
+                              }
+                            >
+                              {pdfBusyId === nfPrintBusyKey ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Printer className="h-3.5 w-3.5" />
+                              )}
+                              Imprimir {coraIds.length > 1 ? `(${coraIds.length})` : ''}
+                            </button>
+                          )}
+
+                          {nf.pending_count > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setEmitModalInvoice(nf)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-pink-600 hover:bg-pink-700 text-white text-xs font-semibold shadow-sm transition-colors"
+                            >
+                              <Send className="h-3.5 w-3.5" />
+                              Emitir {nf.pending_count === 1 ? '1 boleto' : `${nf.pending_count} boletos`}
+                            </button>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-bold">
+                              <CheckCircle2 className="h-3.5 w-3.5" /> Boleto(s) emitido(s)
+                            </span>
+                          )}
+                        </div>
                       </td>
                     </tr>
 
@@ -497,11 +883,28 @@ export default function CoraHorusInvoicesPage() {
                               <span className="font-bold text-slate-700 dark:text-slate-200">
                                 Detalhamento das Parcelas da NF {nf.nro_nota_fiscal} ({nf.installments_count}x)
                               </span>
-                              {nf.chave_acesso_nfe && (
-                                <span className="font-mono text-[10px] text-slate-400">
-                                  Chave NF-e: {nf.chave_acesso_nfe}
-                                </span>
-                              )}
+                              <div className="flex flex-wrap items-center gap-2">
+                                {nf.chave_acesso_nfe && (
+                                  <span className="font-mono text-[10px] text-slate-400">
+                                    Chave NF-e: {nf.chave_acesso_nfe}
+                                  </span>
+                                )}
+                                {coraIds.length > 1 && (
+                                  <button
+                                    type="button"
+                                    disabled={pdfBusyId === nfPrintBusyKey}
+                                    onClick={() => printMultipleCharges(coraIds, nfPrintBusyKey)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold"
+                                  >
+                                    {pdfBusyId === nfPrintBusyKey ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Printer className="h-3 w-3" />
+                                    )}
+                                    Imprimir todas as {coraIds.length} parcelas de uma vez
+                                  </button>
+                                )}
+                              </div>
                             </div>
                             <div className="overflow-x-auto">
                               <table className="w-full text-left text-xs">
@@ -573,7 +976,7 @@ export default function CoraHorusInvoicesPage() {
                                                   onClick={() => openPdf(ch.id)}
                                                   disabled={pdfBusyId === ch.id}
                                                   className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-pink-600 hover:bg-pink-50 dark:hover:bg-pink-950/30"
-                                                  title="2ª via do boleto (PDF)"
+                                                  title="2ª via individual deste boleto (PDF)"
                                                 >
                                                   {pdfBusyId === ch.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
                                                 </button>
@@ -614,16 +1017,46 @@ export default function CoraHorusInvoicesPage() {
         )}
       </div>
 
-      {/* Modal de Emissão de Boletos da Nota Fiscal */}
+      {/* Modal de Emissão de Boletos da Nota Fiscal (com opção de Imprimir Todos de Uma Vez após gerar) */}
       {emitModalInvoice && companyId && (
         <EmitInvoiceBoletosModal
           companyId={companyId}
           invoice={emitModalInvoice}
           onClose={() => setEmitModalInvoice(null)}
-          onEmitted={() => {
-            setEmitModalInvoice(null);
+          onEmitted={(newCharges) => {
+            appendToPrintQueue(newCharges);
             load();
           }}
+        />
+      )}
+
+      {/* Modal de Emissão Segura em Lote */}
+      {showBatchEmitModal && companyId && data && (
+        <BatchEmitBoletosModal
+          companyId={companyId}
+          invoices={data.items.filter(i => i.pending_count > 0)}
+          onClose={() => setShowBatchEmitModal(false)}
+          onEmitted={(newCharges) => {
+            appendToPrintQueue(newCharges);
+            load();
+          }}
+          onOpenPrintQueue={() => {
+            setShowBatchEmitModal(false);
+            setShowPrintQueueModal(true);
+          }}
+        />
+      )}
+
+      {/* Modal de Fila de Impressão Unificada */}
+      {showPrintQueueModal && companyId && (
+        <PrintQueueModal
+          companyId={companyId}
+          queue={printQueue}
+          periodCharges={periodCoraCharges}
+          onImportPeriodCharges={() => appendToPrintQueue(periodCoraCharges)}
+          onRemoveIds={removeFromPrintQueue}
+          onClearQueue={clearPrintQueue}
+          onClose={() => setShowPrintQueueModal(false)}
         />
       )}
 
@@ -831,7 +1264,7 @@ function EmitInvoiceBoletosModal({
   companyId: number | string;
   invoice: HorusInvoiceItem;
   onClose: () => void;
-  onEmitted: () => void;
+  onEmitted: (newCharges: Charge[]) => void;
 }) {
   const [method, setMethod] = useState<'BOLETO' | 'PIX'>('BOLETO');
   const [payer, setPayer] = useState({
@@ -847,7 +1280,6 @@ function EmitInvoiceBoletosModal({
     zip_code: invoice.payer.zip_code || '',
   });
 
-  // Estado editável das parcelas (apenas as pendentes vêm selecionadas; as já emitidas ficam bloqueadas)
   const [rows, setRows] = useState(() =>
     invoice.installments.map(inst => ({
       ...inst,
@@ -855,6 +1287,8 @@ function EmitInvoiceBoletosModal({
     }))
   );
   const [submitting, setSubmitting] = useState(false);
+  const [emittedCharges, setEmittedCharges] = useState<Charge[] | null>(null);
+  const [printingAll, setPrintingAll] = useState(false);
 
   const setP = (k: keyof typeof payer, v: string) => setPayer(p => ({ ...p, [k]: v }));
 
@@ -915,16 +1349,100 @@ function EmitInvoiceBoletosModal({
       );
       toast.success(
         res.created_count === 1
-          ? `1 boleto emitido com sucesso no Banco Cora para a NF ${invoice.nro_nota_fiscal}!`
-          : `${res.created_count} boletos emitidos com sucesso no Banco Cora para a NF ${invoice.nro_nota_fiscal}!`
+          ? `1 boleto emitido e adicionado à Fila de Impressão!`
+          : `${res.created_count} boletos emitidos e adicionados à Fila de Impressão!`
       );
-      onEmitted();
+      setEmittedCharges(res.charges || []);
+      onEmitted(res.charges || []);
     } catch (e: any) {
       toast.error(e.message || 'Erro ao emitir boleto(s) da Nota Fiscal.');
     } finally {
       setSubmitting(false);
     }
   };
+
+  // Combina todos os IDs de boletos da NF (os que já existiam + os recém-emitidos) para impressão única
+  const allNfChargeIds = React.useMemo(() => {
+    const ids = new Set<number>();
+    (invoice.cora_charge_ids || []).forEach(id => ids.add(id));
+    (emittedCharges || []).forEach(c => ids.add(c.id));
+    return Array.from(ids);
+  }, [invoice.cora_charge_ids, emittedCharges]);
+
+  const handlePrintAllNow = async () => {
+    const targetIds = (emittedCharges?.length ? emittedCharges.map(c => c.id) : allNfChargeIds);
+    if (!targetIds.length) return;
+    setPrintingAll(true);
+    try {
+      await openMergedChargesPdf(companyId, targetIds);
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao abrir PDF unificado.');
+    } finally {
+      setPrintingAll(false);
+    }
+  };
+
+  if (emittedCharges) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div className="w-full sm:max-w-xl rounded-t-2xl sm:rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 md:p-6 space-y-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600">
+                <CheckCircle2 className="h-6 w-6" />
+              </div>
+              <div>
+                <h2 className="text-base md:text-lg font-bold text-slate-900 dark:text-white">
+                  {emittedCharges.length === 1
+                    ? 'Boleto Emitido com Sucesso!'
+                    : `${emittedCharges.length} Boletos Emitidos com Sucesso!`}
+                </h2>
+                <p className="text-xs text-slate-500">
+                  NF {invoice.nro_nota_fiscal} · {invoice.payer.name} · Já disponíveis na Fila de Impressão
+                </p>
+              </div>
+            </div>
+            <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 max-h-60 overflow-y-auto">
+            {emittedCharges.map(c => (
+              <div key={c.id} className="px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs">
+                <div>
+                  <span className="font-mono font-bold text-slate-900 dark:text-white">
+                    Parcela {c.installment_number || '1'}
+                  </span>
+                  <span className="ml-2 text-slate-500">Venc. {fmtDate(c.due_date)}</span>
+                </div>
+                <span className="font-mono font-bold text-slate-900 dark:text-white">{brl(c.amount)}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 pt-2">
+            <button
+              type="button"
+              onClick={handlePrintAllNow}
+              disabled={printingAll}
+              className={`${btnCls} flex-1 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm`}
+            >
+              {printingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+              Imprimir {emittedCharges.length > 1 ? `Todos de Uma Vez (${emittedCharges.length} em 1 PDF)` : 'Boleto Agora'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className={`${btnCls} border border-slate-200 dark:border-slate-700`}
+            >
+              Concluir
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -1131,6 +1649,454 @@ function EmitInvoiceBoletosModal({
           </div>
         </div>
       </form>
+    </div>
+  );
+}
+
+function BatchEmitBoletosModal({
+  companyId,
+  invoices,
+  onClose,
+  onEmitted,
+  onOpenPrintQueue,
+}: {
+  companyId: number | string;
+  invoices: HorusInvoiceItem[];
+  onClose: () => void;
+  onEmitted: (newCharges: Charge[]) => void;
+  onOpenPrintQueue: () => void;
+}) {
+  const todayIso = isoDate(new Date());
+  const [selectedNfs, setSelectedNfs] = useState<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = {};
+    invoices.forEach(inv => {
+      if (inv.auto_emit_ready) map[inv.nro_nota_fiscal] = true;
+    });
+    return map;
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [resultCharges, setResultCharges] = useState<Charge[] | null>(null);
+  const [printingBatch, setPrintingBatch] = useState(false);
+
+  const toggleNf = (nroNf: string, ready?: boolean) => {
+    if (!ready) return;
+    setSelectedNfs(prev => ({ ...prev, [nroNf]: !prev[nroNf] }));
+  };
+
+  const chosenInvoices = invoices.filter(inv => inv.auto_emit_ready && selectedNfs[inv.nro_nota_fiscal]);
+  const chosenInstallmentsCount = chosenInvoices.reduce(
+    (acc, inv) =>
+      acc +
+      inv.installments.filter(i => !i.has_existing_boleto && i.amount > 0 && i.due_date >= todayIso).length,
+    0
+  );
+  const chosenTotalAmount = chosenInvoices.reduce((acc, inv) => acc + inv.pending_amount, 0);
+
+  const handleBatchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (chosenInvoices.length === 0) {
+      toast.error('Selecione ao menos uma Nota Fiscal validada para emitir.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payloadInvoices = chosenInvoices.map(inv => ({
+        nro_nota_fiscal: inv.nro_nota_fiscal,
+        serie_fiscal: inv.serie_fiscal,
+        cod_nf: inv.cod_nf,
+        cod_ped_venda: inv.cod_ped_venda,
+        cod_pedido_origem: inv.cod_pedido_origem,
+        horus_cod_cli: inv.cod_cli,
+        horus_id_guid: inv.horus_id_guid,
+        customer_id: inv.customer_id,
+        issue_date: inv.issue_date,
+        chave_acesso_nfe: inv.chave_acesso_nfe,
+        payer: {
+          ...inv.payer,
+          email: inv.payer.email || null,
+          complement: inv.payer.complement || null,
+        },
+        installments: inv.installments
+          .filter(i => !i.has_existing_boleto && i.amount > 0 && i.due_date >= todayIso)
+          .map(r => ({
+            installment_number: r.installment_number,
+            due_date: r.due_date,
+            amount: r.amount,
+            financial_launch_id: r.financial_launch_id,
+            origin_ref: r.origin_ref,
+            description: r.description,
+          })),
+      }));
+
+      const res = await paymentsApi<{
+        created_count: number;
+        error_count: number;
+        charges: Charge[];
+        errors: { nro_nota_fiscal: string; error: string }[];
+      }>(companyId, '/horus-invoices/emit-batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          provider: 'CORA',
+          method: 'BOLETO',
+          invoices: payloadInvoices,
+        }),
+      });
+
+      toast.success(
+        `${res.created_count} boleto(s) emitido(s) com segurança e disponibilizados na Fila de Impressão!`
+      );
+      setResultCharges(res.charges || []);
+      onEmitted(res.charges || []);
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao emitir lote de boletos.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handlePrintGeneratedBatch = async () => {
+    if (!resultCharges?.length) return;
+    setPrintingBatch(true);
+    try {
+      await openMergedChargesPdf(
+        companyId,
+        resultCharges.map(c => c.id)
+      );
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao gerar PDF unificado do lote.');
+    } finally {
+      setPrintingBatch(false);
+    }
+  };
+
+  if (resultCharges) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div className="w-full sm:max-w-xl rounded-t-2xl sm:rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 md:p-6 space-y-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600">
+                <ShieldCheck className="h-6 w-6" />
+              </div>
+              <div>
+                <h2 className="text-base md:text-lg font-bold text-slate-900 dark:text-white">
+                  Lote Emitido com Sucesso ({resultCharges.length} boletos)!
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Todos os boletos foram gerados no Banco Cora e adicionados automaticamente à Fila de Impressão.
+                </p>
+              </div>
+            </div>
+            <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2 pt-2">
+            <button
+              type="button"
+              onClick={handlePrintGeneratedBatch}
+              disabled={printingBatch || resultCharges.length === 0}
+              className={`${btnCls} flex-1 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm`}
+            >
+              {printingBatch ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+              Imprimir Todos Agora ({resultCharges.length} em 1 PDF)
+            </button>
+            <button
+              type="button"
+              onClick={onOpenPrintQueue}
+              className={`${btnCls} border border-slate-200 dark:border-slate-700`}
+            >
+              Abrir Fila de Impressão
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <form
+        onSubmit={handleBatchSubmit}
+        className="w-full sm:max-w-3xl max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 md:p-6 space-y-4"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div>
+            <h2 className="text-base md:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-emerald-600" />
+              Emissão Segura em Lote (Cora + Fila de Impressão)
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Apenas Notas Fiscais com CPF/CNPJ, endereço completo no XML e vencimento válido são liberadas para emissão automática em lote.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 max-h-80 overflow-y-auto">
+          {invoices.map(inv => {
+            const ready = !!inv.auto_emit_ready;
+            const checked = !!selectedNfs[inv.nro_nota_fiscal] && ready;
+            return (
+              <div
+                key={inv.nro_nota_fiscal}
+                onClick={() => toggleNf(inv.nro_nota_fiscal, ready)}
+                className={`p-3 flex items-center justify-between gap-3 text-xs cursor-pointer transition-colors ${
+                  !ready
+                    ? 'bg-slate-50 dark:bg-slate-800/40 opacity-60 cursor-not-allowed'
+                    : checked
+                    ? 'bg-emerald-50/40 dark:bg-emerald-950/15'
+                    : 'hover:bg-slate-50 dark:hover:bg-slate-800/30'
+                }`}
+              >
+                <div className="flex items-start gap-2.5">
+                  <div className="mt-0.5">
+                    {!ready ? (
+                      <AlertTriangle className="h-4 w-4 text-amber-500" />
+                    ) : checked ? (
+                      <CheckSquare className="h-4 w-4 text-emerald-600" />
+                    ) : (
+                      <Square className="h-4 w-4 text-slate-400" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono font-bold text-slate-900 dark:text-white">
+                        NF {inv.nro_nota_fiscal}
+                      </span>
+                      {inv.cod_ped_venda && (
+                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600">
+                          Ped. #{inv.cod_ped_venda}
+                        </span>
+                      )}
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">{inv.payer.name}</span>
+                    </div>
+                    {ready ? (
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {inv.pending_count} parcela(s) pendente(s) · {maskDoc(inv.payer.document)} · {inv.payer.city}/{inv.payer.state}
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5">
+                        Requer revisão manual: {(inv.auto_emit_issues || []).join(', ')}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="text-right font-mono font-bold text-slate-900 dark:text-white shrink-0">
+                  {brl(inv.pending_amount)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+          <div className="text-xs text-slate-600 dark:text-slate-300">
+            Selecionado: <b>{chosenInvoices.length} NF(s)</b> · <b>{chosenInstallmentsCount} boleto(s)</b> · Total:{' '}
+            <b className="font-mono">{brl(chosenTotalAmount)}</b>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className={`${btnCls} border border-slate-200 dark:border-slate-700`}>
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={submitting || chosenInvoices.length === 0}
+              className={`${btnCls} bg-emerald-600 hover:bg-emerald-700 text-white`}
+            >
+              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+              Emitir {chosenInstallmentsCount} boleto(s) com Segurança
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function PrintQueueModal({
+  companyId,
+  queue,
+  periodCharges,
+  onImportPeriodCharges,
+  onRemoveIds,
+  onClearQueue,
+  onClose,
+}: {
+  companyId: number | string;
+  queue: Charge[];
+  periodCharges: Charge[];
+  onImportPeriodCharges: () => void;
+  onRemoveIds: (ids: number[]) => void;
+  onClearQueue: () => void;
+  onClose: () => void;
+}) {
+  const [selectedIds, setSelectedIds] = useState<number[]>(() => queue.map(c => c.id));
+  const [printing, setPrinting] = useState(false);
+
+  useEffect(() => {
+    setSelectedIds(queue.map(c => c.id));
+  }, [queue]);
+
+  const toggleId = (id: number) => {
+    setSelectedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
+
+  const handlePrintSelected = async () => {
+    if (!selectedIds.length) {
+      toast.error('Selecione ao menos um boleto da fila para imprimir.');
+      return;
+    }
+    setPrinting(true);
+    try {
+      await openMergedChargesPdf(companyId, selectedIds);
+      toast.success(`PDF unificado com ${selectedIds.length} boleto(s) aberto para impressão!`);
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao gerar PDF unificado da fila.');
+    } finally {
+      setPrinting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="w-full sm:max-w-3xl max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 md:p-6 space-y-4">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div>
+            <h2 className="text-base md:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Printer className="h-5 w-5 text-indigo-600" />
+              Fila de Impressão Unificada ({queue.length} boleto{queue.length === 1 ? '' : 's'})
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Imprima todas as parcelas e boletos gerados de uma só vez em um único documento PDF contínuo.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => setSelectedIds(queue.map(c => c.id))}
+              className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold"
+            >
+              Marcar todos
+            </button>
+            {periodCharges.length > 0 && (
+              <button
+                type="button"
+                onClick={onImportPeriodCharges}
+                className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 font-semibold"
+              >
+                + Trazer todos os boletos deste período ({periodCharges.length})
+              </button>
+            )}
+          </div>
+          {queue.length > 0 && (
+            <button
+              type="button"
+              onClick={onClearQueue}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 font-semibold"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Limpar fila
+            </button>
+          )}
+        </div>
+
+        {!queue.length ? (
+          <div className="p-8 text-center rounded-xl border border-dashed border-slate-200 dark:border-slate-800 space-y-2">
+            <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+              A Fila de Impressão está vazia no momento.
+            </p>
+            <p className="text-xs text-slate-500">
+              Assim que novos boletos forem emitidos (individualmente, em lote ou pelo Modo Automático Play), eles aparecerão automaticamente aqui para impressão única.
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 max-h-80 overflow-y-auto">
+            {queue.map(c => {
+              const checked = selectedIds.includes(c.id);
+              return (
+                <div
+                  key={c.id}
+                  onClick={() => toggleId(c.id)}
+                  className={`p-3 flex items-center justify-between gap-3 text-xs cursor-pointer transition-colors ${
+                    checked ? 'bg-indigo-50/40 dark:bg-indigo-950/15' : 'hover:bg-slate-50 dark:hover:bg-slate-800/30'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    {checked ? (
+                      <CheckSquare className="h-4 w-4 text-indigo-600 shrink-0" />
+                    ) : (
+                      <Square className="h-4 w-4 text-slate-400 shrink-0" />
+                    )}
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono font-bold text-slate-900 dark:text-white">
+                          NF {c.invoice_number || '-'} · Parc. {c.installment_number || '1'}
+                        </span>
+                        <span className="font-semibold text-slate-700 dark:text-slate-200">{c.payer_name}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Vencimento: {fmtDate(c.due_date)} · Cora #{c.id}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-slate-900 dark:text-white">{brl(c.amount)}</span>
+                    <button
+                      type="button"
+                      onClick={ev => {
+                        ev.stopPropagation();
+                        onRemoveIds([c.id]);
+                      }}
+                      className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-slate-100"
+                      title="Remover da fila"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+          <div className="text-xs text-slate-500">
+            Selecionado para impressão única: <b>{selectedIds.length} boleto(s)</b>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {selectedIds.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  onRemoveIds(selectedIds);
+                  toast.success('Boletos marcados como impressos e removidos da fila.');
+                }}
+                className={`${btnCls} border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300`}
+              >
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" /> Marcar como Impressos
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={printing || selectedIds.length === 0}
+              onClick={handlePrintSelected}
+              className={`${btnCls} bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm`}
+            >
+              {printing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+              Imprimir Todos de Uma Vez ({selectedIds.length} em 1 PDF)
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -33,6 +34,8 @@ interface DropshipConfig {
   perc_desconto_remessa: number | null;
   usar_pedido_remessa: boolean;
   horus_status_pedido_venda: string | null;
+  stock_sync_enabled?: boolean;
+  stock_sync_interval_min?: number;
 }
 
 interface CustomerOption {
@@ -303,13 +306,17 @@ function CredentialModal({
 }
 
 // ── Componente principal ─────────────────────────────────────────────────────
-export function DropshipTab() {
-  const [companyId, setCompanyId] = useState<number | null>(null);
+export function DropshipTab({ companyIdProp }: { companyIdProp?: number } = {}) {
+  const [companyId, setCompanyId] = useState<number | null>(companyIdProp ?? null);
 
   useEffect(() => {
+    if (companyIdProp) {
+      setCompanyId(companyIdProp);
+      return;
+    }
     const user = getUser();
     setCompanyId(user?.company_id ?? null);
-  }, []);
+  }, [companyIdProp]);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -345,6 +352,8 @@ export function DropshipTab() {
     perc_desconto_remessa: number;
     usar_pedido_remessa: boolean;
     horus_status_pedido_venda: string;
+    stock_sync_enabled: boolean;
+    stock_sync_interval_min: number;
   }>({
     enabled: false,
     api_token: '',
@@ -367,6 +376,8 @@ export function DropshipTab() {
     perc_desconto_remessa: 0,
     usar_pedido_remessa: true,
     horus_status_pedido_venda: '',
+    stock_sync_enabled: false,
+    stock_sync_interval_min: 30,
   });
 
   const fetchConfig = useCallback(async () => {
@@ -400,6 +411,8 @@ export function DropshipTab() {
           perc_desconto_remessa: data.perc_desconto_remessa ?? 0,
           usar_pedido_remessa: data.usar_pedido_remessa ?? true,
           horus_status_pedido_venda: data.horus_status_pedido_venda || '',
+          stock_sync_enabled: data.stock_sync_enabled ?? false,
+          stock_sync_interval_min: data.stock_sync_interval_min || 30,
         });
         if (data.horus_customer_name) setCustomerSearch(data.horus_customer_name);
       }
@@ -723,24 +736,23 @@ export function DropshipTab() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Taxa de Frete — Venda (R$)</label>
-              <div className="relative">
-                <span className="absolute inset-y-0 left-3 flex items-center text-xs text-slate-400 pointer-events-none">R$</span>
-                <input id="vlr_taxa_frete" type="number" min={0} step={0.01} value={form.vlr_taxa_frete}
-                  onChange={e => setForm(p => ({ ...p, vlr_taxa_frete: parseFloat(e.target.value) || 0 }))}
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
-                  placeholder="0.00" />
-              </div>
+              <CurrencyInput
+                value={form.vlr_taxa_frete}
+                onChangeValue={val => setForm(p => ({ ...p, vlr_taxa_frete: val }))}
+                prefixStr="R$ "
+                className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+              />
               <p className="text-[10px] text-slate-400 mt-1">Enviado como <span className="font-mono">VLR_FRETE</span> no pedido de Venda (6.118). Zero = não envia.</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Desconto por Item — Remessa (%)</label>
-              <div className="relative">
-                <input id="perc_desconto_remessa" type="number" min={0} max={100} step={0.01} value={form.perc_desconto_remessa}
-                  onChange={e => setForm(p => ({ ...p, perc_desconto_remessa: parseFloat(e.target.value) || 0 }))}
-                  className="w-full pr-8 pl-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30"
-                  placeholder="0.00" />
-                <span className="absolute inset-y-0 right-3 flex items-center text-xs text-slate-400 pointer-events-none">%</span>
-              </div>
+              <CurrencyInput
+                value={form.perc_desconto_remessa}
+                onChangeValue={val => setForm(p => ({ ...p, perc_desconto_remessa: val }))}
+                suffixStr="%"
+                max={100}
+                className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+              />
               <p className="text-[10px] text-slate-400 mt-1">Desconto sobre <span className="font-mono">VLR_LIQUIDO</span> na Remessa (6.923). Zero = sem desconto.</p>
             </div>
           </div>
@@ -789,6 +801,39 @@ export function DropshipTab() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Sincronização de Estoque */}
+      <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+        <div>
+          <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Sincronização Automática de Estoque (Hub-Erdos)</p>
+          <p className="text-[11px] text-slate-400">Envio periódico de posição de estoque para a Erdos via Busca_AcervoB2B (COD_BARRA_ITEM → SKU)</p>
+        </div>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800/40">
+          <div>
+            <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Sincronização Automática Ativa</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Envia saldo atualizado automaticamente conforme intervalo configurado</p>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium text-slate-600 dark:text-slate-400">Intervalo (min):</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={form.stock_sync_interval_min}
+                onChange={e => setForm(p => ({ ...p, stock_sync_interval_min: parseInt(e.target.value.replace(/\D/g, '')) || 30 }))}
+                className="w-20 px-2.5 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-mono text-center"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setForm(p => ({ ...p, stock_sync_enabled: !p.stock_sync_enabled }))}
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none ${form.stock_sync_enabled ? 'bg-violet-500' : 'bg-slate-300 dark:bg-slate-600'}`}
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${form.stock_sync_enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Aviso */}

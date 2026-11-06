@@ -14,25 +14,59 @@ Regras arquiteturais:
 """
 import asyncio
 import base64
+import io
 import logging
 import re
+import time
 import xml.etree.ElementTree as ET
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func
+import httpx
+from pypdf import PdfReader, PdfWriter
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.integrators.horus import HorusClient
 from app.models.company import Company
 from app.models.company_settings import CompanySettings
+from app.models.cora import CoraConfig
 from app.models.customer import Customer
 from app.models.payments import PayCharge
 from app.payments import service
 from app.payments.base import ChargePayer, PaymentProviderError
+from app.payments.registry import get_provider
 
 logger = logging.getLogger(__name__)
+
+_SCHEMA_CHECKED = False
+# Cache em memória para catálogos estáticos do Horus (Busca_MetodoVenda + Busca_FormaPagto) -> TTL 30 min
+_CATALOG_CACHE: Dict[int, Tuple[float, Dict[int, str], List[Dict[str, str]]]] = {}
+# Cache de curto prazo (90s) das notas e débitos do período para troca instantânea de abas/filtros
+_HORUS_DATA_CACHE: Dict[Tuple[int, str, str, str], Tuple[float, List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]] = {}
+# Cache de parse do XML_Base64 por nota (evita decodificar Base64 + XML repetidamente)
+_XML_PARSE_CACHE: Dict[Tuple[int, str, str], Dict[str, Any]] = {}
+
+
+def _ensure_cora_invoice_columns(db: Session) -> None:
+    global _SCHEMA_CHECKED
+    if _SCHEMA_CHECKED:
+        return
+    try:
+        db.execute(text("ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS invoice_allowed_payment_forms VARCHAR(500);"))
+        db.execute(text("ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS invoice_auto_emit_enabled BOOLEAN NOT NULL DEFAULT FALSE;"))
+        db.commit()
+        _SCHEMA_CHECKED = True
+    except Exception as e:
+        db.rollback()
+        logger.debug("[HorusInvoices] _ensure_cora_invoice_columns: %s", e)
+
+
+def invalidate_horus_invoices_cache(company_id: int) -> None:
+    keys_to_remove = [k for k in _HORUS_DATA_CACHE if k[0] == company_id]
+    for k in keys_to_remove:
+        _HORUS_DATA_CACHE.pop(k, None)
 
 
 def _digits(v: Any) -> str:
@@ -254,61 +288,75 @@ async def _fetch_horus_invoices_and_debits_async(
     date_from: date,
     date_to: date,
     cod_ped_venda: Optional[str] = None,
-) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]], Dict[int, str]]:
+    force_refresh: bool = False,
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]], Dict[int, str], List[Dict[str, str]]]:
     """
-    Executa todas as chamadas REST no Horus em uma única sessão HTTP assíncrona:
-      1. `Busca_MetodoVenda` para obter os métodos de venda ativos (e nomes).
+    Executa todas as chamadas REST no Horus em uma única sessão HTTP assíncrona com cache inteligente:
+      1. `Busca_MetodoVenda` + `Busca_FormaPagto` cacheados por 30 minutos por empresa.
       2. Se `cod_ped_venda` for informado, consulta `Busca_PedidosVenda` para descobrir o `COD_METODO` exato do pedido.
       3. `Busca_NotaFiscal` (`XML_BASE64="S"`) por método de venda com `DATA_INI`/`DATA_FIM` e/ou `COD_PED_VENDA`.
-      4. `Busca_debitos` (`ARQ_BASE64="S"`) para cada `COD_CLI` único das notas retornadas.
+      4. `Busca_debitos` (`ARQ_BASE64="N"`) para cada `COD_CLI` único das notas retornadas (alta velocidade).
     """
     emp, fil = _resolve_horus_emp_fil(settings)
     legacy_pag = bool(getattr(settings, "horus_legacy_pagination", False))
+    clean_ped = _clean(cod_ped_venda) if cod_ped_venda else ""
+    now_ts = time.time()
 
     client = HorusClient(db, company_id)
     try:
-        # 1. Métodos de venda e Formas de pagamento (Busca_FormaPagto)
-        methods_map: Dict[int, str] = {
-            1: "Direta",
-            2: "Consignação",
-            3: "Web",
-            4: "Representante",
-            5: "Sem desconto na NF",
-            6: "Pré-venda",
-            7: "E-book",
-        }
-        payment_forms_catalog: List[Dict[str, str]] = []
-        try:
-            m_params: Dict[str, Any] = {}
-            if not legacy_pag:
-                m_params = {"OFFSET": 0, "LIMIT": 100}
-            m_res, fp_res = await asyncio.gather(
-                client.get("Busca_MetodoVenda", params=m_params),
-                client.get("Busca_FormaPagto", params=m_params),
-                return_exceptions=True,
-            )
-            if isinstance(m_res, list):
-                parsed_methods = {}
-                for m in m_res:
-                    if isinstance(m, dict) and not m.get("Falha") and m.get("COD_METODO"):
-                        try:
-                            parsed_methods[int(m["COD_METODO"])] = _clean(m.get("DESC_METODO")) or str(m["COD_METODO"])
-                        except (ValueError, TypeError):
-                            pass
-                if parsed_methods:
-                    methods_map = parsed_methods
-            if isinstance(fp_res, list):
-                for fp in fp_res:
-                    if isinstance(fp, dict) and not fp.get("Falha") and (fp.get("COD_FORMA") is not None or fp.get("NOM_FORMA")):
-                        c_forma = _clean(fp.get("COD_FORMA"))
-                        n_forma = _clean(fp.get("NOM_FORMA")) or c_forma
-                        if n_forma:
-                            payment_forms_catalog.append({"code": c_forma or n_forma, "name": n_forma})
-        except Exception as e:
-            logger.debug("[HorusInvoices] Fallback de Busca_MetodoVenda/Busca_FormaPagto company=%s: %s", company_id, e)
+        # 1. Métodos de venda e Formas de pagamento (Busca_FormaPagto) com cache de 30 min
+        cached_cat = _CATALOG_CACHE.get(company_id)
+        if cached_cat and (now_ts - cached_cat[0] < 1800) and not force_refresh:
+            methods_map = dict(cached_cat[1])
+            payment_forms_catalog = [dict(x) for x in cached_cat[2]]
+        else:
+            methods_map = {
+                1: "Direta",
+                2: "Consignação",
+                3: "Web",
+                4: "Representante",
+                5: "Sem desconto na NF",
+                6: "Pré-venda",
+                7: "E-book",
+            }
+            payment_forms_catalog = []
+            try:
+                m_params: Dict[str, Any] = {}
+                if not legacy_pag:
+                    m_params = {"OFFSET": 0, "LIMIT": 100}
+                m_res, fp_res = await asyncio.gather(
+                    client.get("Busca_MetodoVenda", params=m_params),
+                    client.get("Busca_FormaPagto", params=m_params),
+                    return_exceptions=True,
+                )
+                if isinstance(m_res, list):
+                    parsed_methods = {}
+                    for m in m_res:
+                        if isinstance(m, dict) and not m.get("Falha") and m.get("COD_METODO"):
+                            try:
+                                parsed_methods[int(m["COD_METODO"])] = _clean(m.get("DESC_METODO")) or str(m["COD_METODO"])
+                            except (ValueError, TypeError):
+                                pass
+                    if parsed_methods:
+                        methods_map = parsed_methods
+                if isinstance(fp_res, list):
+                    for fp in fp_res:
+                        if isinstance(fp, dict) and not fp.get("Falha") and (fp.get("COD_FORMA") is not None or fp.get("NOM_FORMA")):
+                            c_forma = _clean(fp.get("COD_FORMA"))
+                            n_forma = _clean(fp.get("NOM_FORMA")) or c_forma
+                            if n_forma:
+                                payment_forms_catalog.append({"code": c_forma or n_forma, "name": n_forma})
+                if payment_forms_catalog:
+                    _CATALOG_CACHE[company_id] = (now_ts, dict(methods_map), [dict(x) for x in payment_forms_catalog])
+            except Exception as e:
+                logger.debug("[HorusInvoices] Fallback de Busca_MetodoVenda/Busca_FormaPagto company=%s: %s", company_id, e)
+
+        cache_key = (company_id, date_from.isoformat(), date_to.isoformat(), clean_ped)
+        cached_data = _HORUS_DATA_CACHE.get(cache_key)
+        if cached_data and (now_ts - cached_data[0] < 90) and not force_refresh:
+            return cached_data[1], cached_data[2], methods_map, payment_forms_catalog
 
         target_methods: List[int] = list(methods_map.keys())
-        clean_ped = _clean(cod_ped_venda) if cod_ped_venda else ""
 
         # 2. Se filtrou por COD_PED_VENDA, tenta descobrir o método do pedido em Busca_PedidosVenda para consulta cirúrgica
         if clean_ped:
@@ -333,8 +381,8 @@ async def _fetch_horus_invoices_and_debits_async(
             except Exception:
                 pass
 
-        # 3. Busca_NotaFiscal concorrente por método (semáforo = 4)
-        sem = asyncio.Semaphore(4)
+        # 3. Busca_NotaFiscal concorrente por método (semáforo = 8)
+        sem = asyncio.Semaphore(8)
         d_ini_str = f"{date_from.strftime('%d/%m/%Y')} 00:00:00"
         d_fim_str = f"{date_to.strftime('%d/%m/%Y')} 23:59:59"
 
@@ -389,7 +437,7 @@ async def _fetch_horus_invoices_and_debits_async(
                     seen_nf_keys.add(nf_key)
                     raw_invoices.append(nf)
 
-        # 4. Busca_debitos concorrente para os COD_CLI das notas encontradas
+        # 4. Busca_debitos concorrente para os COD_CLI das notas encontradas (ARQ_BASE64="N" evita renderizar PDFs pesados no Horus)
         unique_cod_clis = sorted({
             str(nf.get("COD_CLI")).strip()
             for nf in raw_invoices
@@ -402,7 +450,7 @@ async def _fetch_horus_invoices_and_debits_async(
                     "COD_EMPRESA": emp,
                     "COD_FILIAL": fil,
                     "COD_CLI": cod_cli,
-                    "ARQ_BASE64": "S",
+                    "ARQ_BASE64": "N",
                 }
                 if not legacy_pag:
                     deb_params["OFFSET"] = 0
@@ -425,6 +473,9 @@ async def _fetch_horus_invoices_and_debits_async(
             for c_id, d_list in deb_results:
                 debits_by_cli[c_id] = d_list
 
+        if len(_HORUS_DATA_CACHE) > 30:
+            _HORUS_DATA_CACHE.clear()
+        _HORUS_DATA_CACHE[cache_key] = (time.time(), raw_invoices, debits_by_cli)
         return raw_invoices, debits_by_cli, methods_map, payment_forms_catalog
     finally:
         await client.close()
@@ -440,19 +491,21 @@ def list_horus_invoices_for_boletos(
     nro_nota_fiscal: Optional[str] = None,
     search: Optional[str] = None,
     status_filter: str = "ALL",
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
     """
     Lista as últimas Notas Fiscais emitidas no Horus ERP no período (padrão: últimos 3 dias)
     com suas respectivas parcelas (`<cobr><dup>` + `Busca_debitos`) e status de emissão de boleto.
     """
+    _ensure_cora_invoice_columns(db)
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
-    from app.models.cora import CoraConfig
     cora_cfg = db.query(CoraConfig).filter(CoraConfig.company_id == company_id).first()
     saved_allowed_forms = [
         f.strip()
         for f in ((cora_cfg.invoice_allowed_payment_forms if cora_cfg else "") or "").split(",")
         if f.strip()
     ]
+    auto_emit_enabled = bool(getattr(cora_cfg, "invoice_auto_emit_enabled", False)) if cora_cfg else False
     allowed_upper_set = {f.upper() for f in saved_allowed_forms}
 
     if not settings or not settings.horus_enabled:
@@ -462,6 +515,7 @@ def list_horus_invoices_for_boletos(
             "date_to": (date_to or date.today()).isoformat(),
             "payment_forms_catalog": [],
             "allowed_payment_forms": saved_allowed_forms,
+            "auto_emit_enabled": auto_emit_enabled,
             "hidden_by_payment_form_count": 0,
             "summary": {
                 "total_invoices": 0,
@@ -470,6 +524,8 @@ def list_horus_invoices_for_boletos(
                 "emitted_installments": 0,
                 "total_amount": 0.0,
                 "pending_amount": 0.0,
+                "auto_emit_ready_invoices": 0,
+                "auto_emit_ready_installments": 0,
             },
             "items": [],
         }
@@ -490,6 +546,7 @@ def list_horus_invoices_for_boletos(
             date_from=eff_from,
             date_to=eff_to,
             cod_ped_venda=cod_ped_venda,
+            force_refresh=force_refresh,
         )
     )
     forms_name_by_code = {fp["code"].upper(): fp["name"] for fp in payment_forms_catalog}
@@ -502,21 +559,42 @@ def list_horus_invoices_for_boletos(
         if token in forms_code_by_name:
             expanded_allowed_upper.add(forms_code_by_name[token].upper())
 
-    # Mapa de clientes locais do Cronuz para enriquecer e-mail/endereço/customer_id
-    local_customers = (
-        db.query(Customer)
-        .options(joinedload(Customer.addresses))
-        .filter(Customer.company_id == company_id)
-        .all()
-    )
+    # Pré-parseia XMLs (com cache em memória) e coleta apenas os COD_CLI das notas do período para consulta enxuta no PostgreSQL
+    parsed_xml_by_nf_idx: Dict[int, Dict[str, Any]] = {}
+    invoice_cod_clis = set()
+    for idx_nf, nf in enumerate(raw_invoices):
+        c_cli = _clean(nf.get("COD_CLI"))
+        if c_cli:
+            invoice_cod_clis.add(c_cli)
+        xml_key = (company_id, _clean(nf.get("COD_NF")), _clean(nf.get("NRO_NOTA_FISCAL")))
+        cached_xml = _XML_PARSE_CACHE.get(xml_key)
+        if cached_xml is None:
+            cached_xml = _parse_nfe_xml_base64(nf.get("XML_Base64") or nf.get("XML_BASE64"))
+            if len(_XML_PARSE_CACHE) > 600:
+                _XML_PARSE_CACHE.clear()
+            if xml_key[1] or xml_key[2]:
+                _XML_PARSE_CACHE[xml_key] = cached_xml
+        parsed_xml_by_nf_idx[idx_nf] = cached_xml
+
+    # Mapa enxuto de clientes locais do Cronuz apenas para os COD_CLI das notas retornadas
     cust_by_doc: Dict[str, Customer] = {}
     cust_by_cod: Dict[str, Customer] = {}
-    for c in local_customers:
-        d = _digits(c.document)
-        if d:
-            cust_by_doc[d] = c
-        if c.horus_cod_cli:
-            cust_by_cod[str(c.horus_cod_cli)] = c
+    if invoice_cod_clis:
+        local_customers = (
+            db.query(Customer)
+            .options(joinedload(Customer.addresses))
+            .filter(
+                Customer.company_id == company_id,
+                Customer.horus_cod_cli.in_(list(invoice_cod_clis)),
+            )
+            .all()
+        )
+        for c in local_customers:
+            d = _digits(c.document)
+            if d:
+                cust_by_doc[d] = c
+            if c.horus_cod_cli:
+                cust_by_cod[str(c.horus_cod_cli)] = c
 
     # Mapa de cobranças ativas da empresa para impedir geração duplicada
     active_charges = (
@@ -555,9 +633,12 @@ def list_horus_invoices_for_boletos(
     total_amount_sum = 0.0
     pending_amount_sum = 0.0
     hidden_by_payment_form_count = 0
+    auto_emit_ready_invoices = 0
+    auto_emit_ready_installments = 0
     seen_catalog_names = {fp["name"].upper() for fp in payment_forms_catalog}
+    today_iso = today.isoformat()
 
-    for nf in raw_invoices:
+    for idx_nf, nf in enumerate(raw_invoices):
         nro_nf = _clean(nf.get("NRO_NOTA_FISCAL"))
         nro_nf_norm = nro_nf.lstrip("0") or nro_nf
         cod_nf = _clean(nf.get("COD_NF"))
@@ -576,8 +657,8 @@ def list_horus_invoices_for_boletos(
         if nf_filter and nf_filter not in nro_nf_norm and _clean(nro_nota_fiscal) not in nro_nf:
             continue
 
-        # Extrai destinatário e duplicatas do XML_Base64
-        xml_info = _parse_nfe_xml_base64(nf.get("XML_Base64") or nf.get("XML_BASE64"))
+        # Extrai destinatário e duplicatas do XML_Base64 (pré-cacheado)
+        xml_info = parsed_xml_by_nf_idx.get(idx_nf) or _parse_nfe_xml_base64(nf.get("XML_Base64") or nf.get("XML_BASE64"))
         xml_payer = xml_info["payer"]
         xml_dups = xml_info["duplicatas"]
 
@@ -793,6 +874,43 @@ def list_horus_invoices_for_boletos(
         total_amount_sum = round(total_amount_sum + vlr_liquido, 2)
         pending_amount_sum = round(pending_amount_sum + nf_pending_amount, 2)
 
+        cora_charge_ids = [
+            inst["existing_charge"]["id"]
+            for inst in installments_out
+            if inst.get("existing_charge") and inst["existing_charge"].get("id")
+        ]
+
+        # Validação de prontidão e segurança para Emissão Automática (Lote / Botão Play)
+        auto_emit_issues: List[str] = []
+        if status_nf and status_nf.upper() in ("C", "CANCELADA", "CANCELADO"):
+            auto_emit_issues.append("Nota Fiscal cancelada no Horus")
+        if len(_digits(payer_doc)) not in (11, 14):
+            auto_emit_issues.append("CPF/CNPJ do destinatário ausente ou inválido")
+        if not payer_name or len(payer_name.strip()) < 2:
+            auto_emit_issues.append("Nome/Razão Social do destinatário ausente")
+        if not payer_address.get("street") or not payer_address.get("district") or not payer_address.get("city"):
+            auto_emit_issues.append("Endereço completo (logradouro/bairro/cidade) ausente no XML")
+        if len(payer_address.get("state") or "") != 2 or len(_digits(payer_address.get("zip_code"))) != 8:
+            auto_emit_issues.append("UF ou CEP do destinatário inválido")
+
+        eligible_pending_insts = [
+            inst for inst in installments_out
+            if not inst["has_existing_boleto"]
+            and (inst.get("amount") or 0) > 0
+            and (inst.get("due_date") or "") >= today_iso
+        ]
+        overdue_pending = [
+            inst for inst in installments_out
+            if not inst["has_existing_boleto"] and (inst.get("due_date") or "") < today_iso
+        ]
+        if overdue_pending:
+            auto_emit_issues.append(f"{len(overdue_pending)} parcela(s) com vencimento anterior a hoje")
+
+        auto_emit_ready = bool(nf_pending_count > 0 and len(eligible_pending_insts) > 0 and not auto_emit_issues)
+        if auto_emit_ready:
+            auto_emit_ready_invoices += 1
+            auto_emit_ready_installments += len(eligible_pending_insts)
+
         items.append({
             "nro_nota_fiscal": nro_nf,
             "serie_fiscal": serie,
@@ -821,6 +939,9 @@ def list_horus_invoices_for_boletos(
             "pending_count": nf_pending_count,
             "pending_amount": nf_pending_amount,
             "emission_status": emission_status,
+            "cora_charge_ids": cora_charge_ids,
+            "auto_emit_ready": auto_emit_ready,
+            "auto_emit_issues": auto_emit_issues,
             "installments": installments_out,
         })
 
@@ -839,6 +960,7 @@ def list_horus_invoices_for_boletos(
         "date_to": eff_to.isoformat(),
         "payment_forms_catalog": payment_forms_catalog,
         "allowed_payment_forms": saved_allowed_forms,
+        "auto_emit_enabled": auto_emit_enabled,
         "hidden_by_payment_form_count": hidden_by_payment_form_count,
         "summary": {
             "total_invoices": len(items),
@@ -847,6 +969,8 @@ def list_horus_invoices_for_boletos(
             "emitted_installments": emitted_installments,
             "total_amount": round(total_amount_sum, 2),
             "pending_amount": round(pending_amount_sum, 2),
+            "auto_emit_ready_invoices": auto_emit_ready_invoices,
+            "auto_emit_ready_installments": auto_emit_ready_installments,
         },
         "items": items,
     }
@@ -871,10 +995,11 @@ def emit_boletos_for_horus_invoice(
     payer: ChargePayer,
     installments: List[Dict[str, Any]],
     user_id: Optional[int] = None,
+    shared_provider: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Emite 1 ou todas as parcelas pendentes de uma Nota Fiscal do Horus ERP no provedor (ex.: Banco Cora),
-    garantindo trava estrita contra emissão duplicada.
+    garantindo trava estrita contra emissão duplicada e reutilizando a mesma sessão mTLS para múltiplas parcelas.
     """
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
     emp, fil = _resolve_horus_emp_fil(settings) if settings else ("1", "1")
@@ -889,93 +1014,102 @@ def emit_boletos_for_horus_invoice(
     created_charges: List[Dict[str, Any]] = []
     skipped_duplicates: List[Dict[str, Any]] = []
 
-    for idx, inst in enumerate(installments, start=1):
-        inst_num = _normalize_installment_number(inst.get("installment_number"), idx)
-        lancto = _clean(inst.get("financial_launch_id")) or None
-        origin_ref = _clean(inst.get("origin_ref")) or f"horus_nf:{emp}:{fil}:{nro_nf}:{inst_num}"
+    # Carrega cobranças ativas da empresa uma única vez antes do loop
+    existing_q = (
+        db.query(PayCharge)
+        .filter(
+            PayCharge.company_id == company_id,
+            PayCharge.is_active.is_(True),
+            PayCharge.status.notin_(("CANCELLED", "ERROR")),
+        )
+        .all()
+    )
 
-        # Verifica no banco se já existe boleto ativo para esta NF + parcela ou lançamento
-        existing_q = (
-            db.query(PayCharge)
-            .filter(
-                PayCharge.company_id == company_id,
-                PayCharge.is_active.is_(True),
-                PayCharge.status.notin_(("CANCELLED", "ERROR")),
+    own_provider = shared_provider is None
+    prov = shared_provider or get_provider(db, company_id, provider_code)
+    try:
+        for idx, inst in enumerate(installments, start=1):
+            inst_num = _normalize_installment_number(inst.get("installment_number"), idx)
+            lancto = _clean(inst.get("financial_launch_id")) or None
+            origin_ref = _clean(inst.get("origin_ref")) or f"horus_nf:{emp}:{fil}:{nro_nf}:{inst_num}"
+
+            dup_charge: Optional[PayCharge] = None
+            for ex in existing_q:
+                ex_nf = _clean(ex.invoice_number).lstrip("0") if ex.invoice_number else ""
+                ex_inst = _normalize_installment_number(ex.installment_number, 1)
+                if ex.origin_ref == origin_ref:
+                    dup_charge = ex
+                    break
+                if ex_nf and ex_nf == nro_nf_norm and ex_inst == inst_num:
+                    dup_charge = ex
+                    break
+                if lancto and ex.financial_launch_id and _clean(ex.financial_launch_id) == lancto and ex_inst == inst_num:
+                    dup_charge = ex
+                    break
+
+            if dup_charge is not None:
+                skipped_duplicates.append({
+                    "installment_number": inst_num,
+                    "reason": f"A NF {nro_nf} (parcela {inst_num}) já possui boleto ativo (#{dup_charge.id}).",
+                    "charge": service.serialize_charge(dup_charge),
+                })
+                continue
+
+            due_val = inst.get("due_date")
+            if isinstance(due_val, str):
+                due_dt = date.fromisoformat(due_val)
+            elif isinstance(due_val, date):
+                due_dt = due_val
+            else:
+                raise PaymentProviderError(f"Data de vencimento inválida na parcela {inst_num}.")
+
+            amt_val = Decimal(str(inst.get("amount") or 0)).quantize(Decimal("0.01"))
+            desc = _clean(inst.get("description"))
+            if not desc:
+                desc_parts = [f"ERP Horus - NF {nro_nf} (Parc. {inst_num}/{total_parc})"]
+                if cod_ped_venda:
+                    desc_parts.append(f"Ped. {cod_ped_venda}")
+                if lancto:
+                    desc_parts.append(f"Lanç. {lancto}")
+                desc = " | ".join(desc_parts)
+
+            charge = service.create_charge(
+                db,
+                company_id,
+                payer=payer,
+                amount=amt_val,
+                due_date=due_dt,
+                issue_date=issue_date or date.today(),
+                description=desc,
+                method=method,
+                channel="INVOICES",
+                provider_code=provider_code,
+                origin_type="HORUS_INVOICE",
+                origin_ref=origin_ref,
+                customer_id=customer_id,
+                order_number=cod_ped_venda or cod_pedido_origem,
+                financial_launch_id=lancto,
+                installment_number=inst_num,
+                invoice_number=nro_nf,
+                horus_cod_cli=horus_cod_cli,
+                horus_id_guid=horus_id_guid,
+                origin_meta={
+                    "cod_empresa": emp,
+                    "cod_filial": fil,
+                    "cod_nf": cod_nf,
+                    "serie_fiscal": serie_fiscal,
+                    "cod_ped_venda": cod_ped_venda,
+                    "cod_pedido_origem": cod_pedido_origem,
+                    "chave_acesso_nfe": chave_acesso_nfe,
+                },
+                user_id=user_id,
+                provider=prov,
             )
-            .all()
-        )
-        dup_charge: Optional[PayCharge] = None
-        for ex in existing_q:
-            ex_nf = _clean(ex.invoice_number).lstrip("0") if ex.invoice_number else ""
-            ex_inst = _normalize_installment_number(ex.installment_number, 1)
-            if ex.origin_ref == origin_ref:
-                dup_charge = ex
-                break
-            if ex_nf and ex_nf == nro_nf_norm and ex_inst == inst_num:
-                dup_charge = ex
-                break
-            if lancto and ex.financial_launch_id and _clean(ex.financial_launch_id) == lancto and ex_inst == inst_num:
-                dup_charge = ex
-                break
-
-        if dup_charge is not None:
-            skipped_duplicates.append({
-                "installment_number": inst_num,
-                "reason": f"A NF {nro_nf} (parcela {inst_num}) já possui boleto ativo (#{dup_charge.id}).",
-                "charge": service.serialize_charge(dup_charge),
-            })
-            continue
-
-        due_val = inst.get("due_date")
-        if isinstance(due_val, str):
-            due_dt = date.fromisoformat(due_val)
-        elif isinstance(due_val, date):
-            due_dt = due_val
-        else:
-            raise PaymentProviderError(f"Data de vencimento inválida na parcela {inst_num}.")
-
-        amt_val = Decimal(str(inst.get("amount") or 0)).quantize(Decimal("0.01"))
-        desc = _clean(inst.get("description"))
-        if not desc:
-            desc_parts = [f"ERP Horus - NF {nro_nf} (Parc. {inst_num}/{total_parc})"]
-            if cod_ped_venda:
-                desc_parts.append(f"Ped. {cod_ped_venda}")
-            if lancto:
-                desc_parts.append(f"Lanç. {lancto}")
-            desc = " | ".join(desc_parts)
-
-        charge = service.create_charge(
-            db,
-            company_id,
-            payer=payer,
-            amount=amt_val,
-            due_date=due_dt,
-            issue_date=issue_date or date.today(),
-            description=desc,
-            method=method,
-            channel="INVOICES",
-            provider_code=provider_code,
-            origin_type="HORUS_INVOICE",
-            origin_ref=origin_ref,
-            customer_id=customer_id,
-            order_number=cod_ped_venda or cod_pedido_origem,
-            financial_launch_id=lancto,
-            installment_number=inst_num,
-            invoice_number=nro_nf,
-            horus_cod_cli=horus_cod_cli,
-            horus_id_guid=horus_id_guid,
-            origin_meta={
-                "cod_empresa": emp,
-                "cod_filial": fil,
-                "cod_nf": cod_nf,
-                "serie_fiscal": serie_fiscal,
-                "cod_ped_venda": cod_ped_venda,
-                "cod_pedido_origem": cod_pedido_origem,
-                "chave_acesso_nfe": chave_acesso_nfe,
-            },
-            user_id=user_id,
-        )
-        created_charges.append(service.serialize_charge(charge))
+            existing_q.append(charge)
+            created_charges.append(service.serialize_charge(charge))
+    finally:
+        if own_provider:
+            prov.close()
 
     if not created_charges and skipped_duplicates:
         raise PaymentProviderError(skipped_duplicates[0]["reason"])
@@ -989,12 +1123,101 @@ def emit_boletos_for_horus_invoice(
     }
 
 
+def emit_batch_boletos_for_horus_invoices(
+    db: Session,
+    company_id: int,
+    *,
+    provider_code: str,
+    method: str,
+    invoices: List[Dict[str, Any]],
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Emite em lote (de forma segura, idempotente e reutilizando uma única conexão mTLS com o Cora)
+    todas as parcelas pendentes das Notas Fiscais selecionadas ou acionadas pela rotina automática (Play).
+    Retorna a lista consolidada de cobranças geradas para alimentar imediatamente a Fila de Impressão.
+    """
+    if not invoices:
+        raise PaymentProviderError("Nenhuma Nota Fiscal informada para emissão em lote.")
+
+    created_all: List[Dict[str, Any]] = []
+    skipped_all: List[Dict[str, Any]] = []
+    errors_all: List[Dict[str, Any]] = []
+
+    with get_provider(db, company_id, provider_code) as shared_provider:
+        for inv in invoices:
+            nro_nf = _clean(inv.get("nro_nota_fiscal"))
+            raw_payer = inv.get("payer") or {}
+            payer = ChargePayer(
+                name=_clean(raw_payer.get("name")),
+                document=_digits(raw_payer.get("document")),
+                email=_clean(raw_payer.get("email")) or None,
+                street=_clean(raw_payer.get("street")),
+                number=_clean(raw_payer.get("number")) or "S/N",
+                complement=_clean(raw_payer.get("complement")) or None,
+                district=_clean(raw_payer.get("district")),
+                city=_clean(raw_payer.get("city")),
+                state=_clean(raw_payer.get("state"))[:2].upper(),
+                zip_code=_digits(raw_payer.get("zip_code")),
+            )
+            issue_dt_raw = inv.get("issue_date")
+            issue_dt = (
+                date.fromisoformat(issue_dt_raw)
+                if isinstance(issue_dt_raw, str) and len(issue_dt_raw) == 10
+                else (issue_dt_raw if isinstance(issue_dt_raw, date) else date.today())
+            )
+            try:
+                res = emit_boletos_for_horus_invoice(
+                    db,
+                    company_id,
+                    provider_code=provider_code,
+                    method=method,
+                    nro_nota_fiscal=nro_nf,
+                    serie_fiscal=inv.get("serie_fiscal"),
+                    cod_nf=inv.get("cod_nf"),
+                    cod_ped_venda=inv.get("cod_ped_venda"),
+                    cod_pedido_origem=inv.get("cod_pedido_origem"),
+                    horus_cod_cli=inv.get("horus_cod_cli"),
+                    horus_id_guid=inv.get("horus_id_guid"),
+                    customer_id=inv.get("customer_id"),
+                    issue_date=issue_dt,
+                    chave_acesso_nfe=inv.get("chave_acesso_nfe"),
+                    payer=payer,
+                    installments=inv.get("installments") or [],
+                    user_id=user_id,
+                    shared_provider=shared_provider,
+                )
+                created_all.extend(res.get("charges") or [])
+                skipped_all.extend(res.get("skipped") or [])
+            except PaymentProviderError as e:
+                errors_all.append({
+                    "nro_nota_fiscal": nro_nf,
+                    "error": str(e),
+                })
+            except Exception as e:
+                logger.error("[HorusInvoices] Falha no lote NF %s company=%s: %s", nro_nf, company_id, e)
+                errors_all.append({
+                    "nro_nota_fiscal": nro_nf,
+                    "error": f"Falha ao emitir NF {nro_nf}: {e}",
+                })
+
+    return {
+        "created_count": len(created_all),
+        "skipped_count": len(skipped_all),
+        "error_count": len(errors_all),
+        "charges": created_all,
+        "skipped": skipped_all,
+        "errors": errors_all,
+    }
+
+
 def update_invoice_allowed_payment_forms(
     db: Session,
     company_id: int,
     allowed_forms: List[str],
     user_id: Optional[int] = None,
 ) -> List[str]:
+    _ensure_cora_invoice_columns(db)
     cfg = db.query(CoraConfig).filter(CoraConfig.company_id == company_id).first()
     if not cfg:
         cfg = CoraConfig(company_id=company_id)
@@ -1009,9 +1232,162 @@ def update_invoice_allowed_payment_forms(
             cleaned.append(val)
 
     cfg.invoice_allowed_payment_forms = ",".join(cleaned) if cleaned else None
+    if not cleaned:
+        cfg.invoice_auto_emit_enabled = False
     if user_id:
-        cfg.updated_by_id = user_id
+        cfg.updated_by_user_id = user_id
     db.commit()
     db.refresh(cfg)
     return cleaned
+
+
+def update_invoice_auto_emit(
+    db: Session,
+    company_id: int,
+    enabled: bool,
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    _ensure_cora_invoice_columns(db)
+    cfg = db.query(CoraConfig).filter(CoraConfig.company_id == company_id).first()
+    if not cfg:
+        cfg = CoraConfig(company_id=company_id)
+        db.add(cfg)
+
+    allowed = [
+        f.strip()
+        for f in (cfg.invoice_allowed_payment_forms or "").split(",")
+        if f.strip()
+    ]
+    if enabled and not allowed:
+        raise PaymentProviderError(
+            "Por segurança operacional, antes de ativar o Modo Automático (Play), configure quais Formas de Pagamento "
+            "(ex.: Boleto Cora) devem ser exibidas/processadas no ícone de filtro."
+        )
+
+    cfg.invoice_auto_emit_enabled = bool(enabled)
+    if user_id:
+        cfg.updated_by_user_id = user_id
+    db.commit()
+    db.refresh(cfg)
+    return {
+        "auto_emit_enabled": bool(cfg.invoice_auto_emit_enabled),
+        "allowed_payment_forms": allowed,
+    }
+
+
+def build_merged_pdf_for_charges(
+    db: Session,
+    company_id: int,
+    charge_ids: List[int],
+    provider_code: str = "CORA",
+) -> bytes:
+    """
+    Baixa concorrentemente os PDFs de todos os boletos solicitados (ex.: 10 parcelas de uma NF ou fila de impressão)
+    e unifica todas as páginas em um único documento PDF pronto para impressão de uma só vez.
+    """
+    clean_ids: List[int] = []
+    seen = set()
+    for cid in charge_ids or []:
+        try:
+            iv = int(cid)
+            if iv > 0 and iv not in seen:
+                seen.add(iv)
+                clean_ids.append(iv)
+        except (ValueError, TypeError):
+            continue
+
+    if not clean_ids:
+        raise PaymentProviderError("Selecione ao menos um boleto para gerar o PDF unificado de impressão.")
+
+    charges = (
+        db.query(PayCharge)
+        .filter(
+            PayCharge.company_id == company_id,
+            PayCharge.id.in_(clean_ids),
+        )
+        .all()
+    )
+    if not charges:
+        raise PaymentProviderError("Nenhum boleto encontrado para impressão.")
+
+    charge_map = {c.id: c for c in charges}
+    ordered_charges = [charge_map[cid] for cid in clean_ids if cid in charge_map]
+
+    # Revalida URLs ausentes ou expiradas (> 20 min) usando uma única sessão do provedor
+    now_utc = datetime.now(timezone.utc)
+    needs_sync = [
+        c for c in ordered_charges
+        if c.provider_charge_id and (
+            not c.pdf_url
+            or not c.last_synced_at
+            or (now_utc - c.last_synced_at).total_seconds() > 1200
+        )
+    ]
+    if needs_sync:
+        try:
+            with get_provider(db, company_id, provider_code) as shared_prov:
+                for c in needs_sync:
+                    try:
+                        service.sync_charge(db, c, provider=shared_prov, source="USER")
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug("[HorusInvoices] Falha ao revalidar PDFs em lote: %s", e)
+
+    async def _download_all(targets: List[PayCharge]) -> Dict[int, bytes]:
+        out: Dict[int, bytes] = {}
+        sem = asyncio.Semaphore(8)
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as http_client:
+            async def _dl(ch: PayCharge):
+                if not ch.pdf_url:
+                    return
+                async with sem:
+                    try:
+                        resp = await http_client.get(ch.pdf_url)
+                        if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+                            out[ch.id] = resp.content
+                    except Exception as err:
+                        logger.warning("[HorusInvoices] Erro ao baixar PDF charge=%s: %s", ch.id, err)
+
+            await asyncio.gather(*[_dl(c) for c in targets])
+        return out
+
+    pdf_map = _run_async(_download_all(ordered_charges))
+
+    # Se algum boleto falhou por URL S3 expirada, força sync individual e tenta baixar mais uma vez
+    missing_charges = [c for c in ordered_charges if c.id not in pdf_map and c.provider_charge_id]
+    if missing_charges:
+        try:
+            with get_provider(db, company_id, provider_code) as shared_prov:
+                for c in missing_charges:
+                    try:
+                        service.sync_charge(db, c, provider=shared_prov, source="USER")
+                    except Exception:
+                        pass
+            retry_map = _run_async(_download_all(missing_charges))
+            pdf_map.update(retry_map)
+        except Exception:
+            pass
+
+    writer = PdfWriter()
+    added_docs = 0
+    for c in ordered_charges:
+        raw_pdf = pdf_map.get(c.id)
+        if not raw_pdf:
+            continue
+        try:
+            reader = PdfReader(io.BytesIO(raw_pdf))
+            for page in reader.pages:
+                writer.add_page(page)
+            added_docs += 1
+        except Exception as e:
+            logger.warning("[HorusInvoices] PDF inválido em charge=%s: %s", c.id, e)
+
+    if added_docs == 0:
+        raise PaymentProviderError("Não foi possível obter os PDFs dos boletos selecionados no provedor.")
+
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
 

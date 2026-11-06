@@ -49,6 +49,7 @@ class CoraConfig(Base):
     notify_enabled = Column(Boolean, nullable=False, default=False)  # Cora envia notificações ao pagador
     notify_rules = Column(String(500), nullable=True)                # regras CORA_NOTIFY_RULES (csv)
     invoice_allowed_payment_forms = Column(String(500), nullable=True)  # filtro de formas de pagto nas NFs Horus (csv de COD_FORMA ou NOM_FORMA)
+    invoice_auto_emit_enabled = Column(Boolean, nullable=False, default=False)  # rotina automática (Play) de emissão de boletos por NF Horus
 
     # Webhook (notificação de pagamento/cancelamento/vencimento enviada pelo Cora)
     webhook_secret = Column(String(64), nullable=True)               # segredo na URL pública (anti-spam)

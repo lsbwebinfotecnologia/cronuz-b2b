@@ -627,15 +627,16 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const userAllowedModules = user?.allowed_modules;
   const dynamicNavigation = (user?.type === 'SELLER' && Array.isArray(userAllowedModules) && userAllowedModules.length > 0)
     ? baseNavigation.filter(nav => {
+        if (nav.name === 'B2C' || nav.href.startsWith('/b2c-storefront')) return userAllowedModules.includes('b2c') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
         if (nav.name === 'Ponto de Venda (PDV)' || nav.href === '/pdv') return userAllowedModules.includes('pdv');
         if (nav.name === 'Busca Preço' || nav.href === '/product-search' || nav.name === 'Endereçamento' || nav.href === '/addressing') return userAllowedModules.includes('busca_preco') || userAllowedModules.includes('enderecamento');
         if (nav.name === 'Encomendas' || nav.href === '/encomendas') return userAllowedModules.includes('encomendas') || userAllowedModules.includes('orders');
         if (nav.name === 'Cafeteria' || nav.href.startsWith('/cafeteria')) return userAllowedModules.includes('cafeteria');
-        if (nav.name === 'Produtos' || nav.href === '/products') return userAllowedModules.includes('products');
+        if (nav.name === 'Produtos' || nav.href === '/products') return userAllowedModules.includes('products') || userAllowedModules.includes('b2c');
         if (nav.name === 'Pedidos' || nav.href === '/orders' || nav.name === 'Mesa de Pedidos' || nav.href === '/orders/intake') return userAllowedModules.includes('orders') || userAllowedModules.includes('order_intake');
         if (nav.name === 'Empresas' || nav.href === '/customers') return userAllowedModules.includes('customers');
         if (nav.name === 'Serviços' || nav.href === '/services') return userAllowedModules.includes('services');
-        if (nav.name === 'Financeiro' || nav.href === '/financial') return userAllowedModules.includes('financial');
+        if (nav.name === 'Financeiro' || nav.href === '/financial' || nav.name === 'Financeiro Cora' || nav.href.startsWith('/financial')) return userAllowedModules.includes('financial');
         if (nav.name === 'Logística Horus' || nav.href.startsWith('/logistics')) return userAllowedModules.includes('logistics');
         if (nav.name === 'Bookinfo' || nav.href.startsWith('/bookinfo')) return userAllowedModules.includes('bookinfo');
         if (nav.name === 'Marketing' || nav.href === '/promotions') return userAllowedModules.includes('promotions') || userAllowedModules.includes('marketing');

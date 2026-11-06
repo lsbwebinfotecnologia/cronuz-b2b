@@ -5,17 +5,7 @@ import { useParams } from 'next/navigation';
 import { FileSignature, Plus } from 'lucide-react';
 
 export default function CompanyContractsPage() {
-  const contracts: any[] = [
-    {
-       id: 90,
-       subject: "Integração Tray x Horus",
-       type: "Desenvolvimento",
-       value: "R$3.650,00",
-       start_date: "12/03/2026",
-       end_date: "31/03/2026",
-       signature: "Não assinado"
-    }
-  ]; // Placeholder based on print
+  const contracts: any[] = [];
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full">

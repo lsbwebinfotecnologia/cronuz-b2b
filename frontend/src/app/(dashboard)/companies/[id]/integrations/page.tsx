@@ -2,287 +2,239 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Plug, Loader2, Plus, Trash2, Settings } from 'lucide-react';
+import { motion } from 'framer-motion';
+import {
+  Plug, Loader2, Database, BookOpen, PackageCheck, ShoppingBag,
+  CreditCard, ArrowRight, CheckCircle2, AlertCircle
+} from 'lucide-react';
 import { getToken } from '@/lib/auth';
-import { toast } from 'sonner';
+import { useCompany } from '../context';
 import Link from 'next/link';
-
-interface Integrator {
-  id: number;
-  company_id: number;
-  platform: string;
-  credentials: string | null;
-  active: boolean;
-  created_at: string;
-}
 
 export default function CompanyIntegrationsPage() {
   const params = useParams();
   const companyId = params.id as string;
-  const [integrators, setIntegrators] = useState<Integrator[]>([]);
+  const { company } = useCompany();
+
   const [loading, setLoading] = useState(true);
-  
-  const [showModal, setShowModal] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [formData, setFormData] = useState({ platform: '', active: true });
-  
-  const [systemIntegrators, setSystemIntegrators] = useState<any[]>([]);
+  const [settings, setSettings] = useState<any>({});
+  const [dropshipCfg, setDropshipCfg] = useState<any>(null);
+  const [bookinfoInteg, setBookinfoInteg] = useState<any>(null);
 
   useEffect(() => {
-    fetchIntegrators();
-    fetchSystemIntegrators();
+    async function loadAll() {
+      if (!companyId) return;
+      setLoading(true);
+      try {
+        const token = getToken();
+        if (!token) return;
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+        const [sRes, dRes, iRes] = await Promise.all([
+          fetch(`${apiBase}/companies/${companyId}/settings`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${apiBase}/dropship/config/${companyId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${apiBase}/integrators/${companyId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+
+        if (sRes.ok) setSettings(await sRes.json());
+        if (dRes.ok) setDropshipCfg(await dRes.json());
+        if (iRes.ok) {
+          const list = await iRes.json();
+          if (Array.isArray(list)) {
+            setBookinfoInteg(list.find((i: any) => i.platform === 'BOOKINFO') || null);
+          }
+        }
+      } catch (e) {
+        console.error('Erro ao carregar mapa de integrações:', e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadAll();
   }, [companyId]);
 
-  async function fetchSystemIntegrators() {
-    try {
-      const token = getToken();
-      if (!token) return;
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/system-integrators/`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const activeIntegrators = data.filter((i: any) => i.active);
-        setSystemIntegrators(activeIntegrators);
-        if (activeIntegrators.length > 0) {
-           setFormData(f => ({ ...f, platform: activeIntegrators[0].code }));
-        }
-      }
-    } catch (error) {
-       console.error("Erro ao puxar integradores globais:", error);
-    }
-  }
-
-  async function fetchIntegrators() {
-    setLoading(true);
-    try {
-      const token = getToken();
-      if (!token) return;
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/integrators/${companyId}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        setIntegrators(await res.json());
-      }
-    } catch (error) {
-       toast.error('Erro ao carregar os integradores.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleAddIntegrator(e: React.FormEvent) {
-    e.preventDefault();
-    if (!formData.platform.trim()) return;
-    
-    setSubmitting(true);
-    try {
-      const token = getToken();
-      const payload = {
-         ...formData,
-         company_id: parseInt(companyId),
-         credentials: "{}"
-      };
-      
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/integrators/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(payload)
-      });
-      
-      if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.detail || 'Falha ao adicionar integração');
-      }
-      
-      const newIntegrator = await res.json();
-      setIntegrators([...integrators, newIntegrator]);
-      toast.success('Integração adicionada!');
-      setFormData({ platform: systemIntegrators.length > 0 ? systemIntegrators[0].code : '', active: true });
-      setShowModal(false);
-    } catch (error: any) {
-      toast.error(error.message);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleToggleIntegrator(integrator: Integrator) {
-    try {
-      const token = getToken();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/integrators/${integrator.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ active: !integrator.active })
-      });
-      if (!res.ok) throw new Error('Falha ao atualizar integração');
-      
-      const updated = await res.json();
-      setIntegrators(integrators.map(i => i.id === integrator.id ? updated : i));
-      toast.success(`Integração ${updated.active ? 'ativada' : 'inativada'} com sucesso!`);
-    } catch (error) {
-      toast.error('Erro ao mudar o status.');
-    }
-  }
-
-  async function handleDeleteIntegrator(integratorId: number) {
-    if (!window.confirm("Certeza que deseja EXCLUIR esta integração?")) return;
-    try {
-      const token = getToken();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/integrators/${integratorId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (!res.ok) throw new Error('Falha ao excluir');
-      setIntegrators(integrators.filter(i => i.id !== integratorId));
-      toast.success('Integração excluída!');
-    } catch (error: any) {
-      toast.error(error.message);
-    }
-  }
-
-  if (loading) {
+  if (loading || !company) {
     return (
-       <div className="flex h-64 items-center justify-center">
-         <Loader2 className="h-8 w-8 animate-spin text-[var(--color-primary-base)]" />
-       </div>
+      <div className="flex h-64 items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-[var(--color-primary-base)]" />
+      </div>
     );
   }
 
+  const connectors = [
+    {
+      id: 'horus-api',
+      title: 'Hórus ERP (API REST TServerB2B)',
+      desc: 'Sincronização de produtos, saldo disponível (SD_*), clientes, pedidos de venda e notas fiscais.',
+      icon: Database,
+      active: Boolean(settings.horus_enabled && settings.horus_url),
+      badge: settings.horus_enabled
+        ? `Ativo (${settings.horus_company || 'Emp'}/${settings.horus_branch || 'Fil'})`
+        : 'Inativo',
+      detail: settings.horus_url
+        ? `${settings.horus_url}:${settings.horus_port || '8060'} · ${settings.horus_legacy_pagination ? 'Com OFFSET/LIMIT' : 'Sem paginação'}`
+        : 'URL ainda não configurada',
+      href: `/companies/${companyId}/horus`,
+      sellerInfo: 'Espelhado em /settings?tab=horus',
+    },
+    {
+      id: 'horus-sql',
+      title: 'Hórus SQL Direct (SQL Server)',
+      desc: 'Conexão direta ao banco SQL Server para Editorial/DBM, Autores, Financeiro e consultas analíticas.',
+      icon: Database,
+      active: Boolean(company.module_horus_sql && settings.horus_sql_host),
+      badge: company.module_horus_sql && settings.horus_sql_host ? 'Conectado' : 'Opcional / Inativo',
+      detail: settings.horus_sql_host
+        ? `${settings.horus_sql_host}:${settings.horus_sql_port || 1433} (${settings.horus_sql_database || 'DB'})`
+        : 'Servidor SQL não configurado',
+      href: `/companies/${companyId}/horus-sql`,
+      sellerInfo: 'Espelhado em /settings?tab=horus_sql',
+    },
+    {
+      id: 'b2c',
+      title: 'B2C — Loja Virtual Aberta',
+      desc: 'Vitrine B2C por característica Hórus (COD_TPO_CARACT / COD_CARACT), subdomínio automático e domínio próprio.',
+      icon: ShoppingBag,
+      active: Boolean(company.module_b2c_storefront),
+      badge: company.module_b2c_storefront
+        ? settings.b2c_storefront_open !== false
+          ? 'Loja Aberta'
+          : 'Módulo Ativo'
+        : 'Módulo Desativado',
+      detail: company.b2c_custom_domain
+        ? `Domínio: ${company.b2c_custom_domain}`
+        : `Subdomínio: b2c.${(company.domain || `seller${company.id}`).split('.')[0]}.horusb2b.com.br`,
+      href: `/companies/${companyId}/tray`,
+      sellerInfo: 'Gerenciado pelo Seller no menu B2C & Produtos',
+    },
+    {
+      id: 'bookinfo',
+      title: 'Bookinfo Hub B2B',
+      desc: 'Recebimento automatizado de pedidos de venda, avaliação de estoque/consignação e transmissão de compras.',
+      icon: BookOpen,
+      active: Boolean(bookinfoInteg?.active || settings.bookinfo_api_key),
+      badge: bookinfoInteg?.active || settings.bookinfo_api_key ? 'Token Configurado' : 'Sem Token',
+      detail: settings.bookinfo_sync_enabled
+        ? 'Sincronização automática em segundo plano ativa'
+        : 'Modo manual / aguardando ativação',
+      href: `/companies/${companyId}/bookinfo`,
+      sellerInfo: 'Espelhado em /settings?tab=bookinfo',
+    },
+    {
+      id: 'dropship',
+      title: 'Dropshipping (Hub-Erdos)',
+      desc: 'Credenciais Multi-Token por CNPJ, parâmetros fiscais de Remessa (6.923) e Venda (6.118) no Hórus.',
+      icon: PackageCheck,
+      active: Boolean(dropshipCfg?.enabled),
+      badge: dropshipCfg?.enabled ? 'Integração Ativa' : 'Desativado',
+      detail: dropshipCfg?.stock_sync_enabled
+        ? `Sync de estoque ativo (${dropshipCfg.stock_sync_interval_min || 30} min)`
+        : 'Configurado por credencial no Seller',
+      href: `/companies/${companyId}/dropship`,
+      sellerInfo: 'Espelhado em /settings?tab=dropship',
+    },
+    {
+      id: 'payments',
+      title: 'Pagamentos, Gateways & Bancos',
+      desc: 'Habilitação de provedores (Vindi, Efí, Inter, Cielo/Rede, Cora) e matriz de canais × formas de pagamento.',
+      icon: CreditCard,
+      active: Boolean(
+        settings.vindi_enabled ||
+          settings.efi_enabled ||
+          settings.inter_enabled ||
+          settings.cielo_enabled ||
+          settings.cora_enabled
+      ),
+      badge: 'Configurado por Canal',
+      detail: 'Chaves de API gerenciadas diretamente pelo Seller em /settings?tab=pagamentos',
+      href: `/companies/${companyId}/payments`,
+      sellerInfo: 'Credenciais no Seller (/settings?tab=pagamentos)',
+    },
+  ];
+
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full">
-      <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-         <div className="flex items-center gap-3">
-           <Plug className="h-6 w-6 text-slate-500" />
-           <div>
-             <h2 className="text-xl font-bold text-slate-900 dark:text-white">Central de Integrações</h2>
-             <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-               Gerencie conectores para ERPs e Plataformas (Ex: Tray).
-             </p>
-           </div>
-         </div>
-         <button 
-           onClick={() => setShowModal(true)}
-           className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium py-2 px-4 rounded-xl flex items-center gap-2 transition-all shadow-sm"
-         >
-           <Plus className="h-4 w-4" />
-           Novo Integrador
-         </button>
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col h-full">
+      <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/50 dark:bg-slate-950/50">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <Plug className="w-5 h-5 text-[var(--color-primary-base)]" />
+            Mapa de Conectores & Integrações da Empresa
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Visão consolidada em tempo real de todos os conectores técnicos desta empresa e seu espelhamento com o painel do Seller.
+          </p>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-x-auto">
-         <table className="w-full text-left text-sm whitespace-nowrap">
-           <thead className="bg-slate-50 dark:bg-slate-950/50 text-slate-500 font-medium border-b border-slate-200 dark:border-slate-800">
-             <tr>
-               <th className="px-6 py-4">ID</th>
-               <th className="px-6 py-4">Plataforma</th>
-               <th className="px-6 py-4">Status</th>
-               <th className="px-6 py-4">Data de Criação</th>
-               <th className="px-6 py-4 text-center">Ações</th>
-             </tr>
-           </thead>
-           <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60 leading-relaxed">
-             {integrators.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-6 py-16 text-center text-slate-500 dark:text-slate-400">
-                    <div className="flex flex-col items-center justify-center space-y-3">
-                      <Settings className="h-10 w-10 text-slate-300 dark:text-slate-700" />
-                      <p>Nenhum integrador cadastrado.</p>
+      <div className="p-6 flex-1 bg-slate-50/30 dark:bg-slate-950/20">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {connectors.map(conn => {
+            const Icon = conn.icon;
+            return (
+              <div
+                key={conn.id}
+                className={`rounded-2xl border p-5 transition-all flex flex-col justify-between bg-white dark:bg-slate-900 shadow-sm ${
+                  conn.active
+                    ? 'border-emerald-200 dark:border-emerald-800/50'
+                    : 'border-slate-200 dark:border-slate-800'
+                }`}
+              >
+                <div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`p-2.5 rounded-xl ${
+                          conn.active
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                        }`}
+                      >
+                        <Icon className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">{conn.title}</h3>
+                        <span className="text-[11px] text-slate-400 font-medium">{conn.sellerInfo}</span>
+                      </div>
                     </div>
-                  </td>
-                </tr>
-             ) : (
-                integrators.map(int => (
-                   <tr key={int.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/20">
-                     <td className="px-6 py-4 text-slate-500">{int.id}</td>
-                     <td className="px-6 py-4 font-bold text-slate-900 dark:text-slate-200">{int.platform}</td>
-                     <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                           <span className={`h-2 w-2 rounded-full ${int.active ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-                           <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-                              {int.active ? 'Ativo' : 'Inativo'}
-                           </span>
-                        </div>
-                     </td>
-                     <td className="px-6 py-4 text-slate-500 dark:text-slate-400">
-                       {new Date(int.created_at).toLocaleString('pt-BR')}
-                     </td>
-                     <td className="px-6 py-4">
-                        <div className="flex items-center justify-center gap-2">
-                           <Link href={`/companies/${companyId}/integrations/${int.id}`} className="text-xs font-semibold text-[var(--color-primary-base)] hover:underline transition-colors flex items-center gap-1">
-                             <Settings className="w-3 h-3" /> Configurar
-                           </Link>
-                           <span className="text-slate-300">|</span>
-                           <button onClick={() => handleToggleIntegrator(int)} className={`text-xs font-medium hover:underline transition-colors ${int.active ? 'text-rose-600' : 'text-emerald-600'}`}>
-                             {int.active ? 'Desativar' : 'Ativar'}
-                           </button>
-                           <span className="text-slate-300">|</span>
-                           <button onClick={() => handleDeleteIntegrator(int.id)} className="text-xs font-medium text-rose-600 hover:underline">
-                             Excluir
-                           </button>
-                        </div>
-                     </td>
-                   </tr>
-                ))
-             )}
-           </tbody>
-         </table>
-      </div>
 
-      <AnimatePresence>
-        {showModal && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden"
-            >
-              <form onSubmit={handleAddIntegrator}>
-                <div className="p-5 border-b border-slate-200 dark:border-slate-800">
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Nova Integração</h3>
-                </div>
-                <div className="p-5 space-y-4 bg-slate-50 dark:bg-slate-900/50">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Plataforma</label>
-                    <select
-                      value={formData.platform}
-                      onChange={(e) => setFormData({...formData, platform: e.target.value})}
-                      className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border shrink-0 ${
+                        conn.active
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50'
+                          : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
+                      }`}
                     >
-                      {systemIntegrators.length === 0 ? (
-                        <option value="" disabled>Nenhum integrador disponível</option>
-                      ) : (
-                        systemIntegrators.map(int => (
-                          <option key={int.id} value={int.code}>{int.name}</option>
-                        ))
-                      )}
-                    </select>
+                      {conn.active ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                      {conn.badge}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-3 leading-relaxed">{conn.desc}</p>
+
+                  <div className="mt-3 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-300 truncate">
+                    {conn.detail}
                   </div>
                 </div>
-                <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-3 bg-white dark:bg-slate-900">
-                  <button
-                    type="button"
-                    onClick={() => setShowModal(false)}
-                    className="px-4 py-2 font-medium text-slate-500 hover:bg-slate-100 rounded-xl"
+
+                <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/60 flex items-center justify-end">
+                  <Link
+                    href={conn.href}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-bold transition-colors"
                   >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="px-6 py-2 bg-[var(--color-primary-base)] hover:bg-opacity-90 text-white font-medium rounded-xl flex items-center gap-2"
-                  >
-                    {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                    Adicionar
-                  </button>
+                    Abrir Configuração <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
                 </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </motion.div>
   );
 }

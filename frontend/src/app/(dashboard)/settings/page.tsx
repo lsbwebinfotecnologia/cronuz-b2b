@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, DatabaseZap, Building2, CreditCard, Truck, ChevronRight, FileText, Key, CheckCircle, BookOpen, Package } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, DatabaseZap, Building2, CreditCard, Truck, ChevronRight, ChevronDown, FileText, Key, CheckCircle, BookOpen, Package } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -28,7 +28,14 @@ export default function SettingsPage() {
   const companyId = currentUser?.company_id;
 
   const [activeTab, setActiveTab] = useState('geral');
-  const [selectedProviderTab, setSelectedProviderTab] = useState<'VINDI' | 'CORA' | 'INTER' | 'EFI' | 'CIELO_REDE'>('VINDI');
+  const [openMenuGroups, setOpenMenuGroups] = useState<Record<string, boolean>>({
+    '1. Operações & Canais': true,
+    '2. ERP & Catálogo': true,
+    '3. Fiscal & Notas': true,
+    '4. Comunicação': true,
+  });
+  const [selectedOperationHub, setSelectedOperationHub] = useState<'B2C' | 'B2B' | 'PDV' | 'HORUS' | 'EVENTS' | 'FISCAL'>('B2C');
+  const [selectedProviderTab, setSelectedProviderTab] = useState<'VINDI' | 'CORA' | 'INTER' | 'EFI' | 'CIELO_REDE' | null>(null);
   useEffect(() => {
     // Atalho de outras telas: /settings?tab=pagamentos&provider=VINDI
     const params = new URLSearchParams(window.location.search);
@@ -572,60 +579,125 @@ export default function SettingsPage() {
 
   const hasHorusSql = Boolean(company?.module_horus_sql || (settings as any).horus_sql_enabled);
 
-  const tabs = [
-    { id: 'geral', label: 'Dados Gerais', icon: Settings2 },
-    ...(company?.module_horus_erp ? [{ id: 'horus', label: 'Integração Horus ERP', icon: Database }] : []),
-    ...(hasHorusSql ? [{ id: 'horus_sql', label: 'Horus SQL Direct', icon: DatabaseZap }] : []),
-    { id: 'bookinfo', label: 'Integração Bookinfo', icon: BookOpen },
-    { id: 'fiscal', label: 'Fiscal (NFS-e)', icon: Building2 },
-    { id: 'print_points', label: 'Séries e Pontos', icon: FileText },
-    { id: 'pdv', label: 'Frente de Caixa (PDV)', icon: Store },
-    { id: 'pagamentos', label: 'Pagamentos', icon: CreditCard },
-    { id: 'frete', label: 'Frete e Logística', icon: Truck },
-    { id: 'email', label: 'E-mails (SMTP)', icon: Mail },
-    { id: 'templates', label: 'Modelos de E-mail', icon: FileText },
-    { id: 'sefaz_sp', label: 'Fiscal SEFAZ', icon: Key },
-    { id: 'dropship', label: 'Dropship Horus', icon: Package },
-    ...(hasHorusSql ? [{ id: 'logistics', label: 'Logística WMS', icon: Truck }] : []),
+  const tabGroups = [
+    {
+      group: '1. Operações & Canais',
+      items: [
+        { id: 'geral', label: 'Central de Operações', icon: Settings2, activeStatus: true },
+        { id: 'pagamentos', label: 'Pagamentos & Gateways', icon: CreditCard, activeStatus: Boolean(settings.vindi_api_key || settings.efi_client_id || settings.inter_enabled || settings.cielo_merchant_id) },
+        { id: 'pdv', label: 'Frente de Caixa (PDV)', icon: Store, activeStatus: Boolean(company?.module_pdv) },
+        { id: 'frete', label: 'Frete e Logística', icon: Truck, activeStatus: Boolean(settings.origin_zip_code) },
+      ],
+    },
+    {
+      group: '2. ERP & Catálogo',
+      items: [
+        ...(company?.module_horus_erp ? [{ id: 'horus', label: 'Integração Horus ERP', icon: Database, activeStatus: Boolean((settings as any).horus_enabled) }] : []),
+        ...(hasHorusSql ? [{ id: 'horus_sql', label: 'Horus SQL Direct', icon: DatabaseZap, activeStatus: hasHorusSql }] : []),
+        { id: 'bookinfo', label: 'Integração Bookinfo', icon: BookOpen, activeStatus: Boolean((settings as any).bookinfo_sync_enabled || (settings as any).bookinfo_api_key) },
+        { id: 'dropship', label: 'Dropship Horus', icon: Package, activeStatus: Boolean((company as any)?.module_dropship) },
+        ...(hasHorusSql ? [{ id: 'logistics', label: 'Logística WMS', icon: Truck, activeStatus: hasHorusSql }] : []),
+      ],
+    },
+    {
+      group: '3. Fiscal & Notas',
+      items: [
+        { id: 'fiscal', label: 'Fiscal (NFS-e)', icon: Building2, activeStatus: Boolean(fiscalSettings.nfse_enabled) },
+        { id: 'sefaz_sp', label: 'Fiscal SEFAZ', icon: Key, activeStatus: true },
+        { id: 'print_points', label: 'Séries e Pontos', icon: FileText, activeStatus: printPoints.length > 0 },
+      ],
+    },
+    {
+      group: '4. Comunicação',
+      items: [
+        { id: 'email', label: 'E-mails (SMTP)', icon: Mail, activeStatus: Boolean(settings.smtp_host) },
+        { id: 'templates', label: 'Modelos de E-mail', icon: FileText, activeStatus: true },
+      ],
+    },
   ];
+
+  const tabs = tabGroups.flatMap((g) => g.items);
 
   const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'horus_sql' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && activeTab !== 'logistics';
   const FormContainer = isFormTab ? 'form' : 'div';
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
-          <Settings2 className="h-6 w-6 text-[var(--color-primary-base)]" />
-          Configurações da Loja
-        </h1>
-        <p className="text-slate-500 text-sm mt-1 dark:text-slate-400">
-          Gerencie as preferências e parâmetros operacionais do seu negócio.
-        </p>
+    <div className="w-full max-w-[1600px] mx-auto space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+            <Settings2 className="h-6 w-6 text-[var(--color-primary-base)]" />
+            Central de Operações &amp; Configurações
+          </h1>
+          <p className="text-slate-500 text-sm mt-1 dark:text-slate-400">
+            Selecione a operação que deseja configurar ou navegue pelos módulos classificados ao lado.
+          </p>
+        </div>
+        {activeTab !== 'geral' && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('geral')}
+            className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 shrink-0 cursor-pointer shadow-sm"
+          >
+            <Settings2 className="w-3.5 h-3.5 text-[var(--color-primary-base)]" />
+            Voltar ao Seletor de Operações
+          </button>
+        )}
       </div>
 
-      <div className="flex flex-col md:flex-row gap-6 items-start">
-        {/* Sidebar Menu */}
-        <div className="w-full md:w-64 shrink-0 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm dark:bg-slate-900/40 dark:border-slate-800">
-          <nav className="space-y-1">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center justify-between px-3 py-3 rounded-xl text-sm font-medium transition-all ${
-                  activeTab === tab.id
-                    ? 'bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] dark:bg-[var(--color-primary-base)]/20 shadow-sm'
-                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-white'
-                }`}
-              >
-                <div className="flex items-center gap-3 relative">
-                  <tab.icon className={`w-5 h-5 ${activeTab === tab.id ? 'text-[var(--color-primary-base)]' : 'text-slate-400 group-hover:text-slate-500 dark:text-slate-500 dark:group-hover:text-slate-400'} transition-colors`} />
-                  {tab.label}
-                </div>
-                {activeTab === tab.id && <ChevronRight className="w-4 h-4 text-[var(--color-primary-base)] opacity-70" />}
-              </button>
-            ))}
-          </nav>
+      <div className="flex flex-col md:flex-row gap-5 items-start min-w-0">
+        {/* Sidebar Menu Organizado por Domínios Operacionais (Expansível) */}
+        <div className="w-full md:w-64 shrink-0 rounded-2xl border border-slate-200 bg-white p-2.5 shadow-sm dark:bg-slate-900/40 dark:border-slate-800 space-y-2">
+          {tabGroups.map((grp) => {
+            const isOpen = openMenuGroups[grp.group] !== false;
+            return (
+              <div key={grp.group} className="space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setOpenMenuGroups((p) => ({ ...p, [grp.group]: !isOpen }))}
+                  className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-300 transition-colors cursor-pointer"
+                >
+                  <span>{grp.group}</span>
+                  {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                </button>
+                {isOpen && (
+                  <nav className="space-y-0.5">
+                    {grp.items.map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActiveTab(tab.id)}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition-all cursor-pointer ${
+                          activeTab === tab.id
+                            ? 'bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] dark:bg-[var(--color-primary-base)]/20 font-bold shadow-xs'
+                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 relative truncate min-w-0">
+                          <tab.icon
+                            className={`w-4 h-4 shrink-0 ${
+                              activeTab === tab.id
+                                ? 'text-[var(--color-primary-base)]'
+                                : 'text-slate-400 dark:text-slate-500'
+                            } transition-colors`}
+                          />
+                          <span className="truncate">{tab.label}</span>
+                        </div>
+                        <span
+                          className={`w-2 h-2 rounded-full shrink-0 ml-2 ${
+                            tab.activeStatus
+                              ? 'bg-emerald-500'
+                              : 'bg-slate-200 dark:bg-slate-700'
+                          }`}
+                          title={tab.activeStatus ? 'Ativo / Configurado' : 'Opcional / Pendente'}
+                        />
+                      </button>
+                    ))}
+                  </nav>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {/* Content Area */}
@@ -633,7 +705,7 @@ export default function SettingsPage() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           key={activeTab}
-          className="flex-1 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden dark:bg-slate-900/40 dark:border-slate-800 w-full"
+          className="flex-1 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden dark:bg-slate-900/40 dark:border-slate-800 w-full min-w-0"
         >
           <FormContainer onSubmit={isFormTab ? handleSaveSettings : undefined}>
             <div className="p-6 md:p-8 space-y-8">
@@ -794,72 +866,376 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {/* Tab: GERAL */}
+              {/* Tab: GERAL — Central de Operações (Seletor por Tipo de Operação + Catálogo Geral) */}
               {activeTab === 'geral' && (
-                <div className="space-y-4 animate-in fade-in">
-                  <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">
-                    <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-lg">
-                      <Settings2 className="h-5 w-5" />
-                    </div>
+                <div className="space-y-6 animate-in fade-in">
+                  {/* BLOCO 1: SELETOR DE OPERAÇÕES (DINÂMICA AUTOEXPLICATIVA) */}
+                  <div className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 space-y-4">
                     <div>
-                      <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Configurações Gerais</h2>
-                      <p className="text-sm text-slate-500 dark:text-slate-400">Configurações estáticas de exibição e integração de catálogo.</p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
-                        Servidor Primário de Capas (Base URL)
-                      </label>
-                      <input
-                        type="url"
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-[var(--color-primary-base)]/50 dark:placeholder:text-slate-600"
-                        placeholder="https://capas.cataventobr.com.br"
-                        value={settings.cover_image_base_url}
-                        onChange={e => setSettings({ ...settings, cover_image_base_url: e.target.value })}
-                      />
-                      <p className="text-xs text-slate-500 mt-1">
-                        1ª opção de busca por <b>ISBN.jpg</b> (ex: https://capas.site.com.br/978...jpg).
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                        Guia Rápido • Escolha o Tipo de Operação
+                      </span>
+                      <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                        Qual frente de operação você deseja configurar agora?
+                      </h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        Selecione a operação abaixo (<strong>Storefront B2C</strong>, <strong>Storefront B2B</strong>, <strong>PDV</strong>, <strong>Horus ERP</strong>, <strong>Eventos/Assinaturas</strong> ou <strong>Fiscal</strong>) para ver o resumo e abrir diretamente as telas de configuração correspondentes.
                       </p>
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
-                        Servidor Secundário de Capas — Fallback (Base URL)
-                      </label>
-                      <input
-                        type="url"
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-[var(--color-primary-base)]/50 dark:placeholder:text-slate-600"
-                        placeholder="https://capas-secundario.site.com.br"
-                        value={settings.cover_image_secondary_base_url}
-                        onChange={e => setSettings({ ...settings, cover_image_secondary_base_url: e.target.value })}
-                      />
-                      <p className="text-xs text-slate-500 mt-1">
-                        2ª opção automática: se a capa não existir no link primário, busca no link secundário via <b>ISBN.jpg</b>. Se não houver em nenhum dos dois, exibe sem capa.
-                      </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                      {[
+                        {
+                          id: 'B2C',
+                          title: 'B2C (Loja Virtual Aberta)',
+                          desc: 'Vendas para consumidor final (CPF), vitrines, sincronia de produtos e checkout.',
+                          badge: 'Checkout Transparente / Link',
+                          icon: Store,
+                        },
+                        {
+                          id: 'B2B',
+                          title: 'Storefront B2B (Atacado)',
+                          desc: 'Portal de pedidos para livrarias/CNPJs, visibilidade de estoque, capas e frete.',
+                          badge: settings.b2b_show_stock_quantity ? 'Estoque Exato Visível' : 'Estoque Oculto',
+                          icon: Building2,
+                        },
+                        {
+                          id: 'PDV',
+                          title: 'Frente de Caixa (PDV)',
+                          desc: 'Vendas presenciais na loja ou feiras, trava de saldo e parcelamento no cartão.',
+                          badge: `Até ${settings.pdv_max_installments || 12}x • ${settings.pdv_allow_out_of_stock ? 'Sem trava saldo' : 'Com trava saldo'}`,
+                          icon: MonitorSmartphone,
+                        },
+                        {
+                          id: 'HORUS',
+                          title: 'Horus ERP & SQL Direct',
+                          desc: 'Conexão com o ERP Horus (API REST B2B, SQL Direct, Dropship e WMS).',
+                          badge: company?.module_horus_erp ? 'Módulo Horus Ativo' : 'Integração ERP',
+                          icon: Database,
+                        },
+                        {
+                          id: 'EVENTS',
+                          title: 'Eventos Escolares & Assinaturas',
+                          desc: 'Feiras literárias, listas escolares com cashback/vale-livro e clubes recorrentes.',
+                          badge: 'Checkout & Gateways',
+                          icon: CreditCard,
+                        },
+                        {
+                          id: 'FISCAL',
+                          title: 'Fiscal (NFS-e / SEFAZ) & E-mails',
+                          desc: 'Certificado digital A1, emissão de notas, séries de impressão e disparo SMTP.',
+                          badge: fiscalSettings.nfse_enabled ? 'NFS-e Ativa' : 'Configurar Fiscal / SMTP',
+                          icon: Key,
+                        },
+                      ].map((op) => {
+                        const isSelected = selectedOperationHub === op.id;
+                        const IconComp = op.icon;
+                        return (
+                          <button
+                            key={op.id}
+                            type="button"
+                            onClick={() => setSelectedOperationHub(op.id as any)}
+                            className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                              isSelected
+                                ? 'border-indigo-600 bg-white dark:bg-slate-900 ring-2 ring-indigo-500/20 shadow-sm'
+                                : 'border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/50 hover:border-indigo-300'
+                            }`}
+                          >
+                            <div>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                                  <IconComp className={`w-4 h-4 ${isSelected ? 'text-indigo-600' : 'text-slate-400'}`} />
+                                  {op.title}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{op.desc}</p>
+                            </div>
+                            <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                              <span className="text-[10px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                {op.badge}
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-400">
+                                {isSelected ? 'Selecionado ✓' : 'Selecionar →'}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* PAINEL DE ATALHOS E AÇÕES DA OPERAÇÃO SELECIONADA */}
+                    <div className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-white dark:bg-slate-900 space-y-3 shadow-sm">
+                      {selectedOperationHub === 'B2C' && (
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                              Operação Selecionada • Storefront B2C (Loja Virtual)
+                            </span>
+                            <p className="text-xs text-slate-600 dark:text-slate-300">
+                              Configure os meios de pagamento do B2C (Cartão, PIX, Boleto ou Link Vindi no final da venda), gerencie as vitrines da loja ou sincronize produtos do Horus por característica.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('pagamentos')}
+                              className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer shadow-sm"
+                            >
+                              Abrir Pagamentos B2C →
+                            </button>
+                            <Link
+                              href="/b2c/showcases"
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                            >
+                              Gerenciar Vitrines B2C →
+                            </Link>
+                            <Link
+                              href="/products"
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                            >
+                              Catálogo &amp; Sincronia B2C →
+                            </Link>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedOperationHub === 'B2B' && (
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                              Operação Selecionada • Storefront B2B (Atacado &amp; Livrarias)
+                            </span>
+                            <p className="text-xs text-slate-600 dark:text-slate-300">
+                              Defina as regras de pagamento imediato ou faturado via Horus ERP para clientes CNPJ, além do gateway de frete e visibilidade de estoque abaixo.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('pagamentos')}
+                              className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer shadow-sm"
+                            >
+                              Abrir Pagamentos B2B →
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('frete')}
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                            >
+                              Abrir Frete &amp; Logística →
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedOperationHub === 'PDV' && (
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                              Operação Selecionada • Frente de Caixa (PDV)
+                            </span>
+                            <p className="text-xs text-slate-600 dark:text-slate-300">
+                              Configure trava de saldo para feiras/eventos, limite de parcelas no cartão de crédito e quais adquirentes/bancos processam o PDV.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('pdv')}
+                              className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer shadow-sm"
+                            >
+                              Abrir Configurações do PDV →
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('pagamentos')}
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                            >
+                              Pagamentos do PDV →
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedOperationHub === 'HORUS' && (
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                              Operação Selecionada • Integração Horus ERP &amp; Ecossistema
+                            </span>
+                            <p className="text-xs text-slate-600 dark:text-slate-300">
+                              Acesse rapidamente os parâmetros da API REST do Horus (`SD_*` / `AC_*`), conexão SQL Direct, Dropship, Bookinfo e WMS.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            {company?.module_horus_erp && (
+                              <button
+                                type="button"
+                                onClick={() => setActiveTab('horus')}
+                                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer shadow-sm"
+                              >
+                                Abrir Horus ERP (API) →
+                              </button>
+                            )}
+                            {hasHorusSql && (
+                              <button
+                                type="button"
+                                onClick={() => setActiveTab('horus_sql')}
+                                className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                              >
+                                Abrir Horus SQL Direct →
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('dropship')}
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                            >
+                              Abrir Dropship Horus →
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('bookinfo')}
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                            >
+                              Abrir Bookinfo →
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedOperationHub === 'EVENTS' && (
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                              Operação Selecionada • Eventos Escolares &amp; Assinaturas
+                            </span>
+                            <p className="text-xs text-slate-600 dark:text-slate-300">
+                              Configure os provedores de pagamento para Feiras/Escolas e Assinaturas (por forma de pagamento ou Link Vindi no final da venda).
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('pagamentos')}
+                              className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer shadow-sm"
+                            >
+                              Configurar Pagamentos (Eventos &amp; Assinaturas) →
+                            </button>
+                            <Link
+                              href="/schools-events"
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200"
+                            >
+                              Painel Escolas &amp; Eventos →
+                            </Link>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedOperationHub === 'FISCAL' && (
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                              Operação Selecionada • Fiscal, Notas &amp; Comunicação
+                            </span>
+                            <p className="text-xs text-slate-600 dark:text-slate-300">
+                              Configure emissão de NFS-e, certificados SEFAZ, séries de impressão e servidor de e-mail transacional (SMTP).
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('fiscal')}
+                              className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer shadow-sm"
+                            >
+                              Abrir Fiscal (NFS-e) →
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('sefaz_sp')}
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                            >
+                              Abrir Fiscal SEFAZ →
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('email')}
+                              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                            >
+                              Abrir E-mails (SMTP) →
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 dark:border-slate-800/60 dark:bg-slate-900/40 mt-6 md:w-3/4 lg:w-2/3">
-                    <h3 className="text-sm font-bold text-blue-600 tracking-wide uppercase mb-1">Visibilidade da Loja B2B / Storefront</h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">Controle o nível de detalhes do seu estoque voltado para os clientes.</p>
-                    
-                    <label className="flex items-center gap-4 cursor-pointer">
-                        <div className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${settings.b2b_show_stock_quantity ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
-                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.b2b_show_stock_quantity ? 'translate-x-6' : 'translate-x-1'}`} />
-                        </div>
-                        <div className="flex flex-col">
-                            <span className="text-sm font-bold text-slate-800 dark:text-slate-200">Exibir quantidade exata em estoque</span>
-                            <span className="text-xs text-slate-500">Se ativo, mostra "Disponível: X un". Se inativo, exibe apenas se o produto está ou não disponível.</span>
-                        </div>
+                  {/* BLOCO 2: CONFIGURAÇÕES GERAIS DE CATÁLOGO (SERVIDOR PRIMÁRIO E SECUNDÁRIO DE CAPAS + ESTOQUE B2B) */}
+                  <div className="space-y-4 pt-2">
+                    <div className="flex items-center gap-2 border-b border-slate-100 dark:border-slate-800/60 pb-3">
+                      <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-lg">
+                        <Settings2 className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Parâmetros Globais de Catálogo &amp; Capas</h2>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Servidores de capas por ISBN (com fallback automático) e visibilidade de estoque na vitrine B2B.</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
+                          Servidor Primário de Capas (Base URL)
+                        </label>
                         <input
-                            type="checkbox"
-                            className="sr-only"
-                            checked={settings.b2b_show_stock_quantity}
-                            onChange={(e) => setSettings(prev => ({ ...prev, b2b_show_stock_quantity: e.target.checked }))}
+                          type="url"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-[var(--color-primary-base)]/50 dark:placeholder:text-slate-600"
+                          placeholder="https://capas.cataventobr.com.br"
+                          value={settings.cover_image_base_url}
+                          onChange={e => setSettings({ ...settings, cover_image_base_url: e.target.value })}
                         />
-                    </label>
+                        <p className="text-xs text-slate-500 mt-1">
+                          1ª opção de busca por <b>ISBN.jpg</b> (ex: https://capas.site.com.br/978...jpg).
+                        </p>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
+                          Servidor Secundário de Capas — Fallback (Base URL)
+                        </label>
+                        <input
+                          type="url"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-base)] transition-all font-mono text-sm placeholder:text-slate-400 dark:bg-slate-900/50 dark:border-slate-700 dark:text-white dark:focus:ring-[var(--color-primary-base)]/50 dark:placeholder:text-slate-600"
+                          placeholder="https://capas-secundario.site.com.br"
+                          value={settings.cover_image_secondary_base_url}
+                          onChange={e => setSettings({ ...settings, cover_image_secondary_base_url: e.target.value })}
+                        />
+                        <p className="text-xs text-slate-500 mt-1">
+                          2ª opção automática: se a capa não existir no link primário, busca no link secundário via <b>ISBN.jpg</b>. Se não houver em nenhum dos dois, exibe sem capa.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 dark:border-slate-800/60 dark:bg-slate-900/40 mt-6 md:w-3/4 lg:w-2/3">
+                      <h3 className="text-sm font-bold text-blue-600 tracking-wide uppercase mb-1">Visibilidade da Loja B2B / Storefront</h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">Controle o nível de detalhes do seu estoque voltado para os clientes.</p>
+                      
+                      <label className="flex items-center gap-4 cursor-pointer">
+                          <div className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${settings.b2b_show_stock_quantity ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.b2b_show_stock_quantity ? 'translate-x-6' : 'translate-x-1'}`} />
+                          </div>
+                          <div className="flex flex-col">
+                              <span className="text-sm font-bold text-slate-800 dark:text-slate-200">Exibir quantidade exata em estoque</span>
+                              <span className="text-xs text-slate-500">Se ativo, mostra &ldquo;Disponível: X un&rdquo;. Se inativo, exibe apenas se o produto está ou não disponível.</span>
+                          </div>
+                          <input
+                              type="checkbox"
+                              className="sr-only"
+                              checked={settings.b2b_show_stock_quantity}
+                              onChange={(e) => setSettings(prev => ({ ...prev, b2b_show_stock_quantity: e.target.checked }))}
+                          />
+                      </label>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1061,7 +1437,7 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {/* Tab: PAGAMENTOS — Matriz por Canal × Forma de Pagamento + Cofre de Credenciais dos Provedores */}
+              {/* Tab: PAGAMENTOS — Matriz por Canal × Forma de Pagamento + Cofre de Credenciais Sob Demanda */}
               {activeTab === 'pagamentos' && (
                 <div className="space-y-6 animate-in fade-in">
                   {/* PASSO 1: MATRIZ DE ROTEAMENTO POR FRENTE (B2C, EVENTOS, ASSINATURAS, B2B, HORUS ERP, FINANCEIRO CRONUZ, PDV) */}
@@ -1070,20 +1446,23 @@ export default function SettingsPage() {
                       companyId={companyId}
                       settings={settings}
                       setSettings={setSettings}
+                      activeProviderDrawer={selectedProviderTab}
                       onJumpToProvider={(provCode) => {
                         if (provCode === 'CIELO' || provCode === 'REDE') {
                           setSelectedProviderTab('CIELO_REDE');
                         } else if (['VINDI', 'CORA', 'INTER', 'EFI'].includes(provCode)) {
                           setSelectedProviderTab(provCode as any);
                         }
-                        const el = document.getElementById('provider-credentials-vault');
-                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                        setTimeout(() => {
+                          const el = document.getElementById('provider-credentials-vault');
+                          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }, 80);
                       }}
                       onJumpToPdvTab={() => setActiveTab('pdv')}
                     />
                   )}
 
-                  {/* PASSO 2: CREDENCIAIS, CERTIFICADOS & CONSOLE DE HOMOLOGAÇÃO POR PROVEDOR */}
+                  {/* PASSO 2: CREDENCIAIS, CERTIFICADOS & CONSOLE DE HOMOLOGAÇÃO POR PROVEDOR (SOB DEMANDA) */}
                   <div
                     id="provider-credentials-vault"
                     className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-5 shadow-sm"
@@ -1091,19 +1470,28 @@ export default function SettingsPage() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3.5">
                       <div>
                         <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
-                          Passo 2 • Cofre de Credenciais &amp; Homologação dos Provedores
+                          Passo 2 • Provedores &amp; Contas Bancárias (Abertura Sob Demanda)
                         </span>
                         <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-                          Contas Bancárias e Gateways de Pagamento
+                          Configuração de Chaves, Certificados e Homologação
                         </h3>
                         <p className="text-xs text-slate-500 mt-0.5">
-                          Cadastre as chaves, tokens e certificados mTLS uma única vez. Você pode usar cada provedor em diferentes formas de pagamento no Passo 1 acima.
+                          Clique em <strong>Abrir Configurações</strong> na operação acima ou selecione um provedor abaixo para abrir apenas a tela daquele gateway, sem misturar formulários.
                         </p>
                       </div>
+                      {selectedProviderTab && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedProviderTab(null)}
+                          className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 shrink-0 cursor-pointer"
+                        >
+                          Fechar Painel do Provedor ✕
+                        </button>
+                      )}
                     </div>
 
                     {/* Abas de Seleção do Provedor para Configurar Credenciais */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
                       {[
                         {
                           id: 'VINDI',
@@ -1141,39 +1529,57 @@ export default function SettingsPage() {
                           <button
                             key={tab.id}
                             type="button"
-                            onClick={() => setSelectedProviderTab(tab.id as any)}
-                            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                            onClick={() => setSelectedProviderTab(active ? null : (tab.id as any))}
+                            className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
                               active
                                 ? 'border-indigo-600 bg-indigo-50/70 dark:bg-indigo-950/40 ring-2 ring-indigo-500/20 shadow-sm'
                                 : 'border-slate-200 dark:border-slate-800 hover:border-indigo-300'
                             }`}
                           >
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
-                                {tab.name}
+                            <div>
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
+                                  {tab.name}
+                                </span>
+                                <span
+                                  className={`w-2 h-2 rounded-full shrink-0 ${
+                                    tab.ready ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'
+                                  }`}
+                                />
+                              </div>
+                              <span className="text-[10px] text-slate-500 block mt-0.5 truncate">
+                                {tab.desc}
                               </span>
-                              <span
-                                className={`w-2 h-2 rounded-full shrink-0 ${
-                                  tab.ready ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'
-                                }`}
-                              />
                             </div>
-                            <span className="text-[10px] text-slate-500 block mt-0.5 truncate">
-                              {tab.desc}
-                            </span>
+                            <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                              <span className={`text-[10px] font-bold ${tab.ready ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                {tab.ready ? 'Configurado ✓' : 'Pendente'}
+                              </span>
+                              <span className="text-[10px] font-extrabold text-indigo-600 dark:text-indigo-400">
+                                {active ? 'Aberto ▴' : 'Configurar →'}
+                              </span>
+                            </div>
                           </button>
                         );
                       })}
                     </div>
 
+                    {!selectedProviderTab && (
+                      <div className="p-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 text-center text-xs text-slate-500">
+                        Nenhum formulário de credenciais aberto no momento. Clique em <strong>Abrir Configurações</strong> no provedor da operação escolhida acima (ou em um dos 5 cartões acima) para abrir somente a configuração que deseja editar.
+                      </div>
+                    )}
+
                     {/* 1. PAINEL VINDI COMMERCE */}
                     {selectedProviderTab === 'VINDI' && (
-                      <VindiCheckoutPanel settings={settings} setSettings={setSettings} />
+                      <div className="space-y-3 animate-in fade-in">
+                        <VindiCheckoutPanel settings={settings} setSettings={setSettings} />
+                      </div>
                     )}
 
                     {/* 2. PAINEL BANCO CORA */}
                     {selectedProviderTab === 'CORA' && companyId && (
-                      <div className="rounded-2xl border border-pink-200 dark:border-pink-900/40 p-3 md:p-5 bg-white dark:bg-slate-900">
+                      <div className="rounded-2xl border border-pink-200 dark:border-pink-900/40 p-3 md:p-5 bg-white dark:bg-slate-900 animate-in fade-in">
                         <CoraSettingsPanel companyId={companyId} embedded />
                       </div>
                     )}
@@ -1584,7 +1990,6 @@ export default function SettingsPage() {
                         <option value="CORREIOS">Correios (Web Services)</option>
                         <option value="FRENET">Frenet</option>
                         <option value="JADLOG">Jadlog Interativo</option>
-                        <option value="TRAY">Tray Envios</option>
                       </select>
                     </div>
                     <div className="space-y-1.5">
@@ -1620,15 +2025,6 @@ export default function SettingsPage() {
                       <div className="space-y-1.5 md:w-1/2">
                         <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Token Integração Jadlog</label>
                         <input type="password" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:ring-2 focus:ring-teal-500 font-mono text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={settings.jadlog_token} onChange={e => setSettings({...settings, jadlog_token: e.target.value})} />
-                      </div>
-                    </div>
-                  )}
-
-                  {settings.freight_gateway_active === 'TRAY' && (
-                    <div className="grid grid-cols-1 gap-4 mt-4 animate-in fade-in slide-in-from-top-2">
-                      <div className="space-y-1.5 md:w-1/2">
-                        <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Token Tray Envios</label>
-                        <input type="password" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-slate-900 focus:ring-2 focus:ring-teal-500 font-mono text-sm dark:bg-slate-900/50 dark:border-slate-700 dark:text-white" value={settings.tray_envios_token} onChange={e => setSettings({...settings, tray_envios_token: e.target.value})} />
                       </div>
                     </div>
                   )}

@@ -392,7 +392,7 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
                       <input type="text" name="sku" value={product.sku} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white uppercase font-mono" />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Cód. Horus / Ref. Tray</label>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Cód. Item Horus ERP</label>
                       <input type="number" name="horus_cod_item" value={product.horus_cod_item || ''} onChange={handleChange} placeholder="Ex: 163096" className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white font-mono" />
                     </div>
                     <div>
@@ -400,8 +400,8 @@ export default function EditProductPage({ params }: { params: Promise<{ id: stri
                       <input type="text" name="ean_gtin" value={product.ean_gtin || ''} onChange={handleChange} className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white font-mono" />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">ID do Produto na Tray</label>
-                      <input type="text" name="publisher_code" value={product.publisher_code || ''} onChange={handleChange} placeholder="Auto-vinculado (Ex: 7)" className="w-full bg-indigo-50/50 border border-indigo-200 text-sm rounded-xl p-3 dark:bg-indigo-950/30 dark:border-indigo-800 dark:text-indigo-200 font-mono" />
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Cód. Editora / Referência</label>
+                      <input type="text" name="publisher_code" value={product.publisher_code || ''} onChange={handleChange} placeholder="Opcional" className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl p-3 dark:bg-slate-950 dark:border-slate-800 dark:text-white font-mono" />
                     </div>
                   </div>
                  </div>

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -187,6 +188,42 @@ except Exception as _ddl_err:
 
 app = FastAPI(title="Cronuz B2B API", version="0.1.0")
 
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    origin = request.headers.get("origin") or "*"
+    detail_msg = exc.detail
+    if exc.status_code == 405 or detail_msg == "Method Not Allowed":
+        accept_hdr = (request.headers.get("accept") or "").lower()
+        if "text/html" in accept_hdr:
+            return HTMLResponse(
+                status_code=200,
+                content=(
+                    '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8" />'
+                    '<meta name="viewport" content="width=device-width, initial-scale=1" />'
+                    '<meta http-equiv="refresh" content="2;url=https://app.horusb2b.com.br" />'
+                    '<title>Redirecionando...</title>'
+                    '<style>body{font-family:sans-serif;background:#f8fafc;color:#0f172a;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px}'
+                    '.card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:32px;max-width:420px;text-align:center;box-shadow:0 10px 25px -5px rgba(0,0,0,0.05)}'
+                    'a{display:inline-block;margin-top:16px;background:#059669;color:#fff;text-decoration:none;font-weight:700;padding:10px 20px;border-radius:10px}</style></head>'
+                    '<body><div class="card"><h3>Operação Concluída</h3>'
+                    '<p style="color:#475569;font-size:14px;">Estamos redirecionando você de volta para a página inicial...</p>'
+                    '<a href="https://app.horusb2b.com.br">Voltar para a Página Inicial</a></div></body></html>'
+                ),
+            )
+        detail_msg = "Esta ação não está disponível diretamente por este endereço. Volte à página inicial e tente novamente."
+    elif exc.status_code == 404 and detail_msg == "Not Found":
+        detail_msg = "O endereço ou recurso solicitado não foi encontrado."
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": detail_msg},
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "*",
+        },
+    )
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     body = await request.body()
@@ -198,7 +235,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     origin = request.headers.get("origin") or "*"
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
+        content={
+            "detail": "Alguns campos obrigatórios não foram preenchidos corretamente. Verifique os dados informados e tente novamente.",
+            "errors": exc.errors(),
+        },
         headers={
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
@@ -213,7 +253,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     origin = request.headers.get("origin") or "*"
     return JSONResponse(
         status_code=500,
-        content={"detail": "Ocorreu um erro interno no servidor. Por favor, tente novamente mais tarde."},
+        content={"detail": "Não foi possível concluir sua solicitação neste momento. Por favor, aguarde alguns instantes e tente novamente."},
         headers={
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",

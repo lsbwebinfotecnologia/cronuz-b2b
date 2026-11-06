@@ -2028,11 +2028,7 @@ export default function SellerB2CStorefrontManagementPage({
                 <p className="text-sm font-bold text-slate-900 dark:text-white">Pagamento da loja B2C</p>
                 <p>
                   Gateway ativo: <strong>{settingsForm.payment_gateway_active || 'EFI'}</strong> · Finalização:{' '}
-                  <strong>
-                    {settingsForm.b2c_checkout_mode === 'TRAY_REDIRECT'
-                      ? 'Carrinho na Tray'
-                      : 'Checkout transparente na própria loja'}
-                  </strong>
+                  <strong>Checkout na loja / Link de Pagamento</strong>
                 </p>
                 <p className="text-slate-500">
                   O gateway (Vindi / Efí), as credenciais e o modo de finalização são configurados em Configurações → Pagamentos.

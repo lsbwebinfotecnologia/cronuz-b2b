@@ -2,14 +2,21 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Loader2, Globe, Box, Boxes, Users, Megaphone, MonitorSmartphone, Layers, ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database, FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered, BookOpen, GraduationCap, UserCircle, Bell, DatabaseZap, Zap, AlertTriangle, CreditCard, Feather, LayoutGrid, Coffee, Package } from 'lucide-react';
+import {
+  Loader2, Globe, Box, Boxes, Users, Megaphone, MonitorSmartphone, Layers,
+  ShieldAlert, ArrowRightLeft, DollarSign, Tags, ShoppingBag, Database,
+  FileText, ClipboardList, Smartphone, ScanBarcode, BarChart3, ListOrdered,
+  BookOpen, GraduationCap, UserCircle, Bell, DatabaseZap, Zap, AlertTriangle,
+  CreditCard, Feather, LayoutGrid, Coffee, Package, ChevronDown, ChevronRight,
+  Search, ArrowRight, CheckCircle2
+} from 'lucide-react';
 
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
-import { useCompany } from '../context';
+import { useCompany, Company } from '../context';
 import HorusApiBridgeMasterPanel from '@/components/horus/HorusApiBridgeMasterPanel';
-
 
 interface MobileModules {
   app_enabled: boolean;
@@ -24,17 +31,42 @@ interface MobileModules {
 
 const DEFAULT_MOBILE_MODULES: MobileModules = {
   app_enabled: false,
-  pdv: false, conferencia: false, vendas: false,
-  pedidos: false, catalogo: false, clientes: false,
+  pdv: false,
+  conferencia: false,
+  vendas: false,
+  pedidos: false,
+  catalogo: false,
+  clientes: false,
   cafeteria: false,
 };
+
+interface ModuleDef {
+  key: keyof Company;
+  title: string;
+  desc: string;
+  icon: any;
+  colorClass: string;
+  badge?: string;
+  configHref?: string;
+  disabledReason?: (c: Company) => string | null;
+}
 
 export default function CompanyModulesPage() {
   const params = useParams();
   const companyId = params.id as string;
   const { company, refreshCompany } = useCompany();
-  
+
   const [togglingModule, setTogglingModule] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({
+    core: true,
+    sales: true,
+    horus: false,
+    verticals: false,
+    crm_finance: false,
+    mobile: false,
+  });
 
   // ─── Mobile Modules State ──────────────────────────────────────────
   const [mobileModules, setMobileModules] = useState<MobileModules>(DEFAULT_MOBILE_MODULES);
@@ -42,7 +74,11 @@ export default function CompanyModulesPage() {
   const [togglingMobile, setTogglingMobile] = useState<string | null>(null);
 
   // ─── Horus SQL Direct — Features State ────────────────────────────
-  interface HorusSQLFeatures { vindi_baixa: boolean; pedidos: boolean; dbm?: boolean; }
+  interface HorusSQLFeatures {
+    vindi_baixa: boolean;
+    pedidos: boolean;
+    dbm?: boolean;
+  }
   const [horusSQLData, setHorusSQLData] = useState<{
     sql_configured: boolean;
     module_horus_sql: boolean;
@@ -145,7 +181,7 @@ export default function CompanyModulesPage() {
     const mm = String(start.getMonth() + 1).padStart(2, '0');
     const dd = String(start.getDate()).padStart(2, '0');
     const iso = `${yyyy}-${mm}-${dd}`;
-    setPdvLicense(prev => ({ ...prev, enabled: true, expires_at: iso }));
+    setPdvLicense((prev) => ({ ...prev, enabled: true, expires_at: iso }));
   }
 
   useEffect(() => {
@@ -163,12 +199,9 @@ export default function CompanyModulesPage() {
         if (res.ok) {
           const data = await res.json();
           setMobileModules(data.modules ?? DEFAULT_MOBILE_MODULES);
-        } else if (res.status !== 401 && res.status !== 403) {
-          console.warn('[MobileModules] Erro ao carregar:', res.status);
         }
-        // 401/403 — silencioso, usuário pode não ter permissão
       } catch {
-        // Falha de rede silenciosa — não propaga ao overlay
+        // silencioso
       } finally {
         setLoadingMobile(false);
       }
@@ -176,18 +209,22 @@ export default function CompanyModulesPage() {
     fetchMobileModules();
   }, [companyId]);
 
-  // Carrega features do Horus SQL Direct
   useEffect(() => {
     async function fetchHorusSQLFeatures() {
       const token = getToken();
-      if (!token || !companyId) { setLoadingHorusSQL(false); return; }
+      if (!token || !companyId) {
+        setLoadingHorusSQL(false);
+        return;
+      }
       try {
         const res = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/horus-sql/features`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         if (res.ok) setHorusSQLData(await res.json());
-      } catch { /* silencioso */ } finally {
+      } catch {
+        // silencioso
+      } finally {
         setLoadingHorusSQL(false);
       }
     }
@@ -213,7 +250,9 @@ export default function CompanyModulesPage() {
         toast.error(body?.detail || 'Erro ao salvar feature Horus SQL.');
         return;
       }
-      setHorusSQLData(prev => prev ? { ...prev, features: { ...prev.features, [feature]: newValue } } : prev);
+      setHorusSQLData((prev) =>
+        prev ? { ...prev, features: { ...prev.features, [feature]: newValue } } : prev
+      );
       toast.success(`Feature ${newValue ? 'ativada ✓' : 'desativada'} com sucesso!`);
     } catch (err: any) {
       toast.error(`Erro de rede: ${err?.message || err}`);
@@ -228,39 +267,35 @@ export default function CompanyModulesPage() {
     const updated = { ...mobileModules, [key]: newValue };
     const token = getToken();
     const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/seller/mobile/modules/${companyId}`;
-    
+
     try {
       if (!token) {
         toast.error('Sem token — faça login novamente.');
         return;
       }
-      
       const res = await fetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ [key]: newValue }),
       });
-      
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         toast.error(`Erro ${res.status}: ${body?.detail || 'Falha ao salvar'}`);
         return;
       }
-      
       setMobileModules(updated);
       toast.success(`Módulo ${key} ${newValue ? 'ativado ✓' : 'desativado'} no App!`);
     } catch (err: any) {
-      toast.error(`Erro de rede: ${err?.message || err} — URL: ${url}`);
+      toast.error(`Erro de rede: ${err?.message || err}`);
     } finally {
       setTogglingMobile(null);
     }
   }
 
-
   async function handleToggleModule(moduleName: string, currentValue: boolean) {
     if (!company) return;
     setTogglingModule(moduleName);
-    
+
     const updates: Record<string, boolean> = {
       module_b2b_native: company.module_b2b_native,
       module_horus_erp: company.module_horus_erp,
@@ -290,14 +325,13 @@ export default function CompanyModulesPage() {
       module_encomendas: company.module_encomendas ?? false,
       module_order_intake: company.module_order_intake ?? false,
       module_b2c_storefront: company.module_b2c_storefront ?? false,
-      [moduleName]: !currentValue
+      [moduleName]: !currentValue,
     };
 
-    // Mutually exclusive logic for Core B2B
     if (moduleName === 'module_horus_erp' && !currentValue === true) {
       updates.module_b2b_native = false;
       updates.module_products = false;
-      toast.info('Módulo Produtos desativado para evitar conflito com o ERP.');
+      toast.info('Módulo Produtos local desativado para priorizar o catálogo do Horus ERP.');
     } else if (moduleName === 'module_b2b_native' && !currentValue === true) {
       updates.module_horus_erp = false;
       updates.module_products = true;
@@ -305,15 +339,18 @@ export default function CompanyModulesPage() {
 
     try {
       const token = getToken();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/modules`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(updates)
-      });
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/modules`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(updates),
+        }
+      );
       if (!res.ok) throw new Error('Falha ao atualizar módulo');
-      toast.success('Configurações atualizadas!');
+      toast.success('Módulo atualizado com sucesso!');
       refreshCompany();
-    } catch (error) {
+    } catch {
       toast.error('Erro ao mudar status do módulo.');
     } finally {
       setTogglingModule(null);
@@ -322,1040 +359,1012 @@ export default function CompanyModulesPage() {
 
   if (!company) {
     return (
-       <div className="flex h-64 items-center justify-center">
-         <Loader2 className="h-8 w-8 animate-spin text-[var(--color-primary-base)]" />
-       </div>
+      <div className="flex h-64 items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-[var(--color-primary-base)]" />
+      </div>
     );
   }
 
-  const Switch = ({ active, onClick, disabled, colorClass = "bg-[var(--color-primary-base)]" }: { active: boolean, onClick: () => void, disabled?: boolean, colorClass?: string }) => (
-    <button 
+  const Switch = ({
+    active,
+    onClick,
+    disabled,
+    colorClass = 'bg-[var(--color-primary-base)]',
+  }: {
+    active: boolean;
+    onClick: () => void;
+    disabled?: boolean;
+    colorClass?: string;
+  }) => (
+    <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${active ? colorClass : 'bg-slate-200 dark:bg-slate-700'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+        active ? colorClass : 'bg-slate-200 dark:bg-slate-700'
+      } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
     >
-      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${active ? 'translate-x-5' : 'translate-x-0'}`} />
+      <span
+        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+          active ? 'translate-x-5' : 'translate-x-0'
+        }`}
+      />
     </button>
   );
 
+  // Definição estruturada das Categorias de Módulos
+  const moduleCategories: Array<{
+    id: string;
+    title: string;
+    subtitle: string;
+    icon: any;
+    accent: string;
+    items: ModuleDef[];
+  }> = [
+    {
+      id: 'sales',
+      title: '2. Canais de Venda, Lojas & PDV',
+      subtitle: 'B2C, Pedidos B2B, Mesa Comercial (Intake), Propostas, PDV e Assinaturas.',
+      icon: ShoppingBag,
+      accent: 'text-fuchsia-600 dark:text-fuchsia-400 bg-fuchsia-500/10',
+      items: [
+        {
+          key: 'module_b2c_storefront',
+          title: 'B2C (Loja Virtual Aberta)',
+          desc: 'Loja virtual B2C integrada ao Horus, cupons/vale-livro, subdomínio automático e checkout.',
+          icon: Globe,
+          colorClass: 'bg-fuchsia-600',
+          badge: 'B2C',
+          configHref: `/companies/${companyId}/tray`,
+        },
+        {
+          key: 'module_orders',
+          title: 'Pedidos B2B',
+          desc: 'Fluxo de captação de pedidos B2B (Carrinho / Orçamentos).',
+          icon: ShoppingBag,
+          colorClass: 'bg-orange-500',
+        },
+        {
+          key: 'module_order_intake',
+          title: 'Mesa de Pedidos (Análise & Intake B2B)',
+          desc: 'Validação de pedidos via Planilha Excel, E-mail ou Manual, políticas de consignação e envio ao Horus.',
+          icon: ListOrdered,
+          colorClass: 'bg-indigo-600',
+          badge: 'Intake',
+        },
+        {
+          key: 'module_proposals',
+          title: 'Gestão de Propostas & Orçamentos',
+          desc: 'Propostas e orçamentos comerciais com conversão em Pedido e OS.',
+          icon: FileText,
+          colorClass: 'bg-emerald-600',
+          configHref: `/companies/${companyId}/proposals`,
+        },
+        {
+          key: 'module_pdv',
+          title: 'Ponto de Venda (PDV) & HorusPDV.exe',
+          desc: 'Frente de caixa web e licenciamento do aplicativo Windows (Online/Offline).',
+          icon: MonitorSmartphone,
+          colorClass: 'bg-slate-900 dark:bg-indigo-600',
+        },
+        {
+          key: 'module_subscriptions',
+          title: 'Assinaturas (Recorrência)',
+          desc: 'Clubes de assinatura e planos recorrentes.',
+          icon: Layers,
+          colorClass: 'bg-rose-500',
+        },
+        {
+          key: 'module_encomendas',
+          title: 'Módulo de Encomendas',
+          desc: 'Gestão de encomendas de livros no balcão e Busca Preço com aviso via WhatsApp.',
+          icon: Package,
+          colorClass: 'bg-teal-600',
+        },
+      ],
+    },
+    {
+      id: 'horus',
+      title: '3. Ecossistema Horus, Logística & Estoque',
+      subtitle: 'Horus SQL Direct, Agente Bridge (.EXE), Dropship Erdos, Logística, Consignação e Inventário.',
+      icon: Database,
+      accent: 'text-indigo-600 dark:text-indigo-400 bg-indigo-500/10',
+      items: [
+        {
+          key: 'module_dropship',
+          title: 'Dropshipping (Hub-Erdos)',
+          desc: 'Credenciais Multi-Token por CNPJ, remessa (6.923), venda (6.118) e sync de estoque.',
+          icon: Database,
+          colorClass: 'bg-amber-500',
+          configHref: `/companies/${companyId}/dropship`,
+        },
+        {
+          key: 'module_logistica_horus',
+          title: 'Logística Horus (Conferência & Volumes)',
+          desc: 'Conferência de pedidos por volumes/caixas, etiquetas e sincronização com o ERP.',
+          icon: ClipboardList,
+          colorClass: 'bg-indigo-500',
+        },
+        {
+          key: 'module_consignment',
+          title: 'Consignação Horus',
+          desc: 'Acertos e devoluções de consignação integrados com a API Horus.',
+          icon: Database,
+          colorClass: 'bg-orange-500',
+        },
+        {
+          key: 'module_busca_preco',
+          title: 'Busca Preço',
+          desc: 'Consulta de produto e visualização de estoque por filial em tempo real via API Horus.',
+          icon: ScanBarcode,
+          colorClass: 'bg-teal-600',
+        },
+        {
+          key: 'has_inventory_module',
+          title: 'Módulo de Inventário',
+          desc: 'Contagem física de estoque, bipagem mobile/offline e conciliação.',
+          icon: Boxes,
+          colorClass: 'bg-teal-500',
+        },
+      ],
+    },
+    {
+      id: 'verticals',
+      title: '4. Verticais Especializadas (Escolas, Editorial, Autores & Cafeteria)',
+      subtitle: 'Módulos dedicados por segmento de negócio.',
+      icon: GraduationCap,
+      accent: 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10',
+      items: [
+        {
+          key: 'module_schools',
+          title: 'Escolas, Passeios e Eventos',
+          desc: 'Gestão de escolas parceiras, turmas, feiras, listas e vouchers/amigo secreto.',
+          icon: GraduationCap,
+          colorClass: 'bg-indigo-600',
+        },
+        {
+          key: 'modulo_autores_ativo',
+          title: 'Portal do Autor',
+          desc: 'Subdomínio exclusivo autores.[seller].cronuzb2b.com.br e painel de direitos autorais.',
+          icon: Feather,
+          colorClass: 'bg-amber-500',
+        },
+        {
+          key: 'module_editorial',
+          title: 'Produção Editorial',
+          desc: 'Esteiras/etapas de livros (diagramação, revisão, capa, aprovação) e integração Horus.',
+          icon: BookOpen,
+          colorClass: 'bg-emerald-600',
+        },
+        {
+          key: 'module_cafeteria',
+          title: 'Cafeteria & Bistrô Omnichannel',
+          desc: 'Salão e mesas, comandas, fila de barista (KDS) e integração ao caixa PDV.',
+          icon: Coffee,
+          colorClass: 'bg-amber-600',
+        },
+      ],
+    },
+    {
+      id: 'crm_finance',
+      title: '5. CRM, Comercial, Financeiro & Alertas',
+      subtitle: 'Carteira de clientes, políticas comerciais, representantes, financeiro e notificações.',
+      icon: DollarSign,
+      accent: 'text-amber-600 dark:text-amber-400 bg-amber-500/10',
+      items: [
+        {
+          key: 'module_products',
+          title: 'Catálogo de Produtos (Local)',
+          desc: 'Gestão nativa de produtos, marcas e categorias na base do Cronuz.',
+          icon: Box,
+          colorClass: 'bg-indigo-600',
+          disabledReason: (c) => (c.module_horus_erp ? 'Gerido pelo Horus ERP' : null),
+        },
+        {
+          key: 'module_customers',
+          title: 'Gestão de Clientes',
+          desc: 'Cadastro e listagem da carteira de clientes.',
+          icon: Users,
+          colorClass: 'bg-sky-500',
+        },
+        {
+          key: 'module_crm',
+          title: 'CRM 360º',
+          desc: 'Relacionamento, tarefas, pipeline comercial e follow-ups.',
+          icon: Users,
+          colorClass: 'bg-purple-500',
+        },
+        {
+          key: 'module_commercial',
+          title: 'Políticas de Preço',
+          desc: 'Tabelas de preço e descontos segmentados.',
+          icon: Tags,
+          colorClass: 'bg-indigo-500',
+        },
+        {
+          key: 'module_agents',
+          title: 'Vendedores & Representantes',
+          desc: 'Gestão de equipe comercial externa e comissionamento.',
+          icon: ShieldAlert,
+          colorClass: 'bg-teal-500',
+        },
+        {
+          key: 'module_financial',
+          title: 'Gestão Financeira',
+          desc: 'Contas a pagar/receber, conciliação e DRE.',
+          icon: DollarSign,
+          colorClass: 'bg-amber-500',
+          configHref: `/companies/${companyId}/payments`,
+        },
+        {
+          key: 'module_services',
+          title: 'Gestão de Serviços (OS)',
+          desc: 'Ordens de serviço e faturamento de contratos.',
+          icon: Globe,
+          colorClass: 'bg-blue-500',
+        },
+        {
+          key: 'module_marketing',
+          title: 'Marketing & Vitrines',
+          desc: 'Criação de vitrines digitais e campanhas promocionais.',
+          icon: Megaphone,
+          colorClass: 'bg-fuchsia-500',
+        },
+        {
+          key: 'module_notifications',
+          title: 'Notificações & Alertas',
+          desc: 'Alertas programáveis exibidos no storefront e painel.',
+          icon: Bell,
+          colorClass: 'bg-teal-500',
+          configHref: `/companies/${companyId}/alerts`,
+        },
+      ],
+    },
+  ];
+
+  const allFlatItems = moduleCategories.flatMap((c) => c.items);
+  const totalActiveCount =
+    allFlatItems.filter((i) => Boolean(company[i.key])).length +
+    (company.module_horus_erp ? 1 : 0) +
+    (company.module_b2b_native ? 1 : 0) +
+    (company.module_horus_sql ? 1 : 0);
+
+  const toggleAllCategories = (expand: boolean) => {
+    setOpenCategories({
+      core: expand,
+      sales: expand,
+      horus: expand,
+      verticals: expand,
+      crm_finance: expand,
+      mobile: expand,
+    });
+  };
+
+  const filterMatches = (item: ModuleDef) => {
+    const isAct = Boolean(company[item.key]);
+    if (statusFilter === 'ACTIVE' && !isAct) return false;
+    if (statusFilter === 'INACTIVE' && isAct) return false;
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase();
+      return (
+        item.title.toLowerCase().includes(q) ||
+        item.desc.toLowerCase().includes(q)
+      );
+    }
+    return true;
+  };
+
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full overflow-y-auto pb-12">
-      <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-         <div>
-           <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-             Módulos da Empresa
-           </h2>
-           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-             Habilite as integrações e aplicativos disponíveis para os Sellers desta organização.
-           </p>
-         </div>
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="flex flex-col h-full overflow-y-auto pb-12"
+    >
+      {/* Cabeçalho com Busca, Contador e Filtro de Status */}
+      <div className="p-4 sm:p-6 border-b border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-slate-950/90 backdrop-blur-md sticky top-0 z-10 space-y-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
+                Central de Módulos &amp; Licenças
+              </h2>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+                <CheckCircle2 className="w-3.5 h-3.5" /> {totalActiveCount} módulos ativos
+              </span>
+            </div>
+            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+              Clique em uma categoria abaixo para abrir seus módulos, ativar/desativar ou ir direto para a configuração.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => toggleAllCategories(true)}
+              className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer"
+            >
+              Expandir Tudo
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleAllCategories(false)}
+              className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer"
+            >
+              Recolher Tudo
+            </button>
+          </div>
+        </div>
+
+        {/* Barra de Pesquisa e Filtro Ativos/Inativos */}
+        <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between pt-1">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Buscar módulo por nome (ex: B2C, PDV, Horus SQL, Dropship, Escolas)..."
+              className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-1 text-xs font-bold shrink-0">
+            <button
+              type="button"
+              onClick={() => setStatusFilter('ALL')}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                statusFilter === 'ALL'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
+              }`}
+            >
+              Todos
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('ACTIVE')}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                statusFilter === 'ACTIVE'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
+              }`}
+            >
+              Apenas Ativos
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('INACTIVE')}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                statusFilter === 'INACTIVE'
+                  ? 'bg-slate-700 text-white shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
+              }`}
+            >
+              Inativos
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div className="p-6 space-y-8 max-w-4xl">
-        
-        {/* Core B2B Mode Section */}
-        <section className="space-y-4">
-           <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider flex items-center gap-2">
-             <ArrowRightLeft className="h-4 w-4 text-indigo-500" /> Sistema Core (Operação B2B)
-           </h3>
-           <div className="rounded-2xl border border-indigo-100 bg-white overflow-hidden shadow-sm dark:border-indigo-500/20 dark:bg-slate-900/40">
-              
-              <div className="px-6 py-4 bg-indigo-50/50 dark:bg-indigo-500/5">
-                 <p className="text-sm text-slate-600 dark:text-slate-300 font-medium">Modelos de negócio mutuamente exclusivos. Escolha como o catálogo e pedidos serão processados.</p>
+      <div className="p-4 sm:p-6 space-y-4">
+        {/* CATEGORIA 1: MOTOR PRINCIPAL DE CATÁLOGO & ERP (SISTEMA CORE) */}
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm">
+          <button
+            type="button"
+            onClick={() => setOpenCategories((p) => ({ ...p, core: !p.core }))}
+            className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 shrink-0">
+                <ArrowRightLeft className="h-5 w-5" />
               </div>
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                  1. Motor Principal de Catálogo &amp; ERP (Sistema Core)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                  Define se a empresa opera integrada ao Horus ERP ou com catálogo 100% local Cronuz.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5 shrink-0">
+              <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                {company.module_horus_erp ? 'Horus ERP Ativo' : 'B2B Nativo Ativo'}
+              </span>
+              {openCategories.core ? (
+                <ChevronDown className="w-5 h-5 text-slate-400" />
+              ) : (
+                <ChevronRight className="w-5 h-5 text-slate-400" />
+              )}
+            </div>
+          </button>
 
-              <div className="theme-horus:hidden p-6 flex items-start sm:items-center justify-between border-t border-indigo-100/50 dark:border-slate-800 gap-4 flex-col sm:flex-row">
-                <div className="space-y-1 pr-6">
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200">B2B Nativo (Cronuz)</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">A operação será 100% nativa. Catálogo próprio e pedidos locais. Habilita o módulo de Produtos automaticamente.</p>
+          {openCategories.core && (
+            <div className="border-t border-slate-100 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800">
+              <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-orange-600 dark:text-orange-400">
+                    B2B Horus ERP (Catálogo &amp; Saldo em Tempo Real)
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Lê o acervo, preços e saldos diretamente da API REST TServerB2B do Horus ERP.
+                  </p>
                 </div>
-                <div className="shrink-0 flex items-center gap-3">
-                  <span className="text-xs font-semibold text-slate-400">{company.module_b2b_native ? 'Ativado' : 'Desativado'}</span>
-                  <Switch 
-                    active={company.module_b2b_native} 
-                    onClick={() => handleToggleModule('module_b2b_native', company.module_b2b_native)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-indigo-500"
-                  />
-                </div>
-              </div>
-              
-              <div className="p-6 flex items-start sm:items-center justify-between border-t border-indigo-100/50 dark:border-slate-800 gap-4 flex-col sm:flex-row">
-                <div className="space-y-1 pr-6">
-                  <p className="text-sm font-bold text-orange-500">B2B Horus ERP</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Todo o catálogo será lido de forma dinâmica e em tempo real do backend do Horus. <strong className="text-rose-500 font-semibold">Oculta o catálogo local nativo.</strong></p>
-                </div>
-                <div className="shrink-0 flex items-center gap-3">
-                  <span className="text-xs font-semibold text-slate-400">{company.module_horus_erp ? 'Ativado' : 'Desativado'}</span>
-                  <Switch 
-                    active={company.module_horus_erp} 
-                    onClick={() => handleToggleModule('module_horus_erp', company.module_horus_erp)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-orange-500"
-                  />
-                </div>
-              </div>
-
-           </div>
-        </section>
-
-        {/* Management Add-ons */}
-        <section className="space-y-4">
-           <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider flex items-center gap-2 mt-8">
-             <Layers className="h-4 w-4 text-emerald-500" /> Módulos de Gestão (Sellers)
-           </h3>
-           <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm dark:border-slate-800/60 dark:bg-slate-900/40">
-              
-              {/* Products */}
-              <div className="p-5 flex items-center justify-between hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_products ? 'bg-[var(--color-primary-base)]/10 border-[var(--color-primary-base)]/20 text-[var(--color-primary-base)]' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Box className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Catálogo de Produtos</p>
-                    <p className="text-xs text-slate-500">Gestão nativa de produtos, marcas e categorias.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 flex gap-4 items-center pl-4">
-                  {company.module_horus_erp && <span className="text-xs font-semibold text-rose-500 bg-rose-50 px-2 py-1 rounded-md hidden sm:block dark:bg-rose-500/10">Bloqueado pelo ERP</span>}
-                  <Switch 
-                    active={company.module_products} 
-                    onClick={() => handleToggleModule('module_products', company.module_products)} 
-                    disabled={togglingModule !== null || company.module_horus_erp}
-                  />
-                </div>
-              </div>
-              {/* Orders */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_orders ? 'bg-orange-500/10 border-orange-500/20 text-orange-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <ShoppingBag className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Pedidos B2B</p>
-                    <p className="text-xs text-slate-500">Fluxo de captação de pedidos (Carrinho / Orçamentos).</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_orders} 
-                    onClick={() => handleToggleModule('module_orders', company.module_orders)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-orange-500"
-                  />
-                </div>
-              </div>
-
-              {/* Mesa de Pedidos (Order Intake) */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_order_intake ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <ListOrdered className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Mesa de Pedidos (Análise & Intake B2B)</p>
-                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 text-indigo-800 rounded dark:bg-indigo-900/30 dark:text-indigo-400">Novo</span>
-                    </div>
-                    <p className="text-xs text-slate-500">Validação de pedidos na mesa (Planilha Excel, E-mail ou Manual), políticas comerciais de consignação/estoque mínimo, sugestões de giro e envio ao Horus.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
+                <div className="flex items-center gap-3 shrink-0">
+                  <Link
+                    href={`/companies/${companyId}/horus`}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1"
+                  >
+                    Configurar Horus <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
                   <Switch
-                    active={company.module_order_intake ?? false}
-                    onClick={() => handleToggleModule('module_order_intake', company.module_order_intake ?? false)}
+                    active={company.module_horus_erp}
+                    onClick={() => handleToggleModule('module_horus_erp', company.module_horus_erp)}
+                    disabled={togglingModule !== null}
+                    colorClass="bg-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div className="theme-horus:hidden p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                    B2B Nativo (Catálogo Local Cronuz)
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Operação 100% local sem ERP externo. Habilita o módulo de Produtos automaticamente.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <Switch
+                    active={company.module_b2b_native}
+                    onClick={() => handleToggleModule('module_b2b_native', company.module_b2b_native)}
                     disabled={togglingModule !== null}
                     colorClass="bg-indigo-500"
                   />
                 </div>
               </div>
+            </div>
+          )}
+        </div>
 
-              {/* Customers */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_customers ? 'bg-sky-500/10 border-sky-500/20 text-sky-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Users className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Gestão de Clientes</p>
-                    <p className="text-xs text-slate-500">Cadastro e listagem da carteira de B2B.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_customers} 
-                    onClick={() => handleToggleModule('module_customers', company.module_customers)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-sky-500"
-                  />
-                </div>
-              </div>
+        {/* CATEGORIAS 2, 3, 4 E 5 */}
+        {moduleCategories.map((cat) => {
+          const CatIcon = cat.icon;
+          const filteredItems = cat.items.filter(filterMatches);
+          const activeInCat = cat.items.filter((i) => Boolean(company[i.key])).length;
+          const isOpen =
+            Boolean(searchTerm.trim()) ||
+            statusFilter !== 'ALL' ||
+            Boolean(openCategories[cat.id]);
 
-              {/* Marketing */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_marketing ? 'bg-fuchsia-500/10 border-fuchsia-500/20 text-fuchsia-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Megaphone className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Marketing & Vitrines</p>
-                    <p className="text-xs text-slate-500">Criação de vitrines digitais de loja e campanhas.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_marketing} 
-                    onClick={() => handleToggleModule('module_marketing', company.module_marketing)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-fuchsia-500"
-                  />
-                </div>
-              </div>
+          if (filteredItems.length === 0 && cat.id !== 'horus') return null;
 
-              {/* Agents */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_agents ? 'bg-teal-500/10 border-teal-500/20 text-teal-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <ShieldAlert className="h-5 w-5" />
+          return (
+            <div
+              key={cat.id}
+              className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm"
+            >
+              <button
+                type="button"
+                onClick={() => setOpenCategories((p) => ({ ...p, [cat.id]: !p[cat.id] }))}
+                className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className={`p-2.5 rounded-xl shrink-0 ${cat.accent}`}>
+                    <CatIcon className="h-5 w-5" />
                   </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Vendedores & Representantes</p>
-                    <p className="text-xs text-slate-500">Gestão da equipe de vendas externa (Agents).</p>
+                  <div className="min-w-0">
+                    <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                      {cat.title}
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                      {cat.subtitle}
+                    </p>
                   </div>
                 </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_agents} 
-                    onClick={() => handleToggleModule('module_agents', company.module_agents)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-teal-500"
-                  />
-                </div>
-              </div>
 
-              {/* PDV */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_pdv ? 'bg-slate-900 border-slate-700 text-slate-100 dark:bg-white dark:border-slate-300 dark:text-slate-900' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <MonitorSmartphone className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Ponto de Venda (PDV)</p>
-                    <p className="text-xs text-slate-500">Máquina registradora simples para balcão.</p>
-                  </div>
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <span
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                      activeInCat > 0
+                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                        : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                    }`}
+                  >
+                    {activeInCat} de {cat.items.length} ativos
+                  </span>
+                  {isOpen ? (
+                    <ChevronDown className="w-5 h-5 text-slate-400" />
+                  ) : (
+                    <ChevronRight className="w-5 h-5 text-slate-400" />
+                  )}
                 </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_pdv} 
-                    onClick={() => handleToggleModule('module_pdv', company.module_pdv)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-slate-900 dark:bg-white"
-                  />
-                </div>
-              </div>
+              </button>
 
-              {/* Sub-painel Master: Licença Horus PDV Desktop (.EXE) & Sync por Range Horus */}
-              {company.module_pdv && (
-                <div className="mx-3 sm:mx-5 mb-4 p-4 rounded-2xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-extrabold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
-                        🔐 Licença Horus PDV Desktop (.EXE) &amp; Sincronização por Sequência Horus
-                      </p>
-                      <p className="text-xs text-slate-600 dark:text-slate-400">
-                        Controle a data de validade da chave do aplicativo Windows (Online/Offline) e libere a sincronização em lote por COD_ITEM_INI / COD_ITEM_FIM.
-                      </p>
-                    </div>
-                    <span
-                      className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shrink-0 ${
-                        pdvLicense.is_valid
-                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300'
-                          : 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300'
-                      }`}
-                    >
-                      {pdvLicense.status_label || 'Não configurada'}
-                    </span>
-                  </div>
+              {isOpen && (
+                <div className="border-t border-slate-100 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800">
+                  {filteredItems.map((item) => {
+                    const ItemIcon = item.icon;
+                    const isActive = Boolean(company[item.key]);
+                    const disabledMsg = item.disabledReason ? item.disabledReason(company) : null;
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                      <div>
-                        <p className="text-xs font-bold text-slate-800 dark:text-slate-200">Liberar Uso do HorusPDV.exe</p>
-                        <p className="text-[11px] text-slate-500">Permite abrir e realizar vendas no PDV Windows até a data limite.</p>
+                    return (
+                      <div key={String(item.key)} className="space-y-3">
+                        <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors">
+                          <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                            <div
+                              className={`p-2 rounded-xl border shrink-0 ${
+                                isActive
+                                  ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-600 dark:text-indigo-400'
+                                  : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'
+                              }`}
+                            >
+                              <ItemIcon className="h-5 w-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                                  {item.title}
+                                </p>
+                                {item.badge && (
+                                  <span className="px-2 py-0.5 text-[10px] font-bold bg-indigo-100 text-indigo-800 rounded dark:bg-indigo-900/40 dark:text-indigo-300">
+                                    {item.badge}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                {item.desc}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-end gap-3 shrink-0">
+                            {disabledMsg && (
+                              <span className="text-xs font-semibold text-rose-500 bg-rose-50 px-2.5 py-1 rounded-lg dark:bg-rose-500/10">
+                                {disabledMsg}
+                              </span>
+                            )}
+                            {item.configHref && (
+                              <Link
+                                href={item.configHref}
+                                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1"
+                              >
+                                Configurar <ArrowRight className="w-3.5 h-3.5" />
+                              </Link>
+                            )}
+                            <Switch
+                              active={isActive}
+                              onClick={() => handleToggleModule(String(item.key), isActive)}
+                              disabled={togglingModule !== null || Boolean(disabledMsg)}
+                              colorClass={item.colorClass}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Sub-painel do PDV Desktop (.EXE) quando module_pdv está ativo */}
+                        {item.key === 'module_pdv' && company.module_pdv && (
+                          <div className="mx-4 sm:mx-5 mb-4 p-4 rounded-2xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                              <div>
+                                <p className="text-xs font-extrabold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
+                                  🔐 Licença Horus PDV Desktop (.EXE) &amp; Sincronização por Sequência Horus
+                                </p>
+                                <p className="text-xs text-slate-600 dark:text-slate-400">
+                                  Controle a validade da chave do aplicativo Windows (Online/Offline) e libere a sincronização em lote por COD_ITEM_INI / COD_ITEM_FIM.
+                                </p>
+                              </div>
+                              <span
+                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shrink-0 ${
+                                  pdvLicense.is_valid
+                                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300'
+                                    : 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300'
+                                }`}
+                              >
+                                {pdvLicense.status_label || 'Não configurada'}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+                                <div>
+                                  <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                    Liberar Uso do HorusPDV.exe
+                                  </p>
+                                  <p className="text-[11px] text-slate-500">
+                                    Permite abrir e realizar vendas no PDV Windows até a data limite.
+                                  </p>
+                                </div>
+                                <Switch
+                                  active={pdvLicense.enabled}
+                                  onClick={() => {
+                                    const nextEnabled = !pdvLicense.enabled;
+                                    setPdvLicense((prev) => ({ ...prev, enabled: nextEnabled }));
+                                    handleSavePdvDesktopLicense({ enabled: nextEnabled });
+                                  }}
+                                  disabled={savingPdvLicense}
+                                  colorClass="bg-indigo-600"
+                                />
+                              </div>
+
+                              <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+                                <div>
+                                  <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                    Liberar Sync Catálogo por Range (COD_ITEM_INI/FIM)
+                                  </p>
+                                  <p className="text-[11px] text-slate-500">
+                                    Habilita o download sequencial de produtos direto da API do Horus.
+                                  </p>
+                                </div>
+                                <Switch
+                                  active={pdvLicense.range_sync_enabled}
+                                  onClick={() => {
+                                    const nextRange = !pdvLicense.range_sync_enabled;
+                                    setPdvLicense((prev) => ({ ...prev, range_sync_enabled: nextRange }));
+                                    handleSavePdvDesktopLicense({ range_sync_enabled: nextRange });
+                                  }}
+                                  disabled={savingPdvLicense}
+                                  colorClass="bg-emerald-600"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-3 pt-1">
+                              <div className="flex flex-col sm:flex-row sm:items-end gap-2 flex-1">
+                                <div>
+                                  <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                    Data de Validade da Licença
+                                    {pdvLicense.expires_at && (
+                                      <span className="ml-2 text-indigo-600 dark:text-indigo-400">
+                                        ({pdvLicense.expires_at.split('-').reverse().join('/')})
+                                      </span>
+                                    )}
+                                  </label>
+                                  <input
+                                    type="date"
+                                    value={pdvLicense.expires_at}
+                                    onChange={(e) =>
+                                      setPdvLicense((prev) => ({ ...prev, expires_at: e.target.value }))
+                                    }
+                                    className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-slate-100"
+                                  />
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => addDaysToLicenseDate(-1)}
+                                    className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100"
+                                  >
+                                    Ontem (Expirar)
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => addDaysToLicenseDate(30)}
+                                    className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
+                                  >
+                                    +30 Dias
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => addDaysToLicenseDate(90)}
+                                    className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
+                                  >
+                                    +90 Dias
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => addDaysToLicenseDate(365)}
+                                    className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
+                                  >
+                                    +1 Ano
+                                  </button>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                disabled={savingPdvLicense}
+                                onClick={() => handleSavePdvDesktopLicense()}
+                                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-50"
+                              >
+                                {savingPdvLicense
+                                  ? 'Gerando Chave...'
+                                  : '🔑 Salvar Validade & Liberar Chave'}
+                              </button>
+                            </div>
+
+                            {pdvLicense.license_key && (
+                              <div className="p-2.5 rounded-xl bg-slate-900 text-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div className="truncate text-[11px] font-mono">
+                                  <span className="text-indigo-400 font-bold mr-2">CHAVE ATIVA:</span>
+                                  {pdvLicense.license_key}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(pdvLicense.license_key || '');
+                                    toast.success('Chave de licença copiada!');
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shrink-0"
+                                >
+                                  📋 Copiar Chave
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      <Switch
-                        active={pdvLicense.enabled}
-                        onClick={() => {
-                          const nextEnabled = !pdvLicense.enabled;
-                          setPdvLicense(prev => ({ ...prev, enabled: nextEnabled }));
-                          handleSavePdvDesktopLicense({ enabled: nextEnabled });
-                        }}
-                        disabled={savingPdvLicense}
-                        colorClass="bg-indigo-600"
+                    );
+                  })}
+
+                  {/* Na categoria Horus, inclui também Horus SQL Direct e Agente Bridge (.EXE) */}
+                  {cat.id === 'horus' && (
+                    <div className="p-4 sm:p-5 space-y-5 bg-slate-50/40 dark:bg-slate-950/30">
+                      {/* Horus SQL Direct */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-extrabold uppercase tracking-wider text-violet-600 dark:text-violet-400 flex items-center gap-1.5">
+                            <DatabaseZap className="h-4 w-4" /> Horus SQL Direct &amp; Sub-funcionalidades
+                          </h4>
+                          <Link
+                            href={`/companies/${companyId}/horus-sql`}
+                            className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 text-xs font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1"
+                          >
+                            Configurar Conexão SQL <ArrowRight className="w-3.5 h-3.5" />
+                          </Link>
+                        </div>
+
+                        {loadingHorusSQL ? (
+                          <div className="flex items-center gap-2 text-xs text-slate-400 py-2">
+                            <Loader2 className="h-4 w-4 animate-spin" /> Carregando configurações SQL...
+                          </div>
+                        ) : !horusSQLData?.sql_configured ? (
+                          <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 dark:border-amber-800/40 dark:bg-amber-950/20">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                            <div>
+                              <p className="text-xs font-bold text-amber-800 dark:text-amber-300">
+                                Credenciais SQL ainda não configuradas
+                              </p>
+                              <p className="text-xs text-amber-700 dark:text-amber-400">
+                                Configure o acesso ao SQL Server na aba <strong>Horus SQL Direct</strong> antes de habilitar este módulo.
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-violet-200 bg-white overflow-hidden shadow-xs dark:border-violet-500/20 dark:bg-slate-900">
+                            <div className="px-4 py-3.5 flex items-center justify-between border-b border-slate-100 dark:border-slate-800">
+                              <div>
+                                <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                                  Habilitar Horus SQL Direct
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  Libera as rotinas SQL diretas abaixo para o seller.
+                                </p>
+                              </div>
+                              <Switch
+                                active={horusSQLData?.module_horus_sql ?? false}
+                                onClick={() =>
+                                  handleToggleModule(
+                                    'module_horus_sql',
+                                    horusSQLData?.module_horus_sql ?? false
+                                  )
+                                }
+                                disabled={togglingModule !== null}
+                                colorClass="bg-violet-600"
+                              />
+                            </div>
+
+                            {horusSQLData?.module_horus_sql && (
+                              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                                <div className="p-4 flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                      Baixa Financeira com Vindi
+                                    </p>
+                                    <p className="text-[11px] text-slate-500">
+                                      Importa extrato da Vindi e gera borderô de baixa no Horus ERP.
+                                    </p>
+                                  </div>
+                                  <Switch
+                                    active={horusSQLData?.features.vindi_baixa ?? false}
+                                    onClick={() => handleToggleHorusSQLFeature('vindi_baixa')}
+                                    disabled={togglingHorusFeature !== null}
+                                    colorClass="bg-emerald-500"
+                                  />
+                                </div>
+
+                                <div className="p-4 flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                      Pedidos (Horus SQL)
+                                    </p>
+                                    <p className="text-[11px] text-slate-500">
+                                      Listagem e acompanhamento de pedidos direto no SQL do Horus.
+                                    </p>
+                                  </div>
+                                  <Switch
+                                    active={horusSQLData?.features.pedidos ?? false}
+                                    onClick={() => handleToggleHorusSQLFeature('pedidos')}
+                                    disabled={togglingHorusFeature !== null}
+                                    colorClass="bg-violet-600"
+                                  />
+                                </div>
+
+                                <div className="p-4 flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                      Horus Direct DBM (Painel Operacional &amp; CRM)
+                                    </p>
+                                    <p className="text-[11px] text-slate-500">
+                                      Módulos de comercial, pesquisa de empresas, produtos e tiragens DBM.
+                                    </p>
+                                  </div>
+                                  <Switch
+                                    active={horusSQLData?.features.dbm ?? false}
+                                    onClick={() => handleToggleHorusSQLFeature('dbm')}
+                                    disabled={togglingHorusFeature !== null}
+                                    colorClass="bg-indigo-600"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* API Horus Complementar & Agente Bridge (.EXE) */}
+                      <HorusApiBridgeMasterPanel
+                        companyId={companyId}
+                        onCompanyRefresh={refreshCompany}
                       />
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                      <div>
-                        <p className="text-xs font-bold text-slate-800 dark:text-slate-200">Liberar Sync Catálogo por Range (COD_ITEM_INI/FIM)</p>
-                        <p className="text-[11px] text-slate-500">Habilita o download sequencial de produtos direto da API do Horus.</p>
-                      </div>
-                      <Switch
-                        active={pdvLicense.range_sync_enabled}
-                        onClick={() => {
-                          const nextRange = !pdvLicense.range_sync_enabled;
-                          setPdvLicense(prev => ({ ...prev, range_sync_enabled: nextRange }));
-                          handleSavePdvDesktopLicense({ range_sync_enabled: nextRange });
-                        }}
-                        disabled={savingPdvLicense}
-                        colorClass="bg-emerald-600"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-3 pt-1">
-                    <div className="flex flex-col sm:flex-row sm:items-end gap-2 flex-1">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
-                          Data de Validade da Licença (Até quando estará ativo)
-                          {pdvLicense.expires_at && (
-                            <span className="ml-2 text-indigo-600 dark:text-indigo-400">
-                              ({pdvLicense.expires_at.split('-').reverse().join('/')})
-                            </span>
-                          )}
-                        </label>
-                        <input
-                          type="date"
-                          value={pdvLicense.expires_at}
-                          onChange={e => setPdvLicense(prev => ({ ...prev, expires_at: e.target.value }))}
-                          className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-800 dark:text-slate-100"
-                        />
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => addDaysToLicenseDate(-1)}
-                          title="Define a data para ontem (para testar bloqueio de chave expirada)"
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100"
-                        >
-                          Ontem (Expirar)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => addDaysToLicenseDate(0)}
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
-                        >
-                          Hoje
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => addDaysToLicenseDate(30)}
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
-                        >
-                          +30 Dias
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => addDaysToLicenseDate(90)}
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
-                        >
-                          +90 Dias
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => addDaysToLicenseDate(365)}
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
-                        >
-                          +1 Ano
-                        </button>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={savingPdvLicense}
-                      onClick={() => handleSavePdvDesktopLicense()}
-                      className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-50"
-                    >
-                      {savingPdvLicense ? 'Gerando Chave...' : '🔑 Salvar Validade & Liberar Chave no Master'}
-                    </button>
-                  </div>
-
-                  {pdvLicense.license_key && (
-                    <div className="p-2.5 rounded-xl bg-slate-900 text-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="truncate text-[11px] font-mono">
-                        <span className="text-indigo-400 font-bold mr-2">CHAVE ATIVA:</span>
-                        {pdvLicense.license_key}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(pdvLicense.license_key || '');
-                          toast.success('Chave de licença copiada!');
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shrink-0"
-                      >
-                        📋 Copiar Chave
-                      </button>
                     </div>
                   )}
                 </div>
               )}
-
-              {/* Subscriptions */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_subscriptions ? 'bg-rose-500/10 border-rose-500/20 text-rose-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Layers className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Assinaturas (Recorrência)</p>
-                    <p className="text-xs text-slate-500">Clubes de assinaturas, planos pre-pagos com EFI.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_subscriptions} 
-                    onClick={() => handleToggleModule('module_subscriptions', company.module_subscriptions)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-rose-500"
-                  />
-                </div>
-              </div>
-
-              {/* Financeiro */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_financial ? 'bg-amber-500/10 border-amber-500/20 text-amber-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <DollarSign className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Gestão Financeira</p>
-                    <p className="text-xs text-slate-500">Contas a pagar/receber, conciliação e DRE.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_financial} 
-                    onClick={() => handleToggleModule('module_financial', company.module_financial)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-amber-500"
-                  />
-                </div>
-              </div>
-
-              {/* Serviços */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_services ? 'bg-blue-500/10 border-blue-500/20 text-blue-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Globe className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Gestão de Serviços (OS)</p>
-                    <p className="text-xs text-slate-500">Ordens de serviço, OS e faturamento de contratos.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_services} 
-                    onClick={() => handleToggleModule('module_services', company.module_services)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-blue-500"
-                  />
-                </div>
-              </div>
-
-              {/* Políticas Comerciais */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_commercial ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Tags className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Políticas de Preço</p>
-                    <p className="text-xs text-slate-500">Regras comerciais, tabelas de preço e descontos segmentados.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_commercial} 
-                    onClick={() => handleToggleModule('module_commercial', company.module_commercial)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-indigo-500"
-                  />
-                </div>
-              </div>
-
-              {/* CRM 360 */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_crm ? 'bg-purple-500/10 border-purple-500/20 text-purple-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Users className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">CRM 360º</p>
-                    <p className="text-xs text-slate-500">Gestão de relacionamento, tarefas, pipeline e follow-ups.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_crm} 
-                    onClick={() => handleToggleModule('module_crm', company.module_crm)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-purple-500"
-                  />
-                </div>
-              </div>
-
-              {/* Consignação Horus */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_consignment ? 'bg-orange-500/10 border-orange-500/20 text-orange-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Database className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Consignação Horus</p>
-                    <p className="text-xs text-slate-500">Acertos e Devoluções de consignação totalmente integrados com a API Horus.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_consignment} 
-                    onClick={() => handleToggleModule('module_consignment', company.module_consignment)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-orange-500"
-                  />
-                </div>
-              </div>
-
-              {/* Gestão de Propostas / Orçamentos */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_proposals ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <FileText className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Gestão de Propostas</p>
-                    <p className="text-xs text-slate-500">Gere propostas e orçamentos comerciais, com fluxo de conversão automática em Pedido e OS.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_proposals} 
-                    onClick={() => handleToggleModule('module_proposals', company.module_proposals)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-emerald-500"
-                  />
-                </div>
-              </div>
-
-              {/* Logística Horus */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_logistica_horus ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <ClipboardList className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Logística Horus</p>
-                    <p className="text-xs text-slate-500">Rotina de conferência de pedidos por volumes/caixas, impressão de etiquetas e sincronização com o ERP.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch 
-                    active={company.module_logistica_horus} 
-                    onClick={() => handleToggleModule('module_logistica_horus', company.module_logistica_horus)} 
-                    disabled={togglingModule !== null}
-                    colorClass="bg-indigo-500"
-                  />
-                </div>
-              </div>
-
-              {/* Dropshipping (Erdos) */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_dropship ? 'bg-amber-500/10 border-amber-500/20 text-amber-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Database className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Dropshipping (Erdos)</p>
-                    <p className="text-xs text-slate-500">Integração de pedidos, tabela de preços e sincronização de estoque com o fornecedor Erdos via Dropship.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.module_dropship}
-                    onClick={() => handleToggleModule('module_dropship', company.module_dropship)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-amber-500"
-                  />
-                </div>
-              </div>
-
-              {/* Notificações */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_notifications ? 'bg-teal-500/10 border-teal-500/20 text-teal-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Bell className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Notificações</p>
-                    <p className="text-xs text-slate-500">Permite que o seller crie alertas programáveis exibidos no storefront para os clientes (avisos de preços, retirada de pedidos, etc.).</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.module_notifications}
-                    onClick={() => handleToggleModule('module_notifications', company.module_notifications)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-teal-500"
-                  />
-                </div>
-              </div>
-
-              {/* Busca Preço */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_busca_preco ? 'bg-[#00b4b4]/10 border-[#00b4b4]/20 text-[#00b4b4]' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <ScanBarcode className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Busca Preço</p>
-                    <p className="text-xs text-slate-500">Consulta de produto e visualização de estoque por filial em tempo real via API Horus.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.module_busca_preco}
-                    onClick={() => handleToggleModule('module_busca_preco', company.module_busca_preco)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-[#00b4b4]"
-                  />
-                </div>
-              </div>
-
-              {/* Módulo de Encomendas */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_encomendas ? 'bg-[#00b4b4]/10 border-[#00b4b4]/20 text-[#00b4b4]' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Package className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Módulo de Encomendas</p>
-                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-[#00b4b4]/10 text-[#00b4b4] rounded">Novo</span>
-                    </div>
-                    <p className="text-xs text-slate-500">Gestão de encomendas de livros para clientes no balcão e no Busca Preço, acompanhamento de status e aviso de chegada via WhatsApp.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.module_encomendas ?? false}
-                    onClick={() => handleToggleModule('module_encomendas', company.module_encomendas ?? false)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-[#00b4b4]"
-                  />
-                </div>
-              </div>
-
-              {/* Portal do Autor */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.modulo_autores_ativo ? 'bg-amber-500/10 border-amber-500/20 text-amber-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Feather className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Portal do Autor</p>
-                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 rounded dark:bg-amber-900/30 dark:text-amber-400">Novo</span>
-                    </div>
-                    <p className="text-xs text-slate-500">Habilita o subdomínio exclusivo <code className="text-slate-600 dark:text-slate-400">autores.[seller].cronuzb2b.com.br</code> e o painel de vendas e acertos de autores integrado ao Horus ERP.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.modulo_autores_ativo ?? false}
-                    onClick={() => handleToggleModule('modulo_autores_ativo', company.modulo_autores_ativo ?? false)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-amber-500"
-                  />
-                </div>
-              </div>
-
-              {/* Módulo de Inventário */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.has_inventory_module ? 'bg-teal-500/10 border-teal-500/20 text-teal-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Boxes className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Módulo de Inventário</p>
-                    <p className="text-xs text-slate-500">Contagem física de estoque, bipagem mobile/offline, auditoria de prateleiras e conciliação.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.has_inventory_module ?? false}
-                    onClick={() => handleToggleModule('has_inventory_module', company.has_inventory_module ?? false)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-teal-500"
-                  />
-                </div>
-              </div>
-
-              {/* Escolas, Passeios e Eventos */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_schools ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <GraduationCap className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Escolas, Passeios e Eventos</p>
-                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 text-indigo-800 rounded dark:bg-indigo-900/30 dark:text-indigo-400">Novo</span>
-                    </div>
-                    <p className="text-xs text-slate-500">Gestão de escolas parceiras, turmas, passeios, vitrines B2C e motor de Amigo Secreto com sorteio e etiquetas de entrega.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.module_schools ?? false}
-                    onClick={() => handleToggleModule('module_schools', company.module_schools ?? false)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-indigo-500"
-                  />
-                </div>
-              </div>
-
-              {/* Cafeteria Omnichannel */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_cafeteria ? 'bg-amber-500/10 border-amber-500/20 text-amber-600' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Coffee className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Cafeteria & Bistrô Omnichannel</p>
-                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 rounded dark:bg-amber-900/30 dark:text-amber-400">Novo</span>
-                    </div>
-                    <p className="text-xs text-slate-500">Gestão de salão e mesas, comandas avulsas, modificadores/opcionais, fila de barista (KDS) em tempo real e integração ao caixa PDV.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.module_cafeteria ?? false}
-                    onClick={() => handleToggleModule('module_cafeteria', company.module_cafeteria ?? false)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-amber-500"
-                  />
-                </div>
-              </div>
-
-              {/* Produção Editorial */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_editorial ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <BookOpen className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Produção Editorial</p>
-                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800 rounded dark:bg-emerald-900/30 dark:text-emerald-400">Novo</span>
-                    </div>
-                    <p className="text-xs text-slate-500">Gestão de esteiras/etapas de livros (diagramação, revisão, capa, aprovação), tarefas, arquivos e integração com o Horus.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.module_editorial ?? false}
-                    onClick={() => handleToggleModule('module_editorial', company.module_editorial ?? false)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-emerald-500"
-                  />
-                </div>
-              </div>
-
-              {/* B2C */}
-              <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-xl border ${company.module_b2c_storefront ? 'bg-fuchsia-500/10 border-fuchsia-500/20 text-fuchsia-500' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                    <Globe className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">B2C</p>
-                      <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-fuchsia-100 text-fuchsia-800 rounded dark:bg-fuchsia-900/30 dark:text-fuchsia-400">Novo</span>
-                    </div>
-                    <p className="text-xs text-slate-500">Habilita a loja virtual B2C integrada ao acervo Horus, emissão de cupons de desconto (com geração automática de saldo residual), promoções, cache de alta performance e checkout.</p>
-                  </div>
-                </div>
-                <div className="shrink-0 pl-4">
-                  <Switch
-                    active={company.module_b2c_storefront ?? false}
-                    onClick={() => handleToggleModule('module_b2c_storefront', company.module_b2c_storefront ?? false)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-fuchsia-600"
-                  />
-                </div>
-              </div>
-
-           </div>
-        </section>
-
-        {/* ─── App Mobile Section ─────────────────────────────────────── */}
-        <section className="space-y-4">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider flex items-center gap-2 mt-8">
-            <Smartphone className="h-4 w-4 text-violet-500" /> App Mobile (Android &amp; iOS)
-          </h3>
-          <div className="rounded-2xl border border-violet-200 bg-white overflow-hidden shadow-sm dark:border-violet-500/20 dark:bg-slate-900/40">
-
-            {/* ── Toggle mestre ── */}
-            <div className={`px-6 py-5 flex items-center justify-between border-b transition-colors ${mobileModules.app_enabled ? 'bg-violet-50 dark:bg-violet-500/10 border-violet-200 dark:border-violet-500/20' : 'bg-slate-50 dark:bg-slate-800/40 border-slate-100 dark:border-slate-800'}`}>
-              <div className="flex items-center gap-3">
-                <div className={`p-2.5 rounded-xl border transition-colors ${mobileModules.app_enabled ? 'bg-violet-500/15 border-violet-500/30 text-violet-600' : 'bg-slate-200 border-slate-300 text-slate-400 dark:bg-slate-700 dark:border-slate-600'}`}>
-                  <Smartphone className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Habilitar App Mobile</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {mobileModules.app_enabled
-                      ? 'O seller pode fazer login e usar o app.'
-                      : 'App bloqueado — o seller não consegue entrar.'}
-                  </p>
-                </div>
-              </div>
-              <div className="shrink-0 flex items-center gap-3">
-                {loadingMobile && <Loader2 className="h-4 w-4 animate-spin text-violet-500" />}
-                {togglingMobile === 'app_enabled'
-                  ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                  : (
-                    <Switch
-                      active={mobileModules.app_enabled}
-                      onClick={() => handleToggleMobileModule('app_enabled')}
-                      disabled={loadingMobile || togglingMobile !== null}
-                      colorClass="bg-violet-500"
-                    />
-                  )
-                }
-              </div>
             </div>
+          );
+        })}
 
-            {/* ── Módulos individuais (desabilitados se app não ativo) ── */}
-            <div className={`transition-opacity ${mobileModules.app_enabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-
-            {([
-              { key: 'pdv',         label: 'PDV — Ponto de Venda',          desc: 'Realiza vendas e emite pedidos diretamente pelo celular.',           icon: MonitorSmartphone, color: 'violet' },
-              { key: 'conferencia', label: 'Conferência de Pedidos',         desc: 'Leitura de código de barras e conferência integrada ao Horus.',      icon: ScanBarcode,       color: 'sky'    },
-              { key: 'vendas',      label: 'Resultado de Vendas',            desc: 'Dashboard com indicadores de performance do período.',               icon: BarChart3,          color: 'emerald'},
-              { key: 'pedidos',     label: 'Consulta de Pedidos',            desc: 'Consulta e acompanhamento de pedidos em tempo real.',                icon: ListOrdered,        color: 'orange' },
-              { key: 'catalogo',    label: 'Catálogo de Produtos',           desc: 'Consulta de produtos, preços e disponibilidade de estoque.',         icon: BookOpen,           color: 'indigo' },
-              { key: 'clientes',    label: 'Ficha de Clientes',              desc: 'Acesso à carteira de clientes e histórico de compras.',              icon: UserCircle,         color: 'rose'   },
-              { key: 'cafeteria',   label: 'Cafeteria & Comandas',           desc: 'Atendimento de mesas, lançamento de pedidos e KDS no celular.',     icon: Coffee,             color: 'amber'  },
-            ] as { key: keyof MobileModules; label: string; desc: string; icon: any; color: string }[]).map((mod, idx) => {
-              const active = mobileModules[mod.key];
-              const Icon = mod.icon;
-              const colors: Record<string, string> = {
-                violet: 'bg-violet-500/10 border-violet-500/20 text-violet-500',
-                sky:    'bg-sky-500/10 border-sky-500/20 text-sky-500',
-                emerald:'bg-emerald-500/10 border-emerald-500/20 text-emerald-500',
-                orange: 'bg-orange-500/10 border-orange-500/20 text-orange-500',
-                indigo: 'bg-indigo-500/10 border-indigo-500/20 text-indigo-500',
-                rose:   'bg-rose-500/10 border-rose-500/20 text-rose-500',
-                amber:  'bg-amber-500/10 border-amber-500/20 text-amber-600',
-              };
-              const switchColors: Record<string, string> = {
-                violet: 'bg-violet-500', sky: 'bg-sky-500', emerald: 'bg-emerald-500',
-                orange: 'bg-orange-500', indigo: 'bg-indigo-500', rose: 'bg-rose-500',
-                amber:  'bg-amber-500',
-              };
-              return (
-                <div key={mod.key} className={`p-5 flex items-center justify-between ${idx > 0 ? 'border-t border-slate-100 dark:border-slate-800' : ''} hover:bg-slate-50 dark:hover:bg-white/5 transition-colors`}>
-                  <div className="flex items-center gap-4">
-                    <div className={`p-2 rounded-xl border ${active ? colors[mod.color] : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                      <Icon className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{mod.label}</p>
-                      <p className="text-xs text-slate-500">{mod.desc}</p>
-                    </div>
-                  </div>
-                  <div className="shrink-0 pl-4 flex items-center gap-3">
-                    {togglingMobile === mod.key
-                      ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                      : (
-                        <Switch
-                          active={active}
-                          onClick={() => handleToggleMobileModule(mod.key)}
-                          disabled={loadingMobile || togglingMobile !== null}
-                          colorClass={switchColors[mod.color]}
-                        />
-                      )
-                    }
-                  </div>
-                </div>
-              );
-            })}
-
-            </div>{/* fim wrapper opacity — módulos individuais */}
-
-          </div>
-        </section>
-
-
-        {/* ─── Horus SQL Direct Section ────────────────────────────────── */}
-        <section className="space-y-4">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider flex items-center gap-2 mt-8">
-            <DatabaseZap className="h-4 w-4 text-violet-500" /> Horus SQL Direct
-          </h3>
-
-          {loadingHorusSQL ? (
-            <div className="flex items-center gap-2 text-sm text-slate-400 py-4">
-              <Loader2 className="h-4 w-4 animate-spin" /> Carregando configurações SQL...
-            </div>
-          ) : !horusSQLData?.sql_configured ? (
-            /* Credenciais SQL não configuradas — aviso */
-            <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/40 dark:bg-amber-950/20">
-              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
-              <div>
-                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Credenciais SQL não configuradas</p>
-                <p className="text-xs text-amber-700 dark:text-amber-400">
-                  Configure o acesso ao SQL Server na aba <strong>Horus SQL</strong> antes de habilitar este módulo.
+        {/* CATEGORIA 6: APLICATIVO MOBILE (ANDROID & iOS) */}
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm">
+          <button
+            type="button"
+            onClick={() => setOpenCategories((p) => ({ ...p, mobile: !p.mobile }))}
+            className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 text-left hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2.5 rounded-xl bg-violet-500/10 text-violet-600 dark:text-violet-400 shrink-0">
+                <Smartphone className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                  6. Aplicativo Mobile (Android &amp; iOS)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                  Controle de acesso ao App Mobile e liberação de telas (PDV, Conferência, Vendas, Cafeteria).
                 </p>
               </div>
             </div>
-          ) : (
-            <div className="rounded-2xl border border-violet-200 bg-white overflow-hidden shadow-sm dark:border-violet-500/20 dark:bg-slate-900/40">
+            <div className="flex items-center gap-2.5 shrink-0">
+              <span
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                  mobileModules.app_enabled
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                    : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                }`}
+              >
+                {mobileModules.app_enabled ? 'App Liberado' : 'App Desativado'}
+              </span>
+              {openCategories.mobile ? (
+                <ChevronDown className="w-5 h-5 text-slate-400" />
+              ) : (
+                <ChevronRight className="w-5 h-5 text-slate-400" />
+              )}
+            </div>
+          </button>
 
-              {/* Toggle mestre — module_horus_sql */}
-              <div className={`px-6 py-5 flex items-center justify-between border-b transition-colors ${horusSQLData?.module_horus_sql ? 'bg-violet-50 dark:bg-violet-500/10 border-violet-200 dark:border-violet-500/20' : 'bg-slate-50 dark:bg-slate-800/40 border-slate-100 dark:border-slate-800'}`}>
-                <div className="flex items-center gap-3">
-                  <div className={`p-2.5 rounded-xl border transition-colors ${horusSQLData?.module_horus_sql ? 'bg-violet-500/15 border-violet-500/30 text-violet-600' : 'bg-slate-200 border-slate-300 text-slate-400 dark:bg-slate-700 dark:border-slate-600'}`}>
-                    <DatabaseZap className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Habilitar Horus SQL Direct</p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {horusSQLData?.module_horus_sql
-                        ? 'Módulo ativo — conexão direta ao SQL Server do Horus habilitada.'
-                        : 'Módulo inativo — sub-funcionalidades SQL não aparecem para o seller.'}
-                    </p>
-                  </div>
+          {openCategories.mobile && (
+            <div className="border-t border-slate-100 dark:border-slate-800">
+              <div className="p-4 sm:p-5 flex items-center justify-between bg-violet-50/40 dark:bg-violet-950/20 border-b border-slate-100 dark:border-slate-800">
+                <div>
+                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                    Habilitar Login no App Mobile
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Permite que os usuários desta empresa entrem no aplicativo móvel.
+                  </p>
                 </div>
-                <div className="shrink-0 flex items-center gap-3">
-                  <Switch
-                    active={horusSQLData?.module_horus_sql ?? false}
-                    onClick={() => handleToggleModule('module_horus_sql', horusSQLData?.module_horus_sql ?? false)}
-                    disabled={togglingModule !== null}
-                    colorClass="bg-violet-600"
-                  />
-                </div>
+                <Switch
+                  active={mobileModules.app_enabled}
+                  onClick={() => handleToggleMobileModule('app_enabled')}
+                  disabled={loadingMobile || togglingMobile !== null}
+                  colorClass="bg-violet-600"
+                />
               </div>
 
-              {/* Sub-funcionalidades — só visíveis quando módulo ativo */}
-              <div className={`transition-opacity ${horusSQLData?.module_horus_sql ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-
-                {/* Header sub-features */}
-                <div className="px-6 py-3 bg-slate-50/70 dark:bg-slate-800/30 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
-                  <Zap className="h-3.5 w-3.5 text-violet-500" />
-                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                    Funcionalidades disponíveis para o seller
-                  </span>
-                </div>
-
-                {/* Baixa Financeira com Vindi */}
-                <div className="p-5 flex items-center justify-between hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                  <div className="flex items-center gap-4">
-                    <div className={`p-2 rounded-xl border ${horusSQLData?.features.vindi_baixa ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                      <CreditCard className="h-5 w-5" />
+              <div
+                className={`divide-y divide-slate-100 dark:divide-slate-800 ${
+                  mobileModules.app_enabled ? 'opacity-100' : 'opacity-40 pointer-events-none'
+                }`}
+              >
+                {(
+                  [
+                    {
+                      key: 'pdv',
+                      label: 'PDV — Ponto de Venda Mobile',
+                      desc: 'Realiza vendas e emite pedidos pelo celular.',
+                      icon: MonitorSmartphone,
+                    },
+                    {
+                      key: 'conferencia',
+                      label: 'Conferência de Pedidos',
+                      desc: 'Leitura de código de barras integrada ao Horus.',
+                      icon: ScanBarcode,
+                    },
+                    {
+                      key: 'vendas',
+                      label: 'Resultado de Vendas',
+                      desc: 'Dashboard com indicadores de performance.',
+                      icon: BarChart3,
+                    },
+                    {
+                      key: 'pedidos',
+                      label: 'Consulta de Pedidos',
+                      desc: 'Acompanhamento de pedidos em tempo real.',
+                      icon: ListOrdered,
+                    },
+                    {
+                      key: 'catalogo',
+                      label: 'Catálogo de Produtos',
+                      desc: 'Consulta de preços e estoque disponível.',
+                      icon: BookOpen,
+                    },
+                    {
+                      key: 'clientes',
+                      label: 'Ficha de Clientes',
+                      desc: 'Carteira de clientes e histórico.',
+                      icon: UserCircle,
+                    },
+                    {
+                      key: 'cafeteria',
+                      label: 'Cafeteria & Comandas',
+                      desc: 'Atendimento de mesas e KDS no celular.',
+                      icon: Coffee,
+                    },
+                  ] as Array<{ key: keyof MobileModules; label: string; desc: string; icon: any }>
+                ).map((mod) => {
+                  const ModIcon = mod.icon;
+                  const active = mobileModules[mod.key];
+                  return (
+                    <div
+                      key={mod.key}
+                      className="p-4 sm:p-5 flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                          <ModIcon className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                            {mod.label}
+                          </p>
+                          <p className="text-xs text-slate-500">{mod.desc}</p>
+                        </div>
+                      </div>
+                      <Switch
+                        active={active}
+                        onClick={() => handleToggleMobileModule(mod.key)}
+                        disabled={loadingMobile || togglingMobile !== null}
+                        colorClass="bg-violet-600"
+                      />
                     </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Baixa Financeira com Vindi</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Importa extrato de pagamentos da Vindi e gera borderô de baixa no Horus ERP.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="shrink-0 pl-4 flex items-center gap-3">
-                    {togglingHorusFeature === 'vindi_baixa'
-                      ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                      : (
-                        <Switch
-                          active={horusSQLData?.features.vindi_baixa ?? false}
-                          onClick={() => handleToggleHorusSQLFeature('vindi_baixa')}
-                          disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
-                          colorClass="bg-emerald-500"
-                        />
-                      )
-                    }
-                  </div>
-                </div>
-
-                {/* Pedidos (Horus) */}
-                <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                  <div className="flex items-center gap-4">
-                    <div className={`p-2 rounded-xl border ${horusSQLData?.features.pedidos ? 'bg-violet-500/10 border-violet-500/20 text-violet-600' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                      <ShoppingBag className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Pedidos (Horus)</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Listagem e acompanhamento de pedidos no Horus com filtros por status, datas operacionais (criação, expedição, LFT), itens e dados de NF.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="shrink-0 pl-4 flex items-center gap-3">
-                    {togglingHorusFeature === 'pedidos'
-                      ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                      : (
-                        <Switch
-                          active={horusSQLData?.features.pedidos ?? false}
-                          onClick={() => handleToggleHorusSQLFeature('pedidos')}
-                          disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
-                          colorClass="bg-violet-600"
-                        />
-                      )
-                    }
-                  </div>
-                </div>
-
-                {/* DBM (Painel Operacional & CRM) */}
-                <div className="p-5 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 transition-colors dark:hover:bg-white/5">
-                  <div className="flex items-center gap-4">
-                    <div className={`p-2 rounded-xl border ${horusSQLData?.features.dbm ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-600' : 'bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700'}`}>
-                      <LayoutGrid className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200">DBM (Painel Operacional &amp; CRM)</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Painel de navegação ágil estilo Switchboard com módulos de comercial, pesquisa de empresas, produtos e integração.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="shrink-0 pl-4 flex items-center gap-3">
-                    {togglingHorusFeature === 'dbm'
-                      ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-                      : (
-                        <Switch
-                          active={horusSQLData?.features.dbm ?? false}
-                          onClick={() => handleToggleHorusSQLFeature('dbm')}
-                          disabled={loadingHorusSQL || togglingHorusFeature !== null || !horusSQLData?.module_horus_sql}
-                          colorClass="bg-indigo-600"
-                        />
-                      )
-                    }
-                  </div>
-                </div>
-
-              </div>{/* fim wrapper opacity */}
+                  );
+                })}
+              </div>
             </div>
           )}
-        </section>
-
-        {/* ─── API Horus B2B Complementar & Agente Bridge (.EXE) ────────── */}
-        <HorusApiBridgeMasterPanel companyId={companyId} onCompanyRefresh={refreshCompany} />
-
+        </div>
       </div>
     </motion.div>
   );
 }
-
