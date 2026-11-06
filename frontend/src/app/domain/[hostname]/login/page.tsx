@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { setToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import { getImageUrl } from '@/lib/image_helper';
+import B2COpenStorefront from '../_components/B2COpenStorefront';
 
 export default function StorefrontLoginPage() {
   const params = useParams();
@@ -97,6 +98,20 @@ export default function StorefrontLoginPage() {
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <Loader2 className="h-10 w-10 animate-spin text-slate-400" />
       </div>
+    );
+  }
+
+  if (
+    storeInfo &&
+    (storeInfo.is_b2c_domain || storeInfo.business_model === 'B2C_STOREFRONT')
+  ) {
+    return (
+      <B2COpenStorefront
+        hostname={hostname}
+        domainInfo={storeInfo}
+        basePath=""
+        routeSegments={['login']}
+      />
     );
   }
 

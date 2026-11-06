@@ -54,6 +54,9 @@ export interface B2CBranding {
   hero_subtitle: string;
   hero_banner_url: string;
   show_voucher_simulator: boolean;
+  max_top_categories?: number;
+  more_categories_position?: 'start' | 'end';
+  more_categories_label?: string;
 }
 
 export interface B2CBannerItem {
@@ -2137,6 +2140,70 @@ export default function B2CAppearanceManager({
                 <p className="text-xs text-slate-500">
                   Estes filtros aparecem no topo da Loja Aberta B2C para que o cliente filtre por Gênero/Categoria, Editora ou Assunto com 1 clique.
                 </p>
+              </div>
+
+              {/* Limite de Categorias Visíveis e Botão "Outras" */}
+              <div className="p-3.5 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-200/70 dark:border-indigo-900/60 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-indigo-950 dark:text-indigo-200">
+                    Limite no Topo e Botão &ldquo;{branding.more_categories_label || 'Outras'}&rdquo;
+                  </span>
+                  <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400">
+                    Agrupa o restante num menu suspenso
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                      Limite de Categorias da Loja
+                    </label>
+                    <select
+                      value={Number(branding.max_top_categories || 6)}
+                      onChange={(e) =>
+                        setBranding({ ...branding, max_top_categories: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                    >
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20].map((n) => (
+                        <option key={n} value={n}>
+                          Até {n} {n === 1 ? 'categoria visível' : 'categorias visíveis'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                      Posição quando estourar
+                    </label>
+                    <select
+                      value={branding.more_categories_position || 'end'}
+                      onChange={(e) =>
+                        setBranding({
+                          ...branding,
+                          more_categories_position: e.target.value as 'start' | 'end',
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                    >
+                      <option value="end">No Fim da Barra</option>
+                      <option value="start">No Começo da Barra</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                      Renomear Botão (Padrão: Outras)
+                    </label>
+                    <input
+                      type="text"
+                      value={branding.more_categories_label ?? 'Outras'}
+                      onChange={(e) =>
+                        setBranding({ ...branding, more_categories_label: e.target.value })
+                      }
+                      placeholder="Outras"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Manual Quick Add */}

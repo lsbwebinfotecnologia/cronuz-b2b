@@ -52,7 +52,6 @@ function StorefrontHub({ hostname, path }: { hostname: string; path?: string[] }
                 if (
                     forceB2cPreview ||
                     domainData.is_b2c_domain ||
-                    domainData.b2c_storefront_open ||
                     domainData.business_model === 'B2C_STOREFRONT'
                 ) {
                     setLoading(false);
@@ -90,7 +89,6 @@ function StorefrontHub({ hostname, path }: { hostname: string; path?: string[] }
         domainInfo &&
         (forceB2cPreview ||
             domainInfo.is_b2c_domain ||
-            domainInfo.b2c_storefront_open ||
             domainInfo.business_model === 'B2C_STOREFRONT')
     ) {
         return <B2COpenStorefront hostname={hostname} domainInfo={domainInfo} basePath="" routeSegments={path || []} />;

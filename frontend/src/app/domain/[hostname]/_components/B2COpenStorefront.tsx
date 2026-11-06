@@ -92,11 +92,14 @@ export default function B2COpenStorefront({
   const companyId = domainInfo.company_id;
 
   const effectiveBasePath = useMemo(() => {
-    if (typeof basePath === 'string') return basePath.replace(/\/$/, '');
-    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/loja/')) {
-      const parts = window.location.pathname.split('/').filter(Boolean);
-      if (parts.length >= 2) return `/loja/${parts[1]}`;
+    if (typeof window !== 'undefined') {
+      if (window.location.pathname.startsWith('/loja/')) {
+        const parts = window.location.pathname.split('/').filter(Boolean);
+        if (parts.length >= 2) return `/loja/${parts[1]}`;
+      }
+      return '';
     }
+    if (typeof basePath === 'string') return basePath.replace(/\/$/, '');
     return '';
   }, [basePath]);
 
@@ -202,7 +205,9 @@ export default function B2COpenStorefront({
   // Password Recovery via Seller SMTP
   const [recoveryCode, setRecoveryCode] = useState('');
   const [newResetPassword, setNewResetPassword] = useState('');
+  const [confirmResetPassword, setConfirmResetPassword] = useState('');
   const [recoverySent, setRecoverySent] = useState(false);
+  const [recoveryMaskedEmail, setRecoveryMaskedEmail] = useState('');
 
   // Customer My Orders & My Coupons
   const [myOrders, setMyOrders] = useState<any[]>([]);
@@ -1042,10 +1047,16 @@ export default function B2COpenStorefront({
     }
   };
 
-  const handleForgotPassword = async () => {
-    const idVal = (identityInput || b2cCustomer?.email || b2cCustomer?.cpf || '').trim();
+  const handleForgotPassword = async (overrideIdentifier?: string) => {
+    const idVal = (
+      overrideIdentifier ??
+      identityInput ??
+      b2cCustomer?.email ??
+      b2cCustomer?.cpf ??
+      ''
+    ).trim();
     if (!idVal) {
-      toast.error('Informe seu E-mail ou CPF para receber o código de recuperação.');
+      toast.error('Informe seu E-mail ou CPF para receber o token de recuperação.');
       return;
     }
     setAuthLoading(true);
@@ -1059,15 +1070,16 @@ export default function B2COpenStorefront({
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Não foi possível enviar o código.');
+      if (!res.ok) throw new Error(data.detail || 'Não foi possível enviar o token.');
       setRecoverySent(true);
+      setRecoveryMaskedEmail(data.email || '');
       if (!b2cCustomer) setAccountTab('recovery');
       if (data.dev_recovery_code) {
         setRecoveryCode(data.dev_recovery_code);
       }
       toast.success(data.message);
     } catch (err: any) {
-      toast.error(err.message || 'Erro ao solicitar código.');
+      toast.error(err.message || 'Erro ao solicitar token.');
     } finally {
       setAuthLoading(false);
     }
@@ -1076,8 +1088,23 @@ export default function B2COpenStorefront({
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     const idVal = (identityInput || b2cCustomer?.email || b2cCustomer?.cpf || '').trim();
-    if (!recoveryCode.trim() || newResetPassword.trim().length < 6) {
-      toast.error('Informe o código de 6 dígitos e uma nova senha com pelo menos 6 caracteres.');
+    const cleanPwd = newResetPassword.trim();
+    const hasMinLen = cleanPwd.length >= 6;
+    const hasLetter = /[a-zA-Z]/.test(cleanPwd);
+    const hasNumber = /\d/.test(cleanPwd);
+
+    if (!recoveryCode.trim()) {
+      toast.error('Informe o token de segurança de 6 dígitos enviado para o seu e-mail.');
+      return;
+    }
+    if (!hasMinLen || !hasLetter || !hasNumber) {
+      toast.error(
+        'Por segurança, a nova senha deve ter no mínimo 6 caracteres e conter pelo menos 1 letra e 1 número.'
+      );
+      return;
+    }
+    if (confirmResetPassword.trim() && confirmResetPassword.trim() !== cleanPwd) {
+      toast.error('A confirmação da senha não confere com a nova senha.');
       return;
     }
     setAuthLoading(true);
@@ -1089,15 +1116,17 @@ export default function B2COpenStorefront({
           company_id: companyId,
           identifier: idVal,
           recovery_code: recoveryCode.trim(),
-          new_password: newResetPassword.trim(),
+          new_password: cleanPwd,
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Código inválido.');
+      if (!res.ok) throw new Error(data.detail || 'Token inválido.');
       applyAuthenticatedCustomer(data.customer);
       setRecoverySent(false);
       setRecoveryCode('');
       setNewResetPassword('');
+      setConfirmResetPassword('');
+      setRecoveryMaskedEmail('');
       toast.success(data.message || 'Senha redefinida com sucesso!');
       setAccountTab('orders');
       fetchMyOrders(data.customer?.cpf);
@@ -1240,6 +1269,7 @@ export default function B2COpenStorefront({
       setAccountTab(target);
       if (updateUrl) {
         if (target === 'register') navigateToStorePath('/cadastro');
+        else if (target === 'recovery') navigateToStorePath('/recuperar-senha');
         else if (target === 'login') navigateToStorePath('/login');
         else navigateToStorePath('/conta');
       }
@@ -1488,10 +1518,63 @@ export default function B2COpenStorefront({
           description: '',
         });
       }
-      if (autoCats.length >= 12) break;
+      if (autoCats.length >= 25) break;
     }
     return autoCats;
   }, [configuredCategories, catalogFacets.categories, discoveredCategoryNames, products]);
+
+  const maxTopCategories = Math.max(1, Number(branding.max_top_categories || 6));
+  const moreCategoriesPosition: 'start' | 'end' =
+    branding.more_categories_position === 'start' ? 'start' : 'end';
+  const moreCategoriesLabel = String(branding.more_categories_label || 'Outras').trim() || 'Outras';
+  const [isMoreCategoriesOpen, setIsMoreCategoriesOpen] = useState(false);
+  const [moreCategoriesSearch, setMoreCategoriesSearch] = useState('');
+
+  const { visibleTopCategories, overflowCategories } = useMemo(() => {
+    const visible = effectiveCategories.slice(0, maxTopCategories);
+    const visibleSlugs = new Set<string>(
+      visible.map((c: any) => String(slugifySegment(c.label || c.code || '')))
+    );
+    const overflow: any[] = [];
+    const seenOverflow = new Set<string>(Array.from(visibleSlugs));
+
+    for (const c of effectiveCategories.slice(maxTopCategories)) {
+      const sl = slugifySegment(c.label || c.code || '');
+      if (sl && !seenOverflow.has(sl)) {
+        seenOverflow.add(sl);
+        overflow.push(c);
+      }
+    }
+
+    const extraNames: string[] = [
+      ...(catalogFacets.categories || []),
+      ...discoveredCategoryNames,
+    ];
+    for (const rawName of extraNames) {
+      const catName = String(rawName || '').trim();
+      const sl = slugifySegment(catName);
+      if (catName && catName.toLowerCase() !== 'geral' && sl && !seenOverflow.has(sl)) {
+        seenOverflow.add(sl);
+        overflow.push({
+          id: `auto-cat-${sl}`,
+          label: catName,
+          code: catName,
+          slug: sl,
+          filter_type: 'COD_GENERO',
+          banner_url: '',
+          headline: catName,
+          description: '',
+        });
+      }
+    }
+
+    return { visibleTopCategories: visible, overflowCategories: overflow };
+  }, [
+    effectiveCategories,
+    maxTopCategories,
+    catalogFacets.categories,
+    discoveredCategoryNames,
+  ]);
 
   // Multi-Page URL Resolution (F5 Refresh & Browser Back/Forward Navigation)
   useEffect(() => {
@@ -1635,6 +1718,19 @@ export default function B2COpenStorefront({
 
       if (first === 'login' || first === 'entrar') {
         openAccountScreen('login', false);
+        return;
+      }
+
+      if (first === 'recuperar-senha' || first === 'esqueci-senha') {
+        const urlParams = new URLSearchParams(window.location.search);
+        const idParam = urlParams.get('id') || '';
+        const tokenParam = urlParams.get('token') || '';
+        if (idParam) setIdentityInput(idParam);
+        if (tokenParam) {
+          setRecoveryCode(tokenParam);
+          setRecoverySent(true);
+        }
+        openAccountScreen('recovery', false);
         return;
       }
 
@@ -2302,33 +2398,62 @@ export default function B2COpenStorefront({
           </div>
         </div>
 
-        {/* Horizontal Category Navigation Bar (Clean — Categories, Vitrines and Offers) */}
+        {/* Horizontal Category Navigation Bar (Clean — Categories, Vitrines, Offers & "Outras" Overflow Menu) */}
         {(effectiveCategories.length > 0 || activePromotions.length > 0 || activeShowcases.length > 0) && (
-          <div className="border-t border-slate-100 bg-slate-50/90">
+          <div className="relative border-t border-slate-100 bg-slate-50/90">
             <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar">
+              {moreCategoriesPosition === 'start' && overflowCategories.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIsMoreCategoriesOpen((prev) => !prev)}
+                  style={
+                    isMoreCategoriesOpen ||
+                    (activeView === 'category' &&
+                      overflowCategories.some(
+                        (oc: any) =>
+                          oc.id === selectedCategoryId ||
+                          slugifySegment(oc.label) === slugifySegment(selectedCategoryLabel)
+                      ))
+                      ? { backgroundColor: primaryColor, color: '#ffffff' }
+                      : undefined
+                  }
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                    isMoreCategoriesOpen
+                      ? 'shadow-sm'
+                      : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>{moreCategoriesLabel}</span>
+                  <span className="text-[10px] opacity-80">({overflowCategories.length}) ▾</span>
+                </button>
+              )}
+
               {activePromotions.length > 0 && (
                 <button
                   type="button"
-                  onClick={() =>
-                    onlyPromoFilter && activeView === 'category'
-                      ? handleResetToHome()
-                      : handleSelectCategory(
-                          'PROMO',
-                          'Ofertas e Promoções',
-                          '',
-                          'default',
-                          true,
-                          {
-                            id: 'PROMO',
-                            label: 'Ofertas e Promoções',
-                            code: '',
-                            slug: 'ofertas',
-                            headline: 'Ofertas e Promoções Especiais',
-                            description:
-                              'Seleção de títulos com descontos especiais por tempo limitado.',
-                          }
-                        )
-                  }
+                  onClick={() => {
+                    setIsMoreCategoriesOpen(false);
+                    if (onlyPromoFilter && activeView === 'category') {
+                      handleResetToHome();
+                    } else {
+                      handleSelectCategory(
+                        'PROMO',
+                        'Ofertas e Promoções',
+                        '',
+                        'default',
+                        true,
+                        {
+                          id: 'PROMO',
+                          label: 'Ofertas e Promoções',
+                          code: '',
+                          slug: 'ofertas',
+                          headline: 'Ofertas e Promoções Especiais',
+                          description:
+                            'Seleção de títulos com descontos especiais por tempo limitado.',
+                        }
+                      );
+                    }
+                  }}
                   className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all shrink-0 flex items-center gap-1 cursor-pointer ${
                     onlyPromoFilter && activeView === 'category'
                       ? 'bg-rose-600 text-white shadow-sm'
@@ -2340,7 +2465,7 @@ export default function B2COpenStorefront({
                 </button>
               )}
 
-              {effectiveCategories.map((cat: any) => {
+              {visibleTopCategories.map((cat: any) => {
                 const isSelected =
                   activeView === 'category' &&
                   (selectedCategoryId === cat.id ||
@@ -2349,7 +2474,8 @@ export default function B2COpenStorefront({
                   <button
                     key={cat.id}
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      setIsMoreCategoriesOpen(false);
                       handleSelectCategory(
                         cat.id,
                         cat.label,
@@ -2357,8 +2483,8 @@ export default function B2COpenStorefront({
                         cat.filter_type || 'COD_GENERO',
                         false,
                         cat
-                      )
-                    }
+                      );
+                    }}
                     style={
                       isSelected ? { backgroundColor: primaryColor, color: '#ffffff' } : undefined
                     }
@@ -2373,6 +2499,32 @@ export default function B2COpenStorefront({
                 );
               })}
 
+              {moreCategoriesPosition === 'end' && overflowCategories.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIsMoreCategoriesOpen((prev) => !prev)}
+                  style={
+                    isMoreCategoriesOpen ||
+                    (activeView === 'category' &&
+                      overflowCategories.some(
+                        (oc: any) =>
+                          oc.id === selectedCategoryId ||
+                          slugifySegment(oc.label) === slugifySegment(selectedCategoryLabel)
+                      ))
+                      ? { backgroundColor: primaryColor, color: '#ffffff' }
+                      : undefined
+                  }
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                    isMoreCategoriesOpen
+                      ? 'shadow-sm'
+                      : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>{moreCategoriesLabel}</span>
+                  <span className="text-[10px] opacity-80">({overflowCategories.length}) ▾</span>
+                </button>
+              )}
+
               {activeShowcases.map((sc: any) => {
                 const isSelectedSc =
                   activeView === 'showcase' && selectedShowcaseObj?.id === sc.id;
@@ -2380,9 +2532,14 @@ export default function B2COpenStorefront({
                   <button
                     key={`nav-sc-${sc.id}`}
                     type="button"
-                    onClick={() =>
-                      isSelectedSc ? handleResetToHome() : handleSelectShowcase(sc)
-                    }
+                    onClick={() => {
+                      setIsMoreCategoriesOpen(false);
+                      if (isSelectedSc) {
+                        handleResetToHome();
+                      } else {
+                        handleSelectShowcase(sc);
+                      }
+                    }}
                     style={
                       isSelectedSc ? { backgroundColor: primaryColor, color: '#ffffff' } : undefined
                     }
@@ -2398,6 +2555,83 @@ export default function B2COpenStorefront({
                 );
               })}
             </div>
+
+            {/* Dropdown Popover for "Outras" Categories */}
+            {isMoreCategoriesOpen && overflowCategories.length > 0 && (
+              <div className="border-t border-slate-200 bg-white shadow-xl">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
+                      {moreCategoriesLabel} ({overflowCategories.length})
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {overflowCategories.length > 8 && (
+                        <input
+                          type="text"
+                          value={moreCategoriesSearch}
+                          onChange={(e) => setMoreCategoriesSearch(e.target.value)}
+                          placeholder="Filtrar categoria..."
+                          className="px-3 py-1 rounded-lg border border-slate-200 bg-slate-50 text-xs"
+                        />
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setIsMoreCategoriesOpen(false)}
+                        className="text-xs font-bold text-slate-500 hover:text-slate-900 px-2 py-1 rounded-lg hover:bg-slate-100 cursor-pointer"
+                      >
+                        Fechar ✕
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 max-h-72 overflow-y-auto pr-1">
+                    {overflowCategories
+                      .filter(
+                        (oc: any) =>
+                          !moreCategoriesSearch.trim() ||
+                          String(oc.label || '')
+                            .toLowerCase()
+                            .includes(moreCategoriesSearch.trim().toLowerCase())
+                      )
+                      .map((oc: any) => {
+                        const isSelectedOc =
+                          activeView === 'category' &&
+                          (selectedCategoryId === oc.id ||
+                            slugifySegment(selectedCategoryLabel) === slugifySegment(oc.label));
+                        return (
+                          <button
+                            key={`overflow-cat-${oc.id}`}
+                            type="button"
+                            onClick={() => {
+                              setIsMoreCategoriesOpen(false);
+                              setMoreCategoriesSearch('');
+                              handleSelectCategory(
+                                oc.id,
+                                oc.label,
+                                oc.code,
+                                oc.filter_type || 'COD_GENERO',
+                                false,
+                                oc
+                              );
+                            }}
+                            style={
+                              isSelectedOc
+                                ? { backgroundColor: primaryColor, color: '#ffffff' }
+                                : undefined
+                            }
+                            className={`px-3 py-2 rounded-xl text-left text-xs font-semibold truncate transition-all cursor-pointer ${
+                              isSelectedOc
+                                ? 'shadow-sm font-bold'
+                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                            }`}
+                          >
+                            {oc.label}
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </header>
@@ -3364,7 +3598,12 @@ export default function B2COpenStorefront({
                       <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                         <button
                           type="button"
-                          onClick={() => setAccountTab('recovery')}
+                          onClick={() => {
+                            openAccountScreen('recovery');
+                            if (identityInput.trim().length >= 5) {
+                              handleForgotPassword(identityInput.trim());
+                            }
+                          }}
                           className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
                         >
                           Esqueci minha senha
@@ -3463,72 +3702,162 @@ export default function B2COpenStorefront({
                     </form>
                   )}
 
-                  {/* 3. PASSWORD RECOVERY */}
+                  {/* 3. PASSWORD RECOVERY WITH SECURITY RULES & 6-DIGIT EMAIL TOKEN */}
                   {accountTab === 'recovery' && (
-                    <form onSubmit={handleResetPassword} className="max-w-md space-y-4">
+                    <form onSubmit={handleResetPassword} className="max-w-lg space-y-5">
                       <div>
-                        <h2 className="text-lg font-extrabold text-slate-900">Resetar Minha Senha</h2>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          Informe seu E-mail ou CPF para receber um código de 6 dígitos por e-mail e definir uma nova senha.
+                        <h2 className="text-lg font-extrabold text-slate-900">
+                          Recuperação de Senha com Token de Segurança
+                        </h2>
+                        <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                          Informe seu <strong>CPF</strong> ou <strong>E-mail</strong> cadastrado. Enviaremos um{' '}
+                          <strong>Token de Segurança de 6 dígitos</strong> para o seu e-mail para validar sua identidade.
                         </p>
                       </div>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          required
-                          value={identityInput}
-                          onChange={(e) => setIdentityInput(e.target.value)}
-                          placeholder="Seu E-mail ou CPF..."
-                          className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
-                        />
-                        <button
-                          type="button"
-                          disabled={authLoading}
-                          onClick={handleForgotPassword}
-                          className="px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer shrink-0"
-                        >
-                          Enviar Código
-                        </button>
+
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-bold text-slate-700">
+                          1. Seu CPF ou E-mail de Cadastro *
+                        </label>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            type="text"
+                            required
+                            value={identityInput}
+                            onChange={(e) => setIdentityInput(e.target.value)}
+                            placeholder="Digite seu CPF (000.000.000-00) ou E-mail..."
+                            className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm"
+                          />
+                          <button
+                            type="button"
+                            disabled={authLoading}
+                            onClick={() => handleForgotPassword()}
+                            className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer shrink-0 flex items-center justify-center gap-1.5"
+                          >
+                            {authLoading && !recoverySent ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Mail className="w-3.5 h-3.5" />
+                            )}
+                            {recoverySent ? 'Reenviar Token' : 'Enviar Token por E-mail'}
+                          </button>
+                        </div>
+                        {!recoverySent && (
+                          <button
+                            type="button"
+                            onClick={() => setRecoverySent(true)}
+                            className="text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer pt-1"
+                          >
+                            Já recebi meu token de 6 dígitos por e-mail →
+                          </button>
+                        )}
                       </div>
 
                       {recoverySent && (
-                        <>
+                        <div className="p-4 sm:p-5 rounded-2xl border border-indigo-200 bg-indigo-50/40 space-y-4">
+                          {recoveryMaskedEmail && (
+                            <div className="p-3 rounded-xl bg-white border border-indigo-100 flex items-center gap-2.5 text-xs text-slate-700">
+                              <Mail className="w-4 h-4 text-indigo-600 shrink-0" />
+                              <span>
+                                Token enviado para <strong className="text-slate-900">{recoveryMaskedEmail}</strong>{' '}
+                                <span className="text-[11px] text-slate-400">(válido por 30 min)</span>
+                              </span>
+                            </div>
+                          )}
+
                           <div>
                             <label className="block text-xs font-bold text-slate-700 mb-1">
-                              Código de 6 Dígitos Recebido *
+                              2. Token de Segurança (6 dígitos enviados por e-mail) *
                             </label>
                             <input
                               type="text"
                               required
+                              maxLength={6}
                               value={recoveryCode}
-                              onChange={(e) => setRecoveryCode(e.target.value)}
+                              onChange={(e) => setRecoveryCode(e.target.value.replace(/\D/g, ''))}
                               placeholder="000000"
-                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-mono font-bold tracking-widest"
+                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-base font-mono font-extrabold tracking-widest text-center text-indigo-700"
                             />
                           </div>
-                          <div>
-                            <label className="block text-xs font-bold text-slate-700 mb-1">
-                              Nova Senha Segura (mín. 6 caracteres) *
-                            </label>
-                            <input
-                              type="password"
-                              required
-                              minLength={6}
-                              value={newResetPassword}
-                              onChange={(e) => setNewResetPassword(e.target.value)}
-                              placeholder="Digite a nova senha..."
-                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm"
-                            />
+
+                          {/* Password Security Rules Box */}
+                          <div className="p-3.5 rounded-xl bg-white border border-slate-200 space-y-2">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                              Regras de Segurança da Nova Senha
+                            </span>
+                            <ul className="space-y-1 text-xs">
+                              {[
+                                {
+                                  ok: newResetPassword.trim().length >= 6,
+                                  label: 'Mínimo de 6 caracteres',
+                                },
+                                {
+                                  ok: /[a-zA-Z]/.test(newResetPassword),
+                                  label: 'Pelo menos 1 letra (A-Z)',
+                                },
+                                {
+                                  ok: /\d/.test(newResetPassword),
+                                  label: 'Pelo menos 1 número (0-9)',
+                                },
+                              ].map((rule, rIdx) => (
+                                <li
+                                  key={rIdx}
+                                  className={`flex items-center gap-2 font-medium ${
+                                    rule.ok ? 'text-emerald-700 font-bold' : 'text-slate-500'
+                                  }`}
+                                >
+                                  <CheckCircle2
+                                    className={`w-3.5 h-3.5 shrink-0 ${
+                                      rule.ok ? 'text-emerald-600' : 'text-slate-300'
+                                    }`}
+                                  />
+                                  {rule.label}
+                                </li>
+                              ))}
+                            </ul>
                           </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 mb-1">
+                                3. Nova Senha Segura *
+                              </label>
+                              <input
+                                type="password"
+                                required
+                                minLength={6}
+                                value={newResetPassword}
+                                onChange={(e) => setNewResetPassword(e.target.value)}
+                                placeholder="Letras e números..."
+                                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 mb-1">
+                                Confirmar Nova Senha *
+                              </label>
+                              <input
+                                type="password"
+                                required
+                                minLength={6}
+                                value={confirmResetPassword}
+                                onChange={(e) => setConfirmResetPassword(e.target.value)}
+                                placeholder="Repita a nova senha..."
+                                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm"
+                              />
+                            </div>
+                          </div>
+
                           <button
                             type="submit"
                             disabled={authLoading}
                             style={{ backgroundColor: primaryColor }}
-                            className="w-full py-3 rounded-xl text-white text-xs sm:text-sm font-bold cursor-pointer"
+                            className="w-full py-3 rounded-xl text-white text-xs sm:text-sm font-bold shadow-sm hover:opacity-95 cursor-pointer"
                           >
-                            {authLoading ? 'Salvando...' : 'Confirmar Nova Senha'}
+                            {authLoading ? 'Validando Token e Salvando...' : 'Confirmar Nova Senha e Entrar'}
                           </button>
-                        </>
+                        </div>
                       )}
                     </form>
                   )}

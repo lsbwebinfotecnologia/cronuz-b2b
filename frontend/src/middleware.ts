@@ -139,7 +139,7 @@ export function middleware(request: NextRequest) {
   }
 
   if (!appDomains.includes(hostname) && !marketingDomains.includes(hostname)) {
-    const isAppNativePath = url.pathname.startsWith('/store') || url.pathname.startsWith('/dashboard') || url.pathname.startsWith('/cart') || url.pathname.startsWith('/checkout') || url.pathname.startsWith('/portal-autor');
+    const isAppNativePath = url.pathname.startsWith('/store') || url.pathname.startsWith('/dashboard') || url.pathname.startsWith('/portal-autor');
     
     if (!isAppNativePath) {
       url.pathname = `/domain/${hostname}${url.pathname === '/' ? '' : url.pathname}`;

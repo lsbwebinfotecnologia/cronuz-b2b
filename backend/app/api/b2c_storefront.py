@@ -2952,6 +2952,9 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
         "hero_subtitle": raw_branding.get("hero_subtitle") or "Explore nosso catálogo completo com entrega rápida e segura para todo o Brasil.",
         "hero_banner_url": raw_branding.get("hero_banner_url") or company.login_background_url or "",
         "show_voucher_simulator": False,
+        "max_top_categories": int(raw_branding.get("max_top_categories") or 6),
+        "more_categories_position": raw_branding.get("more_categories_position") if raw_branding.get("more_categories_position") in ("start", "end") else "end",
+        "more_categories_label": raw_branding.get("more_categories_label") or "Outras",
     }
 
     banners = raw_cfg.get("banners") if isinstance(raw_cfg.get("banners"), list) else []
@@ -5813,19 +5816,105 @@ def forgot_b2c_customer_password(
     data: B2CAuthForgotPasswordRequest,
     db: Session = Depends(get_db),
 ):
-    cust = _find_b2c_customer_by_identifier(db, data.company_id, data.identifier)
-    if not cust or not cust.email:
-        raise HTTPException(status_code=404, detail="Nenhuma conta encontrada para este E-mail ou CPF.")
+    raw_identifier = (data.identifier or "").strip()
+    digits = _clean_digits(raw_identifier)
+    cust = _find_b2c_customer_by_identifier(db, data.company_id, raw_identifier)
+
+    # Se o cliente ainda não tiver ficha Customer ou estiver com e-mail sintético, busca em Cupons Corporativos / Lotes
+    coupon_name = ""
+    coupon_email = ""
+    coupon_cpf = digits if len(digits) == 11 else ""
+    if not cust or not cust.email or "@compraexpressa" in (cust.email or "") or "@checkout.vindi" in (cust.email or ""):
+        cp_query = db.query(B2CCoupon).filter(B2CCoupon.company_id == data.company_id)
+        if len(digits) == 11:
+            cp_row = cp_query.filter(B2CCoupon.assigned_cpf == digits).order_by(B2CCoupon.id.desc()).first()
+        elif "@" in raw_identifier:
+            cp_row = (
+                cp_query.filter(func.lower(B2CCoupon.assigned_email) == raw_identifier.lower())
+                .order_by(B2CCoupon.id.desc())
+                .first()
+            )
+        else:
+            cp_row = None
+        if cp_row:
+            coupon_name = (cp_row.assigned_name or "").strip()
+            coupon_email = (cp_row.assigned_email or "").strip().lower()
+            coupon_cpf = _clean_digits(cp_row.assigned_cpf or coupon_cpf)
+
+        if not coupon_email:
+            batches = (
+                db.query(B2CCouponBatch)
+                .filter(B2CCouponBatch.company_id == data.company_id, B2CCouponBatch.active == True)
+                .all()
+            )
+            for b in batches:
+                if isinstance(b.eligible_cpfs_json, list):
+                    for row in b.eligible_cpfs_json:
+                        if not isinstance(row, dict):
+                            continue
+                        r_cpf = _clean_digits(row.get("cpf"))
+                        r_email = str(row.get("email") or "").strip().lower()
+                        if (len(digits) == 11 and r_cpf == digits) or (
+                            "@" in raw_identifier and r_email == raw_identifier.lower()
+                        ):
+                            coupon_name = coupon_name or str(row.get("name") or "").strip()
+                            coupon_email = coupon_email or r_email
+                            coupon_cpf = coupon_cpf or r_cpf
+                            break
+
+        if coupon_email and "@" in coupon_email:
+            if not cust:
+                cust = Customer(
+                    company_id=data.company_id,
+                    name=coupon_name or "Cliente",
+                    corporate_name=coupon_name or "Cliente",
+                    document=coupon_cpf or digits or "00000000000",
+                    email=coupon_email,
+                    phone="",
+                    customer_type="PF",
+                    crm_status="ACTIVE",
+                )
+                db.add(cust)
+                db.commit()
+                db.refresh(cust)
+            else:
+                cust.email = coupon_email
+                if coupon_name and cust.name.upper().startswith("CLIENTE CPF"):
+                    cust.name = coupon_name
+                db.commit()
+                db.refresh(cust)
+
+    if not cust or not cust.email or "@compraexpressa" in cust.email or "@checkout.vindi" in cust.email:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhuma conta com e-mail válido foi encontrada para este CPF ou E-mail.",
+        )
 
     recovery_code = "".join(secrets.choice(string.digits) for _ in range(6))
     key = f"{data.company_id}:{cust.id}"
     _B2C_PASSWORD_RESET_CODES[key] = {
         "code": recovery_code,
-        "expires_at": _time.time() + 900,  # 15 minutes
+        "expires_at": _time.time() + 1800,  # 30 minutes
         "email": cust.email,
     }
 
     company = db.query(Company).filter(Company.id == data.company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == data.company_id).first()
+    store_name = company.name if company and company.name else "Loja Virtual"
+
+    # Resolve canonical B2C store link for direct 1-click recovery
+    b2c_domain = (getattr(company, "b2c_custom_domain", None) or "").strip()
+    if not b2c_domain:
+        slug = _slugify_store_name(store_name, data.company_id)
+        tenant_base = "horusb2b.com.br" if getattr(company, "tenant_id", "") == "horus" else "cronuzb2b.com.br"
+        b2c_domain = f"b2c-{slug}.{tenant_base}"
+    if not b2c_domain.startswith("http"):
+        b2c_domain = f"https://{b2c_domain}"
+    recovery_link = f"{b2c_domain.rstrip('/')}/recuperar-senha?id={raw_identifier}&token={recovery_code}"
+
+    u_part, d_part = cust.email.split("@", 1) if "@" in cust.email else (cust.email, "")
+    masked_email = f"{u_part[:2]}***@{d_part}" if d_part else cust.email
+
     smtp_cfg = _resolve_smtp_settings(db, data.company_id)
     sent_via_smtp = False
 
@@ -5839,13 +5928,25 @@ def forgot_b2c_customer_password(
                 smtp_password=smtp_cfg.smtp_password,
                 smtp_from=smtp_cfg.smtp_from_email or smtp_cfg.smtp_username,
                 to_email=cust.email,
-                subject=f"Código de Recuperação de Senha - {company.name if company else 'Loja Virtual'}",
+                subject=f"Token de Recuperação de Senha - {store_name}",
                 html_content=(
-                    f"<div style='font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;'>"
-                    f"<h2 style='color:#0f172a;margin-top:0;'>Recuperação de Senha</h2>"
-                    f"<p style='color:#475569;'>Olá, <strong>{cust.name}</strong>! Utilize o código de 6 dígitos abaixo para criar uma nova senha na loja <strong>{company.name if company else ''}</strong>:</p>"
-                    f"<div style='background:#f8fafc;border:2px dashed #6366f1;padding:16px;text-align:center;font-size:28px;font-weight:bold;letter-spacing:6px;color:#4f46e5;border-radius:10px;margin:20px 0;'>{recovery_code}</div>"
-                    f"<p style='color:#64748b;font-size:12px;'>Este código é válido por 15 minutos.</p>"
+                    f"<div style='font-family:sans-serif;max-width:560px;margin:0 auto;padding:28px;border:1px solid #e2e8f0;border-radius:16px;background:#ffffff;'>"
+                    f"<h2 style='color:#0f172a;margin-top:0;font-size:20px;'>Recuperação de Senha • {store_name}</h2>"
+                    f"<p style='color:#475569;font-size:14px;line-height:1.6;'>Olá, <strong>{cust.name}</strong>! Recebemos uma solicitação para redefinir a senha da sua conta na loja <strong>{store_name}</strong>.</p>"
+                    f"<p style='color:#475569;font-size:14px;'>Utilize o <strong>Token de Segurança de 6 dígitos</strong> abaixo na tela de recuperação:</p>"
+                    f"<div style='background:#f8fafc;border:2px dashed #4f46e5;padding:18px;text-align:center;font-size:30px;font-weight:bold;letter-spacing:8px;color:#4f46e5;border-radius:12px;margin:20px 0;'>{recovery_code}</div>"
+                    f"<div style='text-align:center;margin:22px 0;'>"
+                    f"<a href='{recovery_link}' style='display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:10px;font-weight:bold;font-size:13px;'>Redefinir Minha Senha Agora</a>"
+                    f"</div>"
+                    f"<div style='background:#f1f5f9;border-radius:12px;padding:14px 16px;margin:18px 0;'>"
+                    f"<p style='margin:0 0 6px 0;font-size:12px;font-weight:bold;color:#1e293b;'>🔒 Regras de Segurança para sua Nova Senha:</p>"
+                    f"<ul style='margin:0;padding-left:18px;color:#475569;font-size:12px;line-height:1.6;'>"
+                    f"<li>Mínimo de <strong>6 caracteres</strong>;</li>"
+                    f"<li>Deve conter <strong>letras e números</strong> (combinação alfanumérica);</li>"
+                    f"<li>Este token é de uso único e expira em <strong>30 minutos</strong>.</li>"
+                    f"</ul>"
+                    f"</div>"
+                    f"<p style='color:#94a3b8;font-size:11px;margin-top:20px;'>Se você não solicitou a recuperação de senha, ignore este e-mail com segurança. Sua senha atual permanecerá inalterada.</p>"
                     f"</div>"
                 ),
                 use_ssl=bool(smtp_cfg.smtp_use_ssl),
@@ -5858,12 +5959,17 @@ def forgot_b2c_customer_password(
     return {
         "status": "OK",
         "sent_via_smtp": sent_via_smtp,
-        "email": cust.email,
+        "email": masked_email,
         "dev_recovery_code": None if sent_via_smtp else recovery_code,
+        "security_rules": [
+            "Mínimo de 6 caracteres",
+            "Pelo menos 1 letra (A-Z)",
+            "Pelo menos 1 número (0-9)",
+        ],
         "message": (
-            f"Enviamos um código de 6 dígitos para o seu e-mail ({cust.email})."
+            f"Enviamos um Token de Segurança de 6 dígitos para o e-mail {masked_email}."
             if sent_via_smtp
-            else f"Código de recuperação gerado para {cust.email} (Ambiente Local / SMTP não configurado: {recovery_code})."
+            else f"Token de segurança gerado para {masked_email} (Ambiente Local / SMTP não configurado: {recovery_code})."
         ),
     }
 
@@ -5875,18 +5981,25 @@ def reset_b2c_customer_password(
 ):
     cust = _find_b2c_customer_by_identifier(db, data.company_id, data.identifier)
     if not cust:
-        raise HTTPException(status_code=404, detail="Conta não encontrada.")
-    if len(data.new_password.strip()) < 6:
-        raise HTTPException(status_code=400, detail="A nova senha deve ter no mínimo 6 caracteres.")
+        raise HTTPException(status_code=404, detail="Conta não encontrada para este CPF ou E-mail.")
+    new_pwd = data.new_password.strip()
+    if len(new_pwd) < 6 or not any(c.isalpha() for c in new_pwd) or not any(c.isdigit() for c in new_pwd):
+        raise HTTPException(
+            status_code=400,
+            detail="Por segurança, a nova senha deve ter no mínimo 6 caracteres e conter pelo menos uma letra e um número.",
+        )
 
     key = f"{data.company_id}:{cust.id}"
     entry = _B2C_PASSWORD_RESET_CODES.get(key)
     if not entry or _time.time() > float(entry.get("expires_at", 0)):
-        raise HTTPException(status_code=400, detail="Código de recuperação expirado ou inválido. Solicite um novo código.")
+        raise HTTPException(
+            status_code=400,
+            detail="Token de recuperação expirado ou inválido. Solicite um novo token.",
+        )
     if str(entry.get("code")).strip() != str(data.recovery_code).strip():
-        raise HTTPException(status_code=400, detail="Código de verificação incorreto.")
+        raise HTTPException(status_code=400, detail="Token de segurança incorreto. Verifique os 6 dígitos enviados por e-mail.")
 
-    cust.password_hash = security.get_password_hash(data.new_password.strip())
+    cust.password_hash = security.get_password_hash(new_pwd)
     db.commit()
     _B2C_PASSWORD_RESET_CODES.pop(key, None)
 

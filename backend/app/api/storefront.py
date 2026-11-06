@@ -179,7 +179,7 @@ def get_storefront_domain_info(
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
     business_model = settings.business_model if settings else "B2B_CRONUZ"
     b2c_open = bool(getattr(settings, "b2c_storefront_open", False)) if settings else False
-    if is_b2c_domain or b2c_open or business_model == "B2C_STOREFRONT":
+    if is_b2c_domain or business_model == "B2C_STOREFRONT":
         is_b2c_domain = True
         
     return {
