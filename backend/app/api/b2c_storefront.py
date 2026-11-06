@@ -3527,8 +3527,27 @@ def update_b2c_order(
         if new_st != _normalize_b2c_order_status(order.status):
             status_changed = True
         order.status = new_st
-        if new_st == "PAID" and not order.confirmed_at:
-            order.confirmed_at = datetime.utcnow()
+        if new_st == "PAID":
+            if not order.confirmed_at:
+                order.confirmed_at = datetime.utcnow()
+            meta["vindi_status_name"] = "Aprovada / Pago"
+            history = meta.get("payment_history") if isinstance(meta.get("payment_history"), list) else []
+            now_iso = datetime.now(timezone.utc).isoformat()
+            history.append(
+                {
+                    "event": "PAYMENT_APPROVED",
+                    "timestamp": now_iso,
+                    "at": now_iso,
+                    "source": "PAINEL_SELLER",
+                    "status_id": 6,
+                    "status_name": "Aprovada / Pago",
+                    "vindi_status_name": "Aprovada / Pago",
+                    "payment_method": meta.get("payment_method") or "PAYMENT_LINK",
+                    "token_transaction": meta.get("vindi_token_transaction") or order.external_id,
+                    "message": "Pagamento confirmado no Painel do Pedido",
+                }
+            )
+            meta["payment_history"] = history[-30:]
             red = (
                 db.query(B2CCouponRedemption)
                 .filter(B2CCouponRedemption.company_id == cid, B2CCouponRedemption.order_id == order.id)
@@ -6054,11 +6073,16 @@ async def process_b2c_checkout(
                 order_meta["vindi_pix_url"] = v_res.get("payment_url")
             if vindi_payment_url:
                 order_meta["vindi_payment_url"] = vindi_payment_url
+            now_iso = datetime.now(timezone.utc).isoformat()
+            init_status_label = "Pago / Aprovado" if order.status == "PAID" else "Aguardando Pagamento no Link Vindi"
             order_meta["payment_history"] = [
                 {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "event": "PAYMENT_APPROVED" if order.status == "PAID" else "CHECKOUT_CREATED",
+                    "timestamp": now_iso,
+                    "at": now_iso,
                     "source": "CHECKOUT_LOJA",
-                    "status_name": "Pago / Aprovado" if order.status == "PAID" else "Aguardando Pagamento na Vindi",
+                    "status_name": init_status_label,
+                    "vindi_status_name": init_status_label,
                     "payment_method": "LINK_VINDI" if vindi_payment_url else req_payment_method,
                     "token_transaction": v_res.get("token_transaction") or order.external_id,
                     "message": (
@@ -6369,6 +6393,8 @@ def _sync_order_with_vindi_tx(
 
     if token_tx:
         meta["vindi_token_transaction"] = str(token_tx)
+        if not str(token_tx).startswith("t") or not order.external_id:
+            order.external_id = str(token_tx)
     if tx_id:
         meta["vindi_transaction_id"] = str(tx_id)
     if status_name:
@@ -6386,7 +6412,7 @@ def _sync_order_with_vindi_tx(
             if v_name and (not cust_obj.name or cust_obj.name.startswith("CLIENTE CPF")):
                 cust_obj.name = v_name.upper()
                 cust_obj.corporate_name = v_name.upper()
-            if v_email and (not cust_obj.email or "@checkout.vindi" in cust_obj.email):
+            if v_email and (not cust_obj.email or "@checkout.vindi" in cust_obj.email or "@compraexpressa" in cust_obj.email):
                 cust_obj.email = v_email
             v_contacts = v_cust.get("contacts") if isinstance(v_cust.get("contacts"), list) else []
             if v_contacts and isinstance(v_contacts[0], dict):
@@ -6411,13 +6437,22 @@ def _sync_order_with_vindi_tx(
     history: List[Dict[str, Any]] = meta.get("payment_history") if isinstance(meta.get("payment_history"), list) else []
     last_entry = history[-1] if history else {}
     sig = f"{status_id}:{resolved_pm}:{tx_info.get('paid')}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    ev_type = (
+        "PAYMENT_APPROVED"
+        if tx_info.get("paid")
+        else ("PAYMENT_CANCELED" if tx_info.get("declined") else "STATUS_UPDATE")
+    )
     if last_entry.get("sig") != sig:
         history.append(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": ev_type,
+                "timestamp": now_iso,
+                "at": now_iso,
                 "source": source,
                 "status_id": status_id,
                 "status_name": status_name,
+                "vindi_status_name": status_name,
                 "payment_method": resolved_pm or meta.get("payment_method") or "LINK_VINDI",
                 "transaction_id": tx_id,
                 "token_transaction": token_tx,
@@ -6527,10 +6562,12 @@ async def vindi_b2c_webhook(
 
     # 2. Formato Vindi Commerce / Yapay (suporta JSON aninhado, query string e POST form)
     tx_dict = payload.get("transaction") if isinstance(payload.get("transaction"), dict) else {}
+    pay_dict = tx_dict.get("payment") if isinstance(tx_dict.get("payment"), dict) else {}
     order_number = str(
         payload.get("transaction[order_number]")
         or payload.get("order_number")
         or tx_dict.get("order_number")
+        or payload.get("transaction[free]")
         or ""
     )
     status_id = str(
@@ -6538,34 +6575,68 @@ async def vindi_b2c_webhook(
         or payload.get("status_id")
         or tx_dict.get("status_id")
         or ""
+    ).strip()
+    status_name_wh = str(
+        payload.get("transaction[status_name]")
+        or payload.get("status_name")
+        or tx_dict.get("status_name")
+        or ""
+    ).strip()
+    transaction_id_wh = (
+        payload.get("transaction[transaction_id]")
+        or payload.get("transaction_id")
+        or tx_dict.get("transaction_id")
     )
+    pm_name_wh = str(
+        payload.get("transaction[payment][payment_method_name]")
+        or payload.get("payment_method_name")
+        or pay_dict.get("payment_method_name")
+        or ""
+    ).strip()
+    pm_id_wh = str(
+        payload.get("transaction[payment][payment_method_id]")
+        or payload.get("payment_method_id")
+        or pay_dict.get("payment_method_id")
+        or ""
+    ).strip()
     token_transaction = str(
         payload.get("token_transaction")
+        or payload.get("transaction[token_transaction]")
         or payload.get("transaction[transaction_token]")
         or tx_dict.get("token_transaction")
         or tx_dict.get("transaction_token")
         or ""
     ).strip()
 
+    logger.info(
+        f"[Vindi Webhook] method={request.method} order_id_param={payload.get('order_id')} "
+        f"order_number={order_number} status_id={status_id} token_transaction={token_transaction} "
+        f"transaction_id={transaction_id_wh}"
+    )
+
     target_order_id: Optional[int] = None
     is_paid = False
+
+    raw_oid_param = str(payload.get("order_id") or "").strip()
+    if raw_oid_param.isdigit():
+        target_order_id = int(raw_oid_param)
 
     if ev_type == "bill_paid" or str(bill.get("status") or "").lower() == "paid":
         is_paid = True
         m = re.search(r"B2C-ORD-(\d+)", bill_code)
-        if m:
+        if m and not target_order_id:
             target_order_id = int(m.group(1))
     else:
         m = re.search(r"CRZ-(\d+)", order_number)
-        if m:
+        if m and not target_order_id:
             target_order_id = int(m.group(1))
-        if status_id == "6":
+        if status_id in ("6", "87"):
             is_paid = True
 
     order: Optional[Order] = None
     if target_order_id:
         order = db.query(Order).filter(Order.id == target_order_id, Order.origin == "b2c_storefront").first()
-    elif token_transaction:
+    if not order and token_transaction:
         order = (
             db.query(Order)
             .filter(Order.origin == "b2c_storefront", Order.external_id == token_transaction)
@@ -6576,23 +6647,53 @@ async def vindi_b2c_webhook(
     # 3. Consulta oficial por token_transaction na API Vindi Commerce (get_by_token)
     if order:
         meta = _parse_order_meta(order)
+        if token_transaction:
+            meta["vindi_token_transaction"] = token_transaction
+            order.external_id = token_transaction
+            _save_order_meta(order, meta)
+            db.flush()
+
         tok_to_check = token_transaction or str(meta.get("vindi_token_transaction") or "").strip()
+        tx_info: Dict[str, Any] = {}
         if tok_to_check:
             try:
                 vindi = VindiCheckoutClient(db, order.company_id)
                 if vindi.is_configured and vindi.credential_type == "VINDI_PAGAMENTOS":
                     tx_info = await vindi.get_transaction_by_token(tok_to_check)
-                    sync_res = _sync_order_with_vindi_tx(db, order, tx_info, source="WEBHOOK_VINDI")
             except Exception as e:
                 logger.warning(f"[Vindi Webhook] Falha ao consultar get_by_token ({tok_to_check}): {e}")
 
-        if not sync_res and is_paid:
-            if order.status != "PAID":
-                order.status = "PAID"
-                order.confirmed_at = datetime.utcnow()
-                db.commit()
-                _b2c_cache_clear(order.company_id)
-            sync_res = {"order_id": order.id, "status": "PAID"}
+        # Se o webhook enviou status explícito (ex: status_id=6 Aprovada) e get_by_token ainda não refletiu ou usou token temporário
+        if status_id.isdigit() and int(status_id) > 0 and int(tx_info.get("status_id") or 0) == 0:
+            resolved_wh_pm = "PAYMENT_LINK"
+            if pm_id_wh == "27" or "pix" in pm_name_wh.lower():
+                resolved_wh_pm = "PIX"
+            elif pm_id_wh == "6" or "boleto" in pm_name_wh.lower():
+                resolved_wh_pm = "BOLETO"
+            elif pm_name_wh:
+                resolved_wh_pm = f"CREDIT_CARD ({pm_name_wh})"
+            tx_info = {
+                **tx_info,
+                "status_id": int(status_id),
+                "status_name": status_name_wh or ("Aprovada" if is_paid else f"Status {status_id}"),
+                "paid": is_paid,
+                "declined": int(status_id) in (7, 24, 89),
+                "transaction_id": transaction_id_wh or tx_info.get("transaction_id"),
+                "token_transaction": tok_to_check,
+                "resolved_payment_method": resolved_wh_pm,
+            }
+        elif is_paid and not tx_info.get("paid"):
+            tx_info = {
+                **tx_info,
+                "status_id": int(status_id) if status_id.isdigit() else 6,
+                "status_name": status_name_wh or "Aprovada",
+                "paid": True,
+                "transaction_id": transaction_id_wh or tx_info.get("transaction_id"),
+                "token_transaction": tok_to_check,
+            }
+
+        if tx_info:
+            sync_res = _sync_order_with_vindi_tx(db, order, tx_info, source="WEBHOOK_VINDI")
     else:
         # Se o cliente foi redirecionado via GET sem parâmetros, sincroniza os pedidos B2C recentes pendentes
         recent_pending = (

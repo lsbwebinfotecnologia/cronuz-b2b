@@ -1414,32 +1414,42 @@ export default function SellerB2CStorefrontManagementPage({
                     )}
                   </div>
                   <div className="space-y-1.5">
-                    {selectedOrder.payment_history.map((ev: any, idx: number) => (
-                      <div
-                        key={idx}
-                        className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-                      >
-                        <div>
-                          <span className="font-bold text-slate-900 dark:text-white">
-                            {ev.event === 'PAYMENT_APPROVED'
-                              ? '✓ Pagamento Aprovado'
-                              : ev.event === 'PAYMENT_CANCELED'
-                              ? '✕ Pagamento Cancelado/Reprovado'
-                              : ev.event === 'CHECKOUT_CREATED'
-                              ? '• Transação / Link Gerado no Checkout'
-                              : `• Atualização (${ev.vindi_status_name || ev.event})`}
-                          </span>
-                          <span className="text-slate-500 ml-2">
-                            Meio: <strong>{ev.payment_method || '—'}</strong>
-                            {ev.vindi_status_name ? ` • Vindi: ${ev.vindi_status_name}` : ''}
-                            {ev.transaction_id ? ` • ID: ${ev.transaction_id}` : ''}
+                    {selectedOrder.payment_history.map((ev: any, idx: number) => {
+                      const stName = ev.vindi_status_name || ev.status_name || '';
+                      const evDate = ev.at || ev.timestamp;
+                      const labelText =
+                        ev.event === 'PAYMENT_APPROVED' || Number(ev.status_id) === 6
+                          ? '✓ Pagamento Aprovado'
+                          : ev.event === 'PAYMENT_CANCELED'
+                          ? '✕ Pagamento Cancelado/Reprovado'
+                          : ev.event === 'CHECKOUT_CREATED' || ev.source === 'CHECKOUT_LOJA'
+                          ? '• Transação / Link Gerado no Checkout'
+                          : stName
+                          ? `• ${stName}`
+                          : ev.message
+                          ? `• ${ev.message}`
+                          : '• Registro de Pagamento';
+                      return (
+                        <div
+                          key={idx}
+                          className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                        >
+                          <div>
+                            <span className="font-bold text-slate-900 dark:text-white">
+                              {labelText}
+                            </span>
+                            <span className="text-slate-500 ml-2">
+                              Meio: <strong>{ev.payment_method || '—'}</strong>
+                              {stName ? ` • Vindi: ${stName}` : ''}
+                              {ev.transaction_id ? ` • ID: ${ev.transaction_id}` : ''}
+                            </span>
+                          </div>
+                          <span className="text-[11px] font-mono text-slate-400 shrink-0">
+                            {evDate ? new Date(evDate).toLocaleString('pt-BR') : '—'} ({ev.source || 'SISTEMA'})
                           </span>
                         </div>
-                        <span className="text-[11px] font-mono text-slate-400 shrink-0">
-                          {ev.at ? new Date(ev.at).toLocaleString('pt-BR') : '—'} ({ev.source || 'SISTEMA'})
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

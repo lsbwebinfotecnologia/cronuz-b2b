@@ -439,16 +439,25 @@ class VindiCheckoutClient:
 
         return _public_url_for_vindi_waf(fallback_base or "https://app.horusb2b.com.br")
 
-    def resolve_webhook_url(self, api_base_url: str = "") -> str:
+    def resolve_webhook_url(self, api_base_url: str = "", order_id: Optional[int] = None) -> str:
         """
         Determina a URL pública de notificação automática (Webhook POST) da Vindi.
+        Garante sempre HTTPS e o prefixo /api/b2c/webhooks/vindi para roteamento direto ao FastAPI.
         """
         raw = (api_base_url or "").strip().rstrip("/")
         if not raw or any(local_h in raw.lower() for local_h in ("localhost", "127.0.0.1", "0.0.0.0")):
-            return "https://cronuzb2b.com.br/api/b2c/webhooks/vindi"
-        if raw.endswith("/api"):
-            return f"{raw}/b2c/webhooks/vindi"
-        return f"{raw}/b2c/webhooks/vindi"
+            base_wh = "https://app.horusb2b.com.br/api/b2c/webhooks/vindi"
+        else:
+            raw = re.sub(r"^http://", "https://", raw, flags=re.IGNORECASE)
+            if raw.endswith("/api"):
+                base_wh = f"{raw}/b2c/webhooks/vindi"
+            elif "/api/" in raw:
+                base_wh = f"{raw.split('/api/')[0]}/api/b2c/webhooks/vindi"
+            else:
+                base_wh = f"{raw}/api/b2c/webhooks/vindi"
+        if order_id:
+            return f"{base_wh}?order_id={order_id}"
+        return base_wh
 
     @property
     def credential_type(self) -> str:
@@ -734,7 +743,7 @@ class VindiCheckoutClient:
             addr = address or {}
             waf_safe_base = _public_url_for_vindi_waf(clean_base)
             return_url = self.resolve_store_home_url(waf_safe_base)
-            webhook_url = self.resolve_webhook_url(clean_base)
+            webhook_url = self.resolve_webhook_url(clean_base, order_id=order_id)
             tmp_payload: Dict[str, Any] = {
                 "token_account": self.api_key,
                 "order_number": f"CRZ-{order_id}",
@@ -745,8 +754,8 @@ class VindiCheckoutClient:
                 "shipping_type": "Frete",
                 "shipping_price": "0.00",
                 "url_notification": webhook_url,
-                "url_success": return_url,
-                "url_process": return_url,
+                "url_success": webhook_url,
+                "url_process": webhook_url,
                 "url_cancel": return_url,
                 "transaction_product": [
                     {
@@ -1060,7 +1069,7 @@ class VindiCheckoutClient:
                 "price_discount": None,
                 "shipping_type": "Frete",
                 "shipping_price": "0.00",
-                "url_notification": self.resolve_webhook_url(clean_base),
+                "url_notification": self.resolve_webhook_url(clean_base, order_id=order_id),
             },
             "payment": payment,
         }
