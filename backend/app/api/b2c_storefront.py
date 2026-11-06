@@ -1,6 +1,8 @@
 import re
 import uuid
+import time
 import logging
+import threading
 from datetime import datetime, date, timezone
 from decimal import Decimal
 from typing import List, Optional, Dict, Any
@@ -9,6 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
+from app.integrators.horus_clients import HorusClients
 
 from app.db.session import get_db
 from app.core.dependencies import get_current_user, get_current_user_optional
@@ -117,6 +121,7 @@ class B2CSettingsUpdateRequest(BaseModel):
     correios_password: Optional[str] = None
     freight_config: Optional[Dict[str, Any]] = None
     horus_sync_config: Optional[Dict[str, Any]] = None
+    email_notifications_config: Optional[Dict[str, Any]] = None
     tray_enabled: Optional[bool] = None
     tray_store_url: Optional[str] = None
     tray_auth_code: Optional[str] = None
@@ -385,6 +390,221 @@ def _resolve_seller_company_id(current_user: User, company_id_param: Optional[in
     return current_user.company_id
 
 
+def _default_b2c_email_config() -> Dict[str, Any]:
+    return {
+        "enabled": True,
+        "waiting_payment_subject": "Pedido #{pedido} realizado — Aguardando Pagamento | {loja}",
+        "waiting_payment_body": "Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos.",
+        "paid_subject": "Pagamento Aprovado! Pedido #{pedido} confirmado | {loja}",
+        "paid_body": "O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio.",
+        "canceled_subject": "Pedido #{pedido} cancelado | {loja}",
+        "canceled_body": "Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento.",
+    }
+
+
+def _get_b2c_email_config(settings: Optional[CompanySettings]) -> Dict[str, Any]:
+    defaults = _default_b2c_email_config()
+    raw_cfg = getattr(settings, "b2c_showcases_config", None) if settings else None
+    saved = (
+        raw_cfg.get("email_notifications_config")
+        if isinstance(raw_cfg, dict) and isinstance(raw_cfg.get("email_notifications_config"), dict)
+        else {}
+    )
+    return {**defaults, **saved}
+
+
+def _resolve_smtp_settings(db: Session, company_id: int) -> Optional[CompanySettings]:
+    """Retorna o SMTP do Seller ou faz fallback automático para o SMTP da Sede Master (company_id=1)."""
+    s = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if s and s.smtp_host and s.smtp_username and s.smtp_password:
+        return s
+    master_s = db.query(CompanySettings).filter(CompanySettings.company_id == 1).first()
+    if master_s and master_s.smtp_host and master_s.smtp_username and master_s.smtp_password:
+        return master_s
+    return None
+
+
+def _send_b2c_order_email(
+    db: Session,
+    order: Order,
+    event_status: Optional[str] = None,
+    force: bool = False,
+) -> bool:
+    """
+    Dispara e-mail automático, simples e objetivo para o comprador B2C nos eventos:
+    - WAITING_PAYMENT: Pedido realizado (aguardando pagamento)
+    - PAID: Pagamento aprovado / Pedido pago
+    - CANCELED: Pedido cancelado (pelo portal ou retorno de pagamento)
+    - SEPARATION / FINALIZED / DELIVERED: Atualização operacional, NF-e e rastreio
+    """
+    try:
+        company = db.query(Company).filter(Company.id == order.company_id).first()
+        seller_settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
+        email_cfg = _get_b2c_email_config(seller_settings)
+        if not email_cfg.get("enabled", True):
+            return False
+
+        cust = order.customer or (
+            db.query(Customer).filter(Customer.id == order.customer_id).first() if order.customer_id else None
+        )
+        to_email = (cust.email if cust and cust.email else "").strip().lower()
+        if not to_email or "@" not in to_email or "@compraexpressa" in to_email or "@checkout.vindi" in to_email:
+            return False
+
+        norm_st = _normalize_b2c_order_status(event_status or order.status)
+        meta = _parse_order_meta(order)
+        sent_list = meta.get("emails_sent") if isinstance(meta.get("emails_sent"), list) else []
+        if not force and norm_st in sent_list and norm_st in ("WAITING_PAYMENT", "PAID", "CANCELED"):
+            return False
+
+        smtp_cfg = _resolve_smtp_settings(db, order.company_id)
+        if not smtp_cfg:
+            logger.info(f"[B2C Email] Pedido #{order.id} ({norm_st}): nenhum SMTP configurado para disparo.")
+            return False
+
+        store_name = company.name if company and company.name else "Nossa Loja"
+        cust_name = (cust.name if cust and cust.name else "Cliente").strip()
+        total_val = float(order.total or 0.0)
+        valor_fmt = f"R$ {total_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+        vars_map = {
+            "{cliente}": cust_name,
+            "{pedido}": str(order.id),
+            "{loja}": store_name,
+            "{valor}": valor_fmt,
+        }
+
+        def _apply_vars(text: str) -> str:
+            out = text or ""
+            for k, v in vars_map.items():
+                out = out.replace(k, v)
+            return out
+
+        if norm_st == "WAITING_PAYMENT":
+            subject = _apply_vars(email_cfg.get("waiting_payment_subject") or "")
+            intro_text = _apply_vars(email_cfg.get("waiting_payment_body") or "")
+            badge_bg, badge_color, badge_label = "#fef3c7", "#b45309", "⏳ Pedido Realizado • Aguardando Pagamento"
+        elif norm_st == "PAID":
+            subject = _apply_vars(email_cfg.get("paid_subject") or "")
+            intro_text = _apply_vars(email_cfg.get("paid_body") or "")
+            badge_bg, badge_color, badge_label = "#d1fae5", "#047857", "✅ Pagamento Aprovado"
+        elif norm_st == "CANCELED":
+            subject = _apply_vars(email_cfg.get("canceled_subject") or "")
+            intro_text = _apply_vars(email_cfg.get("canceled_body") or "")
+            badge_bg, badge_color, badge_label = "#fee2e2", "#b91c1c", "❌ Pedido Cancelado"
+        else:
+            st_label = B2C_STATUS_LABELS.get(norm_st, norm_st)
+            subject = f"Atualização do Pedido #{order.id}: {st_label} | {store_name}"
+            intro_text = f"O status do seu pedido #{order.id} na loja {store_name} foi atualizado para: {st_label}."
+            badge_bg, badge_color, badge_label = "#e0e7ff", "#4338ca", f"📦 {st_label}"
+
+        # Lista enxuta de itens
+        items_rows = ""
+        for it in (order.items or []):
+            it_total = float(it.total_price or (float(it.unit_price or 0) * int(it.quantity or 1)))
+            it_fmt = f"R$ {it_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            items_rows += (
+                f"<tr>"
+                f"<td style='padding:8px 0;border-bottom:1px solid #f1f5f9;color:#334155;font-size:13px;'>"
+                f"<strong>{it.quantity}x</strong> {it.name}</td>"
+                f"<td style='padding:8px 0;border-bottom:1px solid #f1f5f9;color:#0f172a;font-size:13px;font-weight:bold;text-align:right;'>"
+                f"{it_fmt}</td>"
+                f"</tr>"
+            )
+
+        action_block = ""
+        vindi_url = meta.get("vindi_payment_url")
+        if norm_st == "WAITING_PAYMENT" and vindi_url:
+            action_block = (
+                f"<div style='margin:20px 0;text-align:center;'>"
+                f"<a href='{vindi_url}' style='display:inline-block;background:#4f46e5;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:10px;font-weight:bold;font-size:14px;'>"
+                f"Concluir Pagamento Online ({valor_fmt})</a>"
+                f"</div>"
+            )
+
+        residual_block = ""
+        res_code = meta.get("residual_coupon_code")
+        res_bal = float(meta.get("remaining_coupon_balance") or 0)
+        if res_code and res_bal > 0 and norm_st in ("WAITING_PAYMENT", "PAID"):
+            res_fmt = f"R$ {res_bal:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            residual_block = (
+                f"<div style='margin:16px 0;padding:12px 16px;background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;font-size:13px;color:#92400e;'>"
+                f"<strong>Saldo Residual Disponível ({res_fmt}):</strong> Utilize o cupom <code style='font-weight:bold;font-size:14px;'>{res_code}</code> na sua próxima compra."
+                f"</div>"
+            )
+
+        tracking_block = ""
+        if order.tracking_code or order.invoice_number:
+            t_parts = []
+            if order.invoice_number:
+                t_parts.append(f"<div><strong>Nota Fiscal:</strong> {order.invoice_number}</div>")
+            if order.tracking_code:
+                t_parts.append(f"<div><strong>Código de Rastreio:</strong> {order.tracking_code}</div>")
+            if meta.get("tracking_url"):
+                t_parts.append(f"<div style='margin-top:6px;'><a href='{meta.get('tracking_url')}' style='color:#4f46e5;font-weight:bold;'>Rastrear entrega online →</a></div>")
+            tracking_block = (
+                f"<div style='margin:16px 0;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;color:#334155;'>"
+                f"{''.join(t_parts)}</div>"
+            )
+
+        html_content = (
+            f"<div style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:16px;background:#ffffff;color:#0f172a;'>"
+            f"<div style='border-bottom:1px solid #f1f5f9;padding-bottom:14px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;'>"
+            f"<strong style='font-size:16px;color:#0f172a;'>{store_name}</strong>"
+            f"<span style='font-size:12px;color:#64748b;'>Pedido #{order.id}</span>"
+            f"</div>"
+            f"<div style='display:inline-block;background:{badge_bg};color:{badge_color};padding:6px 12px;border-radius:8px;font-weight:bold;font-size:13px;margin-bottom:14px;'>"
+            f"{badge_label}</div>"
+            f"<p style='font-size:15px;font-weight:bold;margin:0 0 8px 0;'>Olá, {cust_name}!</p>"
+            f"<p style='font-size:14px;color:#475569;line-height:1.5;margin:0 0 16px 0;'>{intro_text}</p>"
+            f"{action_block}{residual_block}{tracking_block}"
+            f"<div style='background:#f8fafc;padding:14px 16px;border-radius:12px;margin-top:16px;'>"
+            f"<div style='font-size:11px;font-weight:bold;text-transform:uppercase;color:#64748b;margin-bottom:8px;'>Resumo do Pedido #{order.id}</div>"
+            f"<table style='width:100%;border-collapse:collapse;'>{items_rows}</table>"
+            f"<div style='margin-top:10px;padding-top:8px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;font-size:14px;font-weight:bold;color:#0f172a;'>"
+            f"<span>Total a Pagar / Pago: </span><span style='float:right;color:#047857;'>{valor_fmt}</span>"
+            f"</div></div>"
+            f"<p style='color:#94a3b8;font-size:11px;margin-top:20px;text-align:center;'>"
+            f"Você pode acompanhar todos os detalhes em Minha Conta → Meus Pedidos na loja {store_name}.</p>"
+            f"</div>"
+        )
+
+        # Grava no pedido que o e-mail para este status foi disparado
+        if norm_st not in sent_list:
+            sent_list.append(norm_st)
+            meta["emails_sent"] = sent_list
+            _save_order_meta(order, meta)
+            db.commit()
+
+        import threading
+        from app.core.email import send_smtp_email
+
+        smtp_args = {
+            "smtp_host": smtp_cfg.smtp_host,
+            "smtp_port": int(smtp_cfg.smtp_port or 587),
+            "smtp_username": smtp_cfg.smtp_username or "",
+            "smtp_password": smtp_cfg.smtp_password or "",
+            "smtp_from": smtp_cfg.smtp_from_email or smtp_cfg.smtp_username or "noreply@cronuz.com.br",
+            "to_email": to_email,
+            "subject": subject,
+            "html_content": html_content,
+            "use_ssl": bool(smtp_cfg.smtp_use_ssl),
+            "bcc_email": smtp_cfg.smtp_bcc_email,
+        }
+
+        def _bg_send():
+            try:
+                send_smtp_email(**smtp_args)
+            except Exception as exc:
+                logger.warning(f"[B2C Order Email] Falha SMTP no pedido #{order.id} ({norm_st}): {exc}")
+
+        threading.Thread(target=_bg_send, daemon=True).start()
+        return True
+    except Exception as e:
+        logger.warning(f"[B2C Order Email] Erro ao preparar e-mail do pedido #{order.id}: {e}")
+        return False
+
+
 @router.get("/coupons/summary")
 def get_b2c_coupons_summary(
     company_id: Optional[int] = Query(None),
@@ -517,6 +737,7 @@ def get_b2c_coupons_summary(
             "horus_enabled": bool(getattr(settings, "horus_enabled", False)) if settings else False,
             "freight_config": freight_config,
             "horus_sync_config": horus_sync_config,
+            "email_notifications_config": _get_b2c_email_config(settings),
             "homologated_gateways": [
                 {"id": "EFI", "name": "Efí (Gerencianet)", "status": "HOMOLOGATED", "methods": ["PIX", "CREDIT_CARD"]},
                 {"id": "VINDI", "name": "Vindi Pagamentos", "status": "HOMOLOGATED", "methods": ["PIX", "CREDIT_CARD"]},
@@ -625,12 +846,19 @@ def update_b2c_seller_settings(
         raw_cfg["horus_sync_config"] = {
             **prev_sync,
             "cod_tpo_caract": str(data.horus_sync_config.get("cod_tpo_caract") or "").strip(),
-            "cod_caract": str(data.horus_sync_config.get("cod_caract") or "").strip(),
             "characteristic_type_name": str(data.horus_sync_config.get("characteristic_type_name") or "").strip(),
             "characteristic_value": str(data.horus_sync_config.get("characteristic_value") or "").strip(),
             "search_term": str(data.horus_sync_config.get("search_term") or "").strip(),
             "auto_collect_bookinfo_covers": bool(data.horus_sync_config.get("auto_collect_bookinfo_covers", False)),
+            "cod_caract": str(data.horus_sync_config.get("cod_caract") or "").strip(),
         }
+        settings.b2c_showcases_config = raw_cfg
+        flag_modified(settings, "b2c_showcases_config")
+
+    if data.email_notifications_config is not None and isinstance(data.email_notifications_config, dict):
+        raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+        merged_email_cfg = {**_default_b2c_email_config(), **data.email_notifications_config}
+        raw_cfg["email_notifications_config"] = merged_email_cfg
         settings.b2c_showcases_config = raw_cfg
         flag_modified(settings, "b2c_showcases_config")
 
@@ -1891,6 +2119,395 @@ async def sync_horus_products_to_cronuz(
         "last_sync_data_fim": data_fim_datetime_str or run_start_br.strftime("%d/%m/%Y %H:%M:%S"),
         "horus_api_summary": api_diagnostics,
     }
+
+
+import threading
+_B2C_HORUS_STOCK_JOB_LOCK = threading.Lock()
+
+
+class B2CHorusStockJobConfigRequest(BaseModel):
+    enabled: bool = True
+    interval_minutes: int = 5
+
+
+async def execute_company_horus_stock_only_sync(
+    db: Session,
+    company_id: int,
+    trigger: str = "AUTO_JOB",
+) -> Dict[str, Any]:
+    """
+    Executa sincronização leve e exclusiva de ESTOQUE (`Estoque`) no Horus ERP para uma empresa,
+    atualizando apenas `stock_quantity`, `allow_purchase` e `stock_status_label` dos produtos
+    já cadastrados em `prd_product`.
+    Grava telemetria completa em `b2c_showcases_config['horus_stock_job']` e invalida o cache RAM B2C
+    somente quando houver mudança de saldo.
+    """
+    from datetime import timedelta
+    t0 = time.monotonic()
+    br_tz = timezone(timedelta(hours=-3))
+    run_start_utc = datetime.now(timezone.utc)
+    run_start_br = run_start_utc.astimezone(br_tz)
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings or not getattr(settings, "horus_enabled", False):
+        return {
+            "status": "SKIPPED",
+            "message": "Integração Horus ERP inativa para esta empresa.",
+            "checked_count": 0,
+            "updated_count": 0,
+            "duration_ms": 0,
+        }
+
+    raw_cfg = dict(settings.b2c_showcases_config or {})
+    sync_cfg = dict(raw_cfg.get("horus_sync_config") or {})
+    job_cfg = dict(raw_cfg.get("horus_stock_job") or {})
+
+    # Determinar janela incremental (DATA_INI -> DATA_FIM) com margem de segurança de 10 minutos
+    last_ref_iso = str(job_cfg.get("last_success_at") or sync_cfg.get("last_sync_at") or "").strip()
+    dt_ini_br = run_start_br - timedelta(minutes=60)
+    if last_ref_iso:
+        try:
+            parsed_dt = datetime.fromisoformat(last_ref_iso.replace("Z", "+00:00"))
+            if parsed_dt.tzinfo is None:
+                parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+            dt_ini_br = parsed_dt.astimezone(br_tz) - timedelta(minutes=10)
+            # Evitar janelas gigantescas no job leve de 5 min (máximo 48h retroativas)
+            min_allowed_br = run_start_br - timedelta(hours=48)
+            if dt_ini_br < min_allowed_br:
+                dt_ini_br = min_allowed_br
+        except Exception:
+            dt_ini_br = run_start_br - timedelta(minutes=60)
+
+    dt_fim_br = run_start_br + timedelta(hours=1)
+    data_ini_str = dt_ini_br.strftime("%d/%m/%Y %H:%M:%S")
+    data_fim_str = dt_fim_br.strftime("%d/%m/%Y %H:%M:%S")
+
+    cod_tpo_str = str(sync_cfg.get("cod_tpo_caract") or "").strip()
+    cod_caract_str = str(sync_cfg.get("cod_caract") or "").strip()
+    use_pagination = not getattr(settings, "horus_legacy_pagination", False)
+
+    estoque_changes_by_cod: Dict[int, int] = {}
+    status_str = "SUCCESS"
+    error_msg: Optional[str] = None
+    horus_client = None
+
+    try:
+        horus_client = HorusClients(db, company_id)
+        offset = 0
+        limit = 500
+        max_pages = 15 if use_pagination else 1
+
+        for _ in range(max_pages):
+            p_est: Dict[str, Any] = {
+                "COD_EMPRESA": settings.horus_company or 1,
+                "COD_FILIAL": settings.horus_branch or 1,
+                "DATA_INI": data_ini_str,
+                "DATA_FIM": data_fim_str,
+            }
+            if getattr(settings, "horus_stock_local", None):
+                p_est["COD_LOCAL_ESTOQUE"] = settings.horus_stock_local
+            if cod_tpo_str and cod_caract_str:
+                p_est["COD_TPO_CARACT"] = cod_tpo_str
+                p_est["COD_CARACT"] = cod_caract_str
+            if use_pagination:
+                p_est["OFFSET"] = offset
+                p_est["LIMIT"] = limit
+
+            res_est = await horus_client.get("Estoque", params=p_est)
+            batch_est: List[Dict[str, Any]] = []
+            if isinstance(res_est, list):
+                batch_est = [
+                    r for r in res_est
+                    if isinstance(r, dict) and not r.get("Falha") and r.get("COD_ITEM")
+                ]
+            elif isinstance(res_est, dict) and not res_est.get("Falha") and res_est.get("COD_ITEM"):
+                batch_est = [res_est]
+
+            if not batch_est:
+                break
+
+            for row in batch_est:
+                try:
+                    ci = int(str(row.get("COD_ITEM")).strip())
+                    raw_s = row.get("SALDO_DISPONIVEL")
+                    if raw_s is None:
+                        raw_s = row.get("SALDO") or 0
+                    saldo_val = max(0, int(float(str(raw_s).replace(",", "."))))
+                    estoque_changes_by_cod[ci] = saldo_val
+                except Exception:
+                    pass
+
+            if not use_pagination or len(batch_est) < limit:
+                break
+            offset += limit
+
+    except Exception as exc:
+        status_str = "ERROR"
+        error_msg = str(exc)[:300]
+    finally:
+        if horus_client:
+            try:
+                await horus_client.close()
+            except Exception:
+                pass
+
+    checked_count = len(estoque_changes_by_cod)
+    updated_count = 0
+
+    if status_str == "SUCCESS" and estoque_changes_by_cod:
+        target_cods = list(estoque_changes_by_cod.keys())
+        target_skus = [str(c) for c in target_cods]
+        matching_products = (
+            db.query(Product)
+            .filter(
+                Product.company_id == company_id,
+                or_(
+                    Product.horus_cod_item.in_(target_cods),
+                    Product.sku.in_(target_skus),
+                ),
+            )
+            .all()
+        )
+        for prod in matching_products:
+            ci_match = None
+            if prod.horus_cod_item and int(prod.horus_cod_item) in estoque_changes_by_cod:
+                ci_match = int(prod.horus_cod_item)
+            elif prod.sku and prod.sku.strip().isdigit() and int(prod.sku.strip()) in estoque_changes_by_cod:
+                ci_match = int(prod.sku.strip())
+            if ci_match is None:
+                continue
+
+            new_saldo = estoque_changes_by_cod[ci_match]
+            new_allow = new_saldo > 0
+            new_label = "DISPONÍVEL" if new_saldo > 0 else "SEM ESTOQUE"
+
+            if (
+                int(prod.stock_quantity or 0) != new_saldo
+                or bool(prod.allow_purchase) != new_allow
+                or (prod.stock_status_label or "") != new_label
+            ):
+                prod.stock_quantity = new_saldo
+                prod.allow_purchase = new_allow
+                prod.stock_status_label = new_label
+                updated_count += 1
+
+    duration_ms = int((time.monotonic() - t0) * 1000)
+    run_iso = run_start_utc.isoformat()
+
+    if status_str == "ERROR":
+        summary_msg = f"Falha ao consultar Estoque no Horus: {error_msg}"
+    elif updated_count > 0:
+        summary_msg = f"Sucesso: {updated_count} produto(s) tiveram saldo atualizado (de {checked_count} movimentações no Horus)."
+    elif checked_count > 0:
+        summary_msg = f"Sucesso: {checked_count} item(ns) verificado(s) no Horus, todos já estavam com saldo atualizado."
+    else:
+        summary_msg = "Sucesso: Nenhuma movimentação de estoque no Horus na janela consultada."
+
+    history_list = list(job_cfg.get("history") or [])
+    history_entry = {
+        "run_at": run_iso,
+        "trigger": trigger,
+        "status": status_str,
+        "checked_count": checked_count,
+        "updated_count": updated_count,
+        "duration_ms": duration_ms,
+        "window": f"{data_ini_str} → {data_fim_str}",
+        "message": summary_msg,
+    }
+    history_list.insert(0, history_entry)
+    history_list = history_list[:15]
+
+    updated_job_cfg = {
+        "enabled": bool(job_cfg.get("enabled", True)),
+        "interval_minutes": max(5, int(job_cfg.get("interval_minutes") or 5)),
+        "last_run_at": run_iso,
+        "last_success_at": run_iso if status_str == "SUCCESS" else job_cfg.get("last_success_at"),
+        "last_status": status_str,
+        "last_trigger": trigger,
+        "last_duration_ms": duration_ms,
+        "last_checked_count": checked_count,
+        "last_updated_count": updated_count,
+        "last_window": f"{data_ini_str} → {data_fim_str}",
+        "last_message": summary_msg,
+        "history": history_list,
+    }
+
+    raw_cfg["horus_stock_job"] = updated_job_cfg
+    settings.b2c_showcases_config = raw_cfg
+    flag_modified(settings, "b2c_showcases_config")
+    db.commit()
+
+    if updated_count > 0:
+        _b2c_cache_clear(company_id)
+
+    return {
+        **updated_job_cfg,
+        "company_id": company_id,
+    }
+
+
+def run_b2c_horus_stock_sync_job():
+    """
+    Job agendado no APScheduler (a cada 5 minutos) com trava single-flight (`_B2C_HORUS_STOCK_JOB_LOCK`)
+    para nunca sobrepor execuções nem gargalar o servidor.
+    Sincroniza apenas empresas com Horus ativo, produtos locais cadastrados e intervalo atingido.
+    """
+    if not _B2C_HORUS_STOCK_JOB_LOCK.acquire(blocking=False):
+        return
+
+    from app.db.session import SessionLocal
+    import asyncio
+    from datetime import timedelta
+
+    db = SessionLocal()
+    try:
+        active_settings = (
+            db.query(CompanySettings)
+            .filter(
+                CompanySettings.horus_enabled == True,
+                CompanySettings.company_id != 8,  # Regra de segurança WMF
+            )
+            .all()
+        )
+        if not active_settings:
+            return
+
+        now_utc = datetime.now(timezone.utc)
+
+        for s in active_settings:
+            cid = s.company_id
+            raw_cfg = dict(s.b2c_showcases_config or {})
+            job_cfg = dict(raw_cfg.get("horus_stock_job") or {})
+
+            # Por padrão, job é habilitado automaticamente para empresas que possuem produtos no catálogo local
+            is_enabled = bool(job_cfg.get("enabled", True))
+            if not is_enabled:
+                continue
+
+            prod_count = db.query(func.count(Product.id)).filter(Product.company_id == cid).scalar() or 0
+            if prod_count <= 0:
+                continue
+
+            interval_min = max(5, int(job_cfg.get("interval_minutes") or 5))
+            last_run_iso = str(job_cfg.get("last_run_at") or "").strip()
+            if last_run_iso:
+                try:
+                    last_dt = datetime.fromisoformat(last_run_iso.replace("Z", "+00:00"))
+                    if last_dt.tzinfo is None:
+                        last_dt = last_dt.replace(tzinfo=timezone.utc)
+                    elapsed_sec = (now_utc - last_dt).total_seconds()
+                    # Margem de 25 segundos para tolerar jitter natural do scheduler de 5 min
+                    if elapsed_sec < (interval_min * 60 - 25):
+                        continue
+                except Exception:
+                    pass
+
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(
+                    execute_company_horus_stock_only_sync(db=db, company_id=cid, trigger="AUTO_JOB")
+                )
+            except Exception:
+                db.rollback()
+            finally:
+                loop.close()
+    finally:
+        db.close()
+        _B2C_HORUS_STOCK_JOB_LOCK.release()
+
+
+@router.get("/products/stock-job-status")
+def get_b2c_horus_stock_job_status(
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Retorna o status, configurações, última execução e histórico das últimas 15 execuções
+    do Job Automático de Sincronização de Estoque Horus (exibido em Configurações -> ERP & Catálogo).
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    local_products_count = db.query(func.count(Product.id)).filter(Product.company_id == cid).scalar() or 0
+
+    raw_cfg = dict((settings.b2c_showcases_config if settings else None) or {})
+    sync_cfg = dict(raw_cfg.get("horus_sync_config") or {})
+    job_cfg = dict(raw_cfg.get("horus_stock_job") or {})
+
+    return {
+        "company_id": cid,
+        "horus_enabled": bool(getattr(settings, "horus_enabled", False)) if settings else False,
+        "horus_company": getattr(settings, "horus_company", 1) if settings else 1,
+        "horus_branch": getattr(settings, "horus_branch", 1) if settings else 1,
+        "horus_stock_local": getattr(settings, "horus_stock_local", None) if settings else None,
+        "horus_legacy_pagination": bool(getattr(settings, "horus_legacy_pagination", False)) if settings else False,
+        "cod_tpo_caract": sync_cfg.get("cod_tpo_caract") or "",
+        "cod_caract": sync_cfg.get("cod_caract") or "",
+        "characteristic_type_name": sync_cfg.get("characteristic_type_name") or "",
+        "characteristic_value": sync_cfg.get("characteristic_value") or "",
+        "local_products_count": local_products_count,
+        "enabled": bool(job_cfg.get("enabled", True)),
+        "interval_minutes": max(5, int(job_cfg.get("interval_minutes") or 5)),
+        "last_run_at": job_cfg.get("last_run_at"),
+        "last_success_at": job_cfg.get("last_success_at"),
+        "last_status": job_cfg.get("last_status") or "IDLE",
+        "last_trigger": job_cfg.get("last_trigger"),
+        "last_duration_ms": job_cfg.get("last_duration_ms") or 0,
+        "last_checked_count": job_cfg.get("last_checked_count") or 0,
+        "last_updated_count": job_cfg.get("last_updated_count") or 0,
+        "last_window": job_cfg.get("last_window") or "",
+        "last_message": job_cfg.get("last_message") or "Aguardando primeira execução do job.",
+        "history": list(job_cfg.get("history") or []),
+    }
+
+
+@router.put("/products/stock-job-config")
+def update_b2c_horus_stock_job_config(
+    data: B2CHorusStockJobConfigRequest,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Atualiza a configuração do Job Automático de Estoque Horus (ativar/pausar e intervalo em minutos).
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    if not settings:
+        settings = CompanySettings(company_id=cid)
+        db.add(settings)
+        db.flush()
+
+    raw_cfg = dict(settings.b2c_showcases_config or {})
+    job_cfg = dict(raw_cfg.get("horus_stock_job") or {})
+    job_cfg["enabled"] = bool(data.enabled)
+    job_cfg["interval_minutes"] = max(5, min(120, int(data.interval_minutes or 5)))
+    raw_cfg["horus_stock_job"] = job_cfg
+    settings.b2c_showcases_config = raw_cfg
+    flag_modified(settings, "b2c_showcases_config")
+    db.commit()
+
+    return {
+        "message": "Configuração do Job de Estoque atualizada com sucesso!",
+        "enabled": job_cfg["enabled"],
+        "interval_minutes": job_cfg["interval_minutes"],
+    }
+
+
+@router.post("/products/stock-job-run")
+async def trigger_b2c_horus_stock_job_now(
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Dispara manualmente uma execução imediata do Job de Estoque Horus para a empresa atual.
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    result = await execute_company_horus_stock_only_sync(db=db, company_id=cid, trigger="MANUAL")
+    return result
+
 
 
 class B2CTrayProductSyncRequest(BaseModel):
@@ -3572,46 +4189,9 @@ def update_b2c_order(
     db.refresh(order)
     _b2c_cache_clear(cid)
 
-    # Optionally send transactional email notification using Seller's SMTP if configured
-    if status_changed or data.tracking_code:
-        try:
-            settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
-            company = db.query(Company).filter(Company.id == cid).first()
-            cust = order.customer
-            if settings and settings.smtp_host and cust and cust.email:
-                from app.core.email import send_smtp_email
-                st_label = B2C_STATUS_LABELS.get(_normalize_b2c_order_status(order.status), order.status)
-                tracking_html = (
-                    f"<p><strong>Código de Rastreio:</strong> {order.tracking_code}</p>"
-                    if order.tracking_code
-                    else ""
-                )
-                nfe_html = (
-                    f"<p><strong>Nota Fiscal:</strong> {order.invoice_number}</p>"
-                    if order.invoice_number
-                    else ""
-                )
-                send_smtp_email(
-                    host=settings.smtp_host,
-                    port=settings.smtp_port or 587,
-                    username=settings.smtp_username or "",
-                    password=settings.smtp_password or "",
-                    from_email=settings.smtp_from_email or settings.smtp_username or "noreply@cronuz.com.br",
-                    to_email=cust.email,
-                    subject=f"Atualização do Pedido #{order.id}: {st_label} - {company.name if company else 'Loja'}",
-                    html_content=(
-                        f"<div style='font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;'>"
-                        f"<h2 style='color:#0f172a;margin-top:0;'>Olá, {cust.name}!</h2>"
-                        f"<p style='color:#475569;'>O status do seu pedido <strong>#{order.id}</strong> na loja <strong>{company.name if company else ''}</strong> foi atualizado para:</p>"
-                        f"<div style='background:#f8fafc;padding:14px 18px;border-radius:8px;font-weight:bold;color:#4f46e5;font-size:16px;margin:16px 0;'>{st_label}</div>"
-                        f"{tracking_html}{nfe_html}"
-                        f"<p style='color:#64748b;font-size:12px;margin-top:24px;'>Você também pode acompanhar todos os detalhes em Minha Conta → Meus Pedidos na loja.</p>"
-                        f"</div>"
-                    ),
-                    use_ssl=bool(settings.smtp_use_ssl),
-                )
-        except Exception as e:
-            logger.warning(f"[B2C Order Email] Não foi possível disparar e-mail do pedido #{order.id}: {e}")
+    # Dispara e-mail transacional automático (Pago, Cancelado, Em Separação, Finalizado, Entregue)
+    if (status_changed or data.tracking_code) and data.notify_customer:
+        _send_b2c_order_email(db, order, event_status=order.status, force=True)
 
     return {
         "message": f"Pedido #{order.id} atualizado com sucesso!",
@@ -3920,15 +4500,27 @@ async def get_public_b2c_catalog(
 
         brands_set = sorted({str(it.get("brand") or "").strip() for it in items if str(it.get("brand") or "").strip()})[:20]
         authors_set = sorted({str(it.get("author") or "").strip() for it in items if str(it.get("author") or "").strip()})[:20]
+        cats_set = sorted({
+            str((it.get("category") or {}).get("name") or "").strip()
+            for it in items
+            if str((it.get("category") or {}).get("name") or "").strip()
+            and str((it.get("category") or {}).get("name") or "").strip().lower() != "geral"
+        })[:20]
         chars_facets: Dict[str, List[str]] = {}
         for it in items:
+            filtered_it_chars = []
             for ch in (it.get("characteristics") or []):
                 cn = str(ch.get("name") or "").strip()
                 cv = str(ch.get("value") or "").strip()
-                if cn and cv:
-                    chars_facets.setdefault(cn, [])
-                    if cv not in chars_facets[cn]:
-                        chars_facets[cn].append(cv)
+                if not cn or not cv:
+                    continue
+                if "tray" in cn.lower() or "tray" in cv.lower() or f"{cn} {cv}".strip().lower() in ("tray sim", "tray: sim"):
+                    continue
+                filtered_it_chars.append({"name": cn, "value": cv})
+                chars_facets.setdefault(cn, [])
+                if cv not in chars_facets[cn]:
+                    chars_facets[cn].append(cv)
+            it["characteristics"] = filtered_it_chars
 
         current_page = (skip // limit) + 1
         estimated_pages = current_page if len(items) < limit else max(5, current_page + 3)
@@ -3939,6 +4531,7 @@ async def get_public_b2c_catalog(
             "pages": estimated_pages,
             "source": "HORUS_ERP",
             "facets": {
+                "categories": cats_set,
                 "brands": brands_set,
                 "authors": authors_set,
                 "characteristics": chars_facets,
@@ -3950,8 +4543,30 @@ async def get_public_b2c_catalog(
         return res_payload
 
     # Catálogo Local do Cronuz (prd_product sincronizado do Horus ou cadastrado manualmente)
+    from sqlalchemy import and_
     from sqlalchemy.orm import joinedload
     from app.models.catalog_support import Category, ProductCharacteristic, Characteristic
+
+    raw_sync_cfg = (
+        (settings.b2c_showcases_config or {}).get("horus_sync_config", {})
+        if settings and isinstance(getattr(settings, "b2c_showcases_config", None), dict)
+        else {}
+    )
+    sync_char_type_low = str(raw_sync_cfg.get("characteristic_type_name") or "").strip().lower()
+    sync_char_val_low = str(raw_sync_cfg.get("characteristic_value") or "").strip().lower()
+
+    def _is_internal_tray_or_sync_char(c_name: str, c_val: str = "") -> bool:
+        cn_low = str(c_name or "").strip().lower()
+        cv_low = str(c_val or "").strip().lower()
+        combined = f"{cn_low} {cv_low}".strip()
+        if "tray" in cn_low or "tray" in cv_low or combined in ("tray sim", "tray: sim", "tray=sim"):
+            return True
+        if cn_low.startswith("característica horus tipo") and cv_low in ("sim", "s", "true", "1"):
+            return True
+        if sync_char_type_low and cn_low == sync_char_type_low and cv_low in ("sim", "s", "true", "1", sync_char_val_low):
+            return True
+        return False
+
     query = (
         db.query(Product)
         .options(joinedload(Product.category), joinedload(Product.brand_rel), joinedload(Product.characteristics))
@@ -3996,17 +4611,27 @@ async def get_public_b2c_catalog(
     if char_filter:
         if ":" in char_filter:
             c_name_part, c_val_part = char_filter.split(":", 1)
-            query = query.filter(
-                Product.characteristics.any(
-                    and_(
-                        ProductCharacteristic.value.ilike(f"%{c_val_part.strip()}%"),
-                        ProductCharacteristic.characteristic.has(Characteristic.name.ilike(f"%{c_name_part.strip()}%")),
+            c_name_clean = c_name_part.strip()
+            c_val_clean = c_val_part.strip()
+            if c_name_clean.lower() in ("assunto", "gênero", "genero", "categoria"):
+                query = query.outerjoin(Category, Product.category_id == Category.id).filter(
+                    or_(Category.name.ilike(f"%{c_val_clean}%"), Product.subject.ilike(f"%{c_val_clean}%"))
+                )
+            else:
+                query = query.filter(
+                    Product.characteristics.any(
+                        and_(
+                            ProductCharacteristic.value.ilike(f"%{c_val_clean}%"),
+                            ProductCharacteristic.characteristic.has(Characteristic.name.ilike(f"%{c_name_clean}%")),
+                        )
                     )
                 )
-            )
         else:
             query = query.filter(
-                Product.characteristics.any(ProductCharacteristic.value.ilike(f"%{char_filter}%"))
+                or_(
+                    Product.characteristics.any(ProductCharacteristic.value.ilike(f"%{char_filter}%")),
+                    Product.subject.ilike(f"%{char_filter}%"),
+                )
             )
 
     total = query.count()
@@ -4040,7 +4665,10 @@ async def get_public_b2c_catalog(
         chars_list = []
         for pc in (getattr(p, "characteristics", None) or []):
             c_name = pc.characteristic.name if getattr(pc, "characteristic", None) else "Característica"
-            chars_list.append({"name": c_name, "value": pc.value})
+            c_val = str(pc.value or "").strip()
+            if not c_val or _is_internal_tray_or_sync_char(c_name, c_val):
+                continue
+            chars_list.append({"name": c_name, "value": c_val})
 
         mapped.append(
             {
@@ -4081,17 +4709,47 @@ async def get_public_b2c_catalog(
             and float(it.get("promotional_price") or 0) < float(it.get("base_price") or 0)
         ]
 
-    # Build lightweight facets for left sidebar (brands, authors, characteristics) with RAM cache
-    cached_facets = _b2c_cache_get(company_id, "facets_meta", settings)
+    # Build lightweight facets for top bar (categories) and left sidebar (brands, authors, characteristics) with RAM cache
+    cached_facets = _b2c_cache_get(company_id, "facets_meta_v2", settings)
     if cached_facets is not None and isinstance(cached_facets, dict):
+        facets_categories = cached_facets.get("categories", [])
         facets_brands = cached_facets.get("brands", [])
         facets_authors = cached_facets.get("authors", [])
         facets_chars = cached_facets.get("characteristics", {})
     else:
+        facets_categories = []
         facets_brands = []
         facets_authors = []
         facets_chars = {}
         try:
+            # 1. All active store categories (so top bar never loses categories when one is clicked)
+            cat_rows = (
+                db.query(Category.name)
+                .join(Product, Product.category_id == Category.id)
+                .filter(Product.company_id == company_id, Product.status == "ACTIVE", Category.name.isnot(None), Category.name != "")
+                .distinct()
+                .limit(30)
+                .all()
+            )
+            cat_names_set = {
+                str(r[0]).strip()
+                for r in cat_rows
+                if r and r[0] and str(r[0]).strip().lower() != "geral"
+            }
+            if len(cat_names_set) < 12:
+                subj_rows = (
+                    db.query(Product.subject)
+                    .filter(Product.company_id == company_id, Product.status == "ACTIVE", Product.subject.isnot(None), Product.subject != "")
+                    .distinct()
+                    .limit(20)
+                    .all()
+                )
+                for sr in subj_rows:
+                    if sr and sr[0] and str(sr[0]).strip().lower() != "geral":
+                        cat_names_set.add(str(sr[0]).strip())
+            facets_categories = sorted(cat_names_set)[:20]
+
+            # 2. Brands / Publishers
             brand_rows = (
                 db.query(Product.brand)
                 .filter(Product.company_id == company_id, Product.status == "ACTIVE", Product.brand.isnot(None), Product.brand != "")
@@ -4101,6 +4759,7 @@ async def get_public_b2c_catalog(
             )
             facets_brands = sorted({str(r[0]).strip() for r in brand_rows if r and r[0]})[:25]
 
+            # 3. Authors
             author_rows = (
                 db.query(Product.model)
                 .filter(Product.company_id == company_id, Product.status == "ACTIVE", Product.model.isnot(None), Product.model != "")
@@ -4110,28 +4769,54 @@ async def get_public_b2c_catalog(
             )
             facets_authors = sorted({str(r[0]).strip() for r in author_rows if r and r[0]})[:25]
 
+            # 4. Product Characteristics (excluding TRAY / TRAY SIM)
             char_rows = (
                 db.query(Characteristic.name, ProductCharacteristic.value)
                 .join(ProductCharacteristic, ProductCharacteristic.characteristic_id == Characteristic.id)
                 .join(Product, Product.id == ProductCharacteristic.product_id)
                 .filter(Product.company_id == company_id, Product.status == "ACTIVE")
                 .distinct()
-                .limit(80)
+                .limit(120)
                 .all()
             )
             for c_name, c_val in char_rows:
                 cn = str(c_name or "").strip()
                 cv = str(c_val or "").strip()
-                if cn and cv:
+                if not cn or not cv or _is_internal_tray_or_sync_char(cn, cv):
+                    continue
+                facets_chars.setdefault(cn, [])
+                if cv not in facets_chars[cn] and len(facets_chars[cn]) < 20:
+                    facets_chars[cn].append(cv)
+
+            # Also include any other Characteristic definitions created for the company in prd_characteristic (excluding TRAY)
+            all_company_chars = (
+                db.query(Characteristic)
+                .filter(Characteristic.company_id == company_id)
+                .all()
+            )
+            for ch_def in all_company_chars:
+                cn = str(ch_def.name or "").strip()
+                if not cn or _is_internal_tray_or_sync_char(cn, ""):
+                    continue
+                raw_opts = [o.strip() for o in str(ch_def.options or "").split(",") if o.strip()]
+                for opt_val in raw_opts:
+                    if _is_internal_tray_or_sync_char(cn, opt_val):
+                        continue
                     facets_chars.setdefault(cn, [])
-                    if cv not in facets_chars[cn] and len(facets_chars[cn]) < 15:
-                        facets_chars[cn].append(cv)
+                    if opt_val not in facets_chars[cn] and len(facets_chars[cn]) < 20:
+                        facets_chars[cn].append(opt_val)
+
             _b2c_cache_set(
                 company_id,
-                "facets_meta",
-                {"brands": facets_brands, "authors": facets_authors, "characteristics": facets_chars},
+                "facets_meta_v2",
+                {
+                    "categories": facets_categories,
+                    "brands": facets_brands,
+                    "authors": facets_authors,
+                    "characteristics": facets_chars,
+                },
                 settings,
-                label="Filtros Laterais (Editoras, Autores & Características)",
+                label="Filtros Laterais & Categorias (Sem TRAY SIM)",
             )
         except Exception:
             pass
@@ -4144,6 +4829,7 @@ async def get_public_b2c_catalog(
         "pages": max(1, (total + limit - 1) // limit),
         "source": "LOCAL_DB",
         "facets": {
+            "categories": facets_categories,
             "brands": facets_brands,
             "authors": facets_authors,
             "characteristics": facets_chars,
@@ -4624,10 +5310,12 @@ def update_b2c_stock_notify_status(
                 smtp_port=int(settings.smtp_port or 587),
                 smtp_username=settings.smtp_username,
                 smtp_password=settings.smtp_password,
-                from_email=settings.smtp_from_email or settings.smtp_username,
+                smtp_from=settings.smtp_from_email or settings.smtp_username,
                 to_email=target_alert["email"],
                 subject=f"[{store_name}] {prod_title} voltou ao estoque!",
                 html_content=html_body,
+                use_ssl=bool(settings.smtp_use_ssl),
+                bcc_email=settings.smtp_bcc_email,
             )
         except Exception as e:
             logger.warning(f"[B2C Stock Notify] Falha no disparo de e-mail Avise-me: {e}")
@@ -4871,17 +5559,51 @@ def check_b2c_customer_identity(
 ):
     """
     Identificação Inteligente no Checkout (estilo grandes lojas virtuais):
-    Verifica se o E-mail ou CPF já possui conta na loja do Seller.
+    Verifica se o E-mail ou CPF já possui conta na loja do Seller ou dados vinculados a Cupom Corporativo,
+    retornando prefill automático (nome, e-mail, telefone e endereço) para evitar digitação repetida.
     """
     cust = _find_b2c_customer_by_identifier(db, data.company_id, data.identifier)
+    digits = _clean_digits(data.identifier)
+
+    # Busca complementar em Cupons Corporativos nominais por CPF caso o cliente ainda não tenha cadastro completo
+    coupon_name = ""
+    coupon_email = ""
+    if len(digits) == 11:
+        cp = (
+            db.query(B2CCoupon)
+            .filter(
+                B2CCoupon.company_id == data.company_id,
+                B2CCoupon.assigned_cpf == digits,
+            )
+            .order_by(B2CCoupon.id.desc())
+            .first()
+        )
+        if cp:
+            coupon_name = (cp.assigned_name or "").strip()
+            coupon_email = (cp.assigned_email or "").strip().lower()
+        if not coupon_name or not coupon_email:
+            batches = (
+                db.query(B2CCouponBatch)
+                .filter(B2CCouponBatch.company_id == data.company_id, B2CCouponBatch.active == True)
+                .all()
+            )
+            for b in batches:
+                if isinstance(b.eligible_cpfs_json, list):
+                    for row in b.eligible_cpfs_json:
+                        if isinstance(row, dict) and _clean_digits(row.get("cpf")) == digits:
+                            coupon_name = coupon_name or str(row.get("name") or "").strip()
+                            coupon_email = coupon_email or str(row.get("email") or "").strip().lower()
+                            break
+
     if not cust:
-        digits = _clean_digits(data.identifier)
         return {
             "exists": False,
             "has_password": False,
             "prefill": {
-                "email": data.identifier.strip().lower() if "@" in data.identifier else "",
+                "name": coupon_name,
+                "email": coupon_email or (data.identifier.strip().lower() if "@" in data.identifier else ""),
                 "cpf": digits if len(digits) == 11 else "",
+                "phone": "",
             },
         }
 
@@ -4890,12 +5612,27 @@ def check_b2c_customer_identity(
         u_part, d_part = cust.email.split("@", 1)
         masked_email = f"{u_part[:2]}***@{d_part}"
 
+    serialized = _serialize_b2c_customer(cust)
+    clean_name = serialized.get("name") or ""
+    if clean_name.upper().startswith("CLIENTE CPF"):
+        clean_name = coupon_name
+    clean_email = serialized.get("email") or ""
+    if "@compraexpressa" in clean_email or "@checkout.vindi" in clean_email:
+        clean_email = coupon_email
+
     return {
         "exists": True,
         "has_password": bool(cust.password_hash),
-        "customer_name": cust.name,
+        "customer_name": clean_name or cust.name,
         "masked_email": masked_email,
-        "customer": _serialize_b2c_customer(cust) if not cust.password_hash else None,
+        "prefill": {
+            "name": clean_name,
+            "email": clean_email,
+            "cpf": serialized.get("cpf") or (digits if len(digits) == 11 else ""),
+            "phone": serialized.get("phone") or "",
+            "address": serialized.get("address") or {},
+        },
+        "customer": serialized if not cust.password_hash else None,
     }
 
 
@@ -5040,18 +5777,18 @@ def forgot_b2c_customer_password(
     }
 
     company = db.query(Company).filter(Company.id == data.company_id).first()
-    settings = db.query(CompanySettings).filter(CompanySettings.company_id == data.company_id).first()
+    smtp_cfg = _resolve_smtp_settings(db, data.company_id)
     sent_via_smtp = False
 
-    if settings and settings.smtp_host and settings.smtp_username and settings.smtp_password:
+    if smtp_cfg:
         try:
             from app.core.email import send_smtp_email
-            sent_via_smtp = send_smtp_email(
-                host=settings.smtp_host,
-                port=settings.smtp_port or 587,
-                username=settings.smtp_username,
-                password=settings.smtp_password,
-                from_email=settings.smtp_from_email or settings.smtp_username,
+            send_smtp_email(
+                smtp_host=smtp_cfg.smtp_host,
+                smtp_port=int(smtp_cfg.smtp_port or 587),
+                smtp_username=smtp_cfg.smtp_username,
+                smtp_password=smtp_cfg.smtp_password,
+                smtp_from=smtp_cfg.smtp_from_email or smtp_cfg.smtp_username,
                 to_email=cust.email,
                 subject=f"Código de Recuperação de Senha - {company.name if company else 'Loja Virtual'}",
                 html_content=(
@@ -5062,9 +5799,10 @@ def forgot_b2c_customer_password(
                     f"<p style='color:#64748b;font-size:12px;'>Este código é válido por 15 minutos.</p>"
                     f"</div>"
                 ),
-                use_ssl=bool(settings.smtp_use_ssl),
-                bcc_email=settings.smtp_bcc_email,
+                use_ssl=bool(smtp_cfg.smtp_use_ssl),
+                bcc_email=smtp_cfg.smtp_bcc_email,
             )
+            sent_via_smtp = True
         except Exception as e:
             logger.warning(f"[B2C Forgot Password] Erro ao enviar SMTP: {e}")
 
@@ -5566,6 +6304,9 @@ def validate_b2c_coupon(
         "difference_to_pay": difference_to_pay,
         "fully_covered": fully_covered,
         "effective_checkout_mode": "FREE_VOUCHER" if fully_covered else configured_mode,
+        "assigned_name": coupon.assigned_name or "",
+        "assigned_email": coupon.assigned_email or "",
+        "assigned_cpf": coupon.assigned_cpf or "",
     }
 
 
@@ -6140,6 +6881,8 @@ async def process_b2c_checkout(
     _b2c_cache_clear(company.id)
 
     norm_st = _normalize_b2c_order_status(order.status)
+    # Dispara e-mail automático de Pedido Realizado (WAITING_PAYMENT) ou Pagamento Aprovado (PAID)
+    _send_b2c_order_email(db, order, event_status=norm_st)
     return {
         "order_id": order.id,
         "status": norm_st,
@@ -6431,15 +7174,35 @@ def _sync_order_with_vindi_tx(
                 va = v_addrs[0]
                 v_street = str(va.get("street") or "").strip()
                 if v_street:
+                    v_num = str(va.get("number") or "S/N").strip()
+                    v_comp = str(va.get("completion") or "").strip()
+                    v_neigh = str(va.get("neighborhood") or "").strip()
+                    v_city = str(va.get("city") or "").strip()
+                    v_state = str(va.get("state") or "")[:2].upper()
+                    v_zip = _clean_digits(str(va.get("postal_code") or ""))
                     meta["shipping_address"] = {
                         "street": v_street,
-                        "number": str(va.get("number") or "S/N"),
-                        "complement": str(va.get("completion") or ""),
-                        "neighborhood": str(va.get("neighborhood") or ""),
-                        "city": str(va.get("city") or ""),
-                        "state": str(va.get("state") or "")[:2].upper(),
-                        "zip_code": _clean_digits(str(va.get("postal_code") or "")),
+                        "number": v_num,
+                        "complement": v_comp,
+                        "neighborhood": v_neigh,
+                        "city": v_city,
+                        "state": v_state,
+                        "zip_code": v_zip,
                     }
+                    if v_city:
+                        cust_obj.city = v_city
+                    if v_state:
+                        cust_obj.state = v_state
+                    addr_obj = db.query(Address).filter(Address.customer_id == cust_obj.id).first()
+                    if addr_obj:
+                        addr_obj.street = v_street
+                        addr_obj.number = v_num or addr_obj.number
+                        addr_obj.complement = v_comp or addr_obj.complement
+                        addr_obj.neighborhood = v_neigh or addr_obj.neighborhood
+                        addr_obj.city = v_city or addr_obj.city
+                        addr_obj.state = v_state or addr_obj.state
+                        if v_zip:
+                            addr_obj.zip_code = v_zip
 
     history: List[Dict[str, Any]] = meta.get("payment_history") if isinstance(meta.get("payment_history"), list) else []
     last_entry = history[-1] if history else {}
@@ -6473,9 +7236,11 @@ def _sync_order_with_vindi_tx(
         )
         meta["payment_history"] = history[-30:]
 
+    status_transitioned_to: Optional[str] = None
     if tx_info.get("paid") and _normalize_b2c_order_status(order.status) != "PAID":
         order.status = "PAID"
         order.confirmed_at = datetime.utcnow()
+        status_transitioned_to = "PAID"
         red = (
             db.query(B2CCouponRedemption)
             .filter(B2CCouponRedemption.order_id == order.id)
@@ -6483,10 +7248,16 @@ def _sync_order_with_vindi_tx(
         )
         if red and red.status == "PENDING_PAYMENT":
             red.status = "COMPLETED"
+    elif tx_info.get("declined") and _normalize_b2c_order_status(order.status) == "WAITING_PAYMENT":
+        order.status = "CANCELED"
+        status_transitioned_to = "CANCELED"
 
     _save_order_meta(order, meta)
     db.commit()
     _b2c_cache_clear(order.company_id)
+
+    if status_transitioned_to in ("PAID", "CANCELED"):
+        _send_b2c_order_email(db, order, event_status=status_transitioned_to)
     return {
         "order_id": order.id,
         "status": _normalize_b2c_order_status(order.status),

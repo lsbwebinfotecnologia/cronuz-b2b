@@ -117,10 +117,12 @@ export default function B2COpenStorefront({
 
   // Left Sidebar Filters & Facets for Category / Showcase / Search Pages
   const [catalogFacets, setCatalogFacets] = useState<{
+    categories: string[];
     brands: string[];
     authors: string[];
     characteristics: Record<string, string[]>;
-  }>({ brands: [], authors: [], characteristics: {} });
+  }>({ categories: [], brands: [], authors: [], characteristics: {} });
+  const [discoveredCategoryNames, setDiscoveredCategoryNames] = useState<string[]>([]);
   const [sidebarBrand, setSidebarBrand] = useState<string>('');
   const [sidebarAuthor, setSidebarAuthor] = useState<string>('');
   const [sidebarCharacteristic, setSidebarCharacteristic] = useState<string>('');
@@ -349,18 +351,57 @@ export default function B2COpenStorefront({
       const res = await fetch(`${apiBase}/b2c/public/catalog?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
-        setProducts(data.items || []);
-        setTotalItemsCount(Number(data.total || (data.items || []).length));
+        const fetchedItems = Array.isArray(data.items) ? data.items : [];
+        setProducts(fetchedItems);
+        setTotalItemsCount(Number(data.total || fetchedItems.length));
         setPageSkip(skipVal);
         setTotalPages(Math.max(1, Number(data.pages || 1)));
+
+        const facetCats: string[] = Array.isArray(data.facets?.categories)
+          ? data.facets.categories
+          : [];
+        setDiscoveredCategoryNames((prev) => {
+          const merged = new Set<string>(prev);
+          for (const fc of facetCats) {
+            const clean = String(fc || '').trim();
+            if (clean && clean.toLowerCase() !== 'geral') merged.add(clean);
+          }
+          for (const it of fetchedItems) {
+            const cName = String(it?.category?.name || '').trim();
+            if (cName && cName.toLowerCase() !== 'geral') merged.add(cName);
+          }
+          return Array.from(merged);
+        });
+
         if (data.facets) {
+          const rawChars =
+            data.facets.characteristics && typeof data.facets.characteristics === 'object'
+              ? data.facets.characteristics
+              : {};
+          const cleanChars: Record<string, string[]> = {};
+          for (const [k, vals] of Object.entries(rawChars)) {
+            const kTrim = String(k || '').trim();
+            const kLow = kTrim.toLowerCase();
+            if (!kTrim || kLow.includes('tray')) continue;
+            const filteredVals = (Array.isArray(vals) ? vals : []).filter((v) => {
+              const vTrim = String(v || '').trim();
+              const vLow = vTrim.toLowerCase();
+              const comb = `${kLow} ${vLow}`.trim();
+              if (!vTrim || vLow.includes('tray') || comb === 'tray sim') return false;
+              if (kLow.startsWith('característica horus tipo') && (vLow === 'sim' || vLow === 's')) {
+                return false;
+              }
+              return true;
+            });
+            if (filteredVals.length > 0) {
+              cleanChars[kTrim] = filteredVals;
+            }
+          }
           setCatalogFacets({
+            categories: facetCats,
             brands: Array.isArray(data.facets.brands) ? data.facets.brands : [],
             authors: Array.isArray(data.facets.authors) ? data.facets.authors : [],
-            characteristics:
-              data.facets.characteristics && typeof data.facets.characteristics === 'object'
-                ? data.facets.characteristics
-                : {},
+            characteristics: cleanChars,
           });
         }
       }
@@ -836,15 +877,66 @@ export default function B2COpenStorefront({
       if (data.allows_freight_discount) {
         setSelectedFreight(couponFreeFreightOption);
       }
-      if (couponCpf && !customerForm.cpf) {
-        setCustomerForm((prev) => ({ ...prev, cpf: couponCpf }));
-      }
+      setCustomerForm((prev) => ({
+        ...prev,
+        cpf: prev.cpf || couponCpf || data.assigned_cpf || '',
+        name: prev.name || data.assigned_name || '',
+        email: prev.email || data.assigned_email || '',
+      }));
       if (!silent) toast.success('Cupom validado e aplicado à sacola!');
     } catch {
       if (!silent) toast.error('Erro ao validar cupom.');
     } finally {
       setValidatingCoupon(false);
     }
+  };
+
+  const handleAutoLookupByCpf = async (rawCpf: string) => {
+    const digits = rawCpf.replace(/\D/g, '');
+    if (digits.length !== 11) return;
+    try {
+      const res = await fetch(`${apiBase}/b2c/public/auth/check-identity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, identifier: digits }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.prefill) {
+        setCustomerForm((prev) => ({
+          ...prev,
+          cpf: prev.cpf || digits,
+          name: prev.name || data.prefill.name || '',
+          email: prev.email || data.prefill.email || '',
+          phone: prev.phone || data.prefill.phone || '',
+          street:
+            prev.street ||
+            (data.prefill.address?.street && !String(data.prefill.address.street).includes('ETAPA DE PAGAMENTO')
+              ? data.prefill.address.street
+              : ''),
+          number:
+            prev.number ||
+            (data.prefill.address?.number && data.prefill.address.number !== 'S/N'
+              ? data.prefill.address.number
+              : ''),
+          complement: prev.complement || data.prefill.address?.complement || '',
+          neighborhood:
+            prev.neighborhood ||
+            (data.prefill.address?.neighborhood && data.prefill.address.neighborhood !== 'CENTRO'
+              ? data.prefill.address.neighborhood
+              : ''),
+          city: prev.city || data.prefill.address?.city || '',
+          state: prev.state || data.prefill.address?.state || '',
+        }));
+        if (
+          !zipCode &&
+          data.prefill.address?.zip_code &&
+          data.prefill.address.zip_code !== '01001000'
+        ) {
+          setZipCode(data.prefill.address.zip_code);
+        }
+      }
+    } catch {}
   };
 
   const handleCheckIdentity = async (identifierToUse?: string) => {
@@ -866,6 +958,16 @@ export default function B2COpenStorefront({
         setIdentityExists(true);
         setIdentityHasPassword(Boolean(data.has_password));
         setIdentityCustomerName(data.customer_name || '');
+        if (data.prefill) {
+          setCustomerForm((prev) => ({
+            ...prev,
+            name: prev.name || data.prefill.name || '',
+            email: prev.email || data.prefill.email || '',
+            cpf: prev.cpf || data.prefill.cpf || '',
+            phone: prev.phone || data.prefill.phone || '',
+          }));
+          if (data.prefill.cpf) setCouponCpf(data.prefill.cpf);
+        }
         if (!data.has_password && data.customer) {
           // Legacy B2C customer without password: pre-fill data directly
           applyAuthenticatedCustomer(data.customer);
@@ -879,8 +981,10 @@ export default function B2COpenStorefront({
         setIdentityHasPassword(false);
         setCustomerForm((prev) => ({
           ...prev,
+          name: data.prefill?.name || prev.name,
           email: data.prefill?.email || prev.email,
           cpf: data.prefill?.cpf || prev.cpf,
+          phone: data.prefill?.phone || prev.phone,
         }));
         if (data.prefill?.cpf) setCouponCpf(data.prefill.cpf);
       }
@@ -1169,6 +1273,18 @@ export default function B2COpenStorefront({
       toast.error('Informe um CPF válido (11 dígitos) para continuar.');
       return;
     }
+    if (!customerForm.name || customerForm.name.trim().length < 3) {
+      toast.error('Informe seu Nome Completo para continuar.');
+      return;
+    }
+    if (!customerForm.email || !customerForm.email.includes('@')) {
+      toast.error('Informe seu E-mail para continuar.');
+      return;
+    }
+    if (!customerForm.phone || customerForm.phone.replace(/\D/g, '').length < 10) {
+      toast.error('Informe seu WhatsApp / Telefone com DDD.');
+      return;
+    }
     if (!isVindiExpressLink) {
       if (!zipCode || zipCode.replace(/\D/g, '').length < 8) {
         toast.error('Informe o CEP de entrega.');
@@ -1330,7 +1446,7 @@ export default function B2COpenStorefront({
     ? appearance.promotions.filter((p: any) => p.active !== false)
     : [];
 
-  // Fallback dynamic categories derived from loaded catalog if Seller hasn't configured custom categories yet
+  // Fallback dynamic categories derived from store facets & discovered categories so top bar NEVER loses categories when one is selected
   const effectiveCategories = useMemo(() => {
     if (configuredCategories.length > 0) {
       return configuredCategories.map((c: any, idx: number) => ({
@@ -1340,12 +1456,17 @@ export default function B2COpenStorefront({
     }
     const seen = new Set<string>();
     const autoCats: any[] = [];
-    for (const p of products) {
-      const catName = (p.category?.name || '').trim();
+    const candidateNames: string[] = [
+      ...(catalogFacets.categories || []),
+      ...discoveredCategoryNames,
+      ...products.map((p: any) => String(p?.category?.name || '').trim()),
+    ];
+    for (const rawName of candidateNames) {
+      const catName = String(rawName || '').trim();
       if (catName && catName.toLowerCase() !== 'geral' && !seen.has(catName.toLowerCase())) {
         seen.add(catName.toLowerCase());
         autoCats.push({
-          id: `auto-cat-${catName}`,
+          id: `auto-cat-${slugifySegment(catName)}`,
           label: catName,
           code: catName,
           slug: slugifySegment(catName),
@@ -1355,10 +1476,10 @@ export default function B2COpenStorefront({
           description: '',
         });
       }
-      if (autoCats.length >= 8) break;
+      if (autoCats.length >= 12) break;
     }
     return autoCats;
-  }, [configuredCategories, products]);
+  }, [configuredCategories, catalogFacets.categories, discoveredCategoryNames, products]);
 
   // Multi-Page URL Resolution (F5 Refresh & Browser Back/Forward Navigation)
   useEffect(() => {
@@ -2049,22 +2170,23 @@ export default function B2COpenStorefront({
               )}
 
               {effectiveCategories.map((cat: any) => {
-                const isSelected = activeView === 'category' && selectedCategoryId === cat.id;
+                const isSelected =
+                  activeView === 'category' &&
+                  (selectedCategoryId === cat.id ||
+                    slugifySegment(selectedCategoryLabel) === slugifySegment(cat.label));
                 return (
                   <button
                     key={cat.id}
                     type="button"
                     onClick={() =>
-                      isSelected
-                        ? handleResetToHome()
-                        : handleSelectCategory(
-                            cat.id,
-                            cat.label,
-                            cat.code,
-                            cat.filter_type || 'COD_GENERO',
-                            false,
-                            cat
-                          )
+                      handleSelectCategory(
+                        cat.id,
+                        cat.label,
+                        cat.code,
+                        cat.filter_type || 'COD_GENERO',
+                        false,
+                        cat
+                      )
                     }
                     style={
                       isSelected ? { backgroundColor: primaryColor, color: '#ffffff' } : undefined
@@ -4845,31 +4967,81 @@ export default function B2COpenStorefront({
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
                           <User className="w-4 h-4 text-indigo-600" />
-                          Identificação Rápida por CPF
+                          Identificação Rápida do Cliente
                         </span>
                         <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
-                          Compra Rápida
+                          Sem Redigitação
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-600 leading-relaxed">
-                        Para sua comodidade, informe apenas o seu <strong>CPF</strong> aqui. Seus dados de entrega e a escolha da forma de pagamento (PIX, Cartão ou Boleto) serão preenchidos na próxima etapa, em nosso <strong>ambiente seguro de pagamento</strong>.
+                        Preencha apenas seus <strong>dados básicos de contato</strong> abaixo para acompanhamento do pedido. Eles já serão enviados <strong>pré-preenchidos automaticamente</strong> para a próxima etapa de pagamento seguro.
                       </p>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Seu CPF (apenas números) *
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="000.000.000-00"
-                          value={customerForm.cpf || couponCpf}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setCustomerForm({ ...customerForm, cpf: val });
-                            setCouponCpf(val);
-                          }}
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-indigo-300 bg-white text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
-                        />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Seu CPF *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="000.000.000-00"
+                            value={customerForm.cpf || couponCpf}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCustomerForm({ ...customerForm, cpf: val });
+                              setCouponCpf(val);
+                              handleAutoLookupByCpf(val);
+                            }}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-indigo-300 bg-white text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            WhatsApp / Celular *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="(11) 99999-9999"
+                            value={customerForm.phone}
+                            onChange={(e) =>
+                              setCustomerForm({ ...customerForm, phone: e.target.value })
+                            }
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Nome Completo *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Seu nome completo"
+                            value={customerForm.name}
+                            onChange={(e) =>
+                              setCustomerForm({ ...customerForm, name: e.target.value })
+                            }
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            E-mail *
+                          </label>
+                          <input
+                            type="email"
+                            required
+                            placeholder="seu@email.com.br"
+                            value={customerForm.email}
+                            onChange={(e) =>
+                              setCustomerForm({ ...customerForm, email: e.target.value })
+                            }
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm"
+                          />
+                        </div>
                       </div>
                     </div>
                   ) : (
@@ -4900,8 +5072,10 @@ export default function B2COpenStorefront({
                               required
                               value={customerForm.cpf || couponCpf}
                               onChange={(e) => {
-                                setCustomerForm({ ...customerForm, cpf: e.target.value });
-                                setCouponCpf(e.target.value);
+                                const val = e.target.value;
+                                setCustomerForm({ ...customerForm, cpf: val });
+                                setCouponCpf(val);
+                                handleAutoLookupByCpf(val);
                               }}
                               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm font-mono"
                             />
@@ -5957,36 +6131,84 @@ export default function B2COpenStorefront({
                   ← Revisar Sacola ({cart.reduce((a, b) => a + b.quantity, 0)} itens • {formatBRL(subtotal)})
                 </button>
 
-                {/* 1. CUSTOMER IDENTIFICATION: MODO EXPRESS CPF vs CADASTRO COMPLETO */}
+                {/* 1. CUSTOMER IDENTIFICATION: MODO EXPRESS LINK (CPF + NOME + EMAIL + TEL) vs CADASTRO COMPLETO */}
                 {isVindiExpressLink ? (
                   <div className="p-4 rounded-2xl border border-indigo-200 bg-indigo-50/40 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
                         <User className="w-4 h-4 text-indigo-600" />
-                        Identificação Rápida por CPF
+                        Identificação Rápida do Cliente
                       </span>
                       <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
-                        Compra Rápida
+                        Sem Redigitação
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-600 leading-relaxed">
-                      Para sua comodidade, informe apenas o seu <strong>CPF</strong> aqui. Seus dados de entrega e a escolha da forma de pagamento (PIX, Cartão ou Boleto) serão preenchidos na próxima etapa, em nosso <strong>ambiente seguro de pagamento</strong>.
+                      Preencha seus <strong>dados básicos de contato</strong> abaixo para acompanhar seu pedido na loja. Eles já serão enviados <strong>pré-preenchidos automaticamente</strong> para o ambiente seguro de pagamento na próxima etapa.
                     </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Seu CPF *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="000.000.000-00"
+                          value={customerForm.cpf || couponCpf}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setCustomerForm({ ...customerForm, cpf: val });
+                            setCouponCpf(val);
+                            handleAutoLookupByCpf(val);
+                          }}
+                          className="w-full px-3.5 py-2 rounded-xl border border-indigo-300 bg-white text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          WhatsApp / Celular *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="(11) 99999-9999"
+                          value={customerForm.phone}
+                          onChange={(e) =>
+                            setCustomerForm({ ...customerForm, phone: e.target.value })
+                          }
+                          className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-sm"
+                        />
+                      </div>
+                    </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Seu CPF (apenas números) *
+                        Nome Completo *
                       </label>
                       <input
                         type="text"
                         required
-                        placeholder="000.000.000-00"
-                        value={customerForm.cpf || couponCpf}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setCustomerForm({ ...customerForm, cpf: val });
-                          setCouponCpf(val);
-                        }}
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-indigo-300 bg-white text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Seu nome completo"
+                        value={customerForm.name}
+                        onChange={(e) =>
+                          setCustomerForm({ ...customerForm, name: e.target.value })
+                        }
+                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        E-mail *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="seu@email.com.br"
+                        value={customerForm.email}
+                        onChange={(e) =>
+                          setCustomerForm({ ...customerForm, email: e.target.value })
+                        }
+                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-sm"
                       />
                     </div>
                   </div>
@@ -6105,8 +6327,10 @@ export default function B2COpenStorefront({
                             required
                             value={customerForm.cpf || couponCpf}
                             onChange={(e) => {
-                              setCustomerForm({ ...customerForm, cpf: e.target.value });
-                              setCouponCpf(e.target.value);
+                              const val = e.target.value;
+                              setCustomerForm({ ...customerForm, cpf: val });
+                              setCouponCpf(val);
+                              handleAutoLookupByCpf(val);
                             }}
                             className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-mono"
                           />

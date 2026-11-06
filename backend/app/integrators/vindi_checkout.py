@@ -875,10 +875,46 @@ class VindiCheckoutClient:
 
             # Link validado com sucesso na Vindi Commerce!
             # URL oficial do Checkout Vindi: https://checkout.yapay.com.br/transacao/{token_transaction}
-            # e URL do Carrinho Vindi: https://tc.intermediador.yapay.com.br/payment/car/v1/{token_transaction}
+            # O SPA da Vindi (updateStateWithQueryParams) lê nativamente query params (name, email, cpf, phone, zip_code, street, number, neighborhood, city, state, complement)
+            # pré-preenchendo os dados do comprador para evitar digitação dupla!
+            from urllib.parse import urlencode
+
+            cust_data = customer or {}
+            prefill_params: Dict[str, str] = {}
+            c_name = str(cust_data.get("name") or "").strip()
+            c_email = str(cust_data.get("email") or "").strip()
+            c_cpf = "".join(filter(str.isdigit, str(cust_data.get("cpf") or "")))
+            c_phone = "".join(filter(str.isdigit, str(cust_data.get("phone") or "")))
+            if c_name and not c_name.upper().startswith("CLIENTE CPF"):
+                prefill_params["name"] = c_name
+            if c_email and "@compraexpressa" not in c_email and "@checkout.vindi" not in c_email:
+                prefill_params["email"] = c_email
+            if len(c_cpf) == 11:
+                prefill_params["cpf"] = c_cpf
+            if len(c_phone) >= 10:
+                prefill_params["phone"] = c_phone
+
+            a_zip = "".join(filter(str.isdigit, str(addr.get("zip_code") or "")))
+            a_street = str(addr.get("street") or "").strip()
+            if len(a_zip) == 8 and a_zip != "01001000":
+                prefill_params["zip_code"] = a_zip
+            if a_street and "ETAPA DE PAGAMENTO" not in a_street.upper():
+                prefill_params["street"] = a_street
+                if addr.get("number") and str(addr.get("number")).strip().upper() != "S/N":
+                    prefill_params["number"] = str(addr.get("number")).strip()
+                if addr.get("complement"):
+                    prefill_params["complement"] = str(addr.get("complement")).strip()
+                if addr.get("neighborhood") and str(addr.get("neighborhood")).strip().upper() != "CENTRO":
+                    prefill_params["neighborhood"] = str(addr.get("neighborhood")).strip()
+                if addr.get("city"):
+                    prefill_params["city"] = str(addr.get("city")).strip()
+                if addr.get("state"):
+                    prefill_params["state"] = str(addr.get("state")).strip()[:2].upper()
+
+            qs_suffix = f"?{urlencode(prefill_params)}" if prefill_params else ""
             cart_full_url = f"{url_car.rstrip('/')}/{token_tx}" if url_car and token_tx else ""
             direct_checkout_url = (
-                f"https://checkout.yapay.com.br/transacao/{token_tx}"
+                f"https://checkout.yapay.com.br/transacao/{token_tx}{qs_suffix}"
                 if (not effective_sandbox and token_tx)
                 else (cart_full_url or f"{clean_base}/b2c/public/vindi-checkout/{order_id}")
             )

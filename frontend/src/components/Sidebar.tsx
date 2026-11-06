@@ -247,7 +247,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        if (pathname.startsWith('/schools')) initialOpen['Escolas & Eventos'] = true;
        if (pathname.startsWith('/cafeteria')) initialOpen['Cafeteria'] = true;
        if (pathname.startsWith('/product-search') || pathname.startsWith('/addressing')) initialOpen['Busca Preço'] = true;
-       if (pathname.startsWith('/b2c-storefront')) initialOpen['B2C'] = true;
+       if (pathname.startsWith('/b2c-storefront') || pathname.startsWith('/products')) initialOpen['B2C'] = true;
        setOpenMenus(initialOpen);
        
        const fetchSettings = async () => {
@@ -716,7 +716,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
 
         <nav className="space-y-1">
           {dynamicNavigation.map((item) => {
-            const isActive = pathname === item.href || (item.subItems && item.subItems.some(sub => pathname === sub.href)) || pathname.startsWith(item.href + '/');
+            const isActive = pathname === item.href || (item.subItems && item.subItems.some(sub => pathname === sub.href || (sub.href === '/products' && pathname.startsWith('/products/')))) || pathname.startsWith(item.href + '/');
             const isOpen = openMenus[item.name];
 
             return (
@@ -784,7 +784,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                      >
                         <div className="py-1">
                           {item.subItems.map(sub => {
-                             const isSubActive = pathname === sub.href;
+                             const isSubActive = pathname === sub.href || (sub.href === '/products' && item.name === 'B2C' && pathname.startsWith('/products/'));
                              return (
                                <Link
                                  key={sub.name}

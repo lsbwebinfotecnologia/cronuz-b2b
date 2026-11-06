@@ -413,5 +413,19 @@ def start_scheduler():
     except Exception as _e_job_ssl:
         logger.warning(f"Falha ao registrar job de SSL para autores: {_e_job_ssl}")
 
+    # Sincronização incremental leve de Estoque Horus (Produtos / Loja B2C) a cada 5 minutos
+    try:
+        from app.api.b2c_storefront import run_b2c_horus_stock_sync_job
+        scheduler.add_job(
+            run_b2c_horus_stock_sync_job,
+            IntervalTrigger(minutes=5),
+            id="job_b2c_horus_stock_sync",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+        )
+    except Exception as _e_job_b2c_stock:
+        logger.warning(f"Falha ao registrar job de estoque B2C Horus: {_e_job_b2c_stock}")
+
     scheduler.start()
-    logger.info("Cronuz BG Scheduler Started - Jobs: NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice, Authors SSL Sync")
+    logger.info("Cronuz BG Scheduler Started - Jobs: NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice, Authors SSL Sync, B2C Horus Stock Sync")

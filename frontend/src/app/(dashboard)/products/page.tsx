@@ -171,7 +171,7 @@ export default function ProductsPage() {
         }
         
         // Load categories
-        const catRes = await fetch(`${apiBase}/categories/`, {
+        const catRes = await fetch(`${apiBase}/categories`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (catRes.ok) {

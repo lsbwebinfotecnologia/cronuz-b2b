@@ -24,6 +24,7 @@ import {
   Trash2,
   PackageCheck,
   Bell,
+  Mail,
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -57,8 +58,8 @@ export default function SellerB2CStorefrontManagementPage({
 
   // Sub-filter inside the Coupons page only (Cupons Individuais vs Lotes/Campanhas vs Histórico de Uso)
   const [couponSubView, setCouponSubView] = useState<'list' | 'batches' | 'history'>('list');
-  // Sub-tabs inside Settings (Checkout & Pagamento | Frete & Entrega | Cache | LGPD)
-  const [settingsSubTab, setSettingsSubTab] = useState<'checkout' | 'freight' | 'cache' | 'lgpd'>('checkout');
+  // Sub-tabs inside Settings (Checkout & Pagamento | E-mails do Pedido | Frete & Entrega | Cache | LGPD)
+  const [settingsSubTab, setSettingsSubTab] = useState<'checkout' | 'emails' | 'freight' | 'cache' | 'lgpd'>('checkout');
   const [loading, setLoading] = useState(true);
 
   const [summary, setSummary] = useState<any>(null);
@@ -152,6 +153,18 @@ export default function SellerB2CStorefrontManagementPage({
       correios_enabled: true,
       carrier_table: [] as any[],
     },
+    email_notifications_config: {
+      enabled: true,
+      waiting_payment_subject: 'Pedido #{pedido} realizado — Aguardando Pagamento | {loja}',
+      waiting_payment_body:
+        'Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos.',
+      paid_subject: 'Pagamento Aprovado! Pedido #{pedido} confirmado | {loja}',
+      paid_body:
+        'O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio.',
+      canceled_subject: 'Pedido #{pedido} cancelado | {loja}',
+      canceled_body:
+        'Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento.',
+    } as Record<string, any>,
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -276,6 +289,27 @@ export default function SellerB2CStorefrontManagementPage({
               carrier_table: Array.isArray(s.settings.freight_config?.carrier_table)
                 ? s.settings.freight_config.carrier_table
                 : [],
+            },
+            email_notifications_config: {
+              enabled: s.settings.email_notifications_config?.enabled !== false,
+              waiting_payment_subject:
+                s.settings.email_notifications_config?.waiting_payment_subject ||
+                'Pedido #{pedido} realizado — Aguardando Pagamento | {loja}',
+              waiting_payment_body:
+                s.settings.email_notifications_config?.waiting_payment_body ||
+                'Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos.',
+              paid_subject:
+                s.settings.email_notifications_config?.paid_subject ||
+                'Pagamento Aprovado! Pedido #{pedido} confirmado | {loja}',
+              paid_body:
+                s.settings.email_notifications_config?.paid_body ||
+                'O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio.',
+              canceled_subject:
+                s.settings.email_notifications_config?.canceled_subject ||
+                'Pedido #{pedido} cancelado | {loja}',
+              canceled_body:
+                s.settings.email_notifications_config?.canceled_body ||
+                'Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento.',
             },
           });
         }
@@ -1935,6 +1969,7 @@ export default function SellerB2CStorefrontManagementPage({
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-2 flex flex-wrap items-center gap-2 shadow-sm">
             {[
               { id: 'checkout', label: 'Checkout e Pagamento', icon: CreditCard },
+              { id: 'emails', label: 'E-mails do Pedido', icon: Mail },
               { id: 'freight', label: 'Frete e Entrega', icon: Truck },
               { id: 'cache', label: 'Performance e Cache', icon: Database },
               { id: 'lgpd', label: 'Privacidade e LGPD', icon: ShieldCheck },
@@ -2050,6 +2085,277 @@ export default function SellerB2CStorefrontManagementPage({
               >
                 Abrir Configurações → Pagamentos
               </a>
+            </div>
+          </div>
+          )}
+
+          {/* SUB-ABA: NOTIFICAÇÕES AUTOMÁTICAS DE E-MAIL DO PEDIDO B2C */}
+          {settingsSubTab === 'emails' && (
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div>
+                  <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                    E-mails Automáticos do Pedido (Layout Simples &amp; Objetivo)
+                  </h1>
+                  <p className="text-xs text-slate-500">
+                    Disparo automático para o cliente ao realizar o pedido, ao ter o pagamento confirmado e caso o pedido seja cancelado.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleSaveB2CSettings}
+                disabled={savingSettings}
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm disabled:opacity-50 shrink-0 cursor-pointer"
+              >
+                {savingSettings ? 'Salvando...' : 'Salvar Textos de E-mail'}
+              </button>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.email_notifications_config?.enabled !== false}
+                  onChange={(e) =>
+                    setSettingsForm({
+                      ...settingsForm,
+                      email_notifications_config: {
+                        ...settingsForm.email_notifications_config,
+                        enabled: e.target.checked,
+                      },
+                    })
+                  }
+                  className="mt-1 w-4 h-4 rounded text-indigo-600"
+                />
+                <div>
+                  <span className="block text-sm font-bold text-slate-900 dark:text-white">
+                    Ativar Disparo Automático de E-mails Transacionais do Pedido
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    Utiliza a infraestrutura de e-mail já configurada na plataforma. Variáveis dinâmicas suportadas nos textos:{' '}
+                    <code className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 font-mono text-[11px]">{'{cliente}'}</code>,{' '}
+                    <code className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 font-mono text-[11px]">{'{pedido}'}</code>,{' '}
+                    <code className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 font-mono text-[11px]">{'{loja}'}</code> e{' '}
+                    <code className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 font-mono text-[11px]">{'{valor}'}</code>.
+                  </span>
+                </div>
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {/* 1. Pedido Realizado (Aguardando Pagamento) */}
+              <div className="p-4 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/30 dark:bg-amber-950/10 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                    1. Pedido Realizado (Aguardando Pagamento)
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={settingsForm.email_notifications_config?.waiting_payment_enabled !== false}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        email_notifications_config: {
+                          ...settingsForm.email_notifications_config,
+                          waiting_payment_enabled: e.target.checked,
+                        },
+                      })
+                    }
+                    className="w-4 h-4 rounded text-indigo-600 cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                    Assunto do E-mail
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.email_notifications_config?.waiting_payment_subject || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        email_notifications_config: {
+                          ...settingsForm.email_notifications_config,
+                          waiting_payment_subject: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                    Mensagem Principal (Simples e Objetiva)
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={settingsForm.email_notifications_config?.waiting_payment_message || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        email_notifications_config: {
+                          ...settingsForm.email_notifications_config,
+                          waiting_payment_message: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs leading-relaxed"
+                  />
+                </div>
+              </div>
+
+              {/* 2. Pagamento Aprovado (Pedido Pago) */}
+              <div className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/30 dark:bg-emerald-950/10 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300">
+                    2. Pagamento Aprovado (Pedido Pago)
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={settingsForm.email_notifications_config?.paid_enabled !== false}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        email_notifications_config: {
+                          ...settingsForm.email_notifications_config,
+                          paid_enabled: e.target.checked,
+                        },
+                      })
+                    }
+                    className="w-4 h-4 rounded text-indigo-600 cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                    Assunto do E-mail
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.email_notifications_config?.paid_subject || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        email_notifications_config: {
+                          ...settingsForm.email_notifications_config,
+                          paid_subject: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                    Mensagem Principal (Simples e Objetiva)
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={settingsForm.email_notifications_config?.paid_message || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        email_notifications_config: {
+                          ...settingsForm.email_notifications_config,
+                          paid_message: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs leading-relaxed"
+                  />
+                </div>
+              </div>
+
+              {/* 3. Pedido Cancelado */}
+              <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50/30 dark:bg-rose-950/10 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300">
+                    3. Pedido Cancelado
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={settingsForm.email_notifications_config?.canceled_enabled !== false}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        email_notifications_config: {
+                          ...settingsForm.email_notifications_config,
+                          canceled_enabled: e.target.checked,
+                        },
+                      })
+                    }
+                    className="w-4 h-4 rounded text-indigo-600 cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                    Assunto do E-mail
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.email_notifications_config?.canceled_subject || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        email_notifications_config: {
+                          ...settingsForm.email_notifications_config,
+                          canceled_subject: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                    Mensagem Principal (Simples e Objetiva)
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={settingsForm.email_notifications_config?.canceled_message || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        email_notifications_config: {
+                          ...settingsForm.email_notifications_config,
+                          canceled_message: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs leading-relaxed"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Texto de Rodapé do E-mail
+                </label>
+                <input
+                  type="text"
+                  value={settingsForm.email_notifications_config?.footer_note || ''}
+                  onChange={(e) =>
+                    setSettingsForm({
+                      ...settingsForm,
+                      email_notifications_config: {
+                        ...settingsForm.email_notifications_config,
+                        footer_note: e.target.value,
+                      },
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                />
+              </div>
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 text-xs text-slate-600 dark:text-slate-400 flex items-center">
+                <span>
+                  O layout inclui automaticamente o <strong>cabeçalho da loja</strong>, o <strong>selo de status</strong>, o <strong>texto personalizado acima</strong>, a <strong>tabela com os itens e valores do pedido</strong> (e botão de pagamento quando aguardando pagamento).
+                </span>
+              </div>
             </div>
           </div>
           )}

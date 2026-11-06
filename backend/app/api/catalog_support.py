@@ -18,6 +18,7 @@ router = APIRouter(tags=["catalog-metadata"])
 # --- Categories ---
 
 @router.post("/categories", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/categories/", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def create_category(
     item_in: CategoryCreate,
     db: Session = Depends(get_db),
@@ -37,6 +38,7 @@ def create_category(
         raise HTTPException(status_code=400, detail="Categoria com este nome já existe nesta empresa.")
 
 @router.get("/categories", response_model=List[CategoryResponse])
+@router.get("/categories/", response_model=List[CategoryResponse], include_in_schema=False)
 def get_categories(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -93,6 +95,7 @@ def create_brand(
         raise HTTPException(status_code=400, detail="Marca com este nome já existe nesta empresa.")
 
 @router.get("/brands", response_model=List[BrandResponse])
+@router.get("/brands/", response_model=List[BrandResponse], include_in_schema=False)
 def get_brands(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, DatabaseZap, Building2, CreditCard, Truck, ChevronRight, ChevronDown, FileText, Key, CheckCircle, BookOpen, Package } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, DatabaseZap, Building2, CreditCard, Truck, ChevronRight, ChevronDown, FileText, Key, CheckCircle, BookOpen, Package, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -10,6 +10,7 @@ import { PrintPointsTab } from './PrintPointsTab';
 import { EmailTemplatesTab } from './EmailTemplatesTab';
 import { HorusTab } from './HorusTab';
 import { HorusSQLTab } from './HorusSQLTab';
+import { HorusStockJobTab } from './HorusStockJobTab';
 import { BookinfoTab } from './BookinfoTab';
 import { SefazBranchesTab } from './SefazBranchesTab';
 import { DropshipTab } from './DropshipTab';
@@ -593,6 +594,7 @@ export default function SettingsPage() {
       group: '2. ERP & Catálogo',
       items: [
         ...(company?.module_horus_erp ? [{ id: 'horus', label: 'Integração Horus ERP', icon: Database, activeStatus: Boolean((settings as any).horus_enabled) }] : []),
+        { id: 'horus_stock_job', label: 'Job de Estoque (Produtos)', icon: RefreshCw, activeStatus: Boolean((settings as any).horus_enabled) },
         ...(hasHorusSql ? [{ id: 'horus_sql', label: 'Horus SQL Direct', icon: DatabaseZap, activeStatus: hasHorusSql }] : []),
         { id: 'bookinfo', label: 'Integração Bookinfo', icon: BookOpen, activeStatus: Boolean((settings as any).bookinfo_sync_enabled || (settings as any).bookinfo_api_key) },
         { id: 'dropship', label: 'Dropship Horus', icon: Package, activeStatus: Boolean((company as any)?.module_dropship) },
@@ -618,7 +620,7 @@ export default function SettingsPage() {
 
   const tabs = tabGroups.flatMap((g) => g.items);
 
-  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'horus_sql' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && activeTab !== 'logistics';
+  const isFormTab = activeTab !== 'templates' && activeTab !== 'print_points' && activeTab !== 'horus' && activeTab !== 'horus_stock_job' && activeTab !== 'horus_sql' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && activeTab !== 'logistics';
   const FormContainer = isFormTab ? 'form' : 'div';
 
   return (
@@ -995,6 +997,13 @@ export default function SettingsPage() {
                             >
                               Catálogo &amp; Sincronia B2C →
                             </Link>
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('horus_stock_job')}
+                              className="px-3.5 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 text-xs font-bold text-indigo-700 dark:text-indigo-300 cursor-pointer"
+                            >
+                              Job de Estoque (5 min) →
+                            </button>
                           </div>
                         </div>
                       )}
@@ -1077,6 +1086,13 @@ export default function SettingsPage() {
                                 Abrir Horus ERP (API) →
                               </button>
                             )}
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('horus_stock_job')}
+                              className="px-3.5 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 text-xs font-bold text-indigo-700 dark:text-indigo-300 cursor-pointer"
+                            >
+                              Job de Estoque (Produtos) →
+                            </button>
                             {hasHorusSql && (
                               <button
                                 type="button"
@@ -2168,6 +2184,13 @@ export default function SettingsPage() {
                 </div>
               )}
 
+              {/* Tab: JOB DE ESTOQUE (PRODUTOS) */}
+              {activeTab === 'horus_stock_job' && (
+                <div className="animate-in fade-in">
+                  <HorusStockJobTab />
+                </div>
+              )}
+
               {/* Tab: HORUS SQL DIRECT */}
               {activeTab === 'horus_sql' && (
                 <div className="animate-in fade-in">
@@ -2204,7 +2227,7 @@ export default function SettingsPage() {
 
             </div>
 
-            {activeTab !== 'templates' && activeTab !== 'horus' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && activeTab !== 'logistics' && (
+            {activeTab !== 'templates' && activeTab !== 'horus' && activeTab !== 'horus_stock_job' && activeTab !== 'bookinfo' && activeTab !== 'sefaz_sp' && activeTab !== 'dropship' && activeTab !== 'logistics' && (
               <div className="p-6 bg-slate-50 border-t border-slate-200 dark:bg-slate-900/60 dark:border-slate-800/60 flex items-center justify-end">
                 <button
                 type="submit"
