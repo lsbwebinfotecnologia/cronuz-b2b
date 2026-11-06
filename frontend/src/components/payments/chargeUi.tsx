@@ -191,3 +191,21 @@ export async function copyText(text: string | null | undefined) {
   await navigator.clipboard.writeText(text);
   return true;
 }
+
+export async function openMergedChargesPdf(companyId: number | string, chargeIds: number[]): Promise<void> {
+  const res = await fetch(`${API}/companies/${companyId}/payments/charges/batch-pdf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+    body: JSON.stringify({ provider: 'CORA', charge_ids: chargeIds }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = typeof body?.detail === 'string' ? body.detail : `Erro HTTP ${res.status}`;
+    throw new Error(detail);
+  }
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  window.open(blobUrl, '_blank', 'noopener,noreferrer');
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+}
+

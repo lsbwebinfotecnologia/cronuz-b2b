@@ -25,6 +25,7 @@ from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -134,6 +135,7 @@ def list_horus_invoices_for_boletos_endpoint(
     nro_nota_fiscal: Optional[str] = Query(None, max_length=60),
     search: Optional[str] = Query(None, max_length=120),
     status_filter: str = Query("ALL", pattern="^(ALL|PENDING|EMITTED)$"),
+    force_refresh: bool = Query(False),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -148,6 +150,7 @@ def list_horus_invoices_for_boletos_endpoint(
         nro_nota_fiscal=nro_nota_fiscal,
         search=search,
         status_filter=status_filter,
+        force_refresh=force_refresh,
     )
 
 
@@ -232,6 +235,74 @@ def update_horus_invoice_payment_forms_filter_endpoint(
         user_id=getattr(current_user, "id", None),
     )
     return {"allowed_payment_forms": saved}
+
+
+class HorusInvoiceAutoEmitPayload(BaseModel):
+    provider: str = Field("CORA", max_length=30)
+    enabled: bool = Field(False)
+
+
+@router.put("/companies/{company_id}/payments/horus-invoices/auto-emit")
+def update_horus_invoice_auto_emit_endpoint(
+    company_id: int,
+    payload: HorusInvoiceAutoEmitPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    _access(db, current_user, company_id, payload.provider)
+    from app.payments import horus_invoices
+    try:
+        return horus_invoices.update_invoice_auto_emit(
+            db,
+            company_id,
+            payload.enabled,
+            user_id=getattr(current_user, "id", None),
+        )
+    except PaymentProviderError as e:
+        raise _http_error(e)
+
+
+class BatchHorusInvoiceItemPayload(BaseModel):
+    nro_nota_fiscal: str = Field(..., min_length=1, max_length=60)
+    serie_fiscal: Optional[str] = Field(None, max_length=20)
+    cod_nf: Optional[str] = Field(None, max_length=40)
+    cod_ped_venda: Optional[str] = Field(None, max_length=60)
+    cod_pedido_origem: Optional[str] = Field(None, max_length=60)
+    horus_cod_cli: Optional[str] = Field(None, max_length=40)
+    horus_id_guid: Optional[str] = Field(None, max_length=100)
+    customer_id: Optional[int] = None
+    issue_date: Optional[date] = None
+    chave_acesso_nfe: Optional[str] = Field(None, max_length=60)
+    payer: "PayerPayload"
+    installments: List[HorusInvoiceInstallmentItemPayload] = Field(..., min_length=1, max_length=36)
+
+
+class EmitBatchHorusInvoicesPayload(BaseModel):
+    provider: str = "CORA"
+    method: str = Field("BOLETO", pattern="^(BOLETO|PIX)$")
+    invoices: List[BatchHorusInvoiceItemPayload] = Field(..., min_length=1, max_length=100)
+
+
+@router.post("/companies/{company_id}/payments/horus-invoices/emit-batch")
+def emit_batch_horus_invoices_endpoint(
+    company_id: int,
+    payload: EmitBatchHorusInvoicesPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    code = _access(db, current_user, company_id, payload.provider)
+    from app.payments import horus_invoices
+    try:
+        return horus_invoices.emit_batch_boletos_for_horus_invoices(
+            db,
+            company_id,
+            provider_code=code,
+            method=payload.method,
+            invoices=[inv.model_dump() for inv in payload.invoices],
+            user_id=getattr(current_user, "id", None),
+        )
+    except PaymentProviderError as e:
+        raise _http_error(e)
 
 
 # ── Lista / detalhe ──────────────────────────────────────────────────────────
@@ -333,6 +404,8 @@ class PayerPayload(BaseModel):
 
 
 EmitHorusInvoiceBoletosPayload.model_rebuild()
+BatchHorusInvoiceItemPayload.model_rebuild()
+EmitBatchHorusInvoicesPayload.model_rebuild()
 
 
 class ManualChargePayload(BaseModel):
@@ -487,6 +560,43 @@ def charge_pdf(company_id: int, charge_id: int, db: Session = Depends(get_db), c
     if not charge.pdf_url:
         raise HTTPException(status_code=404, detail="PDF da cobrança não disponível.")
     return {"url": charge.pdf_url}
+
+
+class BatchPdfPayload(BaseModel):
+    provider: str = Field("CORA", max_length=30)
+    charge_ids: List[int] = Field(..., min_length=1, max_length=150)
+
+
+@router.post("/companies/{company_id}/payments/charges/batch-pdf")
+def charges_batch_pdf(
+    company_id: int,
+    payload: BatchPdfPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Baixa e unifica todas as páginas dos PDFs dos boletos informados em um único documento PDF
+    pronto para impressão de uma só vez (ex.: 10 parcelas de uma NF ou fila de impressão do lote).
+    """
+    code = _access(db, current_user, company_id, payload.provider)
+    from app.payments import horus_invoices
+    try:
+        pdf_bytes = horus_invoices.build_merged_pdf_for_charges(
+            db,
+            company_id,
+            payload.charge_ids,
+            provider_code=code,
+        )
+    except PaymentProviderError as e:
+        raise _http_error(e)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'inline; filename="boletos-cora-unificados.pdf"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/companies/{company_id}/payments/charges/{charge_id}/simulate-payment")

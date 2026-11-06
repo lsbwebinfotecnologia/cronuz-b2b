@@ -87,9 +87,9 @@ export function middleware(request: NextRequest) {
     });
   }
 
-  // A2. Loja B2C Oficial (Multi-Tenant Subdomain Routing: b2c.[seller].horusb2b.com.br | b2c.[seller].cronuzb2b.com.br | b2c.[seller].localhost)
+  // A2. Loja B2C Oficial (Multi-Tenant Subdomain Routing: b2c.[seller].horusb2b.com.br | b2c-[seller].horusb2b.com.br | b2c.[seller].cronuzb2b.com.br)
   const b2cSubdomainMatch = hostname.match(
-    /^b2c\.([a-zA-Z0-9_-]+)\.(horusb2b\.com\.br|cronuzb2b\.com\.br|cronuz\.com\.br|localhost|horusb2b\.localhost|cronuzb2b\.localhost)$/i
+    /^b2c[.-]([a-zA-Z0-9_-]+)\.(horusb2b\.com\.br|cronuzb2b\.com\.br|cronuz\.com\.br|localhost|horusb2b\.localhost|cronuzb2b\.localhost)$/i
   );
   if (b2cSubdomainMatch) {
     const sellerSlug = b2cSubdomainMatch[1].toLowerCase();

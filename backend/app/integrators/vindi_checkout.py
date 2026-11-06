@@ -108,6 +108,37 @@ class VindiCheckoutError(Exception):
         self.declined = declined
         self.diagnostics: Dict[str, Any] = diagnostics or {}
 
+    def friendly_customer_message(self, payment_method: str = "") -> str:
+        """
+        Retorna uma mensagem amigável, humana e livre de termos técnicos/gateway para o Consumidor Final (Customer).
+        """
+        v_errors = (self.diagnostics or {}).get("vindi_errors") or []
+        codes = {str(x.get("code") or "") for x in v_errors if isinstance(x, dict)}
+
+        if codes & {"003011", "003012", "003014", "003015", "003020"}:
+            return "Alguns dados do cartão de crédito parecem inválidos (número, nome, validade ou código de segurança). Confira os dados e tente novamente."
+        if codes & {"003065", "009006", "003004"}:
+            return "A opção de parcelamento escolhida não atinge o valor mínimo por parcela. Escolha menos parcelas ou outra forma de pagamento."
+        if "003021" in codes:
+            return "Os dados de CPF ou e-mail informados não podem ser iguais aos do cadastro da própria loja. Utilize os dados do comprador para finalizar."
+        if (payment_method or "").upper() == "CREDIT_CARD" and self.declined and not (codes & {"001001", "003039"}):
+            return "Não foi possível aprovar o pagamento com este cartão. Verifique os dados informados ou escolha outra forma de pagamento."
+        return "Não foi possível concluir o processamento do pagamento neste momento. Por favor, aguarde alguns instantes e tente novamente."
+
+    def friendly_seller_message(self) -> str:
+        """
+        Retorna uma mensagem orientada ao negócio para o Lojista (Seller), sem códigos HTTP crus ou JSON técnico.
+        """
+        v_errors = (self.diagnostics or {}).get("vindi_errors") or []
+        codes = {str(x.get("code") or "") for x in v_errors if isinstance(x, dict)}
+        if codes & {"001001", "003039"}:
+            return "Não foi possível validar a chave da operadora de pagamento. Confira se o Token está correto e se o modo Homologação/Produção corresponde à sua conta."
+        if "003021" in codes:
+            return "Para testar uma compra, utilize um CPF e e-mail diferentes dos cadastrados na conta principal da loja."
+        if "003065" in codes:
+            return "O valor de teste é inferior ao mínimo permitido para parcelamento na sua conta. Teste com um valor a partir de R$ 10,00 em 1x."
+        return "Não foi possível concluir a comunicação com a operadora de pagamento. Verifique as configurações da conta e tente novamente."
+
 
 # Bandeiras aceitas pelo Vindi Commerce (Intermediador Yapay) -> payment_method_id
 # Ref: https://developers.vindi.com.br/docs/bandeiras-e-m%C3%A9todos-de-pagamento-dispon%C3%ADveis
@@ -326,12 +357,14 @@ class VindiCheckoutClient:
         sandbox: Optional[bool] = None,
     ):
         self.company_name: str = "LOJAB2C"
+        self.company_obj: Optional[Company] = None
         self.api_key: str = ""
         self.sandbox: bool = True
         self.settings_obj: Optional[CompanySettings] = None
 
         if isinstance(db_or_api_key, Session) and company_id:
             comp = db_or_api_key.query(Company).filter(Company.id == company_id).first()
+            self.company_obj = comp
             if comp and comp.name:
                 self.company_name = comp.name
             self.settings_obj = (
@@ -378,6 +411,44 @@ class VindiCheckoutClient:
     @property
     def is_configured(self) -> bool:
         return len(self.api_key) >= 8
+
+    def resolve_store_home_url(self, fallback_base: str = "") -> str:
+        """
+        Determina a URL pública inicial da loja B2C para redirecionar o cliente após o pagamento.
+        Ignora URLs de webhook/API caso tenham sido preenchidas por engano em return_url.
+        """
+        import unicodedata
+
+        cfg_return = (self.vindi_config.get("return_url") or "").strip().rstrip("/")
+        if cfg_return and "/webhook" not in cfg_return.lower() and "/api/" not in cfg_return.lower() and "@" not in cfg_return:
+            return _public_url_for_vindi_waf(cfg_return)
+
+        if self.company_obj:
+            b2c_dom = (getattr(self.company_obj, "b2c_custom_domain", None) or "").strip().rstrip("/")
+            if b2c_dom and "@" not in b2c_dom and "." in b2c_dom:
+                return b2c_dom if b2c_dom.startswith("http") else f"https://{b2c_dom}"
+
+            raw_cfg = getattr(self.settings_obj, "b2c_showcases_config", None) if self.settings_obj else None
+            raw_branding = raw_cfg.get("branding") if isinstance(raw_cfg, dict) and isinstance(raw_cfg.get("branding"), dict) else {}
+            store_slug = (raw_branding.get("store_slug") or "").strip().lower()
+            if not store_slug:
+                raw_name = str(self.company_obj.name or f"loja-{self.company_obj.id}").strip().lower()
+                norm_name = unicodedata.normalize("NFKD", raw_name).encode("ASCII", "ignore").decode("ASCII")
+                store_slug = re.sub(r"[^a-z0-9]+", "-", norm_name).strip("-") or f"loja-{self.company_obj.id}"
+            return f"https://app.horusb2b.com.br/loja/{store_slug}"
+
+        return _public_url_for_vindi_waf(fallback_base or "https://app.horusb2b.com.br")
+
+    def resolve_webhook_url(self, api_base_url: str = "") -> str:
+        """
+        Determina a URL pública de notificação automática (Webhook POST) da Vindi.
+        """
+        raw = (api_base_url or "").strip().rstrip("/")
+        if not raw or any(local_h in raw.lower() for local_h in ("localhost", "127.0.0.1", "0.0.0.0")):
+            return "https://cronuzb2b.com.br/api/b2c/webhooks/vindi"
+        if raw.endswith("/api"):
+            return f"{raw}/b2c/webhooks/vindi"
+        return f"{raw}/b2c/webhooks/vindi"
 
     @property
     def credential_type(self) -> str:
@@ -662,7 +733,8 @@ class VindiCheckoutClient:
             # Ref: https://developers.vindi.com.br/reference/criar-carrinho-de-compra
             addr = address or {}
             waf_safe_base = _public_url_for_vindi_waf(clean_base)
-            return_url = _public_url_for_vindi_waf(self.vindi_config.get("return_url") or waf_safe_base)
+            return_url = self.resolve_store_home_url(waf_safe_base)
+            webhook_url = self.resolve_webhook_url(clean_base)
             tmp_payload: Dict[str, Any] = {
                 "token_account": self.api_key,
                 "order_number": f"CRZ-{order_id}",
@@ -672,7 +744,7 @@ class VindiCheckoutClient:
                 "max_split_transaction": str(self.vindi_config.get("max_installments", 6)),
                 "shipping_type": "Frete",
                 "shipping_price": "0.00",
-                "url_notification": f"{waf_safe_base}/b2c/webhooks/vindi",
+                "url_notification": webhook_url,
                 "url_success": return_url,
                 "url_process": return_url,
                 "url_cancel": return_url,
@@ -988,7 +1060,7 @@ class VindiCheckoutClient:
                 "price_discount": None,
                 "shipping_type": "Frete",
                 "shipping_price": "0.00",
-                "url_notification": f"{waf_safe_base}/b2c/webhooks/vindi",
+                "url_notification": self.resolve_webhook_url(clean_base),
             },
             "payment": payment,
         }

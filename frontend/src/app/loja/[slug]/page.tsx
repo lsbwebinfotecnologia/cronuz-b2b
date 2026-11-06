@@ -10,6 +10,11 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 export default function FriendlyB2CStorefrontPage() {
   const params = useParams();
   const slug = Array.isArray(params?.slug) ? params.slug[0] : (params?.slug as string) || '';
+  const route = Array.isArray(params?.route)
+    ? (params.route as string[])
+    : params?.route
+    ? [String(params.route)]
+    : [];
 
   const [storeInfo, setStoreInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -60,5 +65,12 @@ export default function FriendlyB2CStorefrontPage() {
     );
   }
 
-  return <B2COpenStorefront hostname={slug} domainInfo={storeInfo} />;
+  return (
+    <B2COpenStorefront
+      hostname={slug}
+      domainInfo={storeInfo}
+      basePath={`/loja/${slug}`}
+      routeSegments={route}
+    />
+  );
 }

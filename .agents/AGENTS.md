@@ -283,4 +283,32 @@ git push origin --delete feature/nome-da-funcionalidade
 3. **Helper de Sanitização**:
    - Sempre aplicar sanitização `.upper()` em dicionários de parâmetros (`payload`) de criação/atualização antes da chamada HTTP ao integrador externo.
 
+---
+
+## 💬 12. Padrão Obrigatório de Comunicação, Retornos de API e Mensagens Amigáveis por Público (`Customer`, `Seller` e `Master`)
+
+> [!IMPORTANT]
+> **Todo e qualquer retorno de API ou mensagem de interface — seja de erro, alerta ou sucesso — DEVE OBRIGATORIAMENTE ser amigável, claro e orientado ao objetivo da tela.**
+> É terminantemente proibido exibir termos técnicos internos, códigos HTTP crus (`Method Not Allowed`, `HTTP 402`, `500`), stack traces, payloads JSON/XML brutos ou nomes de provedores/integradores para públicos que não devem conhecê-los.
+
+### Diretrizes Mandatórias por Camada de Público:
+1. **Consumidor Final (`Customer` — Storefront B2C, Checkout, Portais de Escolas/Eventos, Links de Pagamento e Webhooks de Retorno)**:
+   - **Proibição de Jargões Técnicos e Nomes de Gateways/Integradores**:
+     - O consumidor final **não sabe e não precisa saber** o que é *Vindi*, *Yapay*, *Efí*, *Cora*, *Cielo*, *Rede*, *Horus*, *Tray*, *Webhook*, *Token* ou *Sandbox*.
+     - Nos componentes de loja e checkout (ex.: `B2COpenStorefront.tsx`), nunca utilize rótulos como *"Checkout Express Vindi"*, *"Link Seguro Vindi"* ou *"QR Code • Efí"*. Utilize sempre termos orientados à experiência de compra: **"Checkout Rápido"**, **"Identificação Rápida por CPF"**, **"Ambiente Seguro de Pagamento"**, **"Pagamento Online Seguro"**, **"Liberação Imediata • QR Code"** e **"Aprovação Imediata"**.
+   - **Mensagens de Erro e Sucesso Amigáveis na API Pública**:
+     - Qualquer falha de comunicação ou recusa de gateway deve ser traduzida para uma orientação humana e acolhedora (ex.: *"Não foi possível concluir o processamento do pagamento agora. Confira os dados informados ou escolha outra forma de pagamento."*), mantendo os detalhes técnicos apenas nos logs internos.
+   - **Redirecionamento Inteligente em Endpoints de Retorno / Webhook**:
+     - Caso o navegador do consumidor acesse diretamente uma rota de retorno ou webhook (via `GET` ou `POST` com `Accept: text/html`, como `/api/b2c/webhooks/vindi`), o sistema **nunca** deve exibir JSON cru ou `{"detail": "Method Not Allowed"}`. Deve processar a confirmação silenciosamente e apresentar uma tela amigável redirecionando automaticamente o cliente de volta para a **página inicial da loja**.
+
+2. **Lojista (`Seller` — Painel Administrativo da Loja / Operação Comercial)**:
+   - **Linguagem de Negócio (Menos Técnica e Focada na Ação)**:
+     - Ao tratar erros ou confirmações para o `Seller`, as mensagens devem explicar **o que aconteceu na operação** e **qual ação prática realizar na tela**, evitando códigos técnicos de protocolo, nomes de variáveis de banco (`token_account`, `b2c_showcases_config`) ou despejo de respostas HTTP cruas.
+     - Exemplo correto: *"Não foi possível validar a conexão com a operadora de pagamento. Verifique se a chave de acesso está preenchida corretamente e se o modo Teste/Produção corresponde à sua conta."*
+
+3. **Ambiente `Master` (Super Admin / Engenharia / Homologação Técnica)**:
+   - **Diagnóstico Técnico Completo e Auditoria**:
+     - Informações técnicas aprofundadas (códigos de retorno de APIs externas como `001001`/`003039`, endpoints chamados, status HTTP, payloads sanitizados para auditoria e logs de integração) devem ficar **exclusivamente** restritas ao painel **Master** e aos logs internos do servidor.
+
+
 

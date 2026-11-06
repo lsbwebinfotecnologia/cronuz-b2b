@@ -19,12 +19,12 @@ export default function DomainRouter() {
         return <HotsitePage slug={path[1]} hostname={hostname} />;
     }
     
-    // Route: /domain/[hostname]
-    return <StorefrontHub hostname={hostname} />;
+    // Route: /domain/[hostname] or /domain/[hostname]/[...path]
+    return <StorefrontHub hostname={hostname} path={path} />;
 }
 
 // ============== Storefront Hub Component ==============
-function StorefrontHub({ hostname }: { hostname: string }) {
+function StorefrontHub({ hostname, path }: { hostname: string; path?: string[] }) {
     const searchParams = useSearchParams();
     const forceB2cPreview = searchParams?.get('b2c') === '1';
 
@@ -93,7 +93,7 @@ function StorefrontHub({ hostname }: { hostname: string }) {
             domainInfo.b2c_storefront_open ||
             domainInfo.business_model === 'B2C_STOREFRONT')
     ) {
-        return <B2COpenStorefront hostname={hostname} domainInfo={domainInfo} />;
+        return <B2COpenStorefront hostname={hostname} domainInfo={domainInfo} basePath="" routeSegments={path || []} />;
     }
 
     if (error || !hubData) {

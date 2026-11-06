@@ -2198,6 +2198,7 @@ def _b2c_cache_set(
 
 def _b2c_cache_clear(company_id: int) -> int:
     bucket = _B2C_STORE_CACHE.pop(company_id, {})
+    _B2C_SLUG_CACHE.clear()
     removed = len(bucket)
     stats = _ensure_company_cache_stats(company_id)
     stats["last_cleared_at"] = datetime.now(timezone.utc).isoformat()
@@ -2321,6 +2322,7 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
     raw_branding = raw_cfg.get("branding") if isinstance(raw_cfg.get("branding"), dict) else {}
     branding = {
         "store_slug": raw_branding.get("store_slug") or default_slug,
+        "theme_template": raw_branding.get("theme_template") or "editorial_modern",
         "primary_color": raw_branding.get("primary_color") or "#4f46e5",
         "secondary_color": raw_branding.get("secondary_color") or "#0f172a",
         "logo_url": raw_branding.get("logo_url") or company.logo or "",
@@ -2355,9 +2357,14 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
         pass
 
     showcases = []
-    for sc in raw_showcases:
+    for idx_sc, sc in enumerate(raw_showcases):
         if isinstance(sc, dict):
             sc_copy = dict(sc)
+            sc_copy["slug"] = sc_copy.get("slug") or _slugify_store_name(
+                sc_copy.get("title") or f"vitrine-{idx_sc + 1}", idx_sc + 1
+            )
+            sc_copy["banner_url"] = sc_copy.get("banner_url") or ""
+            sc_copy["description"] = sc_copy.get("description") or sc_copy.get("subtitle") or ""
             sc_items = sc_copy.get("items") if isinstance(sc_copy.get("items"), list) else []
             enriched_items = []
             for raw_it in sc_items:
@@ -2381,10 +2388,10 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
             sc_copy["items"] = _apply_b2c_promotions_to_items(enriched_items, promotions)
             showcases.append(sc_copy)
 
-    categories = raw_cfg.get("categories") if isinstance(raw_cfg.get("categories"), list) else []
+    raw_categories = raw_cfg.get("categories") if isinstance(raw_cfg.get("categories"), list) else []
 
     # Fallback: if no B2C categories configured yet, pull from Seller's NavigationMenuItem
-    if not categories:
+    if not raw_categories:
         try:
             from app.models.marketing_navigation import NavigationMenuItem
             nav_items = (
@@ -2395,7 +2402,7 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
             )
             for nav in nav_items:
                 item_type_str = nav.item_type.value if hasattr(nav.item_type, "value") else str(nav.item_type)
-                categories.append({
+                raw_categories.append({
                     "id": f"nav-{nav.id}",
                     "label": nav.label,
                     "code": nav.external_id,
@@ -2404,6 +2411,18 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
                 })
         except Exception:
             pass
+
+    categories = []
+    for idx_cat, cat in enumerate(raw_categories):
+        if isinstance(cat, dict):
+            cat_copy = dict(cat)
+            cat_copy["slug"] = cat_copy.get("slug") or _slugify_store_name(
+                cat_copy.get("label") or cat_copy.get("code") or f"categoria-{idx_cat + 1}", idx_cat + 1
+            )
+            cat_copy["banner_url"] = cat_copy.get("banner_url") or ""
+            cat_copy["headline"] = cat_copy.get("headline") or ""
+            cat_copy["description"] = cat_copy.get("description") or ""
+            categories.append(cat_copy)
 
     # Build Footer & Contact Info (Mandatory E-commerce Legal Details: CNPJ, Address, Contact)
     raw_footer = raw_cfg.get("footer_info") if isinstance(raw_cfg.get("footer_info"), dict) else {}
@@ -2511,12 +2530,13 @@ def update_b2c_appearance(
         clean_dom = re.sub(r"^https?://", "", clean_dom).rstrip("/")
         company.b2c_custom_domain = clean_dom or None
 
-    # Preserve existing cache_config, contact_messages, freight_config, order_metadata, stock_notifications and horus_sync_config
+    # Preserve all existing internal/payment/cache keys in b2c_showcases_config
     existing_raw = getattr(settings, "b2c_showcases_config", None)
     if isinstance(existing_raw, dict):
-        for preserved_key in ("cache_config", "contact_messages", "freight_config", "order_metadata", "stock_notifications", "horus_sync_config"):
-            if preserved_key in existing_raw:
-                current_cfg[preserved_key] = existing_raw[preserved_key]
+        appearance_keys = {"branding", "banners", "showcases", "categories", "promotions", "footer_info"}
+        for k, v in existing_raw.items():
+            if k not in appearance_keys:
+                current_cfg[k] = v
 
     from sqlalchemy.orm.attributes import flag_modified
     settings.b2c_showcases_config = current_cfg
@@ -3715,6 +3735,9 @@ def get_public_b2c_storefront_info(
     return payload
 
 
+_B2C_SLUG_CACHE: Dict[str, Any] = {}
+
+
 @router.get("/public/resolve-slug")
 def resolve_public_b2c_store_slug(
     slug: str = Query(..., description="Slug amigável, domínio ou ID da loja B2C"),
@@ -3724,9 +3747,15 @@ def resolve_public_b2c_store_slug(
     if not clean:
         raise HTTPException(status_code=404, detail="Loja não encontrada.")
 
-    # Suporte ao subdomínio oficial b2c.{seller}.horusb2b.com.br ou b2c.{seller}.cronuzb2b.com.br
+    import time
+    now_ts = time.time()
+    cached_slug_entry = _B2C_SLUG_CACHE.get(clean)
+    if cached_slug_entry and (now_ts - cached_slug_entry["ts"]) < 60:
+        return get_public_b2c_storefront_info(company_id=cached_slug_entry["company_id"], db=db)
+
+    # Suporte ao subdomínio oficial b2c.{seller}.horusb2b.com.br, b2c-{seller}.horusb2b.com.br ou b2c.{seller}.cronuzb2b.com.br
     b2c_sub_match = re.match(
-        r"^b2c\.([a-z0-9_-]+)\.(horusb2b\.com\.br|cronuzb2b\.com\.br|cronuz\.com\.br|localhost|horusb2b\.localhost|cronuzb2b\.localhost)$",
+        r"^b2c[.-]([a-z0-9_-]+)\.(horusb2b\.com\.br|cronuzb2b\.com\.br|cronuz\.com\.br|localhost|horusb2b\.localhost|cronuzb2b\.localhost)$",
         clean,
     )
     seller_slug = b2c_sub_match.group(1) if b2c_sub_match else clean
@@ -3735,6 +3764,7 @@ def resolve_public_b2c_store_slug(
     if seller_slug.isdigit():
         comp = db.query(Company).filter(Company.id == int(seller_slug), Company.active == True).first()
         if comp:
+            _B2C_SLUG_CACHE[clean] = {"company_id": comp.id, "ts": now_ts}
             return get_public_b2c_storefront_info(company_id=comp.id, db=db)
 
     # 2. Match by b2c_custom_domain, custom_domain, or domain
@@ -3756,6 +3786,7 @@ def resolve_public_b2c_store_slug(
         .first()
     )
     if comp:
+        _B2C_SLUG_CACHE[clean] = {"company_id": comp.id, "ts": now_ts}
         return get_public_b2c_storefront_info(company_id=comp.id, db=db)
 
     # 3. Match by store_slug inside b2c_showcases_config or slugified company name (including compact match)
@@ -3770,6 +3801,7 @@ def resolve_public_b2c_store_slug(
         candidates = [x for x in (cfg_slug, name_slug, domain_slug) if x]
         compact_candidates = [re.sub(r"[^a-z0-9]", "", x) for x in candidates]
         if seller_slug in candidates or (compact_target and compact_target in compact_candidates):
+            _B2C_SLUG_CACHE[clean] = {"company_id": c.id, "ts": now_ts}
             return get_public_b2c_storefront_info(company_id=c.id, db=db)
 
     raise HTTPException(status_code=404, detail="Loja não encontrada para esta URL amigável.")
@@ -3782,6 +3814,13 @@ async def get_public_b2c_catalog(
     q: str = Query("", description="Termo de busca (Título, Autor, ISBN ou Editora)"),
     filter: str = Query("default", description="default, NOM_AUTOR, NOM_EDITORA, COD_GENERO"),
     only_promo: bool = Query(False, description="Filtrar apenas itens em promoção B2C"),
+    brand: str = Query("", description="Filtro adicional por Editora/Marca"),
+    author: str = Query("", description="Filtro adicional por Autor"),
+    characteristic: str = Query("", description="Filtro adicional por característica (Nome:Valor)"),
+    min_price: Optional[float] = Query(None, description="Preço mínimo"),
+    max_price: Optional[float] = Query(None, description="Preço máximo"),
+    in_stock: bool = Query(False, description="Apenas itens em estoque"),
+    sort_by: str = Query("default", description="default, price_asc, price_desc, name_asc"),
     skip: int = Query(0, ge=0),
     limit: int = Query(24, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -3796,7 +3835,14 @@ async def get_public_b2c_catalog(
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
 
     search_term = q.strip() if q else ""
-    cache_key = f"catalog:{search_term.lower()}:{filter}:{int(only_promo)}:{skip}:{limit}"
+    brand_filter = brand.strip() if brand else ""
+    author_filter = author.strip() if author else ""
+    char_filter = characteristic.strip() if characteristic else ""
+    cache_key = (
+        f"catalog:{search_term.lower()}:{filter}:{int(only_promo)}:"
+        f"{brand_filter.lower()}:{author_filter.lower()}:{char_filter.lower()}:"
+        f"{min_price}:{max_price}:{int(in_stock)}:{sort_by}:{skip}:{limit}"
+    )
     cached_catalog = _b2c_cache_get(company_id, cache_key, settings)
     if cached_catalog is not None:
         return cached_catalog
@@ -3835,6 +3881,29 @@ async def get_public_b2c_catalog(
                 if it.get("promotional_price") is not None
                 and float(it.get("promotional_price") or 0) < float(it.get("base_price") or 0)
             ]
+        if brand_filter:
+            items = [it for it in items if brand_filter.lower() in str(it.get("brand") or "").lower()]
+        if author_filter:
+            items = [it for it in items if author_filter.lower() in str(it.get("author") or "").lower()]
+        if in_stock:
+            items = [it for it in items if int(it.get("stock_quantity") or 0) > 0]
+        if min_price is not None:
+            items = [it for it in items if float(it.get("promotional_price") or it.get("base_price") or 0) >= min_price]
+        if max_price is not None:
+            items = [it for it in items if float(it.get("promotional_price") or it.get("base_price") or 0) <= max_price]
+
+        brands_set = sorted({str(it.get("brand") or "").strip() for it in items if str(it.get("brand") or "").strip()})[:20]
+        authors_set = sorted({str(it.get("author") or "").strip() for it in items if str(it.get("author") or "").strip()})[:20]
+        chars_facets: Dict[str, List[str]] = {}
+        for it in items:
+            for ch in (it.get("characteristics") or []):
+                cn = str(ch.get("name") or "").strip()
+                cv = str(ch.get("value") or "").strip()
+                if cn and cv:
+                    chars_facets.setdefault(cn, [])
+                    if cv not in chars_facets[cn]:
+                        chars_facets[cn].append(cv)
+
         current_page = (skip // limit) + 1
         estimated_pages = current_page if len(items) < limit else max(5, current_page + 3)
         res_payload = {
@@ -3843,6 +3912,11 @@ async def get_public_b2c_catalog(
             "page": current_page,
             "pages": estimated_pages,
             "source": "HORUS_ERP",
+            "facets": {
+                "brands": brands_set,
+                "authors": authors_set,
+                "characteristics": chars_facets,
+            },
         }
         if len(items) > 0:
             label_str = f"Catálogo Pág {current_page} ({search_term or 'Vitrine Inicial'})"
@@ -3851,7 +3925,7 @@ async def get_public_b2c_catalog(
 
     # Catálogo Local do Cronuz (prd_product sincronizado do Horus ou cadastrado manualmente)
     from sqlalchemy.orm import joinedload
-    from app.models.catalog_support import Category
+    from app.models.catalog_support import Category, ProductCharacteristic, Characteristic
     query = (
         db.query(Product)
         .options(joinedload(Product.category), joinedload(Product.brand_rel), joinedload(Product.characteristics))
@@ -3883,9 +3957,44 @@ async def get_public_b2c_catalog(
                 )
             )
 
+    if brand_filter:
+        query = query.filter(Product.brand.ilike(f"%{brand_filter}%"))
+    if author_filter:
+        query = query.filter(Product.model.ilike(f"%{author_filter}%"))
+    if in_stock:
+        query = query.filter(Product.stock_quantity > 0)
+    if min_price is not None:
+        query = query.filter(Product.base_price >= min_price)
+    if max_price is not None:
+        query = query.filter(Product.base_price <= max_price)
+    if char_filter:
+        if ":" in char_filter:
+            c_name_part, c_val_part = char_filter.split(":", 1)
+            query = query.filter(
+                Product.characteristics.any(
+                    and_(
+                        ProductCharacteristic.value.ilike(f"%{c_val_part.strip()}%"),
+                        ProductCharacteristic.characteristic.has(Characteristic.name.ilike(f"%{c_name_part.strip()}%")),
+                    )
+                )
+            )
+        else:
+            query = query.filter(
+                Product.characteristics.any(ProductCharacteristic.value.ilike(f"%{char_filter}%"))
+            )
+
     total = query.count()
+    if sort_by == "price_asc":
+        order_clauses = [(Product.stock_quantity > 0).desc(), Product.base_price.asc(), Product.id.desc()]
+    elif sort_by == "price_desc":
+        order_clauses = [(Product.stock_quantity > 0).desc(), Product.base_price.desc(), Product.id.desc()]
+    elif sort_by == "name_asc":
+        order_clauses = [(Product.stock_quantity > 0).desc(), Product.name.asc()]
+    else:
+        order_clauses = [(Product.stock_quantity > 0).desc(), Product.id.desc()]
+
     products = (
-        query.order_by((Product.stock_quantity > 0).desc(), Product.id.desc())
+        query.order_by(*order_clauses)
         .offset(skip)
         .limit(limit)
         .all()
@@ -3946,6 +4055,61 @@ async def get_public_b2c_catalog(
             and float(it.get("promotional_price") or 0) < float(it.get("base_price") or 0)
         ]
 
+    # Build lightweight facets for left sidebar (brands, authors, characteristics) with RAM cache
+    cached_facets = _b2c_cache_get(company_id, "facets_meta", settings)
+    if cached_facets is not None and isinstance(cached_facets, dict):
+        facets_brands = cached_facets.get("brands", [])
+        facets_authors = cached_facets.get("authors", [])
+        facets_chars = cached_facets.get("characteristics", {})
+    else:
+        facets_brands = []
+        facets_authors = []
+        facets_chars = {}
+        try:
+            brand_rows = (
+                db.query(Product.brand)
+                .filter(Product.company_id == company_id, Product.status == "ACTIVE", Product.brand.isnot(None), Product.brand != "")
+                .distinct()
+                .limit(30)
+                .all()
+            )
+            facets_brands = sorted({str(r[0]).strip() for r in brand_rows if r and r[0]})[:25]
+
+            author_rows = (
+                db.query(Product.model)
+                .filter(Product.company_id == company_id, Product.status == "ACTIVE", Product.model.isnot(None), Product.model != "")
+                .distinct()
+                .limit(30)
+                .all()
+            )
+            facets_authors = sorted({str(r[0]).strip() for r in author_rows if r and r[0]})[:25]
+
+            char_rows = (
+                db.query(Characteristic.name, ProductCharacteristic.value)
+                .join(ProductCharacteristic, ProductCharacteristic.characteristic_id == Characteristic.id)
+                .join(Product, Product.id == ProductCharacteristic.product_id)
+                .filter(Product.company_id == company_id, Product.status == "ACTIVE")
+                .distinct()
+                .limit(80)
+                .all()
+            )
+            for c_name, c_val in char_rows:
+                cn = str(c_name or "").strip()
+                cv = str(c_val or "").strip()
+                if cn and cv:
+                    facets_chars.setdefault(cn, [])
+                    if cv not in facets_chars[cn] and len(facets_chars[cn]) < 15:
+                        facets_chars[cn].append(cv)
+            _b2c_cache_set(
+                company_id,
+                "facets_meta",
+                {"brands": facets_brands, "authors": facets_authors, "characteristics": facets_chars},
+                settings,
+                label="Filtros Laterais (Editoras, Autores & Características)",
+            )
+        except Exception:
+            pass
+
     current_page = (skip // limit) + 1
     res_payload = {
         "items": mapped,
@@ -3953,11 +4117,174 @@ async def get_public_b2c_catalog(
         "page": current_page,
         "pages": max(1, (total + limit - 1) // limit),
         "source": "LOCAL_DB",
+        "facets": {
+            "brands": facets_brands,
+            "authors": facets_authors,
+            "characteristics": facets_chars,
+        },
     }
     if len(mapped) > 0:
         label_str = f"Catálogo Pág {current_page} ({search_term or 'Vitrine Inicial'})"
         _b2c_cache_set(company_id, cache_key, res_payload, settings, label=label_str)
     return res_payload
+
+
+@router.get("/public/product/{product_code}")
+async def get_public_b2c_product_detail(
+    product_code: str,
+    company_id: int = Query(..., description="ID do Seller"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional),
+):
+    """
+    Busca a ficha completa de um produto específico do catálogo B2C por ISBN/EAN, SKU ou ID,
+    permitindo URL direta de produto (/produto/{codigo}) e atualização via F5 com Cache em Memória.
+    """
+    clean_code = str(product_code or "").strip()
+    if not clean_code:
+        raise HTTPException(status_code=404, detail="Produto não encontrado.")
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+
+    prod_cache_key = f"prod:{clean_code.lower()}"
+    cached_prod = _b2c_cache_get(company_id, prod_cache_key, settings)
+    if cached_prod is not None:
+        return cached_prod
+
+    promotions = []
+    if company and settings:
+        raw_cfg = getattr(settings, "b2c_showcases_config", None)
+        if isinstance(raw_cfg, dict) and isinstance(raw_cfg.get("promotions"), list):
+            promotions = raw_cfg.get("promotions", [])
+
+    from sqlalchemy.orm import joinedload
+    query = (
+        db.query(Product)
+        .options(joinedload(Product.category), joinedload(Product.brand_rel), joinedload(Product.characteristics))
+        .filter(Product.company_id == company_id, Product.status == "ACTIVE")
+    )
+
+    filters = [
+        Product.ean_gtin == clean_code,
+        Product.sku == clean_code,
+    ]
+    if clean_code.isdigit() and len(clean_code) <= 9:
+        filters.append(Product.id == int(clean_code))
+
+    product = query.filter(or_(*filters)).first()
+
+    if product:
+        real_qty = max(0, int(product.stock_quantity or 0))
+        chars_list = []
+        for pc in (getattr(product, "characteristics", None) or []):
+            c_name = pc.characteristic.name if getattr(pc, "characteristic", None) else "Característica"
+            chars_list.append({"name": c_name, "value": pc.value})
+
+        mapped_item = {
+            "id": product.id,
+            "company_id": product.company_id,
+            "sku": product.sku,
+            "ean_gtin": product.ean_gtin or "",
+            "name": product.name,
+            "author": getattr(product, "author", None) or getattr(product, "model", None) or "",
+            "base_price": float(product.base_price or 0.0),
+            "promotional_price": float(product.promotional_price) if getattr(product, "promotional_price", None) else None,
+            "stock_quantity": real_qty,
+            "weight_kg": float(product.weight_kg) if product.weight_kg else None,
+            "width_cm": float(product.width_cm) if product.width_cm else None,
+            "height_cm": float(product.height_cm) if product.height_cm else None,
+            "length_cm": float(product.length_cm) if product.length_cm else None,
+            "characteristics": chars_list,
+            "status": product.status,
+            "short_description": product.short_description or "",
+            "long_description": product.long_description or product.short_description or "",
+            "brand": (product.brand_rel.name if getattr(product, "brand_rel", None) else None) or product.brand or "",
+            "category": (
+                {"id": product.category.id, "name": product.category.name}
+                if getattr(product, "category", None)
+                else {"id": 0, "name": product.subject or "Geral"}
+            ),
+            "allow_purchase": real_qty > 0,
+            "stock_status_label": "Em Estoque" if real_qty > 0 else "Avise-me quando chegar",
+            "cover_url": getattr(product, "image_url", None) or getattr(product, "cover_url", None),
+        }
+        enriched = _apply_b2c_promotions_to_items([mapped_item], promotions)[0]
+
+        # Related products from same category or brand
+        rel_query = (
+            db.query(Product)
+            .options(joinedload(Product.category), joinedload(Product.brand_rel))
+            .filter(
+                Product.company_id == company_id,
+                Product.status == "ACTIVE",
+                Product.id != product.id,
+            )
+        )
+        if product.category_id:
+            rel_query = rel_query.filter(Product.category_id == product.category_id)
+        elif product.brand:
+            rel_query = rel_query.filter(Product.brand == product.brand)
+
+        rel_prods = rel_query.order_by((Product.stock_quantity > 0).desc(), Product.id.desc()).limit(6).all()
+        related_list = []
+        for rp in rel_prods:
+            r_qty = max(0, int(rp.stock_quantity or 0))
+            related_list.append({
+                "id": rp.id,
+                "company_id": rp.company_id,
+                "sku": rp.sku,
+                "ean_gtin": rp.ean_gtin or "",
+                "name": rp.name,
+                "author": getattr(rp, "author", None) or getattr(rp, "model", None) or "",
+                "base_price": float(rp.base_price or 0.0),
+                "promotional_price": float(rp.promotional_price) if getattr(rp, "promotional_price", None) else None,
+                "stock_quantity": r_qty,
+                "brand": (rp.brand_rel.name if getattr(rp, "brand_rel", None) else None) or rp.brand or "",
+                "category": (
+                    {"id": rp.category.id, "name": rp.category.name}
+                    if getattr(rp, "category", None)
+                    else {"id": 0, "name": rp.subject or "Geral"}
+                ),
+                "allow_purchase": r_qty > 0,
+                "stock_status_label": "Em Estoque" if r_qty > 0 else "Avise-me quando chegar",
+                "cover_url": getattr(rp, "image_url", None) or getattr(rp, "cover_url", None),
+            })
+        related_list = _apply_b2c_promotions_to_items(related_list, promotions)
+        prod_payload = {"product": enriched, "related": related_list}
+        _b2c_cache_set(company_id, prod_cache_key, prod_payload, settings, label=f"Produto {clean_code}")
+        return prod_payload
+
+    # Check showcases in b2c_showcases_config if not in local DB
+    if company and settings:
+        cfg = _build_b2c_appearance_config(company, settings, db)
+        for sc in (cfg.get("showcases") or []):
+            for it in (sc.get("items") or []):
+                if str(it.get("ean_gtin") or "").strip() == clean_code or str(it.get("sku") or "").strip() == clean_code or str(it.get("id") or "") == clean_code:
+                    prod_payload = {"product": it, "related": (sc.get("items") or [])[:6]}
+                    _b2c_cache_set(company_id, prod_cache_key, prod_payload, settings, label=f"Produto Vitrine {clean_code}")
+                    return prod_payload
+
+    # Fallback Horus ERP if enabled
+    if settings and settings.horus_enabled:
+        items = await _fetch_from_horus_storefront(
+            db=db,
+            company_id=company_id,
+            current_user=current_user,
+            term=clean_code,
+            search_type="SEARCH",
+            skip=0,
+            limit=5,
+            settings=settings,
+            search_filter="default",
+        )
+        items = _apply_b2c_promotions_to_items(items, promotions)
+        if items:
+            prod_payload = {"product": items[0], "related": items[1:6]}
+            _b2c_cache_set(company_id, prod_cache_key, prod_payload, settings, label=f"Produto Horus {clean_code}")
+            return prod_payload
+
+    raise HTTPException(status_code=404, detail="Produto não encontrado nesta loja.")
 
 
 @router.post("/public/contact")
@@ -5275,7 +5602,7 @@ async def process_b2c_checkout(
 
     if not customer:
         final_name = req_name or f"CLIENTE CPF {cpf_digits}"
-        final_email = req_email or f"cpf.{cpf_digits}@checkout.vindi.com.br"
+        final_email = req_email or f"cliente.{cpf_digits}@compraexpressa.com.br"
         customer = Customer(
             company_id=company.id,
             name=final_name,
@@ -5314,7 +5641,7 @@ async def process_b2c_checkout(
     if not addr:
         addr = Address(
             customer_id=customer.id,
-            street=req_street or "PREENCHIDO NO CHECKOUT VINDI",
+            street=req_street or "INFORMADO NA ETAPA DE PAGAMENTO",
             number=req_number or "S/N",
             complement=data.complement,
             neighborhood=req_neighborhood or "CENTRO",
@@ -5700,10 +6027,11 @@ async def process_b2c_checkout(
             except VindiCheckoutError as ve:
                 # Nada é gravado (pedido, baixa de estoque e uso de cupom são desfeitos)
                 db.rollback()
-                logger.warning(f"[B2C Checkout Vindi] Empresa {company.id}: {ve.message}")
-                hint = (ve.diagnostics or {}).get("diagnostic_hint")
-                full_msg = f"{ve.message} ({hint})" if hint else ve.message
-                raise HTTPException(status_code=402, detail=full_msg)
+                logger.warning(f"[B2C Checkout Vindi] Empresa {company.id}: {ve.message} | diag={ve.diagnostics}")
+                raise HTTPException(
+                    status_code=402,
+                    detail=ve.friendly_customer_message(req_payment_method),
+                )
 
             order.external_id = str(v_res.get("gateway_tx_id"))
             if v_res.get("status") == "PAID":
@@ -5806,18 +6134,18 @@ async def process_b2c_checkout(
             "Pedido 100% coberto pelo seu cupom e aprovado com sucesso!"
             if fully_covered
             else (
-                "Pagamento aprovado no cartão! Seu pedido já está com status Pago."
+                "Pagamento aprovado! Seu pedido já foi confirmado com sucesso."
                 if norm_st == "PAID"
                 else (
-                    "Carrinho preparado! Redirecionando para pagamento da diferença..."
+                    "Sacola preparada! Redirecionando você para finalizar o pagamento..."
                     if effective_mode == "TRAY_REDIRECT"
                     else (
-                        f"Pedido #{order.id} registrado! Redirecionando para o ambiente seguro de pagamento da Vindi..."
+                        f"Pedido #{order.id} recebido com sucesso! Redirecionando para o ambiente seguro de pagamento..."
                         if vindi_payment_url
                         else (
-                            f"Pedido #{order.id} registrado! Pagamento no cartão em análise pela operadora."
+                            f"Pedido #{order.id} recebido! Seu pagamento no cartão está sendo processado pela operadora."
                             if req_payment_method == "CREDIT_CARD"
-                            else f"Pedido #{order.id} registrado ({active_gateway})! Realize o pagamento do PIX para aprovar."
+                            else f"Pedido #{order.id} recebido! Utilize o QR Code ou código PIX abaixo para concluir o pagamento."
                         )
                     )
                 )
@@ -5898,7 +6226,7 @@ def _build_yapay_hosted_form_html(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Redirecionando para Pagamento Seguro Vindi...</title>
+  <title>Redirecionando para o Ambiente Seguro de Pagamento...</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }}
     .card {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px; max-width: 420px; text-align: center; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05); }}
@@ -5910,11 +6238,11 @@ def _build_yapay_hosted_form_html(
 <body onload="document.getElementById('vindiForm').submit();">
   <div class="card">
     <div class="spinner"></div>
-    <h3 style="margin:0 0 8px;font-size:16px;">Conectando ao Ambiente Seguro Vindi</h3>
-    <p style="margin:0;font-size:13px;color:#64748b;">Aguarde um instante enquanto abrimos sua página de pagamento (R$ {float(amount):.2f})...</p>
+    <h3 style="margin:0 0 8px;font-size:16px;">Conectando ao Ambiente Seguro de Pagamento</h3>
+    <p style="margin:0;font-size:13px;color:#64748b;">Aguarde um instante enquanto preparamos sua página de pagamento (R$ {float(amount):.2f})...</p>
     <form id="vindiForm" method="POST" action="{_html.escape(action_url)}">
       {inputs}
-      <noscript><button type="submit">Continuar para Pagamento Vindi</button></noscript>
+      <noscript><button type="submit">Continuar para o Pagamento</button></noscript>
     </form>
   </div>
 </body>
@@ -5936,7 +6264,7 @@ def public_vindi_hosted_checkout_test(
     vindi_cfg = read_vindi_config(settings)
     vindi = VindiCheckoutClient(db, company_id, sandbox=bool(sandbox))
     if not vindi.is_configured:
-        raise HTTPException(status_code=400, detail="Token / Chave Vindi não configurada para esta empresa.")
+        raise HTTPException(status_code=400, detail="A chave da operadora de pagamento ainda não foi preenchida para esta loja.")
 
     base_url = str(request.base_url).rstrip("/")
     order_num = f"TESTE-{company_id}-{datetime.utcnow().strftime('%H%M%S')}"
@@ -5955,8 +6283,8 @@ def public_vindi_hosted_checkout_test(
         neighborhood="SE",
         city="SAO PAULO",
         state="SP",
-        notification_url=f"{base_url}/b2c/webhooks/vindi",
-        return_url=vindi_cfg.get("return_url") or "",
+        notification_url=vindi.resolve_webhook_url(base_url),
+        return_url=vindi.resolve_store_home_url(base_url),
         max_installments=vindi_cfg.get("max_installments", 6),
         allow_pix=vindi_cfg.get("allow_pix", True),
         allow_credit_card=vindi_cfg.get("allow_credit_card", True),
@@ -5976,14 +6304,14 @@ def public_vindi_hosted_checkout_redirect(
 
     order = db.query(Order).filter(Order.id == order_id, Order.origin == "b2c_storefront").first()
     if not order:
-        raise HTTPException(status_code=404, detail="Pedido B2C não encontrado.")
+        raise HTTPException(status_code=404, detail="Pedido não localizado.")
 
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
     customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
     vindi_cfg = read_vindi_config(settings)
     vindi = VindiCheckoutClient(db, order.company_id)
     if not vindi.is_configured:
-        raise HTTPException(status_code=400, detail="Token / Chave Vindi não configurada para esta loja.")
+        raise HTTPException(status_code=400, detail="O ambiente de pagamento desta loja está temporariamente indisponível. Tente novamente em instantes.")
 
     meta = _parse_order_meta(order)
     addr = meta.get("shipping_address") if isinstance(meta.get("shipping_address"), dict) else {}
@@ -6004,8 +6332,8 @@ def public_vindi_hosted_checkout_redirect(
         neighborhood=addr.get("neighborhood") or "CENTRO",
         city=addr.get("city") or "SAO PAULO",
         state=addr.get("state") or "SP",
-        notification_url=f"{base_url}/b2c/webhooks/vindi",
-        return_url=vindi_cfg.get("return_url") or "",
+        notification_url=vindi.resolve_webhook_url(base_url),
+        return_url=vindi.resolve_store_home_url(base_url),
         max_installments=vindi_cfg.get("max_installments", 6),
         allow_pix=vindi_cfg.get("allow_pix", True),
         allow_credit_card=vindi_cfg.get("allow_credit_card", True),
@@ -6120,27 +6448,69 @@ def _sync_order_with_vindi_tx(
     }
 
 
-@router.post("/webhooks/vindi")
+def _build_friendly_store_return_html(store_url: str, store_name: str = "Loja Oficial") -> str:
+    import html as _html
+    safe_url = _html.escape(store_url or "https://app.horusb2b.com.br")
+    safe_name = _html.escape(store_name or "Loja Oficial")
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="2;url={safe_url}" />
+  <title>Pagamento Recebido • {safe_name}</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; }}
+    .card {{ background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 36px 28px; max-width: 440px; width: 100%; text-align: center; box-shadow: 0 12px 30px -8px rgba(15, 23, 42, 0.08); }}
+    .icon {{ width: 56px; height: 56px; background: #ecfdf5; color: #059669; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: bold; margin: 0 auto 16px; }}
+    h2 {{ margin: 0 0 8px; font-size: 20px; font-weight: 800; color: #0f172a; }}
+    p {{ margin: 0 0 24px; font-size: 14px; line-height: 1.5; color: #475569; }}
+    .btn {{ display: inline-block; background: #059669; color: #ffffff; text-decoration: none; font-weight: 700; font-size: 14px; padding: 12px 24px; border-radius: 12px; transition: background 0.2s; }}
+    .btn:hover {{ background: #047857; }}
+  </style>
+  <script>
+    setTimeout(function() {{
+      window.location.replace("{safe_url}");
+    }}, 1500);
+  </script>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✓</div>
+    <h2>Obrigado pela sua compra!</h2>
+    <p>Seu pagamento foi registrado com sucesso. Estamos redirecionando você de volta para a página inicial da <strong>{safe_name}</strong>...</p>
+    <a class="btn" href="{safe_url}">Voltar para a Página Inicial</a>
+  </div>
+</body>
+</html>"""
+
+
+@router.api_route("/webhooks/vindi", methods=["GET", "POST"])
 async def vindi_b2c_webhook(
     request: Request,
     db: Session = Depends(get_db),
 ):
     """
-    Recebe notificações automáticas de pagamento da Vindi (tanto Vindi Commerce/Yapay quanto Vindi API v1)
-    conforme https://developers.vindi.com.br/docs/webhooks e atualiza o pedido B2C para PAID quando confirmado,
-    gravando o histórico completo da aprovação (PIX ou Cartão).
+    Recebe notificações automáticas de pagamento (POST Webhook) e também redirecionamentos de retorno
+    do navegador do consumidor final (GET/POST), atualizando o pedido B2C para PAID e redirecionando
+    o cliente de forma amigável de volta para a página inicial da loja.
     """
+    from fastapi.responses import HTMLResponse
     from app.integrators.vindi_checkout import VindiCheckoutClient
 
-    try:
-        content_type = (request.headers.get("content-type") or "").lower()
-        if "application/json" in content_type:
-            payload = await request.json()
-        else:
-            form = await request.form()
-            payload = dict(form)
-    except Exception:
-        payload = {}
+    payload: Dict[str, Any] = dict(request.query_params)
+    if request.method == "POST":
+        try:
+            content_type = (request.headers.get("content-type") or "").lower()
+            if "application/json" in content_type:
+                body_data = await request.json()
+                if isinstance(body_data, dict):
+                    payload.update(body_data)
+            else:
+                form = await request.form()
+                payload.update(dict(form))
+        except Exception:
+            pass
 
     # 1. Formato Vindi API v1: {"event": {"type": "bill_paid", "data": {"bill": {"code": "B2C-ORD-123-..."}}}}
     event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
@@ -6148,7 +6518,7 @@ async def vindi_b2c_webhook(
     bill = ((event.get("data") or {}).get("bill") or {}) if isinstance(event.get("data"), dict) else {}
     bill_code = str(bill.get("code") or "")
 
-    # 2. Formato Vindi Commerce / Yapay (suporta JSON aninhado e POST form `transaction[order_number]` / `token_transaction`)
+    # 2. Formato Vindi Commerce / Yapay (suporta JSON aninhado, query string e POST form)
     tx_dict = payload.get("transaction") if isinstance(payload.get("transaction"), dict) else {}
     order_number = str(
         payload.get("transaction[order_number]")
@@ -6195,7 +6565,8 @@ async def vindi_b2c_webhook(
             .first()
         )
 
-    # 3. Consulta oficial por token_transaction na API Vindi Commerce (get_by_token) conforme documentação
+    sync_res: Optional[Dict[str, Any]] = None
+    # 3. Consulta oficial por token_transaction na API Vindi Commerce (get_by_token)
     if order:
         meta = _parse_order_meta(order)
         tok_to_check = token_transaction or str(meta.get("vindi_token_transaction") or "").strip()
@@ -6205,18 +6576,63 @@ async def vindi_b2c_webhook(
                 if vindi.is_configured and vindi.credential_type == "VINDI_PAGAMENTOS":
                     tx_info = await vindi.get_transaction_by_token(tok_to_check)
                     sync_res = _sync_order_with_vindi_tx(db, order, tx_info, source="WEBHOOK_VINDI")
-                    return {"received": True, **sync_res}
             except Exception as e:
                 logger.warning(f"[Vindi Webhook] Falha ao consultar get_by_token ({tok_to_check}): {e}")
 
-    if order and is_paid:
-        if order.status != "PAID":
-            order.status = "PAID"
-            order.confirmed_at = datetime.utcnow()
-            db.commit()
-            _b2c_cache_clear(order.company_id)
-        return {"received": True, "order_id": order.id, "status": "PAID"}
+        if not sync_res and is_paid:
+            if order.status != "PAID":
+                order.status = "PAID"
+                order.confirmed_at = datetime.utcnow()
+                db.commit()
+                _b2c_cache_clear(order.company_id)
+            sync_res = {"order_id": order.id, "status": "PAID"}
+    else:
+        # Se o cliente foi redirecionado via GET sem parâmetros, sincroniza os pedidos B2C recentes pendentes
+        recent_pending = (
+            db.query(Order)
+            .filter(Order.origin == "b2c_storefront", Order.status == "WAITING_PAYMENT")
+            .order_by(Order.id.desc())
+            .limit(5)
+            .all()
+        )
+        for pending_ord in recent_pending:
+            p_meta = _parse_order_meta(pending_ord)
+            p_tok = str(p_meta.get("vindi_token_transaction") or "").strip()
+            if p_tok:
+                try:
+                    vindi_p = VindiCheckoutClient(db, pending_ord.company_id)
+                    if vindi_p.is_configured and vindi_p.credential_type == "VINDI_PAGAMENTOS":
+                        tx_info_p = await vindi_p.get_transaction_by_token(p_tok)
+                        _sync_order_with_vindi_tx(db, pending_ord, tx_info_p, source="RETORNO_CHECKOUT")
+                except Exception:
+                    pass
+            if not order:
+                order = pending_ord
 
+    accept_hdr = (request.headers.get("accept") or "").lower()
+    is_browser_redirect = request.method == "GET" or "text/html" in accept_hdr
+    if is_browser_redirect:
+        target_company_id = order.company_id if order else None
+        if not target_company_id:
+            last_b2c = (
+                db.query(Order)
+                .filter(Order.origin == "b2c_storefront")
+                .order_by(Order.id.desc())
+                .first()
+            )
+            if last_b2c:
+                target_company_id = last_b2c.company_id
+        vindi_nav = VindiCheckoutClient(db, target_company_id) if target_company_id else None
+        store_url = (
+            vindi_nav.resolve_store_home_url("https://app.horusb2b.com.br")
+            if vindi_nav
+            else "https://app.horusb2b.com.br"
+        )
+        store_name = vindi_nav.company_name if (vindi_nav and vindi_nav.company_name) else "Loja Oficial"
+        return HTMLResponse(content=_build_friendly_store_return_html(store_url, store_name))
+
+    if sync_res:
+        return {"received": True, **sync_res}
     return {"received": True, "updated": False}
 
 
@@ -6280,7 +6696,10 @@ async def sync_b2c_orders_with_vindi(
     cid = _resolve_seller_company_id(current_user, company_id)
     vindi = VindiCheckoutClient(db, cid)
     if not vindi.is_configured:
-        raise HTTPException(status_code=400, detail="Token da Vindi não configurado para esta loja.")
+        raise HTTPException(
+            status_code=400,
+            detail="A integração de pagamento ainda não está configurada para esta loja. Verifique a chave de acesso nas Configurações.",
+        )
 
     q = db.query(Order).filter(Order.company_id == cid, Order.origin == "b2c_storefront")
     if data.order_id:
@@ -6315,8 +6734,8 @@ async def sync_b2c_orders_with_vindi(
         "approved_count": approved,
         "details": details,
         "message": (
-            f"Consulta concluída na Vindi: {checked} pedido(s) verificado(s), {approved} pagamento(s) aprovado(s)!"
+            f"Verificação concluída: {checked} pedido(s) consultado(s), {approved} pagamento(s) confirmado(s)!"
             if checked > 0
-            else "Nenhum pedido com token_transaction da Vindi encontrado para sincronizar."
+            else "Nenhum pedido pendente de confirmação de pagamento foi encontrado."
         ),
     }

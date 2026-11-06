@@ -334,6 +334,36 @@ def update_company_settings(
             settings.payment_gateway_active = str(
                 (final_b2c_ch.get("link_provider") if isinstance(final_b2c_ch, dict) else None) or "VINDI"
             ).upper()
+
+    # Sincroniza bookinfo_api_key com Integrator(platform='BOOKINFO') para unificar Seller e Master
+    if "bookinfo_api_key" in update_data:
+        try:
+            import json
+            from app.models.integrator import Integrator
+            bi_token = (update_data.get("bookinfo_api_key") or "").strip()
+            bi_integ = db.query(Integrator).filter(
+                Integrator.company_id == company_id,
+                Integrator.platform == "BOOKINFO"
+            ).first()
+            if bi_integ:
+                try:
+                    existing_creds = json.loads(bi_integ.credentials) if isinstance(bi_integ.credentials, str) else (bi_integ.credentials or {})
+                except Exception:
+                    existing_creds = {}
+                env_val = existing_creds.get("Ambiente") or "PROD"
+                bi_integ.credentials = json.dumps({"Ambiente": env_val, "Token": bi_token})
+                if bi_token:
+                    bi_integ.active = True
+            elif bi_token:
+                bi_integ = Integrator(
+                    company_id=company_id,
+                    platform="BOOKINFO",
+                    active=True,
+                    credentials=json.dumps({"Ambiente": "PROD", "Token": bi_token}),
+                )
+                db.add(bi_integ)
+        except Exception as e:
+            logger.warning("[BOOKINFO_SYNC_SETTINGS] Falha ao sincronizar Integrator BOOKINFO: %s", e)
         
     db.commit()
     db.refresh(settings)

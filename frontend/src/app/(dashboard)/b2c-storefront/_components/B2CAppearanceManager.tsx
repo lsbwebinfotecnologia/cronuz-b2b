@@ -45,6 +45,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export interface B2CBranding {
   store_slug: string;
+  theme_template?: 'editorial_modern' | 'classic_bookstore' | 'minimal_boutique' | string;
   primary_color: string;
   secondary_color: string;
   logo_url: string;
@@ -81,18 +82,25 @@ export interface B2CShowcaseProductItem {
 
 export interface B2CShowcaseSection {
   id: string;
+  slug?: string;
   title: string;
   subtitle?: string;
   badge?: string;
+  banner_url?: string;
+  description?: string;
   items: B2CShowcaseProductItem[];
   active: boolean;
 }
 
 export interface B2CCategoryFilterItem {
   id: string;
+  slug?: string;
   label: string;
   code: string;
   filter_type: 'COD_GENERO' | 'NOM_EDITORA' | 'SEARCH_TERM';
+  banner_url?: string;
+  headline?: string;
+  description?: string;
   active: boolean;
 }
 
@@ -356,6 +364,8 @@ export default function B2CAppearanceManager({
 
       let nextBranding = branding;
       let nextBanners = banners;
+      let nextShowcases = showcases;
+      let nextCategories = categories;
 
       if (target === 'logo') {
         nextBranding = { ...branding, logo_url: data.url };
@@ -367,6 +377,14 @@ export default function B2CAppearanceManager({
         const bannerId = target.replace('banner_', '');
         nextBanners = banners.map((b) => (b.id === bannerId ? { ...b, image_url: data.url } : b));
         setBanners(nextBanners);
+      } else if (target.startsWith('sc_banner_')) {
+        const scId = target.replace('sc_banner_', '');
+        nextShowcases = showcases.map((s) => (s.id === scId ? { ...s, banner_url: data.url } : s));
+        setShowcases(nextShowcases);
+      } else if (target.startsWith('cat_banner_')) {
+        const catId = target.replace('cat_banner_', '');
+        nextCategories = categories.map((c) => (c.id === catId ? { ...c, banner_url: data.url } : c));
+        setCategories(nextCategories);
       }
 
       // Auto-persist immediately so the uploaded logo/banner is saved right away
@@ -379,8 +397,8 @@ export default function B2CAppearanceManager({
         body: JSON.stringify({
           branding: nextBranding,
           banners: nextBanners,
-          showcases,
-          categories,
+          showcases: nextShowcases,
+          categories: nextCategories,
           promotions,
           footer_info: footerInfo,
           b2c_custom_domain: b2cCustomDomain,
@@ -926,6 +944,79 @@ export default function B2CAppearanceManager({
                         title={c.name}
                       />
                     ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Storefront Structural Theme Template Selector & Multi-Page URL Map */}
+              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                      Modelo Estrutural do Front B2C (Tema Visual por Cliente)
+                    </label>
+                    <p className="text-[11px] text-slate-500">
+                      Escolha a identidade estrutural da loja mantendo todas as páginas padronizadas (Home, Produto, Categoria, Vitrine, Contato, Conta e Checkout).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {[
+                    {
+                      id: 'editorial_modern',
+                      title: 'Editorial Moderno',
+                      desc: 'Design contemporâneo, cards arredondados e vitrines dinâmicas.',
+                    },
+                    {
+                      id: 'classic_bookstore',
+                      title: 'Livraria Clássica',
+                      desc: 'Fundo creme literário, tipografia serifada nos títulos e estética editorial.',
+                    },
+                    {
+                      id: 'minimal_boutique',
+                      title: 'Minimalista Boutique',
+                      desc: 'Fundo branco puro, linhas retas de alto contraste e foco nas capas.',
+                    },
+                  ].map((tpl) => {
+                    const isSelected = (branding.theme_template || 'editorial_modern') === tpl.id;
+                    return (
+                      <button
+                        key={tpl.id}
+                        type="button"
+                        onClick={() => setBranding({ ...branding, theme_template: tpl.id })}
+                        className={`text-left p-3.5 rounded-xl border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/30 ring-2 ring-indigo-500/15'
+                            : 'border-slate-200 dark:border-slate-800 hover:border-indigo-300 bg-slate-50/40 dark:bg-slate-800/30'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-bold text-slate-900 dark:text-white">
+                            {tpl.title}
+                          </span>
+                          {isSelected && <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />}
+                        </div>
+                        <p className="text-[11px] text-slate-500 leading-snug">{tpl.desc}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Quick Multi-Page Architecture Reference */}
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                    Rotas Oficiais Padronizadas da Loja Virtual (Suportam F5 e Compartilhamento Direto)
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] font-mono text-slate-600 dark:text-slate-300">
+                    <div>• Home: <strong>/loja/{effectiveSlug}</strong></div>
+                    <div>• Produto: <strong>/loja/{effectiveSlug}/produto/[isbn]</strong></div>
+                    <div>• Categoria: <strong>/loja/{effectiveSlug}/categoria/[slug]</strong></div>
+                    <div>• Vitrine: <strong>/loja/{effectiveSlug}/vitrine/[slug]</strong></div>
+                    <div>• Ofertas: <strong>/loja/{effectiveSlug}/ofertas</strong></div>
+                    <div>• Contato (SAC): <strong>/loja/{effectiveSlug}/contato</strong></div>
+                    <div>• Conta / Login: <strong>/loja/{effectiveSlug}/conta</strong></div>
+                    <div>• Checkout Seguro: <strong>/loja/{effectiveSlug}/checkout</strong></div>
                   </div>
                 </div>
               </div>
@@ -1581,6 +1672,87 @@ export default function B2CAppearanceManager({
                         />
                       </div>
 
+                      {/* Showcase Page Customization (URL, Description & Top Banner) */}
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                            <Globe className="w-3.5 h-3.5 text-indigo-500" />
+                            Página Exclusiva da Vitrine:{' '}
+                            <code className="font-mono text-indigo-600 dark:text-indigo-400">
+                              /loja/{effectiveSlug}/vitrine/{sc.slug || sc.id}
+                            </code>
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const scUrl = `${friendlyStoreUrl}/vitrine/${sc.slug || sc.id}`;
+                                navigator.clipboard.writeText(scUrl);
+                                toast.success('Link direto da vitrine copiado!');
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-700 dark:text-slate-300 hover:border-indigo-400 cursor-pointer"
+                            >
+                              <Copy className="w-3 h-3" />
+                              Copiar Link
+                            </button>
+                            <a
+                              href={`${friendlyStoreUrl}/vitrine/${sc.slug || sc.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-[11px] font-bold text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100"
+                            >
+                              Abrir Página
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                          <input
+                            type="text"
+                            value={sc.description || ''}
+                            onChange={(e) =>
+                              setShowcases((prev) =>
+                                prev.map((x) =>
+                                  x.id === sc.id ? { ...x, description: e.target.value } : x
+                                )
+                              )
+                            }
+                            placeholder="Descrição editorial no topo da página desta vitrine (opcional)"
+                            className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <label className="cursor-pointer inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shrink-0">
+                              {uploadingTarget === `sc_banner_${sc.id}` ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <UploadCloud className="w-3 h-3" />
+                              )}
+                              Banner Topo
+                              <input
+                                type="file"
+                                accept="image/png,image/jpeg,image/webp"
+                                className="hidden"
+                                onChange={(e) => handleUploadImage(e, `sc_banner_${sc.id}`)}
+                              />
+                            </label>
+                            <input
+                              type="text"
+                              value={sc.banner_url || ''}
+                              onChange={(e) =>
+                                setShowcases((prev) =>
+                                  prev.map((x) =>
+                                    x.id === sc.id ? { ...x, banner_url: e.target.value } : x
+                                  )
+                                )
+                              }
+                              placeholder="Ou URL do banner de topo da vitrine..."
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
                       {/* Items inside this showcase */}
                       {sc.items.length === 0 ? (
                         <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-dashed border-slate-200 dark:border-slate-700 text-center text-xs text-slate-400">
@@ -1808,56 +1980,160 @@ export default function B2CAppearanceManager({
 
               {categories.length === 0 ? (
                 <div className="p-8 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-400">
-                  Nenhuma categoria ativa ainda. Clique nas categorias do Horus / Tray ao lado para adicioná-las com 1 clique!
+                  Nenhuma categoria ativa ainda. Clique nas categorias do Horus ERP ao lado para adicioná-las com 1 clique!
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {categories.map((cat, idx) => (
-                    <div
-                      key={cat.id}
-                      className="flex items-center justify-between p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <span className="w-6 h-6 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 text-xs font-bold flex items-center justify-center">
-                          {idx + 1}
-                        </span>
-                        <div>
-                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                            {cat.label}
-                          </p>
-                          <p className="text-[10px] text-slate-500">
-                            Filtro: <span className="font-mono">{cat.code}</span> •{' '}
-                            {cat.filter_type === 'NOM_EDITORA'
-                              ? 'Editora'
-                              : cat.filter_type === 'COD_GENERO'
-                              ? 'Categoria / Gênero'
-                              : 'Busca Livre'}
-                          </p>
+                <div className="space-y-3">
+                  {categories.map((cat, idx) => {
+                    const catSlug =
+                      cat.slug ||
+                      cat.label
+                        .toLowerCase()
+                        .normalize('NFD')
+                        .replace(/[\u0300-\u036f]/g, '')
+                        .replace(/[^a-z0-9]+/g, '-')
+                        .replace(/^-|-$/g, '') ||
+                      cat.id;
+                    const catPageUrl = `${friendlyStoreUrl}/categoria/${catSlug}`;
+
+                    return (
+                      <div
+                        key={cat.id}
+                        className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 space-y-3"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className="w-6 h-6 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 text-xs font-bold flex items-center justify-center shrink-0">
+                              {idx + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
+                                {cat.label}
+                              </p>
+                              <p className="text-[10px] text-slate-500 truncate">
+                                Filtro: <span className="font-mono">{cat.code}</span> •{' '}
+                                {cat.filter_type === 'NOM_EDITORA'
+                                  ? 'Editora'
+                                  : cat.filter_type === 'COD_GENERO'
+                                  ? 'Categoria / Gênero'
+                                  : 'Busca Livre'}{' '}
+                                • URL: <code className="font-mono text-indigo-600">/categoria/{catSlug}</code>
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(catPageUrl);
+                                toast.success(`Link da categoria "${cat.label}" copiado!`);
+                              }}
+                              className="p-1.5 text-slate-600 hover:bg-white dark:hover:bg-slate-700 rounded-lg border border-transparent hover:border-slate-200"
+                              title="Copiar URL da página de categoria"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                            <a
+                              href={catPageUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"
+                              title="Abrir página da categoria"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setCategories((prev) => prev.filter((c) => c.id !== cat.id))
+                              }
+                              className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg"
+                              title="Remover categoria"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Category Page Top Banner, Headline & Description Customization */}
+                        <div className="pt-2 border-t border-slate-200/70 dark:border-slate-700/60 space-y-2">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                            Personalização da Página desta Categoria (Topo & Banner)
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              value={cat.headline || ''}
+                              onChange={(e) =>
+                                setCategories((prev) =>
+                                  prev.map((x) =>
+                                    x.id === cat.id ? { ...x, headline: e.target.value } : x
+                                  )
+                                )
+                              }
+                              placeholder={`Título no topo (padrão: ${cat.label})`}
+                              className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                            />
+                            <div className="flex items-center gap-1.5">
+                              <label className="cursor-pointer inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shrink-0">
+                                {uploadingTarget === `cat_banner_${cat.id}` ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <UploadCloud className="w-3 h-3" />
+                                )}
+                                Banner Topo
+                                <input
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/webp"
+                                  className="hidden"
+                                  onChange={(e) => handleUploadImage(e, `cat_banner_${cat.id}`)}
+                                />
+                              </label>
+                              <input
+                                type="text"
+                                value={cat.banner_url || ''}
+                                onChange={(e) =>
+                                  setCategories((prev) =>
+                                    prev.map((x) =>
+                                      x.id === cat.id ? { ...x, banner_url: e.target.value } : x
+                                    )
+                                  )
+                                }
+                                placeholder="URL do banner do topo da categoria..."
+                                className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                              />
+                            </div>
+                          </div>
+                          <textarea
+                            rows={2}
+                            value={cat.description || ''}
+                            onChange={(e) =>
+                              setCategories((prev) =>
+                                prev.map((x) =>
+                                  x.id === cat.id ? { ...x, description: e.target.value } : x
+                                )
+                              )
+                            }
+                            placeholder="Descreva o que vai aparecer no topo desta página de categoria selecionada (ex: Curadoria especial de livros infantis e infantojuvenis com pronta entrega)..."
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                          />
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setCategories((prev) => prev.filter((c) => c.id !== cat.id))
-                        }
-                        className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
           </div>
 
-          {/* Right: 1-Click Import from Horus ERP & Tray */}
+          {/* Right: 1-Click Import from Horus ERP */}
           <div className="lg:col-span-6 space-y-4">
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    Importar com 1 Clique (Horus ERP / Tray / Catálogo)
+                    Importar com 1 Clique (Horus ERP / Catálogo)
                   </h3>
                   <p className="text-xs text-slate-500">
                     Clique em qualquer gênero ou editora abaixo para incluí-lo imediatamente na barra da Loja B2C.
@@ -1877,7 +2153,7 @@ export default function B2CAppearanceManager({
               {loadingAvailableCategories ? (
                 <div className="py-12 text-center text-xs text-slate-400 flex flex-col items-center gap-2">
                   <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
-                  Consultando árvore de gêneros e editoras no Horus ERP / Tray...
+                  Consultando árvore de gêneros e editoras no Horus ERP...
                 </div>
               ) : (
                 <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">

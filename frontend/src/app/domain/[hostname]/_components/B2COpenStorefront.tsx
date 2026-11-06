@@ -56,6 +56,8 @@ interface B2COpenStorefrontProps {
     b2c_checkout_mode?: string;
     tray_enabled?: boolean;
   };
+  basePath?: string;
+  routeSegments?: string[];
 }
 
 interface CartItem {
@@ -71,24 +73,68 @@ interface CartItem {
   cover_url?: string;
 }
 
-export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStorefrontProps) {
+const slugifySegment = (value: string): string => {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'item';
+};
+
+export default function B2COpenStorefront({
+  hostname,
+  domainInfo,
+  basePath,
+  routeSegments,
+}: B2COpenStorefrontProps) {
   const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
   const companyId = domainInfo.company_id;
 
+  const effectiveBasePath = useMemo(() => {
+    if (typeof basePath === 'string') return basePath.replace(/\/$/, '');
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/loja/')) {
+      const parts = window.location.pathname.split('/').filter(Boolean);
+      if (parts.length >= 2) return `/loja/${parts[1]}`;
+    }
+    return '';
+  }, [basePath]);
+
   const [storeInfo, setStoreInfo] = useState<any>(null);
   const [products, setProducts] = useState<any[]>([]);
+  const [totalItemsCount, setTotalItemsCount] = useState<number>(0);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
+  const [loadingProductDetail, setLoadingProductDetail] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFilter, setSearchFilter] = useState('default');
   const [onlyPromoFilter, setOnlyPromoFilter] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('ALL');
   const [selectedCategoryLabel, setSelectedCategoryLabel] = useState<string>('');
+  const [selectedCategoryObj, setSelectedCategoryObj] = useState<any>(null);
+  const [selectedShowcaseObj, setSelectedShowcaseObj] = useState<any>(null);
   const [pageSkip, setPageSkip] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
 
-  // Navigation View: 'catalog' | 'product' | 'contact' | 'account'
-  const [activeView, setActiveView] = useState<'catalog' | 'product' | 'contact' | 'account'>('catalog');
+  // Left Sidebar Filters & Facets for Category / Showcase / Search Pages
+  const [catalogFacets, setCatalogFacets] = useState<{
+    brands: string[];
+    authors: string[];
+    characteristics: Record<string, string[]>;
+  }>({ brands: [], authors: [], characteristics: {} });
+  const [sidebarBrand, setSidebarBrand] = useState<string>('');
+  const [sidebarAuthor, setSidebarAuthor] = useState<string>('');
+  const [sidebarCharacteristic, setSidebarCharacteristic] = useState<string>('');
+  const [sidebarPriceRange, setSidebarPriceRange] = useState<'ALL' | 'UP_TO_40' | '40_TO_80' | 'OVER_80'>('ALL');
+  const [sidebarInStockOnly, setSidebarInStockOnly] = useState<boolean>(false);
+  const [catalogSortBy, setCatalogSortBy] = useState<string>('default');
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState<boolean>(false);
+
+  // Navigation View: 'catalog' (Home) | 'category' | 'showcase' | 'product' | 'contact' | 'account' | 'checkout'
+  const [activeView, setActiveView] = useState<
+    'catalog' | 'category' | 'showcase' | 'product' | 'contact' | 'account' | 'checkout'
+  >('catalog');
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [productRelatedList, setProductRelatedList] = useState<any[]>([]);
   const [productDetailQty, setProductDetailQty] = useState<number>(1);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -238,15 +284,46 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
       .catch(console.error);
   }, [companyId, apiBase]);
 
-  // Fetch catalog from Horus / DB
+  // Helper to update browser URL without full page reload
+  const navigateToStorePath = (subPath: string, replace = false) => {
+    if (typeof window === 'undefined') return;
+    const cleanSub = subPath.startsWith('/') ? subPath : subPath ? `/${subPath}` : '';
+    const fullUrl = effectiveBasePath
+      ? `${effectiveBasePath}${cleanSub}`
+      : cleanSub || '/';
+    if (window.location.pathname !== fullUrl) {
+      if (replace) {
+        window.history.replaceState(null, '', fullUrl);
+      } else {
+        window.history.pushState(null, '', fullUrl);
+      }
+    }
+  };
+
+  // Fetch catalog from Horus / DB with optional Sidebar Filters & Facets
   const fetchCatalog = async (
     qStr = searchQuery,
     filterStr = searchFilter,
     skipVal = 0,
-    onlyPromo = onlyPromoFilter
+    onlyPromo = onlyPromoFilter,
+    extra?: {
+      brand?: string;
+      author?: string;
+      characteristic?: string;
+      priceRange?: 'ALL' | 'UP_TO_40' | '40_TO_80' | 'OVER_80';
+      inStock?: boolean;
+      sortBy?: string;
+    }
   ) => {
     setLoadingCatalog(true);
     try {
+      const effBrand = extra?.brand !== undefined ? extra.brand : sidebarBrand;
+      const effAuthor = extra?.author !== undefined ? extra.author : sidebarAuthor;
+      const effChar = extra?.characteristic !== undefined ? extra.characteristic : sidebarCharacteristic;
+      const effPriceRange = extra?.priceRange !== undefined ? extra.priceRange : sidebarPriceRange;
+      const effInStock = extra?.inStock !== undefined ? extra.inStock : sidebarInStockOnly;
+      const effSort = extra?.sortBy !== undefined ? extra.sortBy : catalogSortBy;
+
       const params = new URLSearchParams({
         company_id: String(companyId),
         q: qStr,
@@ -254,18 +331,70 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
         only_promo: String(onlyPromo),
         skip: String(skipVal),
         limit: '24',
+        sort_by: effSort || 'default',
       });
+      if (effBrand) params.set('brand', effBrand);
+      if (effAuthor) params.set('author', effAuthor);
+      if (effChar) params.set('characteristic', effChar);
+      if (effInStock) params.set('in_stock', 'true');
+      if (effPriceRange === 'UP_TO_40') {
+        params.set('max_price', '40');
+      } else if (effPriceRange === '40_TO_80') {
+        params.set('min_price', '40');
+        params.set('max_price', '80');
+      } else if (effPriceRange === 'OVER_80') {
+        params.set('min_price', '80');
+      }
+
       const res = await fetch(`${apiBase}/b2c/public/catalog?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setProducts(data.items || []);
+        setTotalItemsCount(Number(data.total || (data.items || []).length));
         setPageSkip(skipVal);
         setTotalPages(Math.max(1, Number(data.pages || 1)));
+        if (data.facets) {
+          setCatalogFacets({
+            brands: Array.isArray(data.facets.brands) ? data.facets.brands : [],
+            authors: Array.isArray(data.facets.authors) ? data.facets.authors : [],
+            characteristics:
+              data.facets.characteristics && typeof data.facets.characteristics === 'object'
+                ? data.facets.characteristics
+                : {},
+          });
+        }
       }
     } catch (e) {
       console.error(e);
     } finally {
       setLoadingCatalog(false);
+    }
+  };
+
+  const fetchProductDetailByCode = async (code: string) => {
+    const cleanCode = decodeURIComponent(String(code || '').trim());
+    if (!cleanCode) return;
+    setLoadingProductDetail(true);
+    setActiveView('product');
+    try {
+      const res = await fetch(
+        `${apiBase}/b2c/public/product/${encodeURIComponent(cleanCode)}?company_id=${companyId}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.product) {
+          setSelectedProduct(data.product);
+          setProductRelatedList(Array.isArray(data.related) ? data.related : []);
+          setProductDetailQty(1);
+        }
+      } else {
+        toast.error('Produto não encontrado nesta loja.');
+        setActiveView('catalog');
+      }
+    } catch {
+      setActiveView('catalog');
+    } finally {
+      setLoadingProductDetail(false);
     }
   };
 
@@ -416,10 +545,15 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     return () => clearInterval(timer);
   }, [checkoutStep, orderResult?.order_id, orderResult?.pix_code, orderResult?.status, apiBase]);
 
-  const openProductPage = (prod: any) => {
+  const openProductPage = (prod: any, updateUrl = true) => {
     setSelectedProduct(prod);
+    setProductRelatedList([]);
     setProductDetailQty(1);
     setActiveView('product');
+    const prodCode = encodeURIComponent(String(prod.ean_gtin || prod.sku || prod.id || '').trim());
+    if (updateUrl && prodCode) {
+      navigateToStorePath(`/produto/${prodCode}`);
+    }
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -467,6 +601,30 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     toast.success(`"${prod.name}" adicionado à sacola!`);
   };
 
+  const openDedicatedCheckoutPage = (updateUrl: boolean | React.MouseEvent = true) => {
+    setIsCartOpen(false);
+    setIsMobileMenuOpen(false);
+    setCheckoutStep('register');
+    setActiveView('checkout');
+    if (updateUrl !== false) {
+      navigateToStorePath('/checkout');
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const openContactPage = (updateUrl: boolean | React.MouseEvent = true) => {
+    setIsMobileMenuOpen(false);
+    setActiveView('contact');
+    if (updateUrl !== false) {
+      navigateToStorePath('/contato');
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
   const updateCartQuantity = (sku: string, delta: number) => {
     setCart((prev) =>
       prev
@@ -479,35 +637,112 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     setCart((prev) => prev.filter((i) => i.sku !== sku));
   };
 
+  const resetSidebarFiltersState = () => {
+    setSidebarBrand('');
+    setSidebarAuthor('');
+    setSidebarCharacteristic('');
+    setSidebarPriceRange('ALL');
+    setSidebarInStockOnly(false);
+    setCatalogSortBy('default');
+  };
+
   const handleSelectCategory = (
     catId: string,
     label: string,
     code: string,
     filterType: string,
-    onlyPromo = false
+    onlyPromo = false,
+    catObj?: any,
+    updateUrl = true
   ) => {
+    resetSidebarFiltersState();
     setSelectedCategoryId(catId);
     setSelectedCategoryLabel(label);
+    setSelectedCategoryObj(
+      catObj || {
+        id: catId,
+        label,
+        code,
+        filter_type: filterType,
+        slug: slugifySegment(label || code || catId),
+        banner_url: '',
+        headline: label,
+        description: '',
+      }
+    );
+    setSelectedShowcaseObj(null);
     setSearchQuery(code);
     const targetFilter =
       filterType === 'SEARCH_TERM' || !filterType ? 'default' : filterType;
     setSearchFilter(targetFilter);
     setOnlyPromoFilter(onlyPromo);
-    setActiveView('catalog');
+    setActiveView('category');
     setIsMobileMenuOpen(false);
-    fetchCatalog(code, targetFilter, 0, onlyPromo);
+    if (updateUrl) {
+      if (catId === 'PROMO') {
+        navigateToStorePath('/ofertas');
+      } else {
+        const catSlug = catObj?.slug || slugifySegment(label || code || catId);
+        navigateToStorePath(`/categoria/${encodeURIComponent(catSlug)}`);
+      }
+    }
+    fetchCatalog(code, targetFilter, 0, onlyPromo, {
+      brand: '',
+      author: '',
+      characteristic: '',
+      priceRange: 'ALL',
+      inStock: false,
+      sortBy: 'default',
+    });
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
-  const handleResetToHome = () => {
+  const handleSelectShowcase = (sc: any, updateUrl = true) => {
+    if (!sc) return;
+    resetSidebarFiltersState();
+    setSelectedShowcaseObj(sc);
+    setSelectedCategoryObj(null);
+    setSelectedCategoryId(`SHOWCASE-${sc.id}`);
+    setSelectedCategoryLabel(sc.title || 'Vitrine Especial');
+    setActiveView('showcase');
+    setIsMobileMenuOpen(false);
+    const scSlug = sc.slug || slugifySegment(sc.title || sc.id);
+    if (updateUrl) {
+      navigateToStorePath(`/vitrine/${encodeURIComponent(scSlug)}`);
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handleResetToHome = (updateUrl: boolean | React.MouseEvent = true) => {
+    resetSidebarFiltersState();
     setSelectedCategoryId('ALL');
     setSelectedCategoryLabel('');
+    setSelectedCategoryObj(null);
+    setSelectedShowcaseObj(null);
     setSearchQuery('');
     setSearchFilter('default');
     setOnlyPromoFilter(false);
     setActiveView('catalog');
     setSelectedProduct(null);
     setIsMobileMenuOpen(false);
-    fetchCatalog('', 'default', 0, false);
+    if (updateUrl !== false) {
+      navigateToStorePath('');
+    }
+    fetchCatalog('', 'default', 0, false, {
+      brand: '',
+      author: '',
+      characteristic: '',
+      priceRange: 'ALL',
+      inStock: false,
+      sortBy: 'default',
+    });
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const handleCalculateFreight = async (cepInput?: string, overrideSubtotal?: number) => {
@@ -871,7 +1106,10 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     }
   };
 
-  const openAccountScreen = (initialMenu?: 'login' | 'register' | 'recovery' | 'orders' | 'coupons' | 'profile' | 'security') => {
+  const openAccountScreen = (
+    initialMenu?: 'login' | 'register' | 'recovery' | 'orders' | 'coupons' | 'profile' | 'security',
+    updateUrl = true
+  ) => {
     setAccountModalOpen(false);
     setIsMobileMenuOpen(false);
     setActiveView('account');
@@ -880,8 +1118,15 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
       setAccountTab(target);
       fetchMyOrders(b2cCustomer.cpf);
       fetchMyCoupons(b2cCustomer.cpf, b2cCustomer.email);
+      if (updateUrl) navigateToStorePath('/conta');
     } else {
-      setAccountTab(initialMenu && ['login', 'register', 'recovery'].includes(initialMenu) ? initialMenu : 'login');
+      const target = initialMenu && ['login', 'register', 'recovery'].includes(initialMenu) ? initialMenu : 'login';
+      setAccountTab(target);
+      if (updateUrl) {
+        if (target === 'register') navigateToStorePath('/cadastro');
+        else if (target === 'login') navigateToStorePath('/login');
+        else navigateToStorePath('/conta');
+      }
     }
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1087,7 +1332,12 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
 
   // Fallback dynamic categories derived from loaded catalog if Seller hasn't configured custom categories yet
   const effectiveCategories = useMemo(() => {
-    if (configuredCategories.length > 0) return configuredCategories;
+    if (configuredCategories.length > 0) {
+      return configuredCategories.map((c: any, idx: number) => ({
+        ...c,
+        slug: c.slug || slugifySegment(c.label || c.code || `categoria-${idx + 1}`),
+      }));
+    }
     const seen = new Set<string>();
     const autoCats: any[] = [];
     for (const p of products) {
@@ -1098,7 +1348,11 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
           id: `auto-cat-${catName}`,
           label: catName,
           code: catName,
+          slug: slugifySegment(catName),
           filter_type: 'COD_GENERO',
+          banner_url: '',
+          headline: catName,
+          description: '',
         });
       }
       if (autoCats.length >= 8) break;
@@ -1106,8 +1360,177 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     return autoCats;
   }, [configuredCategories, products]);
 
+  // Multi-Page URL Resolution (F5 Refresh & Browser Back/Forward Navigation)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const extractSegmentsFromLocation = (): string[] => {
+      const pathname = window.location.pathname.replace(/\/$/, '');
+      if (effectiveBasePath && pathname.startsWith(effectiveBasePath)) {
+        const rest = pathname.slice(effectiveBasePath.length).replace(/^\//, '');
+        return rest ? rest.split('/').filter(Boolean).map((s) => decodeURIComponent(s)) : [];
+      }
+      if (Array.isArray(routeSegments) && routeSegments.length > 0) {
+        return routeSegments.map((s) => decodeURIComponent(s));
+      }
+      const rawParts = pathname.split('/').filter(Boolean);
+      if (rawParts[0] === 'loja' && rawParts.length >= 2) {
+        return rawParts.slice(2).map((s) => decodeURIComponent(s));
+      }
+      return rawParts.map((s) => decodeURIComponent(s));
+    };
+
+    const resolveSegments = (segs: string[]) => {
+      if (!segs || segs.length === 0) {
+        handleResetToHome(false);
+        return;
+      }
+      const first = (segs[0] || '').toLowerCase();
+      const second = segs[1] || '';
+
+      if ((first === 'produto' || first === 'p') && second) {
+        fetchProductDetailByCode(second);
+        return;
+      }
+
+      if ((first === 'categoria' || first === 'c') && second) {
+        const targetSlug = slugifySegment(second);
+        const foundCat = effectiveCategories.find(
+          (c: any) =>
+            slugifySegment(c.slug || c.label || c.code) === targetSlug ||
+            String(c.code || '').toLowerCase() === second.toLowerCase()
+        );
+        if (foundCat) {
+          handleSelectCategory(
+            foundCat.id,
+            foundCat.label,
+            foundCat.code,
+            foundCat.filter_type || 'COD_GENERO',
+            false,
+            foundCat,
+            false
+          );
+        } else {
+          const prettyLabel = second.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+          handleSelectCategory(
+            `url-cat-${targetSlug}`,
+            prettyLabel,
+            second.replace(/-/g, ' '),
+            'COD_GENERO',
+            false,
+            {
+              id: `url-cat-${targetSlug}`,
+              label: prettyLabel,
+              code: second.replace(/-/g, ' '),
+              slug: targetSlug,
+              filter_type: 'COD_GENERO',
+              banner_url: '',
+              headline: prettyLabel,
+              description: '',
+            },
+            false
+          );
+        }
+        return;
+      }
+
+      if ((first === 'vitrine' || first === 'v') && second) {
+        const targetSlug = slugifySegment(second);
+        const foundSc = activeShowcases.find(
+          (s: any) =>
+            slugifySegment(s.slug || s.title || s.id) === targetSlug ||
+            String(s.id || '').toLowerCase() === second.toLowerCase()
+        );
+        if (foundSc) {
+          handleSelectShowcase(foundSc, false);
+        } else if (activeShowcases.length > 0) {
+          handleSelectShowcase(activeShowcases[0], false);
+        }
+        return;
+      }
+
+      if (first === 'ofertas' || first === 'promocoes') {
+        handleSelectCategory(
+          'PROMO',
+          'Ofertas e Promoções',
+          '',
+          'default',
+          true,
+          {
+            id: 'PROMO',
+            label: 'Ofertas e Promoções',
+            code: '',
+            slug: 'ofertas',
+            headline: 'Ofertas e Promoções Especiais',
+            description: 'Confira todas as obras com descontos exclusivos por tempo limitado.',
+          },
+          false
+        );
+        return;
+      }
+
+      if (first === 'busca') {
+        const urlParams = new URLSearchParams(window.location.search);
+        const qParam = urlParams.get('q') || searchQuery || '';
+        const filterParam = urlParams.get('filter') || 'default';
+        setSelectedCategoryId('SEARCH');
+        setSelectedCategoryLabel(qParam ? `Busca: "${qParam}"` : 'Busca no Catálogo');
+        setSelectedCategoryObj({
+          id: 'SEARCH',
+          label: qParam ? `Resultados para "${qParam}"` : 'Catálogo Completo',
+          code: qParam,
+          slug: 'busca',
+          headline: qParam ? `Resultados da busca por "${qParam}"` : 'Explorando o Acervo',
+          description: 'Utilize os filtros na lateral esquerda para refinar por editora, autor, características ou faixa de preço.',
+        });
+        setSearchQuery(qParam);
+        setSearchFilter(filterParam);
+        setActiveView('category');
+        fetchCatalog(qParam, filterParam, 0, false);
+        return;
+      }
+
+      if (first === 'contato' || first === 'fale-conosco') {
+        openContactPage(false);
+        return;
+      }
+
+      if (first === 'conta' || first === 'minha-conta') {
+        openAccountScreen('orders', false);
+        return;
+      }
+
+      if (first === 'login' || first === 'entrar') {
+        openAccountScreen('login', false);
+        return;
+      }
+
+      if (first === 'cadastro' || first === 'criar-conta') {
+        openAccountScreen('register', false);
+        return;
+      }
+
+      if (first === 'checkout' || first === 'finalizar') {
+        openDedicatedCheckoutPage(false);
+        return;
+      }
+    };
+
+    const initialSegs = extractSegmentsFromLocation();
+    if (initialSegs.length > 0) {
+      resolveSegments(initialSegs);
+    }
+
+    const onPopState = () => {
+      resolveSegments(extractSegmentsFromLocation());
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [storeInfo?.company_id, effectiveCategories.length, activeShowcases.length]);
+
   // Suggestions for Product Page ("Quem viu também se interessou")
   const relatedProducts = useMemo(() => {
+    if (productRelatedList.length > 0) return productRelatedList.slice(0, 4);
     if (!selectedProduct) return [];
     const currentSku = String(selectedProduct.sku || selectedProduct.ean_gtin);
     const pool = [...products];
@@ -1131,7 +1554,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     );
     const others = candidates.filter((c) => !sameCatOrBrand.includes(c));
     return [...sameCatOrBrand, ...others].slice(0, 4);
-  }, [selectedProduct, products, activeShowcases]);
+  }, [selectedProduct, productRelatedList, products, activeShowcases]);
 
   // Cross-sell Suggestions inside Cart Drawer ("Aproveite e leve também")
   const cartSuggestions = useMemo(() => {
@@ -1387,9 +1810,17 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
     );
   };
 
+  const themeTemplate = branding.theme_template || 'editorial_modern';
+
   return (
     <div
-      className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans"
+      className={`min-h-screen text-slate-900 flex flex-col ${
+        themeTemplate === 'classic_bookstore'
+          ? 'bg-[#faf8f5] font-serif'
+          : themeTemplate === 'minimal_boutique'
+          ? 'bg-white font-sans'
+          : 'bg-slate-50 font-sans'
+      }`}
       style={{ '--b2c-primary': primaryColor, '--b2c-secondary': secondaryColor } as any}
     >
       {/* Top E-commerce Trust Bar */}
@@ -1434,7 +1865,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
 
               <button
                 type="button"
-                onClick={handleResetToHome}
+                onClick={() => handleResetToHome()}
                 className="flex items-center gap-2.5 text-left cursor-pointer"
               >
                 {effectiveLogo ? (
@@ -1477,9 +1908,22 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              resetSidebarFiltersState();
               setSelectedCategoryId('SEARCH');
-              setSelectedCategoryLabel(searchQuery);
-              setActiveView('catalog');
+              setSelectedCategoryLabel(searchQuery ? `Busca: "${searchQuery}"` : 'Catálogo');
+              setSelectedCategoryObj({
+                id: 'SEARCH',
+                label: searchQuery ? `Resultados para "${searchQuery}"` : 'Explorando o Acervo',
+                code: searchQuery,
+                slug: 'busca',
+                headline: searchQuery ? `Resultados da busca por "${searchQuery}"` : 'Catálogo Completo',
+                description:
+                  'Utilize os filtros na lateral esquerda para refinar por editora, autor, características físicas ou faixa de preço.',
+              });
+              setActiveView('category');
+              navigateToStorePath(
+                `/busca${searchQuery ? `?q=${encodeURIComponent(searchQuery)}&filter=${encodeURIComponent(searchFilter)}` : ''}`
+              );
               fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter);
             }}
             className="flex-1 max-w-2xl flex items-center bg-slate-100 rounded-2xl p-1 border border-slate-200 focus-within:bg-white focus-within:ring-2 focus-within:ring-slate-900/10 transition-all"
@@ -1524,10 +1968,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
 
             <button
               type="button"
-              onClick={() => {
-                setActiveView('contact');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
+              onClick={() => openContactPage()}
               className="px-4 py-2.5 rounded-2xl border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
             >
               <Headset className="w-4 h-4" style={{ color: primaryColor }} />
@@ -1557,20 +1998,47 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
           </div>
         </div>
 
-        {/* Horizontal Category Navigation Bar (Clean — Only Categories and Offers) */}
-        {(effectiveCategories.length > 0 || activePromotions.length > 0) && (
+        {/* Horizontal Category Navigation Bar (Clean — Categories, Vitrines and Offers) */}
+        {(effectiveCategories.length > 0 || activePromotions.length > 0 || activeShowcases.length > 0) && (
           <div className="border-t border-slate-100 bg-slate-50/90">
             <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar">
+              <button
+                type="button"
+                onClick={() => handleResetToHome()}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+                  activeView === 'catalog' && selectedCategoryId === 'ALL' && !onlyPromoFilter
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                Início
+              </button>
+
               {activePromotions.length > 0 && (
                 <button
                   type="button"
                   onClick={() =>
-                    onlyPromoFilter
+                    onlyPromoFilter && activeView === 'category'
                       ? handleResetToHome()
-                      : handleSelectCategory('PROMO', 'Ofertas e Promoções', '', 'default', true)
+                      : handleSelectCategory(
+                          'PROMO',
+                          'Ofertas e Promoções',
+                          '',
+                          'default',
+                          true,
+                          {
+                            id: 'PROMO',
+                            label: 'Ofertas e Promoções',
+                            code: '',
+                            slug: 'ofertas',
+                            headline: 'Ofertas e Promoções Especiais',
+                            description:
+                              'Seleção de títulos com descontos especiais por tempo limitado.',
+                          }
+                        )
                   }
                   className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all shrink-0 flex items-center gap-1 cursor-pointer ${
-                    onlyPromoFilter
+                    onlyPromoFilter && activeView === 'category'
                       ? 'bg-rose-600 text-white shadow-sm'
                       : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
                   }`}
@@ -1581,7 +2049,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
               )}
 
               {effectiveCategories.map((cat: any) => {
-                const isSelected = activeView === 'catalog' && selectedCategoryId === cat.id;
+                const isSelected = activeView === 'category' && selectedCategoryId === cat.id;
                 return (
                   <button
                     key={cat.id}
@@ -1594,7 +2062,8 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                             cat.label,
                             cat.code,
                             cat.filter_type || 'COD_GENERO',
-                            false
+                            false,
+                            cat
                           )
                     }
                     style={
@@ -1607,6 +2076,31 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                     }`}
                   >
                     {cat.label}
+                  </button>
+                );
+              })}
+
+              {activeShowcases.map((sc: any) => {
+                const isSelectedSc =
+                  activeView === 'showcase' && selectedShowcaseObj?.id === sc.id;
+                return (
+                  <button
+                    key={`nav-sc-${sc.id}`}
+                    type="button"
+                    onClick={() =>
+                      isSelectedSc ? handleResetToHome() : handleSelectShowcase(sc)
+                    }
+                    style={
+                      isSelectedSc ? { backgroundColor: primaryColor, color: '#ffffff' } : undefined
+                    }
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all shrink-0 flex items-center gap-1 cursor-pointer ${
+                      isSelectedSc
+                        ? 'shadow-sm'
+                        : 'bg-indigo-50/70 text-indigo-800 border border-indigo-200/80 hover:bg-indigo-100'
+                    }`}
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    {sc.title}
                   </button>
                 );
               })}
@@ -1627,7 +2121,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
             >
               <div className="flex items-center gap-2">
                 <FolderTree className="w-5 h-5" style={{ color: primaryColor }} />
-                <span className="font-bold text-sm">Navegar por Categorias</span>
+                <span className="font-bold text-sm">Navegar pela Loja</span>
               </div>
               <button
                 type="button"
@@ -1642,7 +2136,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
               <div className="space-y-1">
                 <button
                   type="button"
-                  onClick={handleResetToHome}
+                  onClick={() => handleResetToHome()}
                   className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-800 hover:bg-slate-100 cursor-pointer"
                 >
                   <span>🏠 Início</span>
@@ -1681,7 +2175,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
               {effectiveCategories.length > 0 && (
                 <div className="space-y-1 pt-2 border-t border-slate-100">
                   <span className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                    Categorias e Editoras
+                    Páginas de Categorias
                   </span>
                   {effectiveCategories.map((cat: any) => (
                     <button
@@ -1693,12 +2187,35 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                           cat.label,
                           cat.code,
                           cat.filter_type || 'COD_GENERO',
-                          false
+                          false,
+                          cat
                         )
                       }
                       className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
                     >
                       <span>{cat.label}</span>
+                      <ChevronRight className="w-4 h-4 text-slate-400" />
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {activeShowcases.length > 0 && (
+                <div className="space-y-1 pt-2 border-t border-slate-100">
+                  <span className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                    Vitrines Especiais
+                  </span>
+                  {activeShowcases.map((sc: any) => (
+                    <button
+                      key={`mob-sc-${sc.id}`}
+                      type="button"
+                      onClick={() => handleSelectShowcase(sc)}
+                      className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-indigo-800 hover:bg-indigo-50 cursor-pointer"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                        {sc.title}
+                      </span>
                       <ChevronRight className="w-4 h-4 text-slate-400" />
                     </button>
                   ))}
@@ -1711,11 +2228,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                 </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    setActiveView('contact');
-                    setIsMobileMenuOpen(false);
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
+                  onClick={() => openContactPage()}
                   className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-800 hover:bg-slate-100 cursor-pointer"
                 >
                   <span className="flex items-center gap-2">
@@ -1737,8 +2250,14 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
       )}
 
       {/* =======================================================================
-          VIEW 1: DEDICATED PRODUCT DETAIL PAGE (PÁGINA DE PRODUTO COMPLETA)
+          VIEW 1: DEDICATED PRODUCT DETAIL PAGE (PÁGINA DE PRODUTO COMPLETA - /produto/[code])
          ======================================================================= */}
+      {activeView === 'product' && loadingProductDetail && !selectedProduct && (
+        <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-16 flex flex-col items-center justify-center gap-3">
+          <Loader2 className="w-8 h-8 animate-spin" style={{ color: primaryColor }} />
+          <p className="text-xs font-bold text-slate-500">Carregando página do produto...</p>
+        </main>
+      )}
       {activeView === 'product' && selectedProduct && (
         <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-8 space-y-8 pb-24 md:pb-12">
           {/* Breadcrumb & Back Button */}
@@ -1746,8 +2265,8 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
-                onClick={handleResetToHome}
-                className="hover:text-slate-900 font-semibold"
+                onClick={() => handleResetToHome()}
+                className="hover:text-slate-900 font-semibold cursor-pointer"
               >
                 Início
               </button>
@@ -3531,6 +4050,1145 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
       )}
 
       {/* =======================================================================
+          VIEW 2C: DEDICATED CATEGORY & SEARCH PAGE (/categoria/[slug], /ofertas, /busca)
+          WITH CUSTOMIZABLE TOP BANNER, DESCRIPTION & LEFT SIDEBAR FILTERS
+         ======================================================================= */}
+      {activeView === 'category' && (
+        <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-8 space-y-6 pb-20">
+          {/* Breadcrumb & Back */}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleResetToHome()}
+                className="hover:text-slate-900 font-semibold cursor-pointer"
+              >
+                Início
+              </button>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-slate-400">Categorias</span>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-slate-900 font-extrabold">
+                {selectedCategoryObj?.label || selectedCategoryLabel || 'Acervo'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    navigator.clipboard.writeText(window.location.href);
+                    toast.success('Link desta página copiado!');
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                Copiar Link
+              </button>
+              <button
+                type="button"
+                onClick={() => handleResetToHome()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold hover:bg-slate-100 cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                Voltar à Home
+              </button>
+            </div>
+          </div>
+
+          {/* Customizable Category Top Banner + Headline + Editorial Description */}
+          <div
+            className="relative rounded-3xl overflow-hidden text-white p-6 sm:p-10 shadow-sm border border-slate-200/20"
+            style={{
+              backgroundColor: secondaryColor,
+              backgroundImage: selectedCategoryObj?.banner_url
+                ? `linear-gradient(to right, rgba(15,23,42,0.92), rgba(15,23,42,0.45)), url(${getImageUrl(selectedCategoryObj.banner_url)})`
+                : `linear-gradient(135deg, ${secondaryColor} 0%, ${primaryColor} 100%)`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }}
+          >
+            <div className="max-w-3xl space-y-2.5">
+              <span
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider text-white shadow-xs"
+                style={{ backgroundColor: primaryColor }}
+              >
+                <FolderTree className="w-3.5 h-3.5" />
+                {onlyPromoFilter ? 'Promoções Ativas' : 'Departamento / Categoria'}
+              </span>
+              <h1 className="text-2xl sm:text-4xl font-black tracking-tight leading-tight">
+                {selectedCategoryObj?.headline ||
+                  selectedCategoryObj?.label ||
+                  selectedCategoryLabel ||
+                  'Catálogo da Categoria'}
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-200 leading-relaxed max-w-2xl">
+                {selectedCategoryObj?.description ||
+                  `Explore nossa curadoria completa em ${
+                    selectedCategoryObj?.label || selectedCategoryLabel || 'nosso acervo'
+                  }. Utilize os filtros à esquerda para refinar por editora, autor, características da edição ou faixa de preço.`}
+              </p>
+            </div>
+          </div>
+
+          {/* Mobile Filter Toggle Bar */}
+          <div className="flex lg:hidden items-center justify-between gap-2 bg-white p-3 rounded-2xl border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setMobileFiltersOpen(!mobileFiltersOpen)}
+              style={{ backgroundColor: primaryColor }}
+              className="px-4 py-2 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            >
+              <FolderTree className="w-3.5 h-3.5" />
+              {mobileFiltersOpen ? 'Ocultar Filtros' : 'Filtrar Resultados'}
+            </button>
+
+            <select
+              value={catalogSortBy}
+              onChange={(e) => {
+                const nextSort = e.target.value;
+                setCatalogSortBy(nextSort);
+                fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, { sortBy: nextSort });
+              }}
+              className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700"
+            >
+              <option value="default">Ordenar: Relevância</option>
+              <option value="price_asc">Menor Preço</option>
+              <option value="price_desc">Maior Preço</option>
+              <option value="name_asc">Título (A - Z)</option>
+            </select>
+          </div>
+
+          {/* 2-Column Layout: Left Rich Sidebar Filters (lg:col-span-3) + Right Catalog Grid (lg:col-span-9) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <aside
+              className={`${
+                mobileFiltersOpen ? 'block' : 'hidden lg:block'
+              } lg:col-span-3 bg-white rounded-3xl border border-slate-200 p-4 sm:p-5 shadow-xs space-y-5 lg:sticky lg:top-24`}
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+                  <Search className="w-3.5 h-3.5" style={{ color: primaryColor }} />
+                  Filtros da Página
+                </h3>
+                {(sidebarBrand ||
+                  sidebarAuthor ||
+                  sidebarCharacteristic ||
+                  sidebarPriceRange !== 'ALL' ||
+                  sidebarInStockOnly ||
+                  onlyPromoFilter) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetSidebarFiltersState();
+                      setOnlyPromoFilter(false);
+                      fetchCatalog(searchQuery, searchFilter, 0, false, {
+                        brand: '',
+                        author: '',
+                        characteristic: '',
+                        priceRange: 'ALL',
+                        inStock: false,
+                        sortBy: 'default',
+                      });
+                    }}
+                    className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer"
+                  >
+                    Limpar tudo
+                  </button>
+                )}
+              </div>
+
+              {/* 1. Disponibilidade & Ofertas */}
+              <div className="space-y-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Disponibilidade &amp; Ofertas
+                </span>
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sidebarInStockOnly}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setSidebarInStockOnly(checked);
+                      fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, {
+                        inStock: checked,
+                      });
+                    }}
+                    className="rounded text-indigo-600"
+                  />
+                  <span>Apenas itens em estoque</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={onlyPromoFilter}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setOnlyPromoFilter(checked);
+                      fetchCatalog(searchQuery, searchFilter, 0, checked);
+                    }}
+                    className="rounded text-rose-600"
+                  />
+                  <span>Apenas em promoção</span>
+                </label>
+              </div>
+
+              {/* 2. Faixa de Preço */}
+              <div className="space-y-2 pt-3 border-t border-slate-100">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Faixa de Preço
+                </span>
+                <div className="space-y-1">
+                  {[
+                    { id: 'ALL', label: 'Todos os preços' },
+                    { id: 'UP_TO_40', label: 'Até R$ 40,00' },
+                    { id: '40_TO_80', label: 'De R$ 40,00 a R$ 80,00' },
+                    { id: 'OVER_80', label: 'Acima de R$ 80,00' },
+                  ].map((pr) => {
+                    const active = sidebarPriceRange === pr.id;
+                    return (
+                      <button
+                        key={pr.id}
+                        type="button"
+                        onClick={() => {
+                          setSidebarPriceRange(pr.id as any);
+                          fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, {
+                            priceRange: pr.id as any,
+                          });
+                        }}
+                        style={
+                          active ? { backgroundColor: `${primaryColor}15`, color: primaryColor } : undefined
+                        }
+                        className={`w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                          active ? 'font-extrabold' : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {pr.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 3. Editoras / Selos */}
+              {catalogFacets.brands.length > 0 && (
+                <div className="space-y-2 pt-3 border-t border-slate-100">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                    Editoras / Marcas
+                  </span>
+                  <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+                    {catalogFacets.brands.map((bName) => {
+                      const isSel = sidebarBrand.toLowerCase() === bName.toLowerCase();
+                      return (
+                        <button
+                          key={bName}
+                          type="button"
+                          onClick={() => {
+                            const nextB = isSel ? '' : bName;
+                            setSidebarBrand(nextB);
+                            fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, {
+                              brand: nextB,
+                            });
+                          }}
+                          style={
+                            isSel
+                              ? { backgroundColor: primaryColor, color: '#ffffff' }
+                              : undefined
+                          }
+                          className={`w-full text-left px-2.5 py-1.5 rounded-xl text-xs truncate transition-colors cursor-pointer ${
+                            isSel ? 'font-bold shadow-2xs' : 'text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          {bName}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 4. Autores */}
+              {catalogFacets.authors.length > 0 && (
+                <div className="space-y-2 pt-3 border-t border-slate-100">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                    Autores
+                  </span>
+                  <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+                    {catalogFacets.authors.map((aName) => {
+                      const isSel = sidebarAuthor.toLowerCase() === aName.toLowerCase();
+                      return (
+                        <button
+                          key={aName}
+                          type="button"
+                          onClick={() => {
+                            const nextA = isSel ? '' : aName;
+                            setSidebarAuthor(nextA);
+                            fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, {
+                              author: nextA,
+                            });
+                          }}
+                          style={
+                            isSel
+                              ? { backgroundColor: primaryColor, color: '#ffffff' }
+                              : undefined
+                          }
+                          className={`w-full text-left px-2.5 py-1.5 rounded-xl text-xs truncate transition-colors cursor-pointer ${
+                            isSel ? 'font-bold shadow-2xs' : 'text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          {aName}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 5. Características Físicas / Editoriais */}
+              {Object.keys(catalogFacets.characteristics || {}).length > 0 && (
+                <div className="space-y-3 pt-3 border-t border-slate-100">
+                  {Object.entries(catalogFacets.characteristics).map(([charGroup, values]) => (
+                    <div key={charGroup} className="space-y-1.5">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                        {charGroup}
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(values || []).map((val) => {
+                          const token = `${charGroup}:${val}`;
+                          const isSel = sidebarCharacteristic.toLowerCase() === token.toLowerCase();
+                          return (
+                            <button
+                              key={token}
+                              type="button"
+                              onClick={() => {
+                                const nextC = isSel ? '' : token;
+                                setSidebarCharacteristic(nextC);
+                                fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, {
+                                  characteristic: nextC,
+                                });
+                              }}
+                              style={
+                                isSel
+                                  ? { backgroundColor: primaryColor, color: '#ffffff' }
+                                  : undefined
+                              }
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                                isSel
+                                  ? 'border-transparent shadow-2xs'
+                                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                              }`}
+                            >
+                              {val}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* 6. Navegar entre Outras Categorias */}
+              {effectiveCategories.length > 0 && (
+                <div className="space-y-1.5 pt-3 border-t border-slate-100">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                    Todas as Categorias
+                  </span>
+                  {effectiveCategories.map((cat: any) => {
+                    const isCurr = selectedCategoryId === cat.id;
+                    return (
+                      <button
+                        key={`side-cat-${cat.id}`}
+                        type="button"
+                        onClick={() =>
+                          handleSelectCategory(
+                            cat.id,
+                            cat.label,
+                            cat.code,
+                            cat.filter_type || 'COD_GENERO',
+                            false,
+                            cat
+                          )
+                        }
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                          isCurr
+                            ? 'bg-slate-900 text-white font-bold'
+                            : 'text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="truncate">{cat.label}</span>
+                        <ChevronRight className="w-3.5 h-3.5 opacity-60 shrink-0" />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </aside>
+
+            {/* Right Column: Sorting Bar + Active Filter Pills + Products Grid */}
+            <div className="lg:col-span-9 space-y-5">
+              <div className="hidden lg:flex items-center justify-between gap-4 bg-white px-5 py-3.5 rounded-2xl border border-slate-200 shadow-2xs">
+                <div className="text-xs text-slate-600">
+                  Exibindo <strong>{products.length}</strong> de{' '}
+                  <strong>{Math.max(products.length, totalItemsCount)}</strong> obras encontradas
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-500">Ordenar por:</span>
+                  <select
+                    value={catalogSortBy}
+                    onChange={(e) => {
+                      const nextSort = e.target.value;
+                      setCatalogSortBy(nextSort);
+                      fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, {
+                        sortBy: nextSort,
+                      });
+                    }}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800 cursor-pointer"
+                  >
+                    <option value="default">Mais Relevantes</option>
+                    <option value="price_asc">Menor Preço</option>
+                    <option value="price_desc">Maior Preço</option>
+                    <option value="name_asc">Ordem Alfabética (A-Z)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Active Filters Bar */}
+              {(sidebarBrand ||
+                sidebarAuthor ||
+                sidebarCharacteristic ||
+                sidebarPriceRange !== 'ALL' ||
+                sidebarInStockOnly) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-500">Filtros ativos:</span>
+                  {sidebarBrand && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-800 text-xs font-bold border border-indigo-200">
+                      Editora: {sidebarBrand}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSidebarBrand('');
+                          fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, {
+                            brand: '',
+                          });
+                        }}
+                        className="ml-1 hover:text-rose-600 cursor-pointer"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )}
+                  {sidebarAuthor && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-800 text-xs font-bold border border-indigo-200">
+                      Autor: {sidebarAuthor}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSidebarAuthor('');
+                          fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, {
+                            author: '',
+                          });
+                        }}
+                        className="ml-1 hover:text-rose-600 cursor-pointer"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )}
+                  {sidebarCharacteristic && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-800 text-xs font-bold border border-indigo-200">
+                      {sidebarCharacteristic}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSidebarCharacteristic('');
+                          fetchCatalog(searchQuery, searchFilter, 0, onlyPromoFilter, {
+                            characteristic: '',
+                          });
+                        }}
+                        className="ml-1 hover:text-rose-600 cursor-pointer"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {loadingCatalog ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-5">
+                  {Array.from({ length: 6 }).map((_, idx) => (
+                    <div
+                      key={idx}
+                      className="bg-white rounded-2xl border border-slate-200 p-4 h-80 animate-pulse flex flex-col justify-between"
+                    >
+                      <div className="bg-slate-100 h-44 rounded-xl" />
+                      <div className="space-y-2">
+                        <div className="h-3 bg-slate-100 rounded w-3/4" />
+                        <div className="h-3 bg-slate-100 rounded w-1/2" />
+                        <div className="h-8 bg-slate-100 rounded-xl mt-2" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : products.length === 0 ? (
+                <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center space-y-3">
+                  <BookOpen className="w-10 h-10 text-slate-300 mx-auto" />
+                  <h3 className="text-base font-bold text-slate-800">
+                    Nenhum livro encontrado com estes filtros
+                  </h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    Tente remover alguns filtros laterais ou explorar outra categoria da loja.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetSidebarFiltersState();
+                      fetchCatalog(searchQuery, searchFilter, 0, false, {
+                        brand: '',
+                        author: '',
+                        characteristic: '',
+                        priceRange: 'ALL',
+                        inStock: false,
+                        sortBy: 'default',
+                      });
+                    }}
+                    style={{ backgroundColor: primaryColor }}
+                    className="px-4 py-2 rounded-xl text-white text-xs font-bold cursor-pointer"
+                  >
+                    Limpar Filtros da Categoria
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-5">
+                  {products.map((prod) => renderProductCard(prod, 'catpage'))}
+                </div>
+              )}
+
+              {/* Pagination inside Category Page */}
+              {!loadingCatalog && products.length > 0 && (
+                <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 pt-4">
+                  <button
+                    type="button"
+                    disabled={currentPage <= 1}
+                    onClick={() => handleGoToPage(currentPage - 1)}
+                    className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
+                  >
+                    « Anterior
+                  </button>
+                  {pageNumbers.map((pNum) => {
+                    const isCurrent = pNum === currentPage;
+                    return (
+                      <button
+                        key={pNum}
+                        type="button"
+                        onClick={() => handleGoToPage(pNum)}
+                        style={
+                          isCurrent ? { backgroundColor: primaryColor, color: '#ffffff' } : undefined
+                        }
+                        className={`w-9 h-9 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
+                          isCurrent
+                            ? 'shadow-sm scale-105'
+                            : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        {pNum}
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    disabled={products.length < 24 && currentPage >= totalPages}
+                    onClick={() => handleGoToPage(currentPage + 1)}
+                    className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
+                  >
+                    Próxima »
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* =======================================================================
+          VIEW 2D: DEDICATED SPECIFIC SHOWCASE PAGE (/vitrine/[slug])
+         ======================================================================= */}
+      {activeView === 'showcase' && selectedShowcaseObj && (
+        <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-8 space-y-6 pb-20">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleResetToHome()}
+                className="hover:text-slate-900 font-semibold cursor-pointer"
+              >
+                Início
+              </button>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-slate-400">Vitrines</span>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-slate-900 font-extrabold">{selectedShowcaseObj.title}</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    navigator.clipboard.writeText(window.location.href);
+                    toast.success('Link exclusivo da vitrine copiado!');
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                Compartilhar Vitrine
+              </button>
+              <button
+                type="button"
+                onClick={() => handleResetToHome()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold hover:bg-slate-100 cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                Voltar à Home
+              </button>
+            </div>
+          </div>
+
+          {/* Showcase Header Banner */}
+          <div
+            className="relative rounded-3xl overflow-hidden text-white p-6 sm:p-10 shadow-sm"
+            style={{
+              backgroundColor: secondaryColor,
+              backgroundImage: selectedShowcaseObj.banner_url
+                ? `linear-gradient(to right, rgba(15,23,42,0.92), rgba(15,23,42,0.45)), url(${getImageUrl(selectedShowcaseObj.banner_url)})`
+                : `linear-gradient(135deg, ${secondaryColor} 0%, ${primaryColor} 100%)`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }}
+          >
+            <div className="max-w-3xl space-y-2.5">
+              <span
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider text-white"
+                style={{ backgroundColor: primaryColor }}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                {selectedShowcaseObj.badge || 'Vitrine Especial'}
+              </span>
+              <h1 className="text-2xl sm:text-4xl font-black tracking-tight">
+                {selectedShowcaseObj.title}
+              </h1>
+              {(selectedShowcaseObj.description || selectedShowcaseObj.subtitle) && (
+                <p className="text-xs sm:text-sm text-slate-200 leading-relaxed max-w-2xl">
+                  {selectedShowcaseObj.description || selectedShowcaseObj.subtitle}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
+            {(selectedShowcaseObj.items || []).map((prod: any) =>
+              renderProductCard(prod, `sc-page-${selectedShowcaseObj.id}`)
+            )}
+          </div>
+        </main>
+      )}
+
+      {/* =======================================================================
+          VIEW 2E: DEDICATED SEPARATED CHECKOUT PAGE (/checkout)
+         ======================================================================= */}
+      {activeView === 'checkout' && (
+        <main className="flex-1 max-w-6xl w-full mx-auto px-3 sm:px-6 py-6 sm:py-10 space-y-6 pb-20">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-200">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h1 className="text-base sm:text-xl font-black text-slate-900">
+                  Finalização Segura da Compra
+                </h1>
+                <p className="text-[11px] sm:text-xs text-slate-500">
+                  Ambiente criptografado ponta a ponta • Seus dados estão protegidos
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleResetToHome()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Continuar Comprando
+            </button>
+          </div>
+
+          {checkoutStep === 'success' && orderResult ? (
+            <div className="max-w-xl mx-auto bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-5 text-center">
+              <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-9 h-9" />
+              </div>
+              <div>
+                <span className="text-xs font-bold uppercase text-emerald-600">
+                  Pedido #{orderResult.order_id} • {orderResult.status_label || orderResult.status}
+                </span>
+                <h2 className="text-xl font-black text-slate-900 mt-1">{orderResult.message}</h2>
+              </div>
+
+              {orderResult.vindi_payment_url && orderResult.difference_to_pay > 0 && (
+                <div className="p-4 rounded-2xl bg-indigo-50 border border-indigo-200 text-left space-y-3">
+                  <p className="text-xs font-bold text-indigo-950">
+                    Pagamento Online Seguro ({formatBRL(orderResult.difference_to_pay)}):
+                  </p>
+                  <p className="text-xs text-indigo-800">
+                    Clique no botão abaixo caso não tenha sido redirecionado automaticamente para concluir seu pagamento:
+                  </p>
+                  <a
+                    href={orderResult.vindi_payment_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-md"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    Ir para o Ambiente Seguro de Pagamento
+                  </a>
+                </div>
+              )}
+
+              {orderResult.checkout_mode === 'NATIVE_GATEWAY' &&
+                orderResult.difference_to_pay > 0 &&
+                orderResult.pix_code && (
+                  <div className="p-4 rounded-2xl bg-slate-100 border border-slate-200 text-left space-y-2.5">
+                    <p className="text-xs font-bold text-slate-900">
+                      Pagamento via PIX ({formatBRL(orderResult.difference_to_pay)}):
+                    </p>
+                    {orderResult.pix_qr_code_url && (
+                      <img
+                        src={orderResult.pix_qr_code_url}
+                        alt="QR Code PIX"
+                        className="w-44 h-44 mx-auto rounded-xl border border-slate-200 bg-white"
+                      />
+                    )}
+                    <div className="p-2.5 rounded-xl bg-white border border-slate-200 font-mono text-[11px] break-all text-slate-600">
+                      {orderResult.pix_code}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(orderResult.pix_code);
+                        toast.success('Código PIX Copia e Cola copiado!');
+                      }}
+                      className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Copiar Código PIX
+                    </button>
+                  </div>
+                )}
+
+              <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCheckoutStep('cart');
+                    setOrderResult(null);
+                    openAccountScreen('orders');
+                  }}
+                  className="flex-1 py-3 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+                >
+                  Acompanhar em Meus Pedidos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCheckoutStep('cart');
+                    setOrderResult(null);
+                    handleResetToHome();
+                  }}
+                  className="flex-1 py-3 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Voltar para a Loja
+                </button>
+              </div>
+            </div>
+          ) : cart.length === 0 ? (
+            <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center space-y-4">
+              <ShoppingBag className="w-12 h-12 text-slate-300 mx-auto" />
+              <h2 className="text-lg font-extrabold text-slate-800">Sua sacola está vazia</h2>
+              <p className="text-xs text-slate-500">
+                Adicione produtos à sua sacola antes de prosseguir para o checkout.
+              </p>
+              <button
+                type="button"
+                onClick={() => handleResetToHome()}
+                style={{ backgroundColor: primaryColor }}
+                className="px-5 py-2.5 rounded-xl text-white text-xs font-bold cursor-pointer"
+              >
+                Explorar Catálogo
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* Left Column: Customer Identification + Address + Payment */}
+              <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200 p-5 sm:p-7 shadow-xs">
+                <form
+                  onSubmit={handleFinalizeCheckout}
+                  data-yapay="payment-form"
+                  className="space-y-5"
+                >
+                  {isVindiExpressLink ? (
+                    <div className="p-4 rounded-2xl border border-indigo-200 bg-indigo-50/40 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
+                          <User className="w-4 h-4 text-indigo-600" />
+                          Identificação Rápida por CPF
+                        </span>
+                        <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                          Compra Rápida
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        Para sua comodidade, informe apenas o seu <strong>CPF</strong> aqui. Seus dados de entrega e a escolha da forma de pagamento (PIX, Cartão ou Boleto) serão preenchidos na próxima etapa, em nosso <strong>ambiente seguro de pagamento</strong>.
+                      </p>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Seu CPF (apenas números) *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="000.000.000-00"
+                          value={customerForm.cpf || couponCpf}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setCustomerForm({ ...customerForm, cpf: val });
+                            setCouponCpf(val);
+                          }}
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-indigo-300 bg-white text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="space-y-3">
+                        <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+                          1. Dados Pessoais
+                        </h3>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Nome Completo *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={customerForm.name}
+                            onChange={(e) =>
+                              setCustomerForm({ ...customerForm, name: e.target.value })
+                            }
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm"
+                          />
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">CPF *</label>
+                            <input
+                              type="text"
+                              required
+                              value={customerForm.cpf || couponCpf}
+                              onChange={(e) => {
+                                setCustomerForm({ ...customerForm, cpf: e.target.value });
+                                setCouponCpf(e.target.value);
+                              }}
+                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              WhatsApp / Celular *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={customerForm.phone}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, phone: e.target.value })
+                              }
+                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              E-mail *
+                            </label>
+                            <input
+                              type="email"
+                              required
+                              value={customerForm.email}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, email: e.target.value })
+                              }
+                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm"
+                            />
+                          </div>
+                          {!b2cCustomer && (
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 mb-1">
+                                Criar Senha de Acesso *
+                              </label>
+                              <input
+                                type="password"
+                                required={!b2cCustomer}
+                                minLength={6}
+                                value={customerForm.password}
+                                onChange={(e) =>
+                                  setCustomerForm({ ...customerForm, password: e.target.value })
+                                }
+                                placeholder="Mínimo 6 caracteres"
+                                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 pt-4 border-t border-slate-100">
+                        <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+                          2. Endereço de Entrega
+                        </h3>
+                        <div className="grid grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">CEP *</label>
+                            <input
+                              type="text"
+                              required
+                              value={zipCode}
+                              onChange={(e) => setZipCode(e.target.value)}
+                              onBlur={() => handleCalculateFreight(zipCode)}
+                              placeholder="00000-000"
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-mono"
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Rua / Logradouro *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={customerForm.street}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, street: e.target.value })
+                              }
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Número *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={customerForm.number}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, number: e.target.value })
+                              }
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Complemento
+                            </label>
+                            <input
+                              type="text"
+                              value={customerForm.complement}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, complement: e.target.value })
+                              }
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Bairro *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={customerForm.neighborhood}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, neighborhood: e.target.value })
+                              }
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Cidade *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={customerForm.city}
+                              onChange={(e) =>
+                                setCustomerForm({ ...customerForm, city: e.target.value })
+                              }
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">UF *</label>
+                            <input
+                              type="text"
+                              required
+                              maxLength={2}
+                              value={customerForm.state}
+                              onChange={(e) =>
+                                setCustomerForm({
+                                  ...customerForm,
+                                  state: e.target.value.toUpperCase(),
+                                })
+                              }
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs uppercase font-bold"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* LGPD Consent */}
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                    <label className="flex items-start gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        required
+                        checked={customerForm.lgpd_accepted}
+                        onChange={(e) =>
+                          setCustomerForm({ ...customerForm, lgpd_accepted: e.target.checked })
+                        }
+                        className="mt-0.5 rounded text-emerald-600"
+                      />
+                      <span className="text-[11px] text-slate-600 font-medium">
+                        Concordo com o processamento dos meus dados para faturamento e entrega do pedido conforme a{' '}
+                        <strong>Lei Geral de Proteção de Dados (Lei nº 13.709/2018)</strong>. *
+                      </span>
+                    </label>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={submittingCheckout}
+                    className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 cursor-pointer"
+                  >
+                    {submittingCheckout ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Processando seu Pedido...
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard className="w-4 h-4" />
+                        Finalizar Pedido ({formatBRL(differenceToPay)})
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+
+              {/* Right Column: Order Summary, Coupon & Freight */}
+              <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-24">
+                <div className="bg-white rounded-3xl border border-slate-200 p-5 space-y-4 shadow-xs">
+                  <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+                    Resumo do Pedido ({cart.reduce((a, b) => a + b.quantity, 0)} itens)
+                  </h3>
+                  <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                    {cart.map((item) => (
+                      <div
+                        key={`chk-${item.sku}`}
+                        className="flex items-center justify-between gap-2 text-xs border-b border-slate-100 pb-2"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-slate-800 truncate">{item.name}</p>
+                          <p className="text-[11px] text-slate-400">Qtd: {item.quantity}</p>
+                        </div>
+                        <span className="font-extrabold text-slate-900">
+                          {formatBRL(item.unit_price * item.quantity)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Coupon Box inside Dedicated Checkout */}
+                  <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                    <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+                      <Ticket className="w-3.5 h-3.5" style={{ color: primaryColor }} />
+                      Cupom de Desconto ou Vale-Livro
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={couponCode}
+                        onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                        placeholder="CÓDIGO DO CUPOM"
+                        className="flex-1 px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-mono uppercase"
+                      />
+                      <button
+                        type="button"
+                        disabled={validatingCoupon}
+                        onClick={() => handleValidateCoupon(false)}
+                        style={{ backgroundColor: primaryColor }}
+                        className="px-3.5 py-1.5 rounded-xl text-white text-xs font-bold cursor-pointer"
+                      >
+                        Aplicar
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-900 text-white space-y-2 text-xs">
+                    <div className="flex justify-between text-slate-300">
+                      <span>Subtotal:</span>
+                      <span>{formatBRL(subtotal)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-300">
+                      <span>Frete:</span>
+                      <span>
+                        {freightValue === 0 &&
+                        (selectedFreight || couponResult?.allows_freight_discount)
+                          ? 'GRÁTIS'
+                          : formatBRL(freightValue)}
+                      </span>
+                    </div>
+                    {discountApplied > 0 && (
+                      <div className="flex justify-between text-emerald-400 font-bold">
+                        <span>Desconto ({couponResult?.code}):</span>
+                        <span>- {formatBRL(discountApplied)}</span>
+                      </div>
+                    )}
+                    <div className="pt-2 border-t border-slate-700 flex justify-between text-sm font-extrabold">
+                      <span>Total a Pagar:</span>
+                      <span className="text-emerald-400">{formatBRL(differenceToPay)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </main>
+      )}
+
+      {/* =======================================================================
           VIEW 3: MAIN CATALOG & HOME SHOWCASES
          ======================================================================= */}
       {activeView === 'catalog' && (
@@ -3645,11 +5303,24 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                         {String(sc.badge).replace(/\s*&\s*/g, ' e ')}
                       </span>
                     )}
-                    <h2 className="text-lg sm:text-xl font-extrabold text-slate-900">
+                    <h2
+                      onClick={() => handleSelectShowcase(sc)}
+                      className="text-lg sm:text-xl font-extrabold text-slate-900 hover:underline cursor-pointer"
+                    >
                       {String(sc.title || '').replace(/\s*&\s*/g, ' e ')}
                     </h2>
                     {sc.subtitle && <p className="text-xs text-slate-500">{sc.subtitle}</p>}
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSelectShowcase(sc)}
+                    style={{ color: primaryColor }}
+                    className="inline-flex items-center gap-1 text-xs font-extrabold hover:underline self-start sm:self-auto cursor-pointer"
+                  >
+                    Ver Vitrine Completa
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
@@ -3674,12 +5345,12 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                   : 'Catálogo Completo de Livros'}
               </h2>
               <p className="text-xs text-slate-500">
-                Clique na capa para ver os detalhes da obra ou em Comprar para compra rápida.
+                Clique na capa para abrir a página exclusiva da obra ou em Comprar para compra rápida.
               </p>
             </div>
             {(searchQuery || onlyPromoFilter || selectedCategoryId !== 'ALL') && (
               <button
-                onClick={handleResetToHome}
+                onClick={() => handleResetToHome()}
                 style={{ color: primaryColor }}
                 className="text-xs font-bold hover:underline self-start sm:self-auto cursor-pointer"
               >
@@ -3713,7 +5384,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
               </p>
               <button
                 type="button"
-                onClick={handleResetToHome}
+                onClick={() => handleResetToHome()}
                 style={{ backgroundColor: primaryColor }}
                 className="px-4 py-2 rounded-xl text-white text-xs font-bold cursor-pointer"
               >
@@ -3824,7 +5495,9 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                         cat.id,
                         cat.label,
                         cat.code,
-                        cat.filter_type || 'COD_GENERO'
+                        cat.filter_type || 'COD_GENERO',
+                        false,
+                        cat
                       )
                     }
                     className="hover:text-white transition-colors cursor-pointer"
@@ -3836,10 +5509,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
               <li>
                 <button
                   type="button"
-                  onClick={() => {
-                    setActiveView('contact');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
+                  onClick={() => openContactPage()}
                   className="text-emerald-400 font-bold hover:underline cursor-pointer"
                 >
                   Fale Conosco
@@ -4251,11 +5921,11 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                     <div className="space-y-2">
                       <button
                         type="button"
-                        onClick={() => setCheckoutStep('register')}
+                        onClick={() => openDedicatedCheckoutPage(true)}
                         style={{ backgroundColor: primaryColor }}
                         className="w-full py-3.5 rounded-2xl hover:opacity-95 text-white text-sm font-bold flex items-center justify-center gap-2 shadow-lg cursor-pointer"
                       >
-                        Finalizar Compra
+                        Ir para o Checkout Seguro
                         <ArrowRight className="w-4 h-4" />
                       </button>
 
@@ -4287,7 +5957,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                   ← Revisar Sacola ({cart.reduce((a, b) => a + b.quantity, 0)} itens • {formatBRL(subtotal)})
                 </button>
 
-                {/* 1. CUSTOMER IDENTIFICATION: MODO EXPRESS CPF (LINK VINDI) vs CADASTRO COMPLETO */}
+                {/* 1. CUSTOMER IDENTIFICATION: MODO EXPRESS CPF vs CADASTRO COMPLETO */}
                 {isVindiExpressLink ? (
                   <div className="p-4 rounded-2xl border border-indigo-200 bg-indigo-50/40 space-y-3">
                     <div className="flex items-center justify-between">
@@ -4296,11 +5966,11 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                         Identificação Rápida por CPF
                       </span>
                       <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
-                        Checkout Express Vindi
+                        Compra Rápida
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-600 leading-relaxed">
-                      Para você não preencher seus dados duas vezes, informe apenas o seu <strong>CPF</strong> aqui. Seus dados pessoais, endereço de entrega e pagamento (PIX ou Cartão) serão solicitados diretamente no ambiente seguro da <strong>Vindi</strong>.
+                      Para sua comodidade, informe apenas o seu <strong>CPF</strong> aqui. Seus dados de entrega e a escolha da forma de pagamento (PIX, Cartão ou Boleto) serão preenchidos na próxima etapa, em nosso <strong>ambiente seguro de pagamento</strong>.
                     </p>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -4573,7 +6243,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                   </>
                 )}
 
-                {/* Payment Method Selection (PIX vs Cartão de Crédito via Homologated Gateway Efí / Vindi) */}
+                {/* Payment Method Selection */}
                 {differenceToPay > 0.009 &&
                   !(storeInfo?.b2c_checkout_mode === 'TRAY_REDIRECT' && storeInfo?.tray_enabled) &&
                   isVindiPaymentLinkMode && (
@@ -4581,14 +6251,14 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-indigo-950 flex items-center gap-1.5">
                           <CreditCard className="w-4 h-4 text-indigo-600" />
-                          Pagamento via Link Seguro Vindi ({formatBRL(differenceToPay)})
+                          Pagamento Online Seguro ({formatBRL(differenceToPay)})
                         </span>
                         <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
                           PIX • Cartão • Boleto
                         </span>
                       </div>
                       <p className="text-[11px] text-indigo-800">
-                        Ao clicar em finalizar, você será redirecionado para a página oficial da Vindi para escolher PIX ou Cartão de Crédito com segurança.
+                        Ao clicar em finalizar, você será direcionado ao nosso ambiente seguro de pagamento para escolher entre PIX, Cartão de Crédito ou Boleto.
                       </p>
                     </div>
                   )}
@@ -4602,13 +6272,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                           Forma de Pagamento ({formatBRL(differenceToPay)})
                         </h4>
                         <span className="text-[10px] font-bold text-emerald-600">
-                          Ambiente Seguro (
-                          {paymentMethod === 'CREDIT_CARD'
-                            ? storeInfo?.b2c_method_providers?.CARD || storeInfo?.payment_gateway_active || 'Efí'
-                            : (paymentMethod as string) === 'BOLETO'
-                            ? storeInfo?.b2c_method_providers?.BOLETO || storeInfo?.payment_gateway_active || 'Cora'
-                            : storeInfo?.b2c_method_providers?.PIX || storeInfo?.payment_gateway_active || 'Efí'}
-                          )
+                          Ambiente 100% Seguro
                         </span>
                       </div>
 
@@ -4631,7 +6295,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                           >
                             <span className="block text-xs font-extrabold">PIX Instantâneo</span>
                             <span className="block text-[10px] text-slate-500">
-                              QR Code • {storeInfo?.b2c_method_providers?.PIX || storeInfo?.payment_gateway_active || 'Efí'}
+                              Liberação Imediata • QR Code
                             </span>
                           </button>
                         )}
@@ -4650,7 +6314,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                           >
                             <span className="block text-xs font-extrabold">Cartão de Crédito</span>
                             <span className="block text-[10px] text-slate-500">
-                              Aprovação • {storeInfo?.b2c_method_providers?.CARD || storeInfo?.payment_gateway_active || 'Vindi'}
+                              Aprovação Imediata
                             </span>
                           </button>
                         )}
@@ -4667,7 +6331,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                           >
                             <span className="block text-xs font-extrabold">Boleto Bancário</span>
                             <span className="block text-[10px] text-slate-500">
-                              Registrado • {storeInfo?.b2c_method_providers?.BOLETO}
+                              Boleto Registrado
                             </span>
                           </button>
                         )}
@@ -4933,14 +6597,14 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                   </div>
                 )}
 
-                {/* Vindi Payment Link Card */}
+                {/* Hosted Payment Link Card */}
                 {orderResult.vindi_payment_url && orderResult.difference_to_pay > 0 && (
                   <div className="p-4 rounded-2xl bg-indigo-50 border border-indigo-200 text-left space-y-3">
                     <p className="text-xs font-bold text-indigo-950">
-                      Link de Pagamento Vindi ({formatBRL(orderResult.difference_to_pay)}):
+                      Pagamento Online Seguro ({formatBRL(orderResult.difference_to_pay)}):
                     </p>
                     <p className="text-xs text-indigo-800">
-                      Clique abaixo caso não tenha sido redirecionado automaticamente para escolher PIX ou Cartão de Crédito na página segura da Vindi:
+                      Clique no botão abaixo caso não tenha sido redirecionado automaticamente para concluir seu pagamento:
                     </p>
                     <a
                       href={orderResult.vindi_payment_url}
@@ -4949,7 +6613,7 @@ export default function B2COpenStorefront({ hostname, domainInfo }: B2COpenStore
                       className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-md"
                     >
                       <ExternalLink className="w-4 h-4" />
-                      Pagar Agora no Ambiente Seguro Vindi
+                      Ir para o Ambiente Seguro de Pagamento
                     </a>
                   </div>
                 )}
