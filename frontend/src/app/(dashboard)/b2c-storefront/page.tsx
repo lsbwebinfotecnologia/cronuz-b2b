@@ -58,8 +58,10 @@ export default function SellerB2CStorefrontManagementPage({
 
   // Sub-filter inside the Coupons page only (Cupons Individuais vs Lotes/Campanhas vs Histórico de Uso)
   const [couponSubView, setCouponSubView] = useState<'list' | 'batches' | 'history'>('list');
-  // Sub-tabs inside Settings (Checkout & Pagamento | E-mails do Pedido | Frete & Entrega | Cache | LGPD)
-  const [settingsSubTab, setSettingsSubTab] = useState<'checkout' | 'emails' | 'freight' | 'cache' | 'lgpd'>('checkout');
+  // Sub-tabs inside Settings (Checkout & Pagamento | Pedidos Horus ERP | E-mails do Pedido | Frete & Entrega | Cache | LGPD)
+  const [settingsSubTab, setSettingsSubTab] = useState<
+    'checkout' | 'horus_orders' | 'emails' | 'freight' | 'cache' | 'lgpd'
+  >('checkout');
   const [loading, setLoading] = useState(true);
 
   const [summary, setSummary] = useState<any>(null);
@@ -153,20 +155,57 @@ export default function SellerB2CStorefrontManagementPage({
       correios_enabled: true,
       carrier_table: [] as any[],
     },
+    horus_order_config: {
+      enabled: false,
+      auto_send_on_paid: false,
+      tipo_pedido: 'L',
+      cod_param_fiscal_intra: '',
+      cod_param_fiscal_inter: '',
+      cod_metodo: '1',
+      cod_endereco: '1',
+      cod_transp: '',
+      frete_emit_dest: '1',
+      status_envio_erp: 'LEX',
+      resp_cliente: '',
+      cod_resp: '',
+      cod_forma: '',
+      send_freight_value: true,
+      price_mode: 'UNIT_PRICE',
+    } as Record<string, any>,
     email_notifications_config: {
       enabled: true,
+      waiting_payment_enabled: true,
       waiting_payment_subject: 'Pedido #{pedido} realizado — Aguardando Pagamento | {loja}',
       waiting_payment_body:
         'Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos.',
+      waiting_payment_message:
+        'Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos.',
+      paid_enabled: true,
       paid_subject: 'Pagamento Aprovado! Pedido #{pedido} confirmado | {loja}',
       paid_body:
         'O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio.',
+      paid_message:
+        'O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio.',
+      canceled_enabled: true,
       canceled_subject: 'Pedido #{pedido} cancelado | {loja}',
       canceled_body:
         'Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento.',
+      canceled_message:
+        'Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento.',
+      footer_note: 'Você pode acompanhar todos os detalhes em Minha Conta → Meus Pedidos na loja {loja}.',
     } as Record<string, any>,
   });
   const [savingSettings, setSavingSettings] = useState(false);
+
+  // Test Email & Order Email / Horus Integration States
+  const [testEmailTo, setTestEmailTo] = useState('');
+  const [testEmailStatus, setTestEmailStatus] = useState('PAID');
+  const [sendingTestEmail, setSendingTestEmail] = useState(false);
+  const [notifyCustomerOnSave, setNotifyCustomerOnSave] = useState(true);
+  const [manualEmailTo, setManualEmailTo] = useState('');
+  const [manualEmailStatus, setManualEmailStatus] = useState('PAID');
+  const [sendingOrderEmail, setSendingOrderEmail] = useState(false);
+  const [sendingToHorus, setSendingToHorus] = useState<number | null>(null);
 
   // Storefront Cache Engine States (Managed by Seller)
   const [cacheStatus, setCacheStatus] = useState<any>({
@@ -266,6 +305,20 @@ export default function SellerB2CStorefrontManagementPage({
         const s = await sumRes.json();
         setSummary(s);
         if (s.settings) {
+          const wpMsg =
+            s.settings.email_notifications_config?.waiting_payment_message ||
+            s.settings.email_notifications_config?.waiting_payment_body ||
+            'Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos.';
+          const paidMsg =
+            s.settings.email_notifications_config?.paid_message ||
+            s.settings.email_notifications_config?.paid_body ||
+            'O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio.';
+          const cancMsg =
+            s.settings.email_notifications_config?.canceled_message ||
+            s.settings.email_notifications_config?.canceled_body ||
+            'Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento.';
+          const hOrd = s.settings.horus_order_config || {};
+
           setSettingsForm({
             b2c_custom_domain: s.settings.b2c_custom_domain || '',
             b2c_storefront_open: Boolean(s.settings.b2c_storefront_open),
@@ -290,26 +343,47 @@ export default function SellerB2CStorefrontManagementPage({
                 ? s.settings.freight_config.carrier_table
                 : [],
             },
+            horus_order_config: {
+              enabled: Boolean(hOrd.enabled),
+              auto_send_on_paid: Boolean(hOrd.auto_send_on_paid),
+              tipo_pedido: hOrd.tipo_pedido || 'L',
+              cod_param_fiscal_intra: hOrd.cod_param_fiscal_intra || '',
+              cod_param_fiscal_inter: hOrd.cod_param_fiscal_inter || '',
+              cod_metodo: hOrd.cod_metodo || '1',
+              cod_endereco: hOrd.cod_endereco || '1',
+              cod_transp: hOrd.cod_transp || '',
+              frete_emit_dest: hOrd.frete_emit_dest || '1',
+              status_envio_erp: hOrd.status_envio_erp || 'LEX',
+              resp_cliente: hOrd.resp_cliente || '',
+              cod_resp: hOrd.cod_resp || '',
+              cod_forma: hOrd.cod_forma || '',
+              send_freight_value: hOrd.send_freight_value !== false,
+              price_mode: hOrd.price_mode || 'UNIT_PRICE',
+            },
             email_notifications_config: {
               enabled: s.settings.email_notifications_config?.enabled !== false,
+              waiting_payment_enabled:
+                s.settings.email_notifications_config?.waiting_payment_enabled !== false,
               waiting_payment_subject:
                 s.settings.email_notifications_config?.waiting_payment_subject ||
                 'Pedido #{pedido} realizado — Aguardando Pagamento | {loja}',
-              waiting_payment_body:
-                s.settings.email_notifications_config?.waiting_payment_body ||
-                'Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos.',
+              waiting_payment_body: wpMsg,
+              waiting_payment_message: wpMsg,
+              paid_enabled: s.settings.email_notifications_config?.paid_enabled !== false,
               paid_subject:
                 s.settings.email_notifications_config?.paid_subject ||
                 'Pagamento Aprovado! Pedido #{pedido} confirmado | {loja}',
-              paid_body:
-                s.settings.email_notifications_config?.paid_body ||
-                'O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio.',
+              paid_body: paidMsg,
+              paid_message: paidMsg,
+              canceled_enabled: s.settings.email_notifications_config?.canceled_enabled !== false,
               canceled_subject:
                 s.settings.email_notifications_config?.canceled_subject ||
                 'Pedido #{pedido} cancelado | {loja}',
-              canceled_body:
-                s.settings.email_notifications_config?.canceled_body ||
-                'Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento.',
+              canceled_body: cancMsg,
+              canceled_message: cancMsg,
+              footer_note:
+                s.settings.email_notifications_config?.footer_note ||
+                'Você pode acompanhar todos os detalhes em Minha Conta → Meus Pedidos na loja {loja}.',
             },
           });
         }
@@ -354,6 +428,14 @@ export default function SellerB2CStorefrontManagementPage({
 
   const openOrderDetailsModal = (order: any) => {
     setSelectedOrder(order);
+    const cleanEmail =
+      order.customer_email &&
+      !String(order.customer_email).includes('@compraexpressa') &&
+      !String(order.customer_email).includes('@checkout.vindi')
+        ? order.customer_email
+        : order.last_email_to || '';
+    setManualEmailTo(cleanEmail);
+    setManualEmailStatus(order.status || 'WAITING_PAYMENT');
     setOrderEditForm({
       status: order.status || 'WAITING_PAYMENT',
       invoice_number: order.invoice_number || '',
@@ -372,6 +454,7 @@ export default function SellerB2CStorefrontManagementPage({
       const payload = {
         ...orderEditForm,
         ...(overrideStatus ? { status: overrideStatus } : {}),
+        notify_customer: notifyCustomerOnSave,
       };
       const res = await fetch(`${apiBase}/b2c/orders/${selectedOrder.id}`, {
         method: 'PATCH',
@@ -395,6 +478,14 @@ export default function SellerB2CStorefrontManagementPage({
               tracking_code: data.tracking_code,
               carrier_name: data.carrier_name,
               tracking_url: data.tracking_url,
+              horus_pedido_venda: data.horus_pedido_venda || prev.horus_pedido_venda,
+              horus_cod_cli: data.horus_cod_cli || prev.horus_cod_cli,
+              horus_sent_at: data.horus_sent_at || prev.horus_sent_at,
+              horus_status_erp: data.horus_status_erp || prev.horus_status_erp,
+              horus_integration_log: data.horus_integration_log || prev.horus_integration_log,
+              emails_sent: data.emails_sent || prev.emails_sent,
+              last_email_sent_at: data.last_email_sent_at || prev.last_email_sent_at,
+              last_email_to: data.last_email_to || prev.last_email_to,
             }
           : null
       );
@@ -402,11 +493,136 @@ export default function SellerB2CStorefrontManagementPage({
         ...prev,
         status: data.status,
       }));
+      setManualEmailStatus(data.status);
       loadAllData();
     } catch (e: any) {
       toast.error(e.message || 'Falha ao salvar pedido.');
     } finally {
       setSavingOrder(false);
+    }
+  };
+
+  const handleQuickStatusChange = async (order: any, newStatus: string) => {
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/orders/${order.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: newStatus, notify_customer: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao alterar status.');
+      toast.success(data.message || `Status do pedido #${order.id} alterado!`);
+      loadAllData();
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao alterar status.');
+    }
+  };
+
+  const handleSendOrderEmail = async () => {
+    if (!selectedOrder) return;
+    setSendingOrderEmail(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/orders/${selectedOrder.id}/send-email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          event_status: manualEmailStatus || selectedOrder.status,
+          override_email: manualEmailTo.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao enviar e-mail do pedido.');
+      toast.success(data.message || 'E-mail disparado com sucesso!');
+      setSelectedOrder((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              emails_sent: data.emails_sent || prev.emails_sent,
+              last_email_sent_at: data.last_email_sent_at,
+              last_email_to: data.to_email || prev.last_email_to,
+            }
+          : null
+      );
+      loadAllData();
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao enviar e-mail.');
+    } finally {
+      setSendingOrderEmail(false);
+    }
+  };
+
+  const handleSendOrderToHorus = async (orderId: number, force = false) => {
+    setSendingToHorus(orderId);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/orders/${orderId}/send-to-horus`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ force }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Falha ao integrar pedido com Horus ERP.');
+      toast.success(data.message || `Pedido #${orderId} integrado ao Horus!`);
+      if (selectedOrder && selectedOrder.id === orderId) {
+        setSelectedOrder((prev: any) =>
+          prev
+            ? {
+                ...prev,
+                horus_pedido_venda: data.horus_pedido_venda,
+                horus_cod_cli: data.horus_cod_cli,
+                horus_status_erp: data.horus_status_erp,
+                horus_sent_at: data.horus_sent_at,
+                horus_integration_log: data.steps_log || prev.horus_integration_log,
+              }
+            : null
+        );
+      }
+      loadAllData();
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao enviar pedido para o Horus ERP.');
+    } finally {
+      setSendingToHorus(null);
+    }
+  };
+
+  const handleSendTestEmail = async () => {
+    if (!testEmailTo.trim() || !testEmailTo.includes('@')) {
+      toast.error('Informe um endereço de e-mail válido para receber o teste.');
+      return;
+    }
+    setSendingTestEmail(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/settings/test-email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          to_email: testEmailTo.trim(),
+          event_status: testEmailStatus,
+          email_notifications_config: settingsForm.email_notifications_config,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao disparar e-mail de teste.');
+      toast.success(data.message || 'E-mail de teste enviado com sucesso!');
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao enviar e-mail de teste.');
+    } finally {
+      setSendingTestEmail(false);
     }
   };
 
@@ -1300,11 +1516,22 @@ export default function SellerB2CStorefrontManagementPage({
                 </button>
               </div>
 
-              {/* Régua Oficial de Status do Pedido B2C */}
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2.5">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  Fluxo de Status do Pedido B2C (Clique para avançar ou alterar)
-                </span>
+              {/* Régua Oficial de Status do Pedido B2C + Reenvio Manual de E-mail */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
+                    Fluxo de Status do Pedido B2C (Clique para avançar ou alterar)
+                  </span>
+                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={notifyCustomerOnSave}
+                      onChange={(e) => setNotifyCustomerOnSave(e.target.checked)}
+                      className="w-4 h-4 rounded text-indigo-600"
+                    />
+                    Notificar cliente por e-mail ao alterar o status
+                  </label>
+                </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
                   {B2C_ORDER_STATUS_STEPS.map((step, idx) => {
                     const active = orderEditForm.status === step.key;
@@ -1315,6 +1542,7 @@ export default function SellerB2CStorefrontManagementPage({
                         disabled={savingOrder}
                         onClick={() => {
                           setOrderEditForm((prev) => ({ ...prev, status: step.key }));
+                          setManualEmailStatus(step.key);
                           handleSaveOrderDetails(step.key);
                         }}
                         className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
@@ -1331,6 +1559,142 @@ export default function SellerB2CStorefrontManagementPage({
                     );
                   })}
                 </div>
+
+                {/* Barra de Disparo / Reenvio Manual de E-mail do Pedido */}
+                <div className="pt-2.5 border-t border-slate-200/80 dark:border-slate-700 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                    <Mail className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <div>
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        Disparo / Reenvio Manual de E-mail do Pedido:
+                      </span>
+                      {selectedOrder.last_email_sent_at ? (
+                        <span className="ml-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                          ✓ Último envio em{' '}
+                          {new Date(selectedOrder.last_email_sent_at).toLocaleString('pt-BR')} para{' '}
+                          {selectedOrder.last_email_to || selectedOrder.customer_email}
+                        </span>
+                      ) : (
+                        <span className="ml-1.5 text-[11px] text-slate-500">
+                          Envie ou reenvie o e-mail de status para o cliente quando desejar.
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={manualEmailStatus}
+                      onChange={(e) => setManualEmailStatus(e.target.value)}
+                      className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                    >
+                      {B2C_ORDER_STATUS_STEPS.map((st) => (
+                        <option key={st.key} value={st.key}>
+                          Modelo: {st.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="email"
+                      value={manualEmailTo}
+                      onChange={(e) => setManualEmailTo(e.target.value)}
+                      placeholder="E-mail do destinatário"
+                      className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs min-w-[210px]"
+                    />
+                    <button
+                      type="button"
+                      disabled={sendingOrderEmail}
+                      onClick={() => handleSendOrderEmail()}
+                      className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      {sendingOrderEmail ? 'Enviando...' : 'Disparar E-mail Agora'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card de Integração do Pedido com o Horus ERP (API Aberta B2C — Sem ID_GUID de Cliente) */}
+              <div className="p-4 rounded-2xl border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-2.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start sm:items-center gap-2.5">
+                    <PackageCheck className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5 sm:mt-0" />
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
+                          Integração com Horus ERP (API Aberta B2C)
+                        </h4>
+                        {selectedOrder.horus_pedido_venda ? (
+                          <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 text-[11px] font-extrabold font-mono">
+                            ✓ Pedido Horus #{selectedOrder.horus_pedido_venda}
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300 text-[11px] font-bold">
+                            Não enviado ao Horus
+                          </span>
+                        )}
+                        {selectedOrder.horus_cod_cli && (
+                          <span className="text-[11px] font-mono text-slate-500">
+                            COD_CLI: {selectedOrder.horus_cod_cli}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                        Localiza ou cadastra o cliente no Horus apenas por CPF/CNPJ (sem exigir ID_GUID), atualiza o endereço e cria o pedido com os itens em CAIXA ALTA.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {!selectedOrder.horus_pedido_venda ? (
+                      <button
+                        type="button"
+                        disabled={sendingToHorus === selectedOrder.id}
+                        onClick={() => handleSendOrderToHorus(selectedOrder.id, false)}
+                        className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+                      >
+                        <PackageCheck className="w-4 h-4" />
+                        {sendingToHorus === selectedOrder.id
+                          ? 'Integrando no Horus...'
+                          : 'Enviar Pedido para o Horus ERP'}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={sendingToHorus === selectedOrder.id}
+                        onClick={() => handleSendOrderToHorus(selectedOrder.id, true)}
+                        className="px-3.5 py-1.5 rounded-xl border border-indigo-300 dark:border-indigo-800 bg-white dark:bg-slate-900 hover:bg-indigo-50 text-indigo-700 dark:text-indigo-300 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${sendingToHorus === selectedOrder.id ? 'animate-spin' : ''}`} />
+                        {sendingToHorus === selectedOrder.id ? 'Reenviando...' : 'Reenviar ao Horus'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {Array.isArray(selectedOrder.horus_integration_log) &&
+                  selectedOrder.horus_integration_log.length > 0 && (
+                    <div className="pt-2 border-t border-indigo-200/60 dark:border-indigo-900/40 space-y-1">
+                      <span className="block text-[10px] font-bold uppercase text-indigo-800 dark:text-indigo-300">
+                        Últimas Execuções na API Horus:
+                      </span>
+                      {selectedOrder.horus_integration_log.slice(-3).map((lg: any, i: number) => (
+                        <div
+                          key={i}
+                          className="text-[11px] font-mono bg-white/80 dark:bg-slate-900/80 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
+                        >
+                          <span className={lg.ok ? 'text-emerald-700 dark:text-emerald-400 font-bold' : 'text-rose-600 font-bold'}>
+                            {lg.ok
+                              ? `✓ Sucesso: Pedido Horus #${lg.cod_ped_venda} (Cliente ${lg.cod_cli})`
+                              : `✕ Falha na etapa [${lg.step || 'ERP'}]: ${lg.error}`}
+                          </span>
+                          <span className="text-slate-400">
+                            {lg.at ? new Date(lg.at).toLocaleString('pt-BR') : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
               </div>
 
               {/* Dados do Cliente + Endereço de Entrega & Resumo Financeiro */}
@@ -1730,6 +2094,23 @@ export default function SellerB2CStorefrontManagementPage({
                               )}
                             </td>
                             <td className="py-3.5 px-4 text-xs">
+                              {o.horus_pedido_venda ? (
+                                <span className="inline-block mb-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 font-mono text-[10px] font-extrabold">
+                                  Horus #{o.horus_pedido_venda}
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={sendingToHorus === o.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSendOrderToHorus(o.id, false);
+                                  }}
+                                  className="inline-block mb-1 px-2 py-0.5 rounded border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold cursor-pointer"
+                                >
+                                  {sendingToHorus === o.id ? 'Enviando...' : '→ Enviar p/ Horus'}
+                                </button>
+                              )}
                               {o.invoice_number ? (
                                 <span className="block font-semibold text-slate-700 dark:text-slate-300">
                                   NF-e: {o.invoice_number}
@@ -1745,12 +2126,23 @@ export default function SellerB2CStorefrontManagementPage({
                                 <span className="block text-[11px] text-slate-400">Sem rastreio</span>
                               )}
                             </td>
-                            <td className="py-3.5 px-4">
-                              <span
-                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${stObj.badge}`}
+                            <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}>
+                              <select
+                                value={o.status}
+                                onChange={(e) => handleQuickStatusChange(o, e.target.value)}
+                                className={`px-2.5 py-1 rounded-full text-xs font-bold border-0 cursor-pointer ${stObj.badge}`}
+                                title="Alterar status e disparar e-mail ao cliente"
                               >
-                                {stObj.label}
-                              </span>
+                                {B2C_ORDER_STATUS_STEPS.map((st) => (
+                                  <option
+                                    key={st.key}
+                                    value={st.key}
+                                    className="bg-white text-slate-900 font-semibold"
+                                  >
+                                    {st.label}
+                                  </option>
+                                ))}
+                              </select>
                             </td>
                             <td className="py-3.5 px-4 text-right">
                               <button
@@ -1969,6 +2361,7 @@ export default function SellerB2CStorefrontManagementPage({
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-2 flex flex-wrap items-center gap-2 shadow-sm">
             {[
               { id: 'checkout', label: 'Checkout e Pagamento', icon: CreditCard },
+              { id: 'horus_orders', label: 'Pedidos Horus ERP', icon: PackageCheck },
               { id: 'emails', label: 'E-mails do Pedido', icon: Mail },
               { id: 'freight', label: 'Frete e Entrega', icon: Truck },
               { id: 'cache', label: 'Performance e Cache', icon: Database },
@@ -2089,6 +2482,341 @@ export default function SellerB2CStorefrontManagementPage({
           </div>
           )}
 
+          {/* SUB-ABA: INTEGRAÇÃO DE PEDIDOS COM O HORUS ERP (API ABERTA B2C) */}
+          {settingsSubTab === 'horus_orders' && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600">
+                    <PackageCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                      Integração de Pedidos com o Horus ERP (API Aberta B2C)
+                    </h1>
+                    <p className="text-xs text-slate-500">
+                      Cadastra ou localiza o cliente apenas pelo CPF/CNPJ (sem exigir ID_GUID), atualiza o endereço de entrega e cria o pedido de venda automaticamente em CAIXA ALTA.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleSaveB2CSettings}
+                  disabled={savingSettings}
+                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm disabled:opacity-50 shrink-0 cursor-pointer"
+                >
+                  {savingSettings ? 'Salvando...' : 'Salvar Parâmetros Horus'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="flex items-start gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settingsForm.horus_order_config?.enabled)}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          enabled: e.target.checked,
+                        },
+                      })
+                    }
+                    className="mt-1 w-4 h-4 rounded text-indigo-600"
+                  />
+                  <div>
+                    <span className="block text-sm font-bold text-slate-900 dark:text-white">
+                      Habilitar Integração de Pedidos B2C com o Horus ERP
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      Permite enviar pedidos da loja B2C para o Horus ERP (manualmente no pedido ou automaticamente ao confirmar pagamento).
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settingsForm.horus_order_config?.auto_send_on_paid)}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          auto_send_on_paid: e.target.checked,
+                        },
+                      })
+                    }
+                    className="mt-1 w-4 h-4 rounded text-indigo-600"
+                  />
+                  <div>
+                    <span className="block text-sm font-bold text-slate-900 dark:text-white">
+                      Enviar Automaticamente quando o Pedido ficar &ldquo;Pago&rdquo;
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      Assim que o pagamento for aprovado (via Cartão, PIX, Cupom 100% ou alteração manual para Pago), o pedido é integrado no Horus.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Parâmetro Fiscal Estadual (Mesma UF) *
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.horus_order_config?.cod_param_fiscal_intra || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          cod_param_fiscal_intra: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="Ex: 68 ou 1"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Parâmetro Fiscal Interestadual (Outra UF) *
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.horus_order_config?.cod_param_fiscal_inter || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          cod_param_fiscal_inter: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="Ex: 41 ou 2"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Tipo de Pedido (`TIPO_PEDIDO_V_T_D`)
+                  </label>
+                  <select
+                    value={settingsForm.horus_order_config?.tipo_pedido || 'L'}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          tipo_pedido: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                  >
+                    <option value="L">L — Liberação / Remessa (Padrão B2C)</option>
+                    <option value="V">V — Venda Direta</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Status Final no Horus (`STA_PEDIDO`)
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.horus_order_config?.status_envio_erp || 'LEX'}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          status_envio_erp: e.target.value.toUpperCase(),
+                        },
+                      })
+                    }
+                    placeholder="LEX"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Código do Método (`COD_METODO`)
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.horus_order_config?.cod_metodo || '1'}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          cod_metodo: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="1 ou 2"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Tipo de Endereço (`COD_TPO_END`)
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.horus_order_config?.cod_endereco || '1'}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          cod_endereco: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="1"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Código da Transportadora (`COD_TRANSP`)
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.horus_order_config?.cod_transp || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          cod_transp: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="Ex: 2"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Modalidade Frete (`FRETE_EMIT_DEST`)
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.horus_order_config?.frete_emit_dest || '1'}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          frete_emit_dest: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="1 (CIF) ou 2 (FOB)"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Responsável p/ Novos Clientes (`NOM_RESP`)
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.horus_order_config?.resp_cliente || ''}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          resp_cliente: e.target.value.toUpperCase(),
+                        },
+                      })
+                    }
+                    placeholder="Ex: LOJA B2C ou FMZ"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs uppercase font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Cód. Responsável (`COD_RESPONSAVEL`)
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.horus_order_config?.cod_resp || '1'}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          cod_resp: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="1"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Valor Unitário Enviado nos Itens (`VLR_LIQUIDO`)
+                  </label>
+                  <select
+                    value={settingsForm.horus_order_config?.price_mode || 'UNIT_PRICE'}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        horus_order_config: {
+                          ...settingsForm.horus_order_config,
+                          price_mode: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                  >
+                    <option value="UNIT_PRICE">Preço Unitário de Venda da Loja</option>
+                    <option value="NET_PAID">Valor Líquido proporcional (após abatimento de cupom)</option>
+                  </select>
+                </div>
+
+                <div className="flex items-end">
+                  <label className="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold cursor-pointer w-full">
+                    <input
+                      type="checkbox"
+                      checked={settingsForm.horus_order_config?.send_freight_value !== false}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            send_freight_value: e.target.checked,
+                          },
+                        })
+                      }
+                      className="w-4 h-4 rounded text-indigo-600"
+                    />
+                    <span>Enviar Valor do Frete (`VLR_FRETE`)</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* SUB-ABA: NOTIFICAÇÕES AUTOMÁTICAS DE E-MAIL DO PEDIDO B2C */}
           {settingsSubTab === 'emails' && (
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
@@ -2113,6 +2841,49 @@ export default function SellerB2CStorefrontManagementPage({
               >
                 {savingSettings ? 'Salvando...' : 'Salvar Textos de E-mail'}
               </button>
+            </div>
+
+            {/* Card de Disparo de E-mail de Teste Imediato */}
+            <div className="p-4 rounded-2xl border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50/50 dark:bg-indigo-950/20 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <span className="text-xs sm:text-sm font-extrabold text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5">
+                  <Mail className="w-4 h-4 text-indigo-600" />
+                  Testar Disparo de E-mail Agora
+                </span>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  Envie um e-mail de teste real com os textos configurados abaixo para validar o recebimento e o visual na sua caixa de entrada.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={testEmailStatus}
+                  onChange={(e) => setTestEmailStatus(e.target.value)}
+                  className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                >
+                  <option value="WAITING_PAYMENT">1. Pedido Realizado (Aguardando Pagamento)</option>
+                  <option value="PAID">2. Pagamento Aprovado (Pedido Pago)</option>
+                  <option value="SEPARATION">3. Pedido em Separação</option>
+                  <option value="FINALIZED">4. Pedido Finalizado / NF-e Emitida</option>
+                  <option value="DELIVERED">5. Pedido Entregue</option>
+                  <option value="CANCELLED">6. Pedido Cancelado</option>
+                </select>
+                <input
+                  type="email"
+                  value={testEmailTo}
+                  onChange={(e) => setTestEmailTo(e.target.value)}
+                  placeholder="Digite o e-mail para receber o teste..."
+                  className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs min-w-[230px]"
+                />
+                <button
+                  type="button"
+                  disabled={sendingTestEmail}
+                  onClick={handleSendTestEmail}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  {sendingTestEmail ? 'Disparando Teste...' : 'Enviar E-mail de Teste'}
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40">
@@ -2193,13 +2964,18 @@ export default function SellerB2CStorefrontManagementPage({
                   </label>
                   <textarea
                     rows={4}
-                    value={settingsForm.email_notifications_config?.waiting_payment_message || ''}
+                    value={
+                      settingsForm.email_notifications_config?.waiting_payment_message ||
+                      settingsForm.email_notifications_config?.waiting_payment_body ||
+                      ''
+                    }
                     onChange={(e) =>
                       setSettingsForm({
                         ...settingsForm,
                         email_notifications_config: {
                           ...settingsForm.email_notifications_config,
                           waiting_payment_message: e.target.value,
+                          waiting_payment_body: e.target.value,
                         },
                       })
                     }
@@ -2254,13 +3030,18 @@ export default function SellerB2CStorefrontManagementPage({
                   </label>
                   <textarea
                     rows={4}
-                    value={settingsForm.email_notifications_config?.paid_message || ''}
+                    value={
+                      settingsForm.email_notifications_config?.paid_message ||
+                      settingsForm.email_notifications_config?.paid_body ||
+                      ''
+                    }
                     onChange={(e) =>
                       setSettingsForm({
                         ...settingsForm,
                         email_notifications_config: {
                           ...settingsForm.email_notifications_config,
                           paid_message: e.target.value,
+                          paid_body: e.target.value,
                         },
                       })
                     }
@@ -2315,13 +3096,18 @@ export default function SellerB2CStorefrontManagementPage({
                   </label>
                   <textarea
                     rows={4}
-                    value={settingsForm.email_notifications_config?.canceled_message || ''}
+                    value={
+                      settingsForm.email_notifications_config?.canceled_message ||
+                      settingsForm.email_notifications_config?.canceled_body ||
+                      ''
+                    }
                     onChange={(e) =>
                       setSettingsForm({
                         ...settingsForm,
                         email_notifications_config: {
                           ...settingsForm.email_notifications_config,
                           canceled_message: e.target.value,
+                          canceled_body: e.target.value,
                         },
                       })
                     }

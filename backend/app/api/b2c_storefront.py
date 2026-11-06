@@ -121,10 +121,26 @@ class B2CSettingsUpdateRequest(BaseModel):
     correios_password: Optional[str] = None
     freight_config: Optional[Dict[str, Any]] = None
     horus_sync_config: Optional[Dict[str, Any]] = None
+    horus_order_config: Optional[Dict[str, Any]] = None
     email_notifications_config: Optional[Dict[str, Any]] = None
     tray_enabled: Optional[bool] = None
     tray_store_url: Optional[str] = None
     tray_auth_code: Optional[str] = None
+
+
+class B2CTestEmailRequest(BaseModel):
+    to_email: str
+    event_status: str = "PAID"
+    email_notifications_config: Optional[Dict[str, Any]] = None
+
+
+class B2COrderSendEmailRequest(BaseModel):
+    event_status: Optional[str] = None
+    override_email: Optional[str] = None
+
+
+class B2CSendToHorusRequest(BaseModel):
+    force: bool = False
 
 
 class B2CHorusSyncRequest(BaseModel):
@@ -392,14 +408,24 @@ def _resolve_seller_company_id(current_user: User, company_id_param: Optional[in
 
 
 def _default_b2c_email_config() -> Dict[str, Any]:
+    wp_msg = "Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos."
+    paid_msg = "O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio."
+    canc_msg = "Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento."
     return {
         "enabled": True,
+        "waiting_payment_enabled": True,
         "waiting_payment_subject": "Pedido #{pedido} realizado — Aguardando Pagamento | {loja}",
-        "waiting_payment_body": "Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos.",
+        "waiting_payment_body": wp_msg,
+        "waiting_payment_message": wp_msg,
+        "paid_enabled": True,
         "paid_subject": "Pagamento Aprovado! Pedido #{pedido} confirmado | {loja}",
-        "paid_body": "O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio.",
+        "paid_body": paid_msg,
+        "paid_message": paid_msg,
+        "canceled_enabled": True,
         "canceled_subject": "Pedido #{pedido} cancelado | {loja}",
-        "canceled_body": "Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento.",
+        "canceled_body": canc_msg,
+        "canceled_message": canc_msg,
+        "footer_note": "Você pode acompanhar todos os detalhes em Minha Conta → Meus Pedidos na loja {loja}.",
     }
 
 
@@ -409,6 +435,64 @@ def _get_b2c_email_config(settings: Optional[CompanySettings]) -> Dict[str, Any]
     saved = (
         raw_cfg.get("email_notifications_config")
         if isinstance(raw_cfg, dict) and isinstance(raw_cfg.get("email_notifications_config"), dict)
+        else {}
+    )
+    merged = {**defaults, **saved}
+    # Sincroniza *_message e *_body para compatibilidade total
+    for prefix in ("waiting_payment", "paid", "canceled"):
+        msg_val = saved.get(f"{prefix}_message") or saved.get(f"{prefix}_body") or defaults[f"{prefix}_body"]
+        merged[f"{prefix}_message"] = msg_val
+        merged[f"{prefix}_body"] = msg_val
+    return merged
+
+
+def _default_b2c_horus_order_config(db: Optional[Session] = None, company_id: Optional[int] = None) -> Dict[str, Any]:
+    base = {
+        "enabled": False,
+        "auto_send_on_paid": False,
+        "tipo_pedido": "L",  # "L" = Logística/Remessa B2C (não exige condição financeira) ou "V" = Venda
+        "cod_param_fiscal_intra": "",
+        "cod_param_fiscal_inter": "",
+        "cod_metodo": "1",
+        "cod_endereco": "1",
+        "cod_transp": "",
+        "frete_emit_dest": "1",  # 1 = Emitente, 2 = Destinatário
+        "status_envio_erp": "LEX",
+        "resp_cliente": "",
+        "cod_resp": "",
+        "cod_forma": "",
+        "send_freight_value": True,
+        "price_mode": "UNIT_PRICE",  # "UNIT_PRICE" = Preço Unitário do Item | "NET_AFTER_COUPON" = Líquido pós-cupom
+    }
+    if db and company_id:
+        try:
+            from app.models.dropship import DropshipConfig
+            dsp = db.query(DropshipConfig).filter(DropshipConfig.company_id == company_id).first()
+            if dsp:
+                base["cod_param_fiscal_intra"] = str(dsp.horus_fiscal_param_remessa_intra or dsp.horus_fiscal_param_venda or "")
+                base["cod_param_fiscal_inter"] = str(dsp.horus_fiscal_param_remessa_inter or dsp.horus_fiscal_param_venda or "")
+                base["cod_metodo"] = str(dsp.horus_cod_metodo or "1")
+                base["cod_endereco"] = str(dsp.horus_cod_endereco or "1")
+                base["cod_transp"] = str(dsp.horus_cod_transp or "")
+                base["frete_emit_dest"] = str(dsp.horus_frete_emit_dest or "1")
+                base["status_envio_erp"] = str(dsp.horus_status_envio_erp or "LEX")
+                base["resp_cliente"] = str(dsp.horus_resp_cliente or "").upper()
+                base["cod_resp"] = str(dsp.horus_cod_resp or "")
+        except Exception:
+            pass
+    return base
+
+
+def _get_b2c_horus_order_config(
+    settings: Optional[CompanySettings],
+    db: Optional[Session] = None,
+    company_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    defaults = _default_b2c_horus_order_config(db=db, company_id=company_id)
+    raw_cfg = getattr(settings, "b2c_showcases_config", None) if settings else None
+    saved = (
+        raw_cfg.get("horus_order_config")
+        if isinstance(raw_cfg, dict) and isinstance(raw_cfg.get("horus_order_config"), dict)
         else {}
     )
     return {**defaults, **saved}
@@ -430,32 +514,54 @@ def _send_b2c_order_email(
     order: Order,
     event_status: Optional[str] = None,
     force: bool = False,
+    override_email: Optional[str] = None,
+    sync_send: bool = False,
 ) -> bool:
     """
     Dispara e-mail automático, simples e objetivo para o comprador B2C nos eventos:
     - WAITING_PAYMENT: Pedido realizado (aguardando pagamento)
     - PAID: Pagamento aprovado / Pedido pago
-    - CANCELED: Pedido cancelado (pelo portal ou retorno de pagamento)
+    - CANCELLED / CANCELED: Pedido cancelado (pelo portal ou retorno de pagamento)
     - SEPARATION / FINALIZED / DELIVERED: Atualização operacional, NF-e e rastreio
     """
     try:
         company = db.query(Company).filter(Company.id == order.company_id).first()
         seller_settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
         email_cfg = _get_b2c_email_config(seller_settings)
-        if not email_cfg.get("enabled", True):
+        if not force and not email_cfg.get("enabled", True):
             return False
 
         cust = order.customer or (
             db.query(Customer).filter(Customer.id == order.customer_id).first() if order.customer_id else None
         )
-        to_email = (cust.email if cust and cust.email else "").strip().lower()
+        red = (
+            db.query(B2CCouponRedemption)
+            .filter(B2CCouponRedemption.company_id == order.company_id, B2CCouponRedemption.order_id == order.id)
+            .first()
+        )
+        to_email = (
+            (override_email or "").strip().lower()
+            or (red.customer_email if red and red.customer_email else "").strip().lower()
+            or (cust.email if cust and cust.email else "").strip().lower()
+        )
         if not to_email or "@" not in to_email or "@compraexpressa" in to_email or "@checkout.vindi" in to_email:
             return False
 
+        if override_email and cust and ("@compraexpressa" in (cust.email or "") or "@checkout.vindi" in (cust.email or "") or not cust.email):
+            cust.email = to_email
+
         norm_st = _normalize_b2c_order_status(event_status or order.status)
+        if not force:
+            if norm_st == "WAITING_PAYMENT" and email_cfg.get("waiting_payment_enabled") is False:
+                return False
+            if norm_st == "PAID" and email_cfg.get("paid_enabled") is False:
+                return False
+            if norm_st in ("CANCELLED", "CANCELED") and email_cfg.get("canceled_enabled") is False:
+                return False
+
         meta = _parse_order_meta(order)
         sent_list = meta.get("emails_sent") if isinstance(meta.get("emails_sent"), list) else []
-        if not force and norm_st in sent_list and norm_st in ("WAITING_PAYMENT", "PAID", "CANCELED"):
+        if not force and norm_st in sent_list and norm_st in ("WAITING_PAYMENT", "PAID", "CANCELLED", "CANCELED"):
             return False
 
         smtp_cfg = _resolve_smtp_settings(db, order.company_id)
@@ -464,15 +570,22 @@ def _send_b2c_order_email(
             return False
 
         store_name = company.name if company and company.name else "Nossa Loja"
-        cust_name = (cust.name if cust and cust.name else "Cliente").strip()
+        cust_name = (
+            (red.customer_name if red and red.customer_name else None)
+            or (cust.name if cust and cust.name else "Cliente")
+        ).strip()
         total_val = float(order.total or 0.0)
         valor_fmt = f"R$ {total_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
         vars_map = {
             "{cliente}": cust_name,
+            "{nome_cliente}": cust_name,
             "{pedido}": str(order.id),
+            "{numero_pedido}": str(order.id),
             "{loja}": store_name,
+            "{nome_loja}": store_name,
             "{valor}": valor_fmt,
+            "{valor_total}": valor_fmt,
         }
 
         def _apply_vars(text: str) -> str:
@@ -483,15 +596,15 @@ def _send_b2c_order_email(
 
         if norm_st == "WAITING_PAYMENT":
             subject = _apply_vars(email_cfg.get("waiting_payment_subject") or "")
-            intro_text = _apply_vars(email_cfg.get("waiting_payment_body") or "")
+            intro_text = _apply_vars(email_cfg.get("waiting_payment_message") or email_cfg.get("waiting_payment_body") or "")
             badge_bg, badge_color, badge_label = "#fef3c7", "#b45309", "⏳ Pedido Realizado • Aguardando Pagamento"
         elif norm_st == "PAID":
             subject = _apply_vars(email_cfg.get("paid_subject") or "")
-            intro_text = _apply_vars(email_cfg.get("paid_body") or "")
+            intro_text = _apply_vars(email_cfg.get("paid_message") or email_cfg.get("paid_body") or "")
             badge_bg, badge_color, badge_label = "#d1fae5", "#047857", "✅ Pagamento Aprovado"
-        elif norm_st == "CANCELED":
+        elif norm_st in ("CANCELLED", "CANCELED"):
             subject = _apply_vars(email_cfg.get("canceled_subject") or "")
-            intro_text = _apply_vars(email_cfg.get("canceled_body") or "")
+            intro_text = _apply_vars(email_cfg.get("canceled_message") or email_cfg.get("canceled_body") or "")
             badge_bg, badge_color, badge_label = "#fee2e2", "#b91c1c", "❌ Pedido Cancelado"
         else:
             st_label = B2C_STATUS_LABELS.get(norm_st, norm_st)
@@ -524,8 +637,8 @@ def _send_b2c_order_email(
             )
 
         residual_block = ""
-        res_code = meta.get("residual_coupon_code")
-        res_bal = float(meta.get("remaining_coupon_balance") or 0)
+        res_code = meta.get("residual_coupon_code") or (red.residual_coupon_code if red else None)
+        res_bal = float(meta.get("remaining_coupon_balance") or (red.remaining_balance if red else 0) or 0)
         if res_code and res_bal > 0 and norm_st in ("WAITING_PAYMENT", "PAID"):
             res_fmt = f"R$ {res_bal:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             residual_block = (
@@ -548,6 +661,11 @@ def _send_b2c_order_email(
                 f"{''.join(t_parts)}</div>"
             )
 
+        footer_text = _apply_vars(
+            email_cfg.get("footer_note")
+            or f"Você pode acompanhar todos os detalhes em Minha Conta → Meus Pedidos na loja {store_name}."
+        )
+
         html_content = (
             f"<div style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:16px;background:#ffffff;color:#0f172a;'>"
             f"<div style='border-bottom:1px solid #f1f5f9;padding-bottom:14px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;'>"
@@ -566,16 +684,18 @@ def _send_b2c_order_email(
             f"<span>Total a Pagar / Pago: </span><span style='float:right;color:#047857;'>{valor_fmt}</span>"
             f"</div></div>"
             f"<p style='color:#94a3b8;font-size:11px;margin-top:20px;text-align:center;'>"
-            f"Você pode acompanhar todos os detalhes em Minha Conta → Meus Pedidos na loja {store_name}.</p>"
+            f"{footer_text}</p>"
             f"</div>"
         )
 
         # Grava no pedido que o e-mail para este status foi disparado
         if norm_st not in sent_list:
             sent_list.append(norm_st)
-            meta["emails_sent"] = sent_list
-            _save_order_meta(order, meta)
-            db.commit()
+        meta["emails_sent"] = sent_list
+        meta["last_email_sent_at"] = datetime.now(timezone.utc).isoformat()
+        meta["last_email_to"] = to_email
+        _save_order_meta(order, meta)
+        db.commit()
 
         import threading
         from app.core.email import send_smtp_email
@@ -593,6 +713,9 @@ def _send_b2c_order_email(
             "bcc_email": smtp_cfg.smtp_bcc_email,
         }
 
+        if sync_send:
+            return bool(send_smtp_email(**smtp_args))
+
         def _bg_send():
             try:
                 send_smtp_email(**smtp_args)
@@ -604,6 +727,444 @@ def _send_b2c_order_email(
     except Exception as e:
         logger.warning(f"[B2C Order Email] Erro ao preparar e-mail do pedido #{order.id}: {e}")
         return False
+
+
+_UF_NOMES_HORUS_UPPER: Dict[str, str] = {
+    "AC": "ACRE", "AL": "ALAGOAS", "AP": "AMAPÁ", "AM": "AMAZONAS",
+    "BA": "BAHIA", "CE": "CEARÁ", "DF": "DISTRITO FEDERAL",
+    "ES": "ESPÍRITO SANTO", "GO": "GOIÁS", "MA": "MARANHÃO",
+    "MT": "MATO GROSSO", "MS": "MATO GROSSO DO SUL", "MG": "MINAS GERAIS",
+    "PA": "PARÁ", "PB": "PARAÍBA", "PR": "PARANÁ", "PE": "PERNAMBUCO",
+    "PI": "PIAUÍ", "RJ": "RIO DE JANEIRO", "RN": "RIO GRANDE DO NORTE",
+    "RS": "RIO GRANDE DO SUL", "RO": "RONDÔNIA", "RR": "RORAIMA",
+    "SC": "SANTA CATARINA", "SP": "SÃO PAULO", "SE": "SERGIPE", "TO": "TOCANTINS",
+}
+
+
+def _upper_horus_dict(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Regra 11: Garante que todo valor textual enviado ao Horus esteja em CAIXA ALTA."""
+    return {
+        k: (v.strip().upper() if isinstance(v, str) else v)
+        for k, v in params.items()
+        if v is not None and v != ""
+    }
+
+
+async def _send_b2c_order_to_horus(
+    db: Session,
+    order: Order,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """
+    Integra um pedido da Loja B2C ao Horus ERP via API Aberta do Horus (sem necessidade de ID_GUID do cliente),
+    seguindo rigorosamente o fluxo homologado (Regra 11 — 100% CAIXA ALTA):
+      1. Busca_Cliente (por CPF/CNPJ) -> se não existir, InsAltCliente (COD_CLI='NOVO')
+      2. InsAltEndCliente (cadastra/atualiza endereço de entrega do consumidor final)
+      3. Busca_Acervo / Cache local para resolver COD_ITEM de cada livro
+      4. InsPedidoVenda (cria o cabeçalho do pedido no Horus ERP)
+      5. InsItensPedidoVenda (insere os itens com QTD_PEDIDA e VLR_LIQUIDO)
+      6. AltStatus_Pedido (avança o status para LEX/LAP conforme configuração)
+    """
+    meta = _parse_order_meta(order)
+    if order.horus_pedido_venda and not force:
+        return {
+            "ok": True,
+            "already_sent": True,
+            "horus_pedido_venda": order.horus_pedido_venda,
+            "horus_cod_cli": meta.get("horus_cod_cli"),
+            "message": f"Pedido #{order.id} já está integrado ao Horus ERP (Pedido Horus #{order.horus_pedido_venda}).",
+        }
+
+    company = db.query(Company).filter(Company.id == order.company_id).first()
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
+    if not settings or not settings.horus_enabled:
+        raise ValueError("Integração Horus ERP não está habilitada nas configurações desta empresa.")
+
+    h_cfg = _get_b2c_horus_order_config(settings, db=db, company_id=order.company_id)
+    fiscal_intra = str(h_cfg.get("cod_param_fiscal_intra") or "").strip().upper()
+    fiscal_inter = str(h_cfg.get("cod_param_fiscal_inter") or "").strip().upper()
+    if not fiscal_intra and not fiscal_inter:
+        raise ValueError(
+            "Parâmetro Fiscal (COD_PARAM_FISCAL Intraestadual / Interestadual) não configurado. "
+            "Acesse Loja B2C → Configurações → Integração Pedidos Horus e preencha o código do parâmetro fiscal."
+        )
+
+    cust = order.customer or (
+        db.query(Customer).filter(Customer.id == order.customer_id).first() if order.customer_id else None
+    )
+    red = (
+        db.query(B2CCouponRedemption)
+        .filter(B2CCouponRedemption.company_id == order.company_id, B2CCouponRedemption.order_id == order.id)
+        .first()
+    )
+    addr = cust.addresses[0] if (cust and getattr(cust, "addresses", None)) else None
+    meta_ship = meta.get("shipping_address") if isinstance(meta.get("shipping_address"), dict) else {}
+
+    cpf_cnpj = _clean_digits(
+        (red.customer_cpf if red and red.customer_cpf else None)
+        or (cust.document if cust and cust.document else "")
+    )
+    if not cpf_cnpj:
+        raise ValueError("CPF/CNPJ do comprador não encontrado no pedido. O Horus exige CPF ou CNPJ para registrar o cliente.")
+
+    nome = (
+        (red.customer_name if red and red.customer_name else None)
+        or (cust.name if cust and cust.name else "CLIENTE LOJA B2C")
+    ).strip().upper()
+    cep = _clean_digits(
+        meta_ship.get("zip_code")
+        or (getattr(addr, "zip_code", "") if addr else "")
+        or (getattr(company, "zip_code", "") if company else "")
+        or "01001000"
+    )
+    uf = (
+        meta_ship.get("state")
+        or (getattr(addr, "state", "") if addr else "")
+        or (getattr(cust, "state", "") if cust else "")
+        or (getattr(company, "state", "") if company else "")
+        or "SP"
+    ).strip().upper()[:2]
+    cidade = (
+        meta_ship.get("city")
+        or (getattr(addr, "city", "") if addr else "")
+        or (getattr(cust, "city", "") if cust else "")
+        or (getattr(company, "city", "") if company else "")
+        or "SAO PAULO"
+    ).strip().upper()
+    bairro = (
+        meta_ship.get("neighborhood")
+        or (getattr(addr, "neighborhood", "") if addr else "")
+        or (getattr(company, "neighborhood", "") if company else "")
+        or "CENTRO"
+    ).strip().upper()
+    endereco = (
+        meta_ship.get("street")
+        or (getattr(addr, "street", "") if addr else "")
+        or (getattr(company, "address", "") if company else "")
+        or "ENDERECO PADRAO"
+    ).strip().upper()
+    numero = (
+        meta_ship.get("number")
+        or (getattr(addr, "number", "") if addr else "")
+        or "S/N"
+    ).strip().upper()
+    complemento = (
+        meta_ship.get("complement")
+        or (getattr(addr, "complement", "") if addr else "")
+        or ""
+    ).strip().upper()
+
+    horus_clients = HorusClients(db, order.company_id)
+    steps_log: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+
+    try:
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 1: Busca_Cliente (por CPF/CNPJ) ou InsAltCliente (COD_CLI='NOVO')
+        # ──────────────────────────────────────────────────────────────────────
+        cod_cli: Optional[str] = None
+        busca = await horus_clients.get_client_b2c(cnpj_destino="", cpf=cpf_cnpj)
+        if busca and not busca.get("error") and busca.get("data"):
+            data_cli = busca["data"]
+            cod_cli = str(data_cli.get("COD_CLI") or data_cli.get("CODIGO") or "").strip().upper() or None
+            if cod_cli:
+                steps_log.append({
+                    "step": "Busca_Cliente",
+                    "status": "OK",
+                    "detail": f"Cliente localizado no Horus: COD_CLI={cod_cli} (CPF/CNPJ {cpf_cnpj})",
+                })
+
+        if not cod_cli:
+            doc_key = "CPF" if len(cpf_cnpj) == 11 else "CNPJ"
+            tpo_pessoa = "F" if len(cpf_cnpj) == 11 else "J"
+            ins_params: Dict[str, Any] = {
+                "COD_CLI": "NOVO",
+                "TPO_PESSOA": tpo_pessoa,
+                doc_key: cpf_cnpj,
+                "NOM_CLI": (nome[:60] if nome else "CLIENTE LOJA B2C").upper(),
+            }
+            if h_cfg.get("resp_cliente"):
+                ins_params["NOM_RESP"] = str(h_cfg["resp_cliente"]).strip().upper()
+            if h_cfg.get("cod_resp"):
+                ins_params["COD_RESPONSAVEL"] = str(h_cfg["cod_resp"]).strip().upper()
+
+            ins_params = _upper_horus_dict(ins_params)
+            ins_res = await horus_clients.get("InsAltCliente", params=ins_params)
+            if ins_res and isinstance(ins_res, list) and len(ins_res) > 0:
+                item_cli = ins_res[0]
+                if item_cli.get("Falha") or item_cli.get("FALHA") == "S":
+                    msg_horus = str(item_cli.get("Mensagem") or item_cli.get("MENSAGEM") or item_cli.get("MSG") or "Erro Horus")
+                    if "duplica" in msg_horus.lower() or "buscar antes" in msg_horus.lower():
+                        busca_retry = await horus_clients.get_client_b2c(cnpj_destino="", cpf=cpf_cnpj)
+                        if busca_retry and not busca_retry.get("error") and busca_retry.get("data"):
+                            cod_cli = str(busca_retry["data"].get("COD_CLI") or busca_retry["data"].get("CODIGO") or "").strip().upper() or None
+                    if not cod_cli:
+                        raise ValueError(f"InsAltCliente recusado pelo Horus: {msg_horus}")
+                else:
+                    cod_cli = str(item_cli.get("COD_CLI") or item_cli.get("CODIGO") or "").strip().upper() or None
+            if not cod_cli:
+                raise ValueError(f"InsAltCliente não retornou COD_CLI válido. Resposta Horus: {ins_res}")
+
+            steps_log.append({
+                "step": "InsAltCliente",
+                "status": "OK",
+                "detail": f"Cliente cadastrado no Horus: COD_CLI={cod_cli} ({nome[:60]})",
+            })
+
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 2: InsAltEndCliente — Cadastrar/atualizar endereço de entrega (CAIXA ALTA)
+        # ──────────────────────────────────────────────────────────────────────
+        end_params: Dict[str, Any] = {
+            "COD_CLI": cod_cli,
+            "COD_TPO_END": str(h_cfg.get("cod_endereco") or "1").strip().upper(),
+            "NOM_PAIS": "BRASIL",
+            "SIGLA_UF": uf,
+            "NOME_UF": _UF_NOMES_HORUS_UPPER.get(uf, uf).upper(),
+            "NOM_LOCAL": cidade[:60],
+            "NOM_BAIRRO": bairro[:40],
+            "DESC_ENDERECO": endereco[:80],
+            "NUM_END": numero[:10],
+            "CEP": cep,
+        }
+        if complemento:
+            end_params["COM_ENDERECO"] = complemento[:40]
+        end_params = _upper_horus_dict(end_params)
+        try:
+            end_res = await horus_clients.get("InsAltEndCliente", params=end_params)
+            end_fail = _extract_horus_failures(end_res)
+            if end_fail:
+                warnings.append(f"InsAltEndCliente aviso: {' | '.join(end_fail)}")
+                steps_log.append({"step": "InsAltEndCliente", "status": "WARNING", "detail": " | ".join(end_fail)})
+            else:
+                steps_log.append({
+                    "step": "InsAltEndCliente",
+                    "status": "OK",
+                    "detail": f"Endereço atualizado: {endereco[:40]}, {numero} - {cidade}/{uf} (CEP {cep})",
+                })
+        except Exception as e_end:
+            warnings.append(f"InsAltEndCliente falhou (não bloqueante): {e_end}")
+
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 3: Resolver COD_ITEM de todos os itens do pedido
+        # ──────────────────────────────────────────────────────────────────────
+        order_items = list(order.items or [])
+        if not order_items:
+            raise ValueError("O pedido não possui itens para enviar ao Horus.")
+
+        resolved_items: List[Dict[str, Any]] = []
+        for it in order_items:
+            cod_item_val: Optional[str] = None
+            isbn_clean = str(it.ean_isbn or it.sku or "").strip().upper()
+
+            if it.product_id:
+                p_obj = db.query(Product).filter(Product.id == it.product_id).first()
+                if p_obj and p_obj.horus_cod_item:
+                    cod_item_val = str(p_obj.horus_cod_item).strip()
+
+            if not cod_item_val and isbn_clean:
+                p_by_ean = (
+                    db.query(Product)
+                    .filter(
+                        Product.company_id == order.company_id,
+                        or_(Product.ean_gtin == isbn_clean, Product.sku == isbn_clean),
+                    )
+                    .first()
+                )
+                if p_by_ean and p_by_ean.horus_cod_item:
+                    cod_item_val = str(p_by_ean.horus_cod_item).strip()
+
+            if not cod_item_val and isbn_clean:
+                try:
+                    acervo = await horus_clients.get("Busca_Acervo", params={"BARRAS_ISBN": isbn_clean})
+                    if isinstance(acervo, list) and len(acervo) > 0 and isinstance(acervo[0], dict) and not acervo[0].get("Falha"):
+                        cod_item_val = str(acervo[0].get("COD_ITEM") or acervo[0].get("CODIGO") or "").strip() or None
+                except Exception:
+                    pass
+
+            if not cod_item_val and str(it.sku or "").strip().isdigit():
+                cod_item_val = str(it.sku).strip()
+
+            if not cod_item_val:
+                raise ValueError(
+                    f"Não foi possível localizar o COD_ITEM no Horus para o produto '{it.name}' (ISBN/SKU: {isbn_clean})."
+                )
+
+            resolved_items.append({
+                "order_item": it,
+                "cod_item": cod_item_val.upper(),
+                "isbn": isbn_clean,
+                "qty": max(1, int(it.quantity or 1)),
+                "unit_price": float(it.unit_price or 0.0),
+            })
+
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 4: InsPedidoVenda (Cabeçalho do Pedido via API Aberta B2C)
+        # ──────────────────────────────────────────────────────────────────────
+        uf_seller = str(getattr(company, "state", "") or "SP").strip().upper()[:2]
+        if uf_seller and uf and uf_seller == uf:
+            fiscal_param = fiscal_intra or fiscal_inter
+        else:
+            fiscal_param = fiscal_inter or fiscal_intra
+
+        coupon_ref = (red.coupon_code if red and red.coupon_code else None) or (
+            order.customer_order_ref if order.customer_order_ref and order.customer_order_ref != "B2C_DIRECT" else None
+        )
+        obs_parts = [
+            f"LOJA B2C | PEDIDO #{order.id}",
+            f"CLIENTE: {nome[:40]}",
+            f"CPF: {cpf_cnpj}",
+            f"CEP: {cep}",
+        ]
+        if coupon_ref:
+            obs_parts.append(f"CUPOM: {coupon_ref}")
+        obs_pedido = " | ".join(obs_parts).upper()[:240]
+
+        tipo_ped = str(h_cfg.get("tipo_pedido") or "L").strip().upper()[:1] or "L"
+        pedido_params: Dict[str, Any] = {
+            "TIPO_PEDIDO_V_T_D": tipo_ped,
+            "COD_PARAM_FISCAL": fiscal_param,
+            "COD_PEDIDO_ORIGEM": f"B2C-{order.id}".upper(),
+            "COD_CLI": cod_cli,
+            "OBS_PEDIDO": obs_pedido,
+        }
+        if settings.horus_company:
+            pedido_params["COD_EMPRESA"] = str(settings.horus_company).strip().upper()
+        if settings.horus_branch:
+            pedido_params["COD_FILIAL"] = str(settings.horus_branch).strip().upper()
+        if h_cfg.get("cod_metodo"):
+            pedido_params["COD_METODO"] = str(h_cfg["cod_metodo"]).strip().upper()
+        if h_cfg.get("cod_endereco"):
+            pedido_params["COD_TPO_END"] = str(h_cfg["cod_endereco"]).strip().upper()
+        if h_cfg.get("cod_transp"):
+            pedido_params["COD_TRANSP"] = str(h_cfg["cod_transp"]).strip().upper()
+        if h_cfg.get("frete_emit_dest"):
+            pedido_params["FRETE_EMIT_DEST"] = str(h_cfg["frete_emit_dest"]).strip().upper()
+        if h_cfg.get("cod_forma") and tipo_ped == "V":
+            pedido_params["COD_FORMA"] = str(h_cfg["cod_forma"]).strip().upper()
+
+        freight_val = float(red.order_freight or 0) if red else float(meta.get("freight_value") or 0.0)
+        if h_cfg.get("send_freight_value", True) and freight_val > 0:
+            pedido_params["VLR_FRETE"] = round(freight_val, 2)
+
+        pedido_params = _upper_horus_dict(pedido_params)
+        ped_res = await horus_clients.get("InsPedidoVenda", params=pedido_params)
+        cod_ped_venda: Optional[str] = None
+        if ped_res and isinstance(ped_res, list) and len(ped_res) > 0:
+            if ped_res[0].get("Falha") or ped_res[0].get("FALHA") == "S":
+                msg_ped = str(ped_res[0].get("Mensagem") or ped_res[0].get("MENSAGEM") or ped_res[0])
+                raise ValueError(f"InsPedidoVenda recusado pelo Horus: {msg_ped}")
+            cod_ped_venda = str(ped_res[0].get("COD_PED_VENDA") or "").strip().upper() or None
+
+        if not cod_ped_venda:
+            raise ValueError(f"Horus não retornou COD_PED_VENDA em InsPedidoVenda. Resposta: {ped_res}")
+
+        steps_log.append({
+            "step": "InsPedidoVenda",
+            "status": "OK",
+            "detail": f"Pedido criado no Horus: COD_PED_VENDA={cod_ped_venda} (CFOP/Param Fiscal={fiscal_param}, Tipo={tipo_ped})",
+        })
+
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 5: InsItensPedidoVenda (Inserir todos os itens do pedido)
+        # ──────────────────────────────────────────────────────────────────────
+        price_mode = str(h_cfg.get("price_mode") or "UNIT_PRICE").strip().upper()
+        subtotal_val = float(order.subtotal or 0.0)
+        discount_val = float(order.discount or 0.0)
+        discount_ratio = (
+            max(0.0, min(0.99, (subtotal_val - discount_val) / subtotal_val))
+            if (price_mode == "NET_AFTER_COUPON" and subtotal_val > 0 and discount_val > 0)
+            else 1.0
+        )
+
+        items_sent_count = 0
+        for r_it in resolved_items:
+            raw_unit = float(r_it["unit_price"] or 0.01)
+            vlr_liq = round(max(0.01, raw_unit * discount_ratio), 2)
+            item_params: Dict[str, Any] = {
+                "COD_PED_VENDA": cod_ped_venda,
+                "COD_ITEM": r_it["cod_item"],
+                "QTD_PEDIDA": r_it["qty"],
+                "VLR_LIQUIDO": vlr_liq,
+                "COD_CLI": cod_cli,
+            }
+            if settings.horus_company:
+                item_params["COD_EMPRESA"] = str(settings.horus_company).strip().upper()
+            if settings.horus_branch:
+                item_params["COD_FILIAL"] = str(settings.horus_branch).strip().upper()
+
+            item_params = _upper_horus_dict(item_params)
+            it_res = await horus_clients.get("InsItensPedidoVenda", params=item_params)
+            it_fail = _extract_horus_failures(it_res)
+            if it_fail:
+                warnings.append(f"Item {r_it['cod_item']} ({r_it['isbn']}): {' | '.join(it_fail)}")
+            else:
+                items_sent_count += 1
+
+        steps_log.append({
+            "step": "InsItensPedidoVenda",
+            "status": "OK" if items_sent_count == len(resolved_items) else "WARNING",
+            "detail": f"{items_sent_count}/{len(resolved_items)} item(ns) inserido(s) no pedido Horus #{cod_ped_venda}",
+        })
+
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 6: AltStatus_Pedido (Liberar pedido no Horus, ex: LEX / LAP)
+        # ──────────────────────────────────────────────────────────────────────
+        target_erp_status = str(h_cfg.get("status_envio_erp") or "").strip().upper()
+        if target_erp_status:
+            alt_params: Dict[str, Any] = {
+                "COD_EMPRESA": settings.horus_company,
+                "COD_FILIAL": settings.horus_branch,
+                "COD_CLI": cod_cli,
+                "COD_PED_VENDA": cod_ped_venda,
+                "STA_PEDIDO": target_erp_status,
+            }
+            alt_params = _upper_horus_dict(alt_params)
+            try:
+                alt_res = await horus_clients.get("AltStatus_Pedido", params=alt_params)
+                alt_fail = _extract_horus_failures(alt_res)
+                if alt_fail:
+                    warnings.append(f"AltStatus_Pedido ({target_erp_status}): {' | '.join(alt_fail)}")
+                    steps_log.append({"step": "AltStatus_Pedido", "status": "WARNING", "detail": " | ".join(alt_fail)})
+                else:
+                    steps_log.append({
+                        "step": "AltStatus_Pedido",
+                        "status": "OK",
+                        "detail": f"Status no Horus avançado para {target_erp_status}",
+                    })
+            except Exception as e_alt:
+                warnings.append(f"AltStatus_Pedido ({target_erp_status}) falhou: {e_alt}")
+
+        # Persistir no Pedido B2C
+        now_iso = datetime.now(timezone.utc).isoformat()
+        order.horus_pedido_venda = str(cod_ped_venda)
+        meta["horus_pedido_venda"] = str(cod_ped_venda)
+        meta["horus_cod_cli"] = str(cod_cli)
+        meta["horus_sent_at"] = now_iso
+        meta["horus_status_erp"] = target_erp_status or "CRIADO"
+        meta["horus_integration_log"] = steps_log
+        if warnings:
+            meta["horus_warnings"] = warnings
+        _save_order_meta(order, meta)
+        db.commit()
+        db.refresh(order)
+
+        return {
+            "ok": True,
+            "already_sent": False,
+            "horus_pedido_venda": str(cod_ped_venda),
+            "horus_cod_cli": str(cod_cli),
+            "horus_status_erp": target_erp_status or "CRIADO",
+            "horus_sent_at": now_iso,
+            "items_sent": items_sent_count,
+            "warnings": warnings,
+            "steps_log": steps_log,
+            "message": f"Pedido #{order.id} integrado ao Horus ERP com sucesso! Nº Horus: {cod_ped_venda} (COD_CLI: {cod_cli}).",
+        }
+    finally:
+        try:
+            await horus_clients.close()
+        except Exception:
+            pass
 
 
 @router.get("/coupons/summary")
@@ -736,9 +1297,13 @@ def get_b2c_coupons_summary(
             "correios_user": getattr(settings, "correios_user", None) or "" if settings else "",
             "correios_password": getattr(settings, "correios_password", None) or "" if settings else "",
             "horus_enabled": bool(getattr(settings, "horus_enabled", False)) if settings else False,
+            "horus_company": getattr(settings, "horus_company", "") or "" if settings else "",
+            "horus_branch": getattr(settings, "horus_branch", "") or "" if settings else "",
             "freight_config": freight_config,
             "horus_sync_config": horus_sync_config,
+            "horus_order_config": _get_b2c_horus_order_config(settings, db=db, company_id=cid),
             "email_notifications_config": _get_b2c_email_config(settings),
+            "smtp_configured": bool(_resolve_smtp_settings(db, cid)),
             "homologated_gateways": [
                 {"id": "EFI", "name": "Efí (Gerencianet)", "status": "HOMOLOGATED", "methods": ["PIX", "CREDIT_CARD"]},
                 {"id": "VINDI", "name": "Vindi Pagamentos", "status": "HOMOLOGATED", "methods": ["PIX", "CREDIT_CARD"]},
@@ -856,9 +1421,45 @@ def update_b2c_seller_settings(
         settings.b2c_showcases_config = raw_cfg
         flag_modified(settings, "b2c_showcases_config")
 
+    if data.horus_order_config is not None and isinstance(data.horus_order_config, dict):
+        raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+        prev_hord = (
+            raw_cfg.get("horus_order_config")
+            if isinstance(raw_cfg.get("horus_order_config"), dict)
+            else _default_b2c_horus_order_config(db=db, company_id=cid)
+        )
+        raw_cfg["horus_order_config"] = {
+            **prev_hord,
+            "enabled": bool(data.horus_order_config.get("enabled", True)),
+            "auto_send_on_paid": bool(data.horus_order_config.get("auto_send_on_paid", False)),
+            "tipo_pedido": str(data.horus_order_config.get("tipo_pedido") or "L").strip().upper()[:1] or "L",
+            "cod_param_fiscal_intra": str(data.horus_order_config.get("cod_param_fiscal_intra") or "").strip().upper(),
+            "cod_param_fiscal_inter": str(data.horus_order_config.get("cod_param_fiscal_inter") or "").strip().upper(),
+            "cod_metodo": str(data.horus_order_config.get("cod_metodo") or "1").strip().upper(),
+            "cod_endereco": str(data.horus_order_config.get("cod_endereco") or "1").strip().upper(),
+            "cod_transp": str(data.horus_order_config.get("cod_transp") or "").strip().upper(),
+            "frete_emit_dest": str(data.horus_order_config.get("frete_emit_dest") or "1").strip().upper(),
+            "status_envio_erp": str(data.horus_order_config.get("status_envio_erp") or "LEX").strip().upper(),
+            "resp_cliente": str(data.horus_order_config.get("resp_cliente") or "").strip().upper(),
+            "cod_resp": str(data.horus_order_config.get("cod_resp") or "").strip().upper(),
+            "cod_forma": str(data.horus_order_config.get("cod_forma") or "").strip().upper(),
+            "send_freight_value": bool(data.horus_order_config.get("send_freight_value", True)),
+            "price_mode": str(data.horus_order_config.get("price_mode") or "UNIT_PRICE").strip().upper(),
+        }
+        settings.b2c_showcases_config = raw_cfg
+        flag_modified(settings, "b2c_showcases_config")
+
     if data.email_notifications_config is not None and isinstance(data.email_notifications_config, dict):
         raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
         merged_email_cfg = {**_default_b2c_email_config(), **data.email_notifications_config}
+        for prefix in ("waiting_payment", "paid", "canceled"):
+            msg_val = (
+                data.email_notifications_config.get(f"{prefix}_message")
+                or data.email_notifications_config.get(f"{prefix}_body")
+                or merged_email_cfg.get(f"{prefix}_body")
+            )
+            merged_email_cfg[f"{prefix}_message"] = msg_val
+            merged_email_cfg[f"{prefix}_body"] = msg_val
         raw_cfg["email_notifications_config"] = merged_email_cfg
         settings.b2c_showcases_config = raw_cfg
         flag_modified(settings, "b2c_showcases_config")
@@ -866,6 +1467,173 @@ def update_b2c_seller_settings(
     db.commit()
     _b2c_cache_clear(cid)
     return {"message": "Configurações B2C atualizadas com sucesso!"}
+
+
+@router.post("/settings/test-email")
+def send_b2c_test_email(
+    data: B2CTestEmailRequest,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Dispara um e-mail real de teste síncrono para o destinatário informado usando o modelo do evento selecionado
+    (WAITING_PAYMENT, PAID, SEPARATION, FINALIZED, DELIVERED ou CANCELLED), validando imediatamente o SMTP.
+    """
+    from app.core.email import send_smtp_email
+
+    cid = _resolve_seller_company_id(current_user, company_id)
+    to_email = (data.to_email or "").strip().lower()
+    if not to_email or "@" not in to_email:
+        raise HTTPException(status_code=400, detail="Informe um endereço de e-mail válido para o teste.")
+
+    smtp_cfg = _resolve_smtp_settings(db, cid)
+    if not smtp_cfg:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhum servidor SMTP ativo encontrado. Configure o SMTP em Configurações da Empresa ou no Painel Master.",
+        )
+
+    company = db.query(Company).filter(Company.id == cid).first()
+    seller_settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    email_cfg = _get_b2c_email_config(seller_settings)
+    if data.email_notifications_config and isinstance(data.email_notifications_config, dict):
+        email_cfg = {**email_cfg, **data.email_notifications_config}
+
+    store_name = company.name if company and company.name else "Nossa Loja"
+    norm_st = _normalize_b2c_order_status(data.event_status)
+
+    # Se existir um pedido B2C real, usa os itens dele como exemplo; caso contrário monta exemplo demonstrativo
+    sample_order = (
+        db.query(Order)
+        .filter(Order.company_id == cid, Order.origin == "b2c_storefront")
+        .order_by(Order.id.desc())
+        .first()
+    )
+    sample_id = sample_order.id if sample_order else 9999
+    sample_total = float(sample_order.total or 89.90) if sample_order else 89.90
+    valor_fmt = f"R$ {sample_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    cust_name = "Cliente Teste"
+    if sample_order and sample_order.customer and sample_order.customer.name:
+        cust_name = sample_order.customer.name
+
+    vars_map = {
+        "{cliente}": cust_name,
+        "{nome_cliente}": cust_name,
+        "{pedido}": str(sample_id),
+        "{numero_pedido}": str(sample_id),
+        "{loja}": store_name,
+        "{nome_loja}": store_name,
+        "{valor}": valor_fmt,
+        "{valor_total}": valor_fmt,
+    }
+
+    def _apply_vars(text: str) -> str:
+        out = text or ""
+        for k, v in vars_map.items():
+            out = out.replace(k, v)
+        return out
+
+    if norm_st == "WAITING_PAYMENT":
+        subject = _apply_vars(email_cfg.get("waiting_payment_subject") or "")
+        intro_text = _apply_vars(email_cfg.get("waiting_payment_message") or email_cfg.get("waiting_payment_body") or "")
+        badge_bg, badge_color, badge_label = "#fef3c7", "#b45309", "⏳ Pedido Realizado • Aguardando Pagamento"
+    elif norm_st == "PAID":
+        subject = _apply_vars(email_cfg.get("paid_subject") or "")
+        intro_text = _apply_vars(email_cfg.get("paid_message") or email_cfg.get("paid_body") or "")
+        badge_bg, badge_color, badge_label = "#d1fae5", "#047857", "✅ Pagamento Aprovado"
+    elif norm_st in ("CANCELLED", "CANCELED"):
+        subject = _apply_vars(email_cfg.get("canceled_subject") or "")
+        intro_text = _apply_vars(email_cfg.get("canceled_message") or email_cfg.get("canceled_body") or "")
+        badge_bg, badge_color, badge_label = "#fee2e2", "#b91c1c", "❌ Pedido Cancelado"
+    else:
+        st_label = B2C_STATUS_LABELS.get(norm_st, norm_st)
+        subject = f"Atualização do Pedido #{sample_id}: {st_label} | {store_name}"
+        intro_text = f"O status do seu pedido #{sample_id} na loja {store_name} foi atualizado para: {st_label}."
+        badge_bg, badge_color, badge_label = "#e0e7ff", "#4338ca", f"📦 {st_label}"
+
+    subject = f"[TESTE] {subject}"
+
+    items_rows = ""
+    if sample_order and sample_order.items:
+        for it in sample_order.items:
+            it_total = float(it.total_price or (float(it.unit_price or 0) * int(it.quantity or 1)))
+            it_fmt = f"R$ {it_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            items_rows += (
+                f"<tr><td style='padding:8px 0;border-bottom:1px solid #f1f5f9;color:#334155;font-size:13px;'>"
+                f"<strong>{it.quantity}x</strong> {it.name}</td>"
+                f"<td style='padding:8px 0;border-bottom:1px solid #f1f5f9;color:#0f172a;font-size:13px;font-weight:bold;text-align:right;'>"
+                f"{it_fmt}</td></tr>"
+            )
+    else:
+        items_rows = (
+            "<tr><td style='padding:8px 0;border-bottom:1px solid #f1f5f9;color:#334155;font-size:13px;'>"
+            "<strong>1x</strong> Livro Demonstrativo de Teste</td>"
+            f"<td style='padding:8px 0;border-bottom:1px solid #f1f5f9;color:#0f172a;font-size:13px;font-weight:bold;text-align:right;'>"
+            f"{valor_fmt}</td></tr>"
+        )
+
+    tracking_block = ""
+    if norm_st in ("FINALIZED", "DELIVERED"):
+        tracking_block = (
+            "<div style='margin:16px 0;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;color:#334155;'>"
+            "<div><strong>Nota Fiscal:</strong> 00012548</div>"
+            "<div><strong>Código de Rastreio:</strong> AA123456789BR</div>"
+            "</div>"
+        )
+
+    footer_text = _apply_vars(
+        email_cfg.get("footer_note")
+        or f"Você pode acompanhar todos os detalhes em Minha Conta → Meus Pedidos na loja {store_name}."
+    )
+
+    html_content = (
+        f"<div style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:16px;background:#ffffff;color:#0f172a;'>"
+        f"<div style='border-bottom:1px solid #f1f5f9;padding-bottom:14px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;'>"
+        f"<strong style='font-size:16px;color:#0f172a;'>{store_name}</strong>"
+        f"<span style='font-size:12px;color:#64748b;'>Pedido #{sample_id}</span>"
+        f"</div>"
+        f"<div style='display:inline-block;background:{badge_bg};color:{badge_color};padding:6px 12px;border-radius:8px;font-weight:bold;font-size:13px;margin-bottom:14px;'>"
+        f"{badge_label}</div>"
+        f"<p style='font-size:15px;font-weight:bold;margin:0 0 8px 0;'>Olá, {cust_name}!</p>"
+        f"<p style='font-size:14px;color:#475569;line-height:1.5;margin:0 0 16px 0;'>{intro_text}</p>"
+        f"{tracking_block}"
+        f"<div style='background:#f8fafc;padding:14px 16px;border-radius:12px;margin-top:16px;'>"
+        f"<div style='font-size:11px;font-weight:bold;text-transform:uppercase;color:#64748b;margin-bottom:8px;'>Resumo do Pedido #{sample_id}</div>"
+        f"<table style='width:100%;border-collapse:collapse;'>{items_rows}</table>"
+        f"<div style='margin-top:10px;padding-top:8px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;font-size:14px;font-weight:bold;color:#0f172a;'>"
+        f"<span>Total a Pagar / Pago: </span><span style='float:right;color:#047857;'>{valor_fmt}</span>"
+        f"</div></div>"
+        f"<p style='color:#94a3b8;font-size:11px;margin-top:20px;text-align:center;'>{footer_text}</p>"
+        f"</div>"
+    )
+
+    ok = send_smtp_email(
+        smtp_host=smtp_cfg.smtp_host,
+        smtp_port=int(smtp_cfg.smtp_port or 587),
+        smtp_username=smtp_cfg.smtp_username or "",
+        smtp_password=smtp_cfg.smtp_password or "",
+        smtp_from=smtp_cfg.smtp_from_email or smtp_cfg.smtp_username or "noreply@cronuz.com.br",
+        to_email=to_email,
+        subject=subject,
+        html_content=html_content,
+        use_ssl=bool(smtp_cfg.smtp_use_ssl),
+        bcc_email=None,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail=f"O servidor SMTP ({smtp_cfg.smtp_host}:{smtp_cfg.smtp_port or 587}) recusou ou falhou no envio para {to_email}. Verifique usuário e senha SMTP.",
+        )
+
+    return {
+        "sent": True,
+        "to_email": to_email,
+        "event_status": norm_st,
+        "subject": subject,
+        "smtp_host": smtp_cfg.smtp_host,
+        "message": f"E-mail de teste ({B2C_STATUS_LABELS.get(norm_st, norm_st)}) enviado com sucesso para {to_email}!",
+    }
 
 
 class VindiOAuthExchangeRequest(BaseModel):
@@ -4158,6 +4926,15 @@ def list_b2c_orders(
                 "tracking_code": o.tracking_code or "",
                 "carrier_name": carrier_name,
                 "tracking_url": tracking_url,
+                "horus_pedido_venda": o.horus_pedido_venda or meta.get("horus_pedido_venda") or "",
+                "horus_cod_cli": meta.get("horus_cod_cli") or "",
+                "horus_sent_at": meta.get("horus_sent_at"),
+                "horus_status_erp": meta.get("horus_status_erp") or "",
+                "horus_integration_log": meta.get("horus_integration_log") if isinstance(meta.get("horus_integration_log"), list) else [],
+                "horus_warnings": meta.get("horus_warnings") if isinstance(meta.get("horus_warnings"), list) else [],
+                "emails_sent": meta.get("emails_sent") if isinstance(meta.get("emails_sent"), list) else [],
+                "last_email_sent_at": meta.get("last_email_sent_at"),
+                "last_email_to": meta.get("last_email_to") or "",
                 "tray_cart_url": red.tray_cart_url if red else None,
                 "tray_coupon_code": red.tray_coupon_code if red else None,
                 "redemption_status": red.status if red else None,
@@ -4172,7 +4949,7 @@ def list_b2c_orders(
 
 
 @router.patch("/orders/{order_id}")
-def update_b2c_order(
+async def update_b2c_order(
     order_id: int,
     data: B2COrderUpdateRequest,
     company_id: Optional[int] = Query(None),
@@ -4242,20 +5019,134 @@ def update_b2c_order(
     _b2c_cache_clear(cid)
 
     # Dispara e-mail transacional automático (Pago, Cancelado, Em Separação, Finalizado, Entregue)
+    email_sent = False
     if (status_changed or data.tracking_code) and data.notify_customer:
-        _send_b2c_order_email(db, order, event_status=order.status, force=True)
+        email_sent = _send_b2c_order_email(db, order, event_status=order.status, force=True)
+
+    # Se alterou para PAID e envio automático ao Horus estiver ativo, integra automaticamente
+    horus_auto_result: Optional[Dict[str, Any]] = None
+    if _normalize_b2c_order_status(order.status) == "PAID" and not order.horus_pedido_venda:
+        s_obj = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+        h_cfg = _get_b2c_horus_order_config(s_obj, db=db, company_id=cid)
+        if h_cfg.get("enabled") and h_cfg.get("auto_send_on_paid"):
+            try:
+                horus_auto_result = await _send_b2c_order_to_horus(db, order, force=False)
+            except Exception as e_horus:
+                logger.warning(f"[B2C Auto Horus] Falha ao enviar pedido #{order.id}: {e_horus}")
+                horus_auto_result = {"ok": False, "error": str(e_horus)}
+
+    meta = _parse_order_meta(order)
+    st_norm = _normalize_b2c_order_status(order.status)
+    st_lbl = B2C_STATUS_LABELS.get(st_norm, order.status)
+    msg_parts = [f"Pedido #{order.id} atualizado para '{st_lbl}'!"]
+    if email_sent:
+        msg_parts.append("E-mail de notificação disparado ao cliente.")
+    if horus_auto_result and horus_auto_result.get("ok"):
+        msg_parts.append(f"Integrado ao Horus ERP (#{order.horus_pedido_venda}).")
 
     return {
-        "message": f"Pedido #{order.id} atualizado com sucesso!",
+        "message": " ".join(msg_parts),
         "id": order.id,
-        "status": _normalize_b2c_order_status(order.status),
-        "status_label": B2C_STATUS_LABELS.get(_normalize_b2c_order_status(order.status), order.status),
+        "status": st_norm,
+        "status_label": st_lbl,
+        "email_sent": email_sent,
         "invoice_number": order.invoice_number or "",
         "invoice_key": order.invoice_key or "",
         "tracking_code": order.tracking_code or "",
         "carrier_name": meta.get("carrier_name") or "",
         "tracking_url": meta.get("tracking_url") or "",
+        "horus_pedido_venda": order.horus_pedido_venda or meta.get("horus_pedido_venda") or "",
+        "horus_cod_cli": meta.get("horus_cod_cli") or "",
+        "horus_sent_at": meta.get("horus_sent_at"),
+        "horus_status_erp": meta.get("horus_status_erp") or "",
+        "horus_integration_log": meta.get("horus_integration_log") if isinstance(meta.get("horus_integration_log"), list) else [],
+        "emails_sent": meta.get("emails_sent") if isinstance(meta.get("emails_sent"), list) else [],
+        "last_email_sent_at": meta.get("last_email_sent_at"),
+        "last_email_to": meta.get("last_email_to") or "",
     }
+
+
+@router.post("/orders/{order_id}/send-email")
+def manual_send_b2c_order_email(
+    order_id: int,
+    data: B2COrderSendEmailRequest,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Permite ao Seller disparar/reenviar manualmente o e-mail de notificação de qualquer status
+    direto de dentro do pedido (com suporte a informar ou substituir o e-mail de destino).
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id, Order.company_id == cid, Order.origin == "b2c_storefront")
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido B2C não encontrado.")
+
+    target_status = _normalize_b2c_order_status(data.event_status or order.status)
+    sent_ok = _send_b2c_order_email(
+        db=db,
+        order=order,
+        event_status=target_status,
+        force=True,
+        override_email=data.override_email,
+        sync_send=True,
+    )
+    meta = _parse_order_meta(order)
+    if not sent_ok:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Não foi possível enviar o e-mail para este pedido. "
+                "Verifique se o cliente possui um e-mail válido cadastrado e se o servidor SMTP está ativo."
+            ),
+        )
+    st_lbl = B2C_STATUS_LABELS.get(target_status, target_status)
+    return {
+        "sent": True,
+        "order_id": order.id,
+        "event_status": target_status,
+        "status_label": st_lbl,
+        "to_email": meta.get("last_email_to") or data.override_email or "",
+        "emails_sent": meta.get("emails_sent") if isinstance(meta.get("emails_sent"), list) else [],
+        "last_email_sent_at": meta.get("last_email_sent_at"),
+        "message": f"E-mail do pedido #{order.id} ({st_lbl}) enviado com sucesso para {meta.get('last_email_to') or 'o cliente'}!",
+    }
+
+
+@router.post("/orders/{order_id}/send-to-horus")
+async def manual_send_b2c_order_to_horus(
+    order_id: int,
+    data: B2CSendToHorusRequest,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Integra manualmente um pedido da Loja B2C ao Horus ERP via API Aberta do Horus (sem necessidade de ID_GUID).
+    Executa: Busca_Cliente -> InsAltCliente -> InsAltEndCliente -> Busca_Acervo -> InsPedidoVenda -> InsItensPedidoVenda -> AltStatus_Pedido.
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id, Order.company_id == cid, Order.origin == "b2c_storefront")
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido B2C não encontrado.")
+
+    try:
+        res = await _send_b2c_order_to_horus(db=db, order=order, force=bool(data.force))
+        return res
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as exc:
+        logger.warning(f"[B2C Send To Horus] Erro no pedido #{order_id}: {exc}")
+        raise HTTPException(status_code=400, detail=f"Falha ao integrar pedido #{order_id} no Horus ERP: {exc}")
 
 
 @router.get("/lgpd/consents")
@@ -7045,6 +7936,13 @@ async def process_b2c_checkout(
     norm_st = _normalize_b2c_order_status(order.status)
     # Dispara e-mail automático de Pedido Realizado (WAITING_PAYMENT) ou Pagamento Aprovado (PAID)
     _send_b2c_order_email(db, order, event_status=norm_st)
+    if norm_st == "PAID" and not order.horus_pedido_venda:
+        h_cfg = _get_b2c_horus_order_config(settings, db=db, company_id=company.id)
+        if h_cfg.get("enabled") and h_cfg.get("auto_send_on_paid"):
+            try:
+                await _send_b2c_order_to_horus(db, order, force=False)
+            except Exception as e_horus:
+                logger.warning(f"[B2C Checkout Auto Horus] Pedido #{order.id}: {e_horus}")
     return {
         "order_id": order.id,
         "status": norm_st,
@@ -7634,6 +8532,14 @@ async def vindi_b2c_webhook(
 
         if tx_info:
             sync_res = _sync_order_with_vindi_tx(db, order, tx_info, source="WEBHOOK_VINDI")
+            if sync_res.get("paid") and not order.horus_pedido_venda:
+                s_wh = db.query(CompanySettings).filter(CompanySettings.company_id == order.company_id).first()
+                h_cfg_wh = _get_b2c_horus_order_config(s_wh, db=db, company_id=order.company_id)
+                if h_cfg_wh.get("enabled") and h_cfg_wh.get("auto_send_on_paid"):
+                    try:
+                        await _send_b2c_order_to_horus(db, order, force=False)
+                    except Exception as e_hw:
+                        logger.warning(f"[Vindi Webhook Auto Horus] Pedido #{order.id}: {e_hw}")
     else:
         # Se o cliente foi redirecionado via GET sem parâmetros, sincroniza os pedidos B2C recentes pendentes
         recent_pending = (
