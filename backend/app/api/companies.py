@@ -431,3 +431,88 @@ async def test_horus_connection(
         raise HTTPException(status_code=e.response.status_code, detail=f"Servidor acessível, mas retornou erro HTTP {e.response.status_code}. Caminho ou permissão incorreta.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Falha de comunicação: {str(e)}")
+
+
+class B2CDnsVerifyRequest(BaseModel):
+    domain: Optional[str] = None
+    auto_save: bool = True
+
+
+@router.post("/companies/{company_id}/b2c-verify-dns-ssl")
+def verify_and_provision_b2c_domain(
+    company_id: int,
+    payload: B2CDnsVerifyRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    if current_user.type != user_models.UserRole.MASTER and current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Sem permissão para gerenciar o domínio B2C desta empresa")
+
+    company = db.query(company_models.Company).filter(company_models.Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+
+    raw_domain = (payload.domain or getattr(company, "b2c_custom_domain", "") or "").strip().lower()
+    clean_host = raw_domain.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0].strip()
+    if not clean_host:
+        raise HTTPException(status_code=400, detail="Informe o domínio próprio B2C para verificar (ex: parceiro.movimentoliterario.com.br).")
+
+    if payload.auto_save and getattr(company, "b2c_custom_domain", None) != clean_host:
+        company.b2c_custom_domain = clean_host
+        db.commit()
+        db.refresh(company)
+
+    import socket
+    import os
+    from app.core.ssl_authors import ensure_custom_b2c_domain_ssl, is_production_ssl_available
+
+    expected_ip = "64.23.182.183"
+    resolved_ips = []
+    cname_target = None
+    try:
+        hostname_alias, aliaslist, ipaddrlist = socket.gethostbyname_ex(clean_host)
+        resolved_ips = list(set(ipaddrlist or []))
+        if hostname_alias and hostname_alias.lower() != clean_host:
+            cname_target = hostname_alias.lower()
+    except Exception:
+        resolved_ips = []
+
+    dns_propagated = expected_ip in resolved_ips
+    ssl_active = False
+    ssl_message = ""
+
+    if dns_propagated:
+        if is_production_ssl_available():
+            ssl_ok = ensure_custom_b2c_domain_ssl(clean_host)
+            cert_file = f"/etc/letsencrypt/live/{clean_host}/fullchain.pem"
+            ssl_active = bool(ssl_ok or os.path.exists(cert_file))
+            ssl_message = (
+                f"DNS propagado para {expected_ip} e certificado HTTPS Let's Encrypt ativo!"
+                if ssl_active
+                else f"DNS propagado para {expected_ip}. Certificado SSL em ativação."
+            )
+        else:
+            ssl_active = True
+            ssl_message = f"DNS propagado para {expected_ip}! (Em produção o SSL Let's Encrypt é ativado automaticamente)."
+    else:
+        if resolved_ips:
+            ssl_message = (
+                f"O domínio {clean_host} está apontando para {', '.join(resolved_ips)}, "
+                f"mas deve apontar para {expected_ip}."
+            )
+        else:
+            ssl_message = (
+                f"Ainda não propagado (NXDOMAIN). Verifique se o nome do subdomínio está idêntico no Registro.br "
+                f"e aguarde de 15 a 30 minutos após salvar a zona."
+            )
+
+    return {
+        "domain": clean_host,
+        "dns_propagated": dns_propagated,
+        "resolved_ips": resolved_ips,
+        "cname_target": cname_target,
+        "expected_ip": expected_ip,
+        "ssl_active": ssl_active,
+        "https_url": f"https://{clean_host}",
+        "message": ssl_message,
+    }

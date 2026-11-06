@@ -33,6 +33,17 @@ export default function MasterB2CSettingsPage() {
 
   const [b2cDomain, setB2cDomain] = useState('');
   const [storefrontOpen, setStorefrontOpen] = useState(true);
+  const [verifyingDns, setVerifyingDns] = useState(false);
+  const [dnsStatusResult, setDnsStatusResult] = useState<{
+    domain: string;
+    dns_propagated: boolean;
+    resolved_ips: string[];
+    cname_target?: string | null;
+    expected_ip: string;
+    ssl_active: boolean;
+    https_url: string;
+    message: string;
+  } | null>(null);
 
   const [syncConfig, setSyncConfig] = useState({
     horus_enabled: false,
@@ -207,10 +218,58 @@ export default function MasterB2CSettingsPage() {
       setB2cDomain(cleanDomain);
       toast.success('Domínio e status da Loja B2C atualizados com sucesso!');
       refreshCompany();
+      if (cleanDomain) {
+        handleVerifyDnsAndSsl(cleanDomain);
+      } else {
+        setDnsStatusResult(null);
+      }
     } catch (err: any) {
       toast.error(err.message || 'Erro ao salvar domínio B2C.');
     } finally {
       setSavingDomain(false);
+    }
+  };
+
+  const handleVerifyDnsAndSsl = async (customHostOverride?: string) => {
+    const targetDomain = (customHostOverride ?? b2cDomain)
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/+$/, '')
+      .toLowerCase();
+    if (!targetDomain) {
+      return toast.error('Digite primeiro o domínio próprio (ex: parceiro.movimentoliterario.com.br).');
+    }
+
+    setVerifyingDns(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiUrl}/companies/${companyId}/b2c-verify-dns-ssl`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          domain: targetDomain,
+          auto_save: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Falha ao verificar DNS.');
+      }
+      setB2cDomain(data.domain);
+      setDnsStatusResult(data);
+      refreshCompany();
+      if (data.dns_propagated) {
+        toast.success(data.message || 'DNS propagado e HTTPS verificado!');
+      } else {
+        toast.warning(data.message || 'DNS ainda não propagado.');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao verificar propagação DNS.');
+    } finally {
+      setVerifyingDns(false);
     }
   };
 
@@ -456,22 +515,66 @@ export default function MasterB2CSettingsPage() {
             </div>
 
             {/* Domínio Próprio do Cliente */}
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 block">
                 Domínio Próprio B2C do Cliente (Opcional)
               </label>
-              <input
-                type="text"
-                autoComplete="off"
-                data-lpignore="true"
-                placeholder="Ex: parceria.movimentoliterario.com.br"
-                value={b2cDomain}
-                onChange={(e) => setB2cDomain(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  autoComplete="off"
+                  data-lpignore="true"
+                  placeholder="Ex: parceiro.movimentoliterario.com.br"
+                  value={b2cDomain}
+                  onChange={(e) => setB2cDomain(e.target.value)}
+                  className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={verifyingDns || !b2cDomain.trim()}
+                  onClick={() => handleVerifyDnsAndSsl()}
+                  className="px-3.5 py-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50 transition-colors"
+                >
+                  {verifyingDns ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                  )}
+                  Verificar DNS &amp; Ativar HTTPS
+                </button>
+              </div>
               <span className="text-[11px] text-slate-500 block">
-                Informe apenas o host sem <code className="font-mono">https://</code> (ex.: <code className="font-mono">parceria.movimentoliterario.com.br</code>).
+                Informe apenas o host sem <code className="font-mono">https://</code> (ex.: <code className="font-mono">parceiro.movimentoliterario.com.br</code>).
               </span>
+
+              {dnsStatusResult && (
+                <div
+                  className={`p-3 rounded-xl border text-xs space-y-1.5 ${
+                    dnsStatusResult.dns_propagated
+                      ? 'border-emerald-200 bg-emerald-50/80 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/30 dark:text-emerald-200'
+                      : 'border-amber-200 bg-amber-50/80 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      {dnsStatusResult.dns_propagated ? 'DNS Propagado & Ativo ✓' : 'Aguardando Propagação DNS'}
+                    </span>
+                    {dnsStatusResult.dns_propagated && (
+                      <a
+                        href={dnsStatusResult.https_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono font-bold underline flex items-center gap-1"
+                      >
+                        Abrir {dnsStatusResult.domain}
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                  <p className="text-[11px] leading-relaxed">{dnsStatusResult.message}</p>
+                </div>
+              )}
             </div>
           </div>
 
