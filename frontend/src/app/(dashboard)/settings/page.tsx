@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, DatabaseZap, Building2, CreditCard, Truck, ChevronRight, ChevronDown, FileText, Key, CheckCircle, BookOpen, Package, RefreshCw } from 'lucide-react';
+import { Settings2, Loader2, Save, Store, MonitorSmartphone, Receipt, Mail, Database, DatabaseZap, Building2, CreditCard, Truck, ChevronRight, ChevronDown, FileText, Key, CheckCircle, BookOpen, Package, RefreshCw, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -112,6 +112,7 @@ export default function SettingsPage() {
     pdv_allow_out_of_stock: false,
     pdv_max_installments: 12,
     pdv_min_installment_amount: 5.0,
+    pdv_supervisor_password: '',
     cover_image_base_url: '',
     cover_image_secondary_base_url: '',
     efi_sandbox: true,
@@ -218,6 +219,7 @@ export default function SettingsPage() {
         pdv_allow_out_of_stock: data.pdv_allow_out_of_stock || false,
         pdv_max_installments: data.pdv_max_installments ?? 12,
         pdv_min_installment_amount: data.pdv_min_installment_amount ?? 5.0,
+        pdv_supervisor_password: data.pdv_supervisor_password || '',
         cover_image_base_url: data.cover_image_base_url || '',
         cover_image_secondary_base_url: data.cover_image_secondary_base_url || '',
         efi_sandbox: data.efi_sandbox ?? true,
@@ -1447,6 +1449,43 @@ export default function SettingsPage() {
                             className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
                           />
                         </div>
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 space-y-4 pt-3 mt-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Senha do Supervisor (Autorização no PDV)
+                          </h3>
+                          {settings.pdv_supervisor_password && settings.pdv_supervisor_password.trim() !== '' ? (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                              Configurada
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                              Não definida
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xl">
+                          Defina uma senha exclusiva do supervisor (diferente da senha de acesso ao portal) para autorizar ações restritas no PDV, como <strong>reabrir uma sessão/evento fechado</strong>.
+                        </p>
+                      </div>
+
+                      <div className="max-w-md pt-1">
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                          Senha do Supervisor
+                        </label>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          placeholder="Digite a senha do supervisor do PDV..."
+                          value={settings.pdv_supervisor_password || ''}
+                          onChange={e => setSettings({ ...settings, pdv_supervisor_password: e.target.value })}
+                          className="w-full px-3 py-2 text-xs font-medium rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
                       </div>
                     </div>
                   </div>

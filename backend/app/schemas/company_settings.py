@@ -39,6 +39,7 @@ class CompanySettingsBase(BaseModel):
     pdv_allow_out_of_stock: Optional[bool] = False
     pdv_max_installments: Optional[int] = 12
     pdv_min_installment_amount: Optional[float] = 5.00
+    pdv_supervisor_password: Optional[str] = None
     pdv_desktop_license_enabled: Optional[bool] = False
     pdv_desktop_expires_at: Optional[datetime] = None
     pdv_desktop_license_key: Optional[str] = None

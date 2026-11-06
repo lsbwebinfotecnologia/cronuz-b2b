@@ -61,6 +61,7 @@ class CompanySettings(Base):
     pdv_allow_out_of_stock = Column(Boolean, default=False, nullable=False)
     pdv_max_installments = Column(Integer, default=12, nullable=False)
     pdv_min_installment_amount = Column(Numeric(10, 2), default=5.00, nullable=False)
+    pdv_supervisor_password = Column(String(100), nullable=True)
     pdv_desktop_license_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
     pdv_desktop_expires_at = Column(DateTime(timezone=True), nullable=True)
     pdv_desktop_license_key = Column(String(500), nullable=True)

@@ -10,7 +10,11 @@ import {
   Loader2, 
   Lock, 
   Sparkles,
-  DollarSign
+  DollarSign,
+  RotateCcw,
+  KeyRound,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -72,6 +76,10 @@ export default function POSSessionModal({
   const [newValidateStock, setNewValidateStock] = useState<boolean>(true);
   const [newInitialCash, setNewInitialCash] = useState<string>('0.00');
   const [creating, setCreating] = useState(false);
+  const [reopeningSessionId, setReopeningSessionId] = useState<number | null>(null);
+  const [supervisorPassword, setSupervisorPassword] = useState('');
+  const [showSupervisorPass, setShowSupervisorPass] = useState(false);
+  const [reopening, setReopening] = useState(false);
 
   const userStr = getUser();
   const currentUser = typeof userStr === 'string' ? JSON.parse(userStr) : userStr;
@@ -198,6 +206,44 @@ export default function POSSessionModal({
       }
     } catch (e) {
       toast.error('Erro ao fechar sessão');
+    }
+  }
+
+  async function handleReopenSession(sessionId: number) {
+    if (!supervisorPassword.trim()) {
+      toast.error('Informe a senha do supervisor para reabrir a sessão.');
+      return;
+    }
+    try {
+      setReopening(true);
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions/${sessionId}/reopen`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ supervisor_password: supervisorPassword.trim() }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Não foi possível reabrir a sessão.');
+      }
+      const reopened = await res.json();
+      toast.success(`Sessão "${reopened.title}" reaberta e ativada!`);
+      setReopeningSessionId(null);
+      setSupervisorPassword('');
+      setShowSupervisorPass(false);
+      onSelectSession(reopened);
+      fetchSessions();
+      onClose();
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao reabrir a sessão');
+    } finally {
+      setReopening(false);
     }
   }
 
@@ -516,85 +562,162 @@ export default function POSSessionModal({
                 return (
                   <div
                     key={s.id}
-                    className={`p-3.5 rounded-xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    className={`p-3.5 rounded-xl border transition flex flex-col gap-3 ${
                       isActive
                         ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20'
                         : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
                     }`}
                   >
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-bold text-sm text-slate-900 dark:text-white">
-                          {s.title}
-                        </span>
-                        <span
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            isClosed
-                              ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-                              : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
-                          }`}
-                        >
-                          {isClosed ? 'Fechada' : 'Aberta'}
-                        </span>
-                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                          {sourceLabel}
-                        </span>
-                        {s.branch_name && (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                            📍 {s.branch_name}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-sm text-slate-900 dark:text-white">
+                            {s.title}
                           </span>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              isClosed
+                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                                : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
+                            }`}
+                          >
+                            {isClosed ? 'Fechada' : 'Aberta'}
+                          </span>
+                          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                            {sourceLabel}
+                          </span>
+                          {s.branch_name && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                              📍 {s.branch_name}
+                            </span>
+                          )}
+                          {pCount > 0 && s.catalog_source !== 'HORUS_REALTIME' && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                              {pCount} produtos
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleValidateStock(s)}
+                            disabled={isClosed}
+                            title={isClosed ? 'Sessão encerrada' : 'Clique para alternar entre Validar Estoque e Venda Livre'}
+                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border transition ${
+                              s.validate_stock !== false
+                                ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
+                                : 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 hover:bg-amber-100'
+                            } ${!isClosed ? 'cursor-pointer' : 'cursor-default'}`}
+                          >
+                            {s.validate_stock !== false ? '🛡️ Valida Estoque (Alterar)' : '⚡ Venda Livre (Alterar)'}
+                          </button>
+                          {Number(s.initial_cash_amount || 0) > 0 && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                              💵 R$ {Number(s.initial_cash_amount).toFixed(2)}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                          {s.code} • {s.total_sales_count} vendas (R$ {Number(s.total_sales_amount || 0).toFixed(2)})
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                        {!isClosed && !isActive && (
+                          <button
+                            onClick={() => {
+                              onSelectSession(s);
+                              onClose();
+                            }}
+                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-sm"
+                          >
+                            Ativar
+                          </button>
                         )}
-                        {pCount > 0 && s.catalog_source !== 'HORUS_REALTIME' && (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                            {pCount} produtos
-                          </span>
+                        {!isClosed && (
+                          <button
+                            onClick={() => handleCloseSession(s.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 transition"
+                            title="Fechar sessão"
+                          >
+                            <Lock className="w-4 h-4" />
+                          </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => handleToggleValidateStock(s)}
-                          disabled={isClosed}
-                          title={isClosed ? 'Sessão encerrada' : 'Clique para alternar entre Validar Estoque e Venda Livre'}
-                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border transition ${
-                            s.validate_stock !== false
-                              ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
-                              : 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 hover:bg-amber-100'
-                          } ${!isClosed ? 'cursor-pointer' : 'cursor-default'}`}
-                        >
-                          {s.validate_stock !== false ? '🛡️ Valida Estoque (Alterar)' : '⚡ Venda Livre (Alterar)'}
-                        </button>
-                        {Number(s.initial_cash_amount || 0) > 0 && (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                            💵 R$ {Number(s.initial_cash_amount).toFixed(2)}
-                          </span>
+                        {isClosed && reopeningSessionId !== s.id && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReopeningSessionId(s.id);
+                              setSupervisorPassword('');
+                              setShowSupervisorPass(false);
+                            }}
+                            className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-indigo-300 dark:border-indigo-700 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5 transition"
+                            title="Reabrir esta sessão (exige Senha do Supervisor)"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            Reabrir
+                          </button>
                         )}
                       </div>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                        {s.code} • {s.total_sales_count} vendas (R$ {Number(s.total_sales_amount || 0).toFixed(2)})
-                      </p>
                     </div>
 
-                    <div className="flex items-center gap-2 self-end sm:self-center">
-                      {!isClosed && !isActive && (
-                        <button
-                          onClick={() => {
-                            onSelectSession(s);
-                            onClose();
-                          }}
-                          className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-sm"
-                        >
-                          Ativar
-                        </button>
-                      )}
-                      {!isClosed && (
-                        <button
-                          onClick={() => handleCloseSession(s.id)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 transition"
-                          title="Fechar sessão"
-                        >
-                          <Lock className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
+                    {isClosed && reopeningSessionId === s.id && (
+                      <div className="pt-2.5 border-t border-slate-200 dark:border-slate-800 bg-indigo-50/40 dark:bg-indigo-950/20 -mx-3.5 -mb-3.5 p-3.5 rounded-b-xl space-y-2">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                          <KeyRound className="w-3.5 h-3.5" />
+                          <span>Autorização do Supervisor para reabrir esta sessão</span>
+                        </div>
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                          <div className="relative flex-1">
+                            <input
+                              type={showSupervisorPass ? 'text' : 'password'}
+                              autoFocus
+                              placeholder="Digite a Senha do Supervisor..."
+                              value={supervisorPassword}
+                              onChange={(e) => setSupervisorPassword(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleReopenSession(s.id);
+                                } else if (e.key === 'Escape') {
+                                  setReopeningSessionId(null);
+                                  setSupervisorPassword('');
+                                }
+                              }}
+                              className="w-full pl-3 pr-9 py-1.5 text-xs font-medium rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowSupervisorPass((prev) => !prev)}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                              tabIndex={-1}
+                            >
+                              {showSupervisorPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-2 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReopeningSessionId(null);
+                                setSupervisorPassword('');
+                              }}
+                              disabled={reopening}
+                              className="px-3 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleReopenSession(s.id)}
+                              disabled={reopening}
+                              className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 transition disabled:opacity-50"
+                            >
+                              {reopening && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                              Confirmar Reabertura
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })

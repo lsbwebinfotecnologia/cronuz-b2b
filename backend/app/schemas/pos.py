@@ -22,6 +22,10 @@ class POSSessionCloseRequest(BaseModel):
     closing_notes: Optional[str] = None
 
 
+class POSSessionReopenRequest(BaseModel):
+    supervisor_password: str
+
+
 class POSSessionResponse(BaseModel):
     id: int
     code: str

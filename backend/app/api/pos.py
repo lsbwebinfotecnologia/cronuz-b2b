@@ -42,6 +42,7 @@ from app.models.pos import (
 from app.schemas.pos import (
     POSSessionCreate,
     POSSessionCloseRequest,
+    POSSessionReopenRequest,
     POSSessionResponse,
     POSSessionProductOut,
     POSSessionProductsListResponse,
@@ -200,6 +201,9 @@ def get_pos_config(
     allow_out_of_stock = bool(getattr(settings, "pdv_allow_out_of_stock", False)) if settings else False
     max_installments = int(getattr(settings, "pdv_max_installments", 12) or 12) if settings else 12
     min_installment_amount = float(getattr(settings, "pdv_min_installment_amount", 5.0) or 5.0) if settings else 5.0
+    has_supervisor_password = bool(
+        settings and getattr(settings, "pdv_supervisor_password", None) and str(settings.pdv_supervisor_password).strip()
+    )
 
     return {
         "company_id": company_id,
@@ -209,6 +213,7 @@ def get_pos_config(
         "validate_stock": not allow_out_of_stock,
         "pdv_max_installments": max_installments,
         "pdv_min_installment_amount": min_installment_amount,
+        "has_supervisor_password": has_supervisor_password,
         "horus_legacy_pagination": bool(getattr(settings, "horus_legacy_pagination", False)) if settings else False,
         "pdv_desktop_license_enabled": bool(getattr(settings, "pdv_desktop_license_enabled", False)) if settings else False,
         "pdv_desktop_expires_at": settings.pdv_desktop_expires_at.isoformat() if (settings and getattr(settings, "pdv_desktop_expires_at", None)) else None,
@@ -458,6 +463,47 @@ def close_pos_session(
     session.closed_by_user_id = current_user.id
     session.status = POSSessionStatus.CLOSED.value
     session.closed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@router.put("/sessions/{session_id}/reopen", response_model=POSSessionResponse)
+def reopen_pos_session(
+    company_id: int,
+    session_id: int,
+    payload: POSSessionReopenRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """Reabre uma sessão de PDV fechada mediante validação da Senha do Supervisor configurada pela empresa."""
+    _assert_pos_access(current_user, company_id, db)
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    configured_password = (getattr(settings, "pdv_supervisor_password", None) or "").strip() if settings else ""
+    if not configured_password:
+        raise HTTPException(
+            status_code=400,
+            detail="A Senha do Supervisor ainda não foi configurada. Acesse Configurações → Frente de Caixa (PDV) para defini-la.",
+        )
+
+    provided_password = (payload.supervisor_password or "").strip()
+    if provided_password != configured_password:
+        raise HTTPException(
+            status_code=403,
+            detail="Senha do supervisor incorreta. A reabertura da sessão não foi autorizada.",
+        )
+
+    session = db.query(POSSession).filter(
+        POSSession.id == session_id,
+        POSSession.company_id == company_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+
+    session.status = POSSessionStatus.OPEN.value
+    session.closed_at = None
+    session.closed_by_user_id = None
     db.commit()
     db.refresh(session)
     return session
