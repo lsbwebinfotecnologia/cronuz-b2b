@@ -6391,6 +6391,13 @@ def _sync_order_with_vindi_tx(
     tx_id = tx_info.get("transaction_id")
     token_tx = tx_info.get("token_transaction") or meta.get("vindi_token_transaction")
 
+    # Se o pedido já foi confirmado como PAGO e a consulta por token temporário (t...) retornou status_id=0, preserva o status aprovado
+    already_paid = _normalize_b2c_order_status(order.status) in ("PAID", "SEPARATION", "FINALIZED", "DELIVERED")
+    if already_paid and status_id == 0 and not tx_info.get("paid"):
+        status_id = 6
+        status_name = str(meta.get("vindi_status_name") or "Aprovada")
+        tx_info = {**tx_info, "status_id": 6, "status_name": status_name, "paid": True}
+
     if token_tx:
         meta["vindi_token_transaction"] = str(token_tx)
         if not str(token_tx).startswith("t") or not order.external_id:
