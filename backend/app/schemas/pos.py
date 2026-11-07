@@ -1,4 +1,4 @@
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Any
 from datetime import datetime
 import json
@@ -24,6 +24,11 @@ class POSSessionCloseRequest(BaseModel):
 
 class POSSessionReopenRequest(BaseModel):
     supervisor_password: str
+
+
+class POSSaleCancelRequest(BaseModel):
+    supervisor_password: str
+    reason: Optional[str] = None
 
 
 class POSSessionResponse(BaseModel):
@@ -148,6 +153,7 @@ class POSSaleCreate(BaseModel):
     items_count: int = 1
     sold_at: datetime
     origin: str = "pdv_offline"
+    sale_status: Optional[str] = "COMPLETED"
     notes: Optional[str] = None
     items: List[POSSaleItemSchema]
 
@@ -157,6 +163,11 @@ class POSSaleCreate(BaseModel):
         if not isinstance(data, dict):
             return data
         d = dict(data)
+        raw_st = str(d.get("sale_status") or d.get("status") or "").strip().upper()
+        if raw_st in ("CANCELLED", "CANCELED", "CANCELADA"):
+            d["sale_status"] = "CANCELLED"
+        else:
+            d["sale_status"] = "COMPLETED"
         if not d.get("sold_at"):
             d["sold_at"] = d.get("created_at") or datetime.utcnow().isoformat()
         if d.get("discount") is None and d.get("discount_amount") is not None:
@@ -204,4 +215,35 @@ class POSSyncBatchResponse(BaseModel):
     failed_count: int
     synced_uuids: List[str]
     errors: List[dict]
+
+
+class POSHorusSyncSendRequest(BaseModel):
+    sale_ids: List[int] = Field(..., description="IDs das vendas do PDV selecionadas para sintetizar e enviar ao Horus")
+    session_id: Optional[int] = None
+    cod_cli: str = Field(..., description="Código do Cliente no Horus ERP (COD_CLI)")
+    cod_transp: Optional[str] = Field(None, description="Código da Transportadora no Horus (opcional)")
+    cod_param_fiscal: Optional[str] = Field(None, description="Código do Parâmetro Fiscal / CFOP no Horus")
+    tipo_pedido: Optional[str] = Field("L", description="Tipo do pedido no Horus (L = Logística/B2C, V = Venda)")
+    cod_metodo: Optional[str] = Field(None, description="Código do Método de Pagamento/Cobrança no Horus (opcional)")
+    cod_tpo_end: Optional[str] = Field(None, description="Código do Tipo de Endereço do Cliente no Horus (opcional)")
+    frete_emit_dest: Optional[str] = Field(None, description="Frete Emitente/Destinatário (E ou D, opcional)")
+    status_envio_erp: Optional[str] = Field(None, description="Status para avançar o pedido após criação (ex: LEX, LAP)")
+    max_order_amount: float = Field(10000.0, description="Valor máximo por pedido enviado ao Horus (padrão R$ 10.000,00)")
+    obs_extra: Optional[str] = Field(None, description="Observação adicional para o pedido no Horus")
+
+
+class POSHorusSyncDefaultsUpdateRequest(BaseModel):
+    session_id: Optional[int] = Field(None, description="Se informado, salva parâmetros específicos para esta sessão; caso contrário, salva como padrão geral do seller")
+    cod_cli: Optional[str] = Field(None, description="Código do Cliente padrão no Horus ERP (COD_CLI)")
+    client_name: Optional[str] = Field(None, description="Nome do cliente validado no Horus")
+    cod_transp: Optional[str] = Field(None, description="Código da Transportadora padrão no Horus (COD_TRANSP)")
+    cod_param_fiscal: Optional[str] = Field("1", description="Código do Parâmetro Fiscal / CFOP no Horus")
+    tipo_pedido: Optional[str] = Field("L", description="Tipo do pedido no Horus (L ou V)")
+    cod_metodo: Optional[str] = Field(None, description="Código do Método de Pagamento/Cobrança no Horus")
+    cod_tpo_end: Optional[str] = Field("1", description="Código do Tipo de Endereço do Cliente no Horus")
+    frete_emit_dest: Optional[str] = Field("E", description="Frete Emitente/Destinatário (E ou D)")
+    status_envio_erp: Optional[str] = Field(None, description="Status para avançar o pedido após criação (ex: LEX, LAP)")
+    obs_extra: Optional[str] = Field(None, description="Observação adicional padrão para o pedido no Horus")
+
+
 

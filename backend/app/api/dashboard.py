@@ -98,6 +98,21 @@ def get_dashboard_metrics(
     horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
     company_logo = getattr(company, "logo", None) if company else None
 
+    pdv_horus_sync_enabled = True
+    if settings and getattr(settings, "b2c_showcases_config", None):
+        import json as _json
+        _raw_cfg = settings.b2c_showcases_config
+        if isinstance(_raw_cfg, str):
+            try:
+                _raw_cfg = _json.loads(_raw_cfg)
+            except Exception:
+                _raw_cfg = {}
+        if isinstance(_raw_cfg, dict):
+            _pdv_sync_cfg = _raw_cfg.get("pdv_horus_sync") or {}
+            if isinstance(_pdv_sync_cfg, dict) and "enabled" in _pdv_sync_cfg:
+                pdv_horus_sync_enabled = bool(_pdv_sync_cfg["enabled"])
+
+
     # Uses horus is derived from integration / module flag
     if current_user and current_user.type == "MASTER" and getattr(current_user, "tenant_id", None) == "horus":
         uses_horus = True
@@ -367,7 +382,10 @@ def get_dashboard_metrics(
         "module_marketing": module_marketing,
         "module_subscriptions": module_subscriptions,
         "module_pdv": module_pdv,
+        "pdv_horus_sync_enabled": bool(module_pdv and pdv_horus_sync_enabled),
+        "user_allowed_modules": getattr(current_user, "allowed_modules", None) if current_user else None,
         "module_agents": module_agents,
+
         "module_financial": module_financial,
         "module_services": module_services,
         "module_commercial": module_commercial,

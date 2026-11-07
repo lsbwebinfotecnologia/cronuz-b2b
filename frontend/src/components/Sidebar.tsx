@@ -50,7 +50,8 @@ import {
   UtensilsCrossed,
   QrCode,
   MapPin,
-  Wrench
+  Wrench,
+  Send
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -173,7 +174,7 @@ const sellerNavigation: NavItem[] = [
 ];
 
 const agentNavigation: NavItem[] = [
-  { name: 'Ponto de Venda (PDV)', href: '/pdv', icon: MonitorSmartphone },
+  { name: 'PDV', href: '/pdv', icon: MonitorSmartphone },
   { name: 'Empresas', href: '/customers', icon: Users },
   { name: 'Pedidos', href: '/orders', icon: ShoppingBag },
   { name: 'Propostas', href: '/proposals', icon: FileText },
@@ -197,7 +198,9 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduleMarketing, setModuleMarketing] = useState(false);
   const [moduleSubscriptions, setModuleSubscriptions] = useState(false);
   const [modulePdv, setModulePdv] = useState(false);
+  const [pdvHorusSyncEnabled, setPdvHorusSyncEnabled] = useState(true);
   const [moduleAgents, setModuleAgents] = useState(false);
+
   const [moduleFinancial, setModuleFinancial] = useState(false);
   const [moduleServices, setModuleServices] = useState(false);
   const [moduleCommercial, setModuleCommercial] = useState(false);
@@ -248,6 +251,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        if (pathname.startsWith('/cafeteria')) initialOpen['Cafeteria'] = true;
        if (pathname.startsWith('/product-search') || pathname.startsWith('/addressing')) initialOpen['Busca Preço'] = true;
        if (pathname.startsWith('/b2c-storefront') || pathname.startsWith('/products')) initialOpen['B2C'] = true;
+       if (pathname.startsWith('/pdv')) initialOpen['PDV'] = true;
        setOpenMenus(initialOpen);
        
        const fetchSettings = async () => {
@@ -266,7 +270,12 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuleMarketing(data.module_marketing || false);
                setModuleSubscriptions(data.module_subscriptions || false);
                setModulePdv(data.module_pdv || false);
+               setPdvHorusSyncEnabled(data.pdv_horus_sync_enabled ?? true);
+               if (data.user_allowed_modules !== undefined) {
+                 setUser((prev: any) => prev ? { ...prev, allowed_modules: data.user_allowed_modules } : prev);
+               }
                setModuleAgents(data.module_agents || false);
+
                setModuleFinancial(data.module_financial || false);
                setModuleServices(data.module_services || false);
                setModuleCommercial(data.module_commercial || false);
@@ -603,11 +612,23 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   if (modulePdv) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
-    filteredSellerNavigation.splice(targetIndex, 0, {
-      name: 'Ponto de Venda (PDV)',
-      href: '/pdv',
-      icon: MonitorSmartphone,
-    });
+    const hasRestricted = user?.type === 'SELLER' && Array.isArray(user?.allowed_modules) && user.allowed_modules.length > 0;
+    const pdvSubItems: { name: string; href: string; icon?: any }[] = [];
+    if (!hasRestricted || user?.allowed_modules?.includes('pdv')) {
+      pdvSubItems.push({ name: 'Frente de Caixa', href: '/pdv', icon: MonitorSmartphone });
+    }
+    if (pdvHorusSyncEnabled && (!hasRestricted || user?.allowed_modules?.includes('pdv_horus_sync'))) {
+      pdvSubItems.push({ name: 'Sincronizar com Horus', href: '/pdv/horus-sync', icon: Send });
+    }
+
+    if (pdvSubItems.length > 0) {
+      filteredSellerNavigation.splice(targetIndex, 0, {
+        name: 'PDV',
+        href: pdvSubItems[0].href,
+        icon: MonitorSmartphone,
+        subItems: pdvSubItems,
+      });
+    }
   }
 
   const dynamicMasterNavigation = masterNavigation.map(item => {
@@ -630,7 +651,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const dynamicNavigation = (user?.type === 'SELLER' && Array.isArray(userAllowedModules) && userAllowedModules.length > 0)
     ? baseNavigation.filter(nav => {
         if (nav.name === 'B2C' || nav.href.startsWith('/b2c-storefront')) return userAllowedModules.includes('b2c') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
-        if (nav.name === 'Ponto de Venda (PDV)' || nav.href === '/pdv') return userAllowedModules.includes('pdv');
+        if (nav.name === 'PDV' || nav.href.startsWith('/pdv')) return userAllowedModules.includes('pdv') || userAllowedModules.includes('pdv_horus_sync');
         if (nav.name === 'Busca Preço' || nav.href === '/product-search' || nav.name === 'Endereçamento' || nav.href === '/addressing') return userAllowedModules.includes('busca_preco') || userAllowedModules.includes('enderecamento');
         if (nav.name === 'Encomendas' || nav.href === '/encomendas') return userAllowedModules.includes('encomendas') || userAllowedModules.includes('orders');
         if (nav.name === 'Cafeteria' || nav.href.startsWith('/cafeteria')) return userAllowedModules.includes('cafeteria');

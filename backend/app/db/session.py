@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import logging
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
@@ -10,6 +11,9 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 os.environ["PGCLIENTENCODING"] = "UTF8"
+os.environ["TZ"] = "America/Sao_Paulo"
+if hasattr(time, "tzset"):
+    time.tzset()
 
 # [SEC] Nunca usa fallback com credencial hardcoded — usa .env obrigatoriamente em producao.
 # Em desenvolvimento local, garanta que DATABASE_URL está no .env antes de subir o servidor.
@@ -18,7 +22,7 @@ if not _DATABASE_URL:
     logger.critical("[session] DATABASE_URL nao esta definida no ambiente. Encerrando.")
     sys.exit(1)
 
-# [PERF] Pool configurado para producao — suporta multiplos workers Uvicorn.
+# [PERF & TZ] Pool configurado para producao e sessao PostgreSQL travada em America/Sao_Paulo (Horario de Brasilia).
 engine = create_engine(
     _DATABASE_URL,
     pool_size=20,           # conexoes mantidas no pool (padrao 5 era insuficiente)
@@ -26,6 +30,7 @@ engine = create_engine(
     pool_pre_ping=True,     # detecta conexoes mortas antes de usar (evita "connection reset")
     pool_recycle=1800,      # recicla a cada 30min (evita timeout do PG apos idle longo)
     echo=False,             # desabilitado em producao — ativar somente para debug SQL
+    connect_args={"options": "-c timezone=America/Sao_Paulo"},
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

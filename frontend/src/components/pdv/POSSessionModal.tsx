@@ -14,10 +14,13 @@ import {
   RotateCcw,
   KeyRound,
   Eye,
-  EyeOff
+  EyeOff,
+  Trash2,
+  Database
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
+import { CurrencyInput } from '@/components/CurrencyInput';
 
 export interface POSSessionData {
   id: number;
@@ -56,13 +59,15 @@ interface POSSessionModalProps {
   onClose: () => void;
   activeSession: POSSessionData | null;
   onSelectSession: (session: POSSessionData | null) => void;
+  localCatalogCount?: number;
 }
 
 export default function POSSessionModal({
   isOpen,
   onClose,
   activeSession,
-  onSelectSession
+  onSelectSession,
+  localCatalogCount = 0
 }: POSSessionModalProps) {
   const [sessions, setSessions] = useState<POSSessionData[]>([]);
   const [branches, setBranches] = useState<POSBranch[]>([]);
@@ -77,9 +82,12 @@ export default function POSSessionModal({
   const [newInitialCash, setNewInitialCash] = useState<string>('0.00');
   const [creating, setCreating] = useState(false);
   const [reopeningSessionId, setReopeningSessionId] = useState<number | null>(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
   const [supervisorPassword, setSupervisorPassword] = useState('');
   const [showSupervisorPass, setShowSupervisorPass] = useState(false);
   const [reopening, setReopening] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
 
   const userStr = getUser();
   const currentUser = typeof userStr === 'string' ? JSON.parse(userStr) : userStr;
@@ -87,10 +95,10 @@ export default function POSSessionModal({
 
   useEffect(() => {
     if (isOpen && companyId) {
-      fetchSessions();
+      fetchSessions(showDeleted);
       fetchBranches();
     }
-  }, [isOpen, companyId]);
+  }, [isOpen, companyId, showDeleted]);
 
   async function fetchBranches() {
     try {
@@ -114,12 +122,13 @@ export default function POSSessionModal({
     }
   }
 
-  async function fetchSessions() {
+  async function fetchSessions(onlyDeleted = showDeleted) {
     try {
       setLoading(true);
       const token = getToken();
+      const query = onlyDeleted ? '?status=DELETED' : '';
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions`,
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions${query}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (res.ok) {
@@ -247,6 +256,44 @@ export default function POSSessionModal({
     }
   }
 
+  async function handleDeleteSession(sessionId: number) {
+    if (!supervisorPassword.trim()) {
+      toast.error('Informe a senha do supervisor para excluir a sessão.');
+      return;
+    }
+    try {
+      setDeleting(true);
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions/${sessionId}/delete`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ supervisor_password: supervisorPassword.trim() }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Não foi possível excluir a sessão.');
+      }
+      toast.success('Sessão movida para a lixeira com segurança! (Pode ser restaurada na aba Lixeira)');
+      if (activeSession?.id === sessionId) {
+        onSelectSession(null);
+      }
+      setDeletingSessionId(null);
+      setSupervisorPassword('');
+      setShowSupervisorPass(false);
+      fetchSessions(showDeleted);
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao excluir a sessão');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function handleToggleValidateStock(s: POSSessionData) {
     if (s.status === 'CLOSED') return;
     const nextVal = s.validate_stock === false ? true : false;
@@ -340,6 +387,10 @@ export default function POSSessionModal({
                       {activeSession.products_count ?? 0} produtos vinculados
                     </span>
                   )}
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                    <Database className="w-3 h-3" />
+                    {localCatalogCount} sincronizados offline no aparelho
+                  </span>
                   {activeSession.validate_stock !== false ? (
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                       🛡️ Valida Estoque
@@ -499,20 +550,13 @@ export default function POSSessionModal({
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
                   Fundo de Troco Inicial (Dinheiro em Gaveta)
                 </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
-                    R$
-                  </span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                    value={newInitialCash}
-                    onChange={(e) => setNewInitialCash(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
+                <CurrencyInput
+                  prefixStr="R$ "
+                  allowEmpty={false}
+                  value={parseFloat(newInitialCash.replace(',', '.')) || 0}
+                  onChangeValue={(val) => setNewInitialCash(val.toFixed(2))}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                />
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
                   Suprimento de dinheiro inserido no caixa na abertura para troco.
                 </p>
@@ -539,19 +583,41 @@ export default function POSSessionModal({
 
           {/* Sessions List */}
           <div className="space-y-2 pt-2">
-            <h4 className="text-xs font-bold uppercase text-slate-400">
-              Histórico de Sessões
-            </h4>
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-bold uppercase text-slate-400">
+                {showDeleted ? 'Lixeira — Sessões Excluídas (Preservadas)' : 'Histórico de Sessões'}
+              </h4>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleted((prev) => !prev);
+                  setReopeningSessionId(null);
+                  setDeletingSessionId(null);
+                  setSupervisorPassword('');
+                }}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 border transition ${
+                  showDeleted
+                    ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <Trash2 className="w-3 h-3" />
+                {showDeleted ? 'Voltar para Sessões Ativas' : 'Ver Excluídas (Lixeira)'}
+              </button>
+            </div>
             {loading ? (
               <div className="py-8 flex justify-center text-slate-400">
                 <Loader2 className="w-6 h-6 animate-spin" />
               </div>
             ) : sessions.length === 0 ? (
-              <p className="text-xs text-slate-400 text-center py-4">Nenhuma sessão registrada.</p>
+              <p className="text-xs text-slate-400 text-center py-4">
+                {showDeleted ? 'Nenhuma sessão excluída na lixeira.' : 'Nenhuma sessão registrada.'}
+              </p>
             ) : (
               sessions.map((s) => {
                 const isActive = activeSession?.id === s.id;
                 const isClosed = s.status === 'CLOSED';
+                const isDeleted = s.status === 'DELETED';
                 const pCount = s.products_count ?? 0;
 
                 const sourceLabel = 
@@ -565,7 +631,9 @@ export default function POSSessionModal({
                     className={`p-3.5 rounded-xl border transition flex flex-col gap-3 ${
                       isActive
                         ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20'
-                        : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                        : isDeleted
+                          ? 'border-rose-200 dark:border-rose-900/50 bg-rose-50/30 dark:bg-rose-950/10'
+                          : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
                     }`}
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -576,12 +644,14 @@ export default function POSSessionModal({
                           </span>
                           <span
                             className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                              isClosed
-                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-                                : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
+                              isDeleted
+                                ? 'bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300'
+                                : isClosed
+                                  ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                                  : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
                             }`}
                           >
-                            {isClosed ? 'Fechada' : 'Aberta'}
+                            {isDeleted ? 'Excluída (Lixeira)' : isClosed ? 'Fechada' : 'Aberta'}
                           </span>
                           <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                             {sourceLabel}
@@ -596,19 +666,21 @@ export default function POSSessionModal({
                               {pCount} produtos
                             </span>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => handleToggleValidateStock(s)}
-                            disabled={isClosed}
-                            title={isClosed ? 'Sessão encerrada' : 'Clique para alternar entre Validar Estoque e Venda Livre'}
-                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border transition ${
-                              s.validate_stock !== false
-                                ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
-                                : 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 hover:bg-amber-100'
-                            } ${!isClosed ? 'cursor-pointer' : 'cursor-default'}`}
-                          >
-                            {s.validate_stock !== false ? '🛡️ Valida Estoque (Alterar)' : '⚡ Venda Livre (Alterar)'}
-                          </button>
+                          {!isDeleted && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleValidateStock(s)}
+                              disabled={isClosed}
+                              title={isClosed ? 'Sessão encerrada' : 'Clique para alternar entre Validar Estoque e Venda Livre'}
+                              className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border transition ${
+                                s.validate_stock !== false
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
+                                  : 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 hover:bg-amber-100'
+                              } ${!isClosed ? 'cursor-pointer' : 'cursor-default'}`}
+                            >
+                              {s.validate_stock !== false ? '🛡️ Valida Estoque (Alterar)' : '⚡ Venda Livre (Alterar)'}
+                            </button>
+                          )}
                           {Number(s.initial_cash_amount || 0) > 0 && (
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                               💵 R$ {Number(s.initial_cash_amount).toFixed(2)}
@@ -621,7 +693,7 @@ export default function POSSessionModal({
                       </div>
 
                       <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-                        {!isClosed && !isActive && (
+                        {!isClosed && !isDeleted && !isActive && (
                           <button
                             onClick={() => {
                               onSelectSession(s);
@@ -632,38 +704,54 @@ export default function POSSessionModal({
                             Ativar
                           </button>
                         )}
-                        {!isClosed && (
+                        {!isClosed && !isDeleted && (
                           <button
                             onClick={() => handleCloseSession(s.id)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 transition"
+                            className="p-1.5 text-slate-400 hover:text-amber-600 transition"
                             title="Fechar sessão"
                           >
                             <Lock className="w-4 h-4" />
                           </button>
                         )}
-                        {isClosed && reopeningSessionId !== s.id && (
+                        {(isClosed || isDeleted) && reopeningSessionId !== s.id && (
                           <button
                             type="button"
                             onClick={() => {
+                              setDeletingSessionId(null);
                               setReopeningSessionId(s.id);
                               setSupervisorPassword('');
                               setShowSupervisorPass(false);
                             }}
                             className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-indigo-300 dark:border-indigo-700 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5 transition"
-                            title="Reabrir esta sessão (exige Senha do Supervisor)"
+                            title={isDeleted ? 'Restaurar e reabrir esta sessão (exige Senha do Supervisor)' : 'Reabrir esta sessão (exige Senha do Supervisor)'}
                           >
                             <RotateCcw className="w-3.5 h-3.5" />
-                            Reabrir
+                            {isDeleted ? 'Restaurar' : 'Reabrir'}
+                          </button>
+                        )}
+                        {!isDeleted && deletingSessionId !== s.id && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReopeningSessionId(null);
+                              setDeletingSessionId(s.id);
+                              setSupervisorPassword('');
+                              setShowSupervisorPass(false);
+                            }}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
+                            title="Excluir sessão (mover para lixeira com Senha do Supervisor)"
+                          >
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         )}
                       </div>
                     </div>
 
-                    {isClosed && reopeningSessionId === s.id && (
+                    {(isClosed || isDeleted) && reopeningSessionId === s.id && (
                       <div className="pt-2.5 border-t border-slate-200 dark:border-slate-800 bg-indigo-50/40 dark:bg-indigo-950/20 -mx-3.5 -mb-3.5 p-3.5 rounded-b-xl space-y-2">
                         <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300">
                           <KeyRound className="w-3.5 h-3.5" />
-                          <span>Autorização do Supervisor para reabrir esta sessão</span>
+                          <span>Autorização do Supervisor para {isDeleted ? 'restaurar' : 'reabrir'} esta sessão</span>
                         </div>
                         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                           <div className="relative flex-1">
@@ -712,7 +800,67 @@ export default function POSSessionModal({
                               className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 transition disabled:opacity-50"
                             >
                               {reopening && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                              Confirmar Reabertura
+                              {isDeleted ? 'Confirmar Restauração' : 'Confirmar Reabertura'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {!isDeleted && deletingSessionId === s.id && (
+                      <div className="pt-2.5 border-t border-rose-200 dark:border-rose-800 bg-rose-50/50 dark:bg-rose-950/30 -mx-3.5 -mb-3.5 p-3.5 rounded-b-xl space-y-2">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700 dark:text-rose-300">
+                          <KeyRound className="w-3.5 h-3.5" />
+                          <span>Autorização do Supervisor para excluir esta sessão (será movida para a Lixeira)</span>
+                        </div>
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                          <div className="relative flex-1">
+                            <input
+                              type={showSupervisorPass ? 'text' : 'password'}
+                              autoFocus
+                              placeholder="Digite a Senha do Supervisor..."
+                              value={supervisorPassword}
+                              onChange={(e) => setSupervisorPassword(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleDeleteSession(s.id);
+                                } else if (e.key === 'Escape') {
+                                  setDeletingSessionId(null);
+                                  setSupervisorPassword('');
+                                }
+                              }}
+                              className="w-full pl-3 pr-9 py-1.5 text-xs font-medium rounded-lg border border-rose-300 dark:border-rose-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-rose-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowSupervisorPass((prev) => !prev)}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                              tabIndex={-1}
+                            >
+                              {showSupervisorPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-2 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDeletingSessionId(null);
+                                setSupervisorPassword('');
+                              }}
+                              disabled={deleting}
+                              className="px-3 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSession(s.id)}
+                              disabled={deleting}
+                              className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 transition disabled:opacity-50"
+                            >
+                              {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                              Confirmar Exclusão
                             </button>
                           </div>
                         </div>

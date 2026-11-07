@@ -35,6 +35,7 @@ interface POSReportItemRow {
   unit_price: number;
   total_price: number;
   payment_method: string;
+  sale_status?: string;
   customer_name: string;
   customer_document: string;
 }
@@ -43,6 +44,8 @@ interface POSReportKPIs {
   total_sales: number;
   total_items: number;
   total_amount: number;
+  cancelled_sales?: number;
+  cancelled_amount?: number;
   by_payment: Record<string, { count: number; total: number }>;
 }
 
@@ -62,6 +65,7 @@ export default function POSSalesReportModal({
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<'COMPLETED' | 'CANCELLED' | 'ALL'>('COMPLETED');
   
   const [loadingData, setLoadingData] = useState(false);
   const [downloadingExcel, setDownloadingExcel] = useState(false);
@@ -87,12 +91,14 @@ export default function POSSalesReportModal({
       const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       setStartDate(today);
       setEndDate(today);
+      setStatusFilter('COMPLETED');
       // Carrega dados iniciais
       loadReportData({
         session_id: activeSession ? String(activeSession.id) : '',
         start_date: today,
         end_date: today,
         payment_method: '',
+        status: 'COMPLETED',
       });
     }
   }, [isOpen, companyId]);
@@ -119,11 +125,12 @@ export default function POSSalesReportModal({
     if (startDate) params.append('start_date', startDate);
     if (endDate) params.append('end_date', endDate);
     if (paymentMethod) params.append('payment_method', paymentMethod);
+    if (statusFilter) params.append('status', statusFilter);
     params.append('format', overrideFormat || 'json');
     return params.toString();
   }
 
-  async function loadReportData(customFilters?: { session_id?: string; start_date?: string; end_date?: string; payment_method?: string }) {
+  async function loadReportData(customFilters?: { session_id?: string; start_date?: string; end_date?: string; payment_method?: string; status?: string }) {
     try {
       setLoadingData(true);
       const token = getToken();
@@ -132,12 +139,14 @@ export default function POSSalesReportModal({
       const sDate = customFilters?.start_date !== undefined ? customFilters.start_date : startDate;
       const eDate = customFilters?.end_date !== undefined ? customFilters.end_date : endDate;
       const pMethod = customFilters?.payment_method !== undefined ? customFilters.payment_method : paymentMethod;
+      const stFilter = customFilters?.status !== undefined ? customFilters.status : statusFilter;
 
       const params = new URLSearchParams();
       if (sId) params.append('session_id', sId);
       if (sDate) params.append('start_date', sDate);
       if (eDate) params.append('end_date', eDate);
       if (pMethod) params.append('payment_method', pMethod);
+      if (stFilter) params.append('status', stFilter);
       params.append('format', 'json');
 
       const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/reports/sales?${params.toString()}`;
@@ -218,7 +227,7 @@ export default function POSSalesReportModal({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 self-end sm:self-center">
+          <div className="flex flex-wrap items-center gap-2 self-end sm:self-center">
             {/* Exportar Excel */}
             <button
               onClick={() => downloadReport('excel')}
@@ -252,7 +261,7 @@ export default function POSSalesReportModal({
         <div className="p-6 overflow-y-auto flex-1 space-y-5">
           
           {/* Barra de Filtros */}
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
             <div>
               <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
                 Sessão / Evento
@@ -293,6 +302,21 @@ export default function POSSalesReportModal({
                 onChange={(e) => setEndDate(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
               />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                Status das Vendas
+              </label>
+              <select
+                value={statusFilter}
+                onChange={(e: any) => setStatusFilter(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="COMPLETED">Vendas Concretas</option>
+                <option value="CANCELLED">Vendas Canceladas</option>
+                <option value="ALL">Todas (Concretas + Canceladas)</option>
+              </select>
             </div>
 
             <div className="flex gap-2">
@@ -361,6 +385,11 @@ export default function POSSalesReportModal({
                   <p className="text-xl font-black text-emerald-600 dark:text-emerald-400">
                     R$ {Number(kpis.total_amount || 0).toFixed(2)}
                   </p>
+                  {(kpis.cancelled_sales ?? 0) > 0 && (
+                    <span className="text-[10px] font-semibold text-rose-500 block">
+                      {kpis.cancelled_sales} cancelada(s) (R$ {Number(kpis.cancelled_amount || 0).toFixed(2)})
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -390,6 +419,7 @@ export default function POSSalesReportModal({
                     <tr>
                       <th className="px-3.5 py-3 text-center">Data/Hora</th>
                       <th className="px-3.5 py-3 text-center">Venda</th>
+                      <th className="px-3.5 py-3 text-center">Status</th>
                       <th className="px-3.5 py-3">Sessão</th>
                       <th className="px-3.5 py-3 text-center">ISBN / Cód.</th>
                       <th className="px-3.5 py-3">Título do Produto</th>
@@ -401,58 +431,72 @@ export default function POSSalesReportModal({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
-                    {rows.map((row) => (
-                      <tr key={row.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition">
-                        <td className="px-3.5 py-2.5 text-center text-[11px] text-slate-500">
-                          {row.sold_at}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-center font-bold text-slate-900 dark:text-white">
-                          {row.sale_number}
-                        </td>
-                        <td className="px-3.5 py-2.5">
-                          <span className="font-medium text-slate-800 dark:text-slate-200">
-                            {row.session_name}
-                          </span>
-                        </td>
-                        <td className="px-3.5 py-2.5 text-center font-mono text-xs text-slate-600 dark:text-slate-400">
-                          {row.barcode || '-'}
-                        </td>
-                        <td className="px-3.5 py-2.5 max-w-xs truncate" title={row.title}>
-                          <span className="font-semibold text-slate-900 dark:text-white">
-                            {row.title}
-                          </span>
-                          {row.publisher && (
-                            <span className="block text-[10px] text-slate-400">
-                              {row.publisher}
+                    {rows.map((row) => {
+                      const isRowCancelled = String(row.sale_status || '').toUpperCase() === 'CANCELLED';
+                      return (
+                        <tr key={row.id} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition ${isRowCancelled ? 'bg-rose-50/30 dark:bg-rose-950/10' : ''}`}>
+                          <td className="px-3.5 py-2.5 text-center text-[11px] text-slate-500">
+                            {row.sold_at}
+                          </td>
+                          <td className={`px-3.5 py-2.5 text-center font-bold ${isRowCancelled ? 'line-through text-slate-400' : 'text-slate-900 dark:text-white'}`}>
+                            {row.sale_number}
+                          </td>
+                          <td className="px-3.5 py-2.5 text-center">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                isRowCancelled
+                                  ? 'bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300'
+                                  : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
+                              }`}
+                            >
+                              {isRowCancelled ? 'Cancelada' : 'Concreta'}
                             </span>
-                          )}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-center font-bold">
-                          {row.quantity}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-right font-medium">
-                          R$ {row.unit_price.toFixed(2)}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-right font-bold text-emerald-600 dark:text-emerald-400">
-                          R$ {row.total_price.toFixed(2)}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-center">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                            {row.payment_method}
-                          </span>
-                        </td>
-                        <td className="px-3.5 py-2.5 text-[11px]">
-                          <span className="font-medium text-slate-900 dark:text-white">
-                            {row.customer_name}
-                          </span>
-                          {row.customer_document && (
-                            <span className="block text-[10px] text-slate-400">
-                              {row.customer_document}
+                          </td>
+                          <td className="px-3.5 py-2.5">
+                            <span className="font-medium text-slate-800 dark:text-slate-200">
+                              {row.session_name}
                             </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="px-3.5 py-2.5 text-center font-mono text-xs text-slate-600 dark:text-slate-400">
+                            {row.barcode || '-'}
+                          </td>
+                          <td className="px-3.5 py-2.5 max-w-xs truncate" title={row.title}>
+                            <span className="font-semibold text-slate-900 dark:text-white">
+                              {row.title}
+                            </span>
+                            {row.publisher && (
+                              <span className="block text-[10px] text-slate-400">
+                                {row.publisher}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3.5 py-2.5 text-center font-bold">
+                            {row.quantity}
+                          </td>
+                          <td className="px-3.5 py-2.5 text-right font-medium">
+                            R$ {row.unit_price.toFixed(2)}
+                          </td>
+                          <td className={`px-3.5 py-2.5 text-right font-bold ${isRowCancelled ? 'line-through text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                            R$ {row.total_price.toFixed(2)}
+                          </td>
+                          <td className="px-3.5 py-2.5 text-center">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                              {row.payment_method}
+                            </span>
+                          </td>
+                          <td className="px-3.5 py-2.5 text-[11px]">
+                            <span className="font-medium text-slate-900 dark:text-white">
+                              {row.customer_name}
+                            </span>
+                            {row.customer_document && (
+                              <span className="block text-[10px] text-slate-400">
+                                {row.customer_document}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

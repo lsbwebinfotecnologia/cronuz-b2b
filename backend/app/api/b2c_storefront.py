@@ -410,6 +410,9 @@ def _resolve_seller_company_id(current_user: User, company_id_param: Optional[in
 def _default_b2c_email_config() -> Dict[str, Any]:
     wp_msg = "Recebemos o seu pedido #{pedido} no valor de {valor}. Assim que o pagamento for confirmado, iniciaremos a separação dos seus produtos."
     paid_msg = "O pagamento do seu pedido #{pedido} ({valor}) foi aprovado com sucesso! Já estamos preparando o seu pedido para envio."
+    sep_msg = "Boas notícias! O seu pedido #{pedido} já está em separação em nosso estoque e em breve será expedido."
+    fin_msg = "O seu pedido #{pedido} foi finalizado/faturado e preparado para envio. Confira abaixo os dados de acompanhamento."
+    deliv_msg = "O seu pedido #{pedido} consta como entregue! Agradecemos a sua compra na {loja}."
     canc_msg = "Informamos que o seu pedido #{pedido} foi cancelado. Caso tenha qualquer dúvida, estamos à disposição em nossos canais de atendimento."
     return {
         "enabled": True,
@@ -421,6 +424,18 @@ def _default_b2c_email_config() -> Dict[str, Any]:
         "paid_subject": "Pagamento Aprovado! Pedido #{pedido} confirmado | {loja}",
         "paid_body": paid_msg,
         "paid_message": paid_msg,
+        "separation_enabled": True,
+        "separation_subject": "Seu pedido #{pedido} está em separação | {loja}",
+        "separation_body": sep_msg,
+        "separation_message": sep_msg,
+        "finalized_enabled": True,
+        "finalized_subject": "Pedido #{pedido} finalizado e pronto para envio | {loja}",
+        "finalized_body": fin_msg,
+        "finalized_message": fin_msg,
+        "delivered_enabled": True,
+        "delivered_subject": "Pedido #{pedido} entregue! | {loja}",
+        "delivered_body": deliv_msg,
+        "delivered_message": deliv_msg,
         "canceled_enabled": True,
         "canceled_subject": "Pedido #{pedido} cancelado | {loja}",
         "canceled_body": canc_msg,
@@ -438,8 +453,8 @@ def _get_b2c_email_config(settings: Optional[CompanySettings]) -> Dict[str, Any]
         else {}
     )
     merged = {**defaults, **saved}
-    # Sincroniza *_message e *_body para compatibilidade total
-    for prefix in ("waiting_payment", "paid", "canceled"):
+    # Sincroniza *_message e *_body para compatibilidade total em todos os 6 status oficiais
+    for prefix in ("waiting_payment", "paid", "separation", "finalized", "delivered", "canceled"):
         msg_val = saved.get(f"{prefix}_message") or saved.get(f"{prefix}_body") or defaults[f"{prefix}_body"]
         merged[f"{prefix}_message"] = msg_val
         merged[f"{prefix}_body"] = msg_val
@@ -516,13 +531,16 @@ def _send_b2c_order_email(
     force: bool = False,
     override_email: Optional[str] = None,
     sync_send: bool = False,
+    allow_resend: bool = False,
 ) -> bool:
     """
-    Dispara e-mail automático, simples e objetivo para o comprador B2C nos eventos:
+    Dispara e-mail automático, simples e objetivo para o comprador B2C nos 6 eventos:
     - WAITING_PAYMENT: Pedido realizado (aguardando pagamento)
     - PAID: Pagamento aprovado / Pedido pago
+    - SEPARATION: Pedido em separação
+    - FINALIZED: Pedido finalizado / faturado
+    - DELIVERED: Pedido entregue
     - CANCELLED / CANCELED: Pedido cancelado (pelo portal ou retorno de pagamento)
-    - SEPARATION / FINALIZED / DELIVERED: Atualização operacional, NF-e e rastreio
     """
     try:
         company = db.query(Company).filter(Company.id == order.company_id).first()
@@ -551,17 +569,22 @@ def _send_b2c_order_email(
             cust.email = to_email
 
         norm_st = _normalize_b2c_order_status(event_status or order.status)
-        if not force:
-            if norm_st == "WAITING_PAYMENT" and email_cfg.get("waiting_payment_enabled") is False:
-                return False
-            if norm_st == "PAID" and email_cfg.get("paid_enabled") is False:
-                return False
-            if norm_st in ("CANCELLED", "CANCELED") and email_cfg.get("canceled_enabled") is False:
-                return False
+        status_prefix_map = {
+            "WAITING_PAYMENT": "waiting_payment",
+            "PAID": "paid",
+            "SEPARATION": "separation",
+            "FINALIZED": "finalized",
+            "DELIVERED": "delivered",
+            "CANCELLED": "canceled",
+            "CANCELED": "canceled",
+        }
+        st_prefix = status_prefix_map.get(norm_st)
+        if not force and st_prefix and email_cfg.get(f"{st_prefix}_enabled") is False:
+            return False
 
         meta = _parse_order_meta(order)
         sent_list = meta.get("emails_sent") if isinstance(meta.get("emails_sent"), list) else []
-        if not force and norm_st in sent_list and norm_st in ("WAITING_PAYMENT", "PAID", "CANCELLED", "CANCELED"):
+        if not force and not allow_resend and norm_st in sent_list:
             return False
 
         smtp_cfg = _resolve_smtp_settings(db, order.company_id)
@@ -602,6 +625,18 @@ def _send_b2c_order_email(
             subject = _apply_vars(email_cfg.get("paid_subject") or "")
             intro_text = _apply_vars(email_cfg.get("paid_message") or email_cfg.get("paid_body") or "")
             badge_bg, badge_color, badge_label = "#d1fae5", "#047857", "✅ Pagamento Aprovado"
+        elif norm_st == "SEPARATION":
+            subject = _apply_vars(email_cfg.get("separation_subject") or f"Seu pedido #{order.id} está em separação | {store_name}")
+            intro_text = _apply_vars(email_cfg.get("separation_message") or email_cfg.get("separation_body") or "")
+            badge_bg, badge_color, badge_label = "#e0e7ff", "#4338ca", "📦 Pedido em Separação"
+        elif norm_st == "FINALIZED":
+            subject = _apply_vars(email_cfg.get("finalized_subject") or f"Pedido #{order.id} finalizado e pronto para envio | {store_name}")
+            intro_text = _apply_vars(email_cfg.get("finalized_message") or email_cfg.get("finalized_body") or "")
+            badge_bg, badge_color, badge_label = "#dbeafe", "#1d4ed8", "🚚 Pedido Finalizado • Pronto para Envio"
+        elif norm_st == "DELIVERED":
+            subject = _apply_vars(email_cfg.get("delivered_subject") or f"Pedido #{order.id} entregue! | {store_name}")
+            intro_text = _apply_vars(email_cfg.get("delivered_message") or email_cfg.get("delivered_body") or "")
+            badge_bg, badge_color, badge_label = "#dcfce7", "#15803d", "🎉 Pedido Entregue"
         elif norm_st in ("CANCELLED", "CANCELED"):
             subject = _apply_vars(email_cfg.get("canceled_subject") or "")
             intro_text = _apply_vars(email_cfg.get("canceled_message") or email_cfg.get("canceled_body") or "")
@@ -5018,10 +5053,12 @@ async def update_b2c_order(
     db.refresh(order)
     _b2c_cache_clear(cid)
 
-    # Dispara e-mail transacional automático (Pago, Cancelado, Em Separação, Finalizado, Entregue)
+    # Dispara e-mail transacional automático respeitando os status habilitados em Configurações -> E-mails
     email_sent = False
     if (status_changed or data.tracking_code) and data.notify_customer:
-        email_sent = _send_b2c_order_email(db, order, event_status=order.status, force=True)
+        email_sent = _send_b2c_order_email(
+            db, order, event_status=order.status, force=False, allow_resend=True
+        )
 
     # Se alterou para PAID e envio automático ao Horus estiver ativo, integra automaticamente
     horus_auto_result: Optional[Dict[str, Any]] = None
@@ -5920,8 +5957,14 @@ async def get_public_b2c_product_detail(
                     _b2c_cache_set(company_id, prod_cache_key, prod_payload, settings, label=f"Produto Vitrine {clean_code}")
                     return prod_payload
 
-    # Fallback Horus ERP if enabled
-    if settings and settings.horus_enabled:
+    # Fallback Horus ERP somente se a loja ainda não tiver nenhum produto sincronizado no banco local do Cronuz
+    local_active_count = (
+        db.query(func.count(Product.id))
+        .filter(Product.company_id == company_id, Product.status == "ACTIVE")
+        .scalar()
+        or 0
+    )
+    if local_active_count == 0 and settings and settings.horus_enabled:
         items = await _fetch_from_horus_storefront(
             db=db,
             company_id=company_id,

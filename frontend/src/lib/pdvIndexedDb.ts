@@ -49,6 +49,7 @@ export interface PDVPendingSaleRecord {
   items_count: number;
   sold_at: string; // ISO string
   status: 'pending' | 'synced';
+  sale_status?: 'COMPLETED' | 'CANCELLED';
   origin: string;
   notes?: string;
   items: PDVSaleItemRecord[];
@@ -266,10 +267,73 @@ export async function savePendingSale(sale: PDVPendingSaleRecord): Promise<void>
   return new Promise((resolve, reject) => {
     const tx = db.transaction('pdv_pending_sales', 'readwrite');
     const store = tx.objectStore('pdv_pending_sales');
-    store.put(sale);
+    store.put({
+      ...sale,
+      sale_status: sale.sale_status || 'COMPLETED',
+    });
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+}
+
+export async function adjustLocalCatalogStock(
+  items: { barcode: string; quantity: number }[],
+  direction: -1 | 1
+): Promise<void> {
+  if (!items || items.length === 0) return;
+  try {
+    const db = await openPdvDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('pdv_catalog', 'readwrite');
+      const store = tx.objectStore('pdv_catalog');
+      for (const it of items) {
+        const bar = String(it.barcode || '').trim();
+        if (!bar) continue;
+        const req = store.get(bar);
+        req.onsuccess = () => {
+          if (req.result) {
+            const cur = Number(req.result.stock ?? 0);
+            const nextSt = Math.max(0, Number((cur + direction * Number(it.quantity || 1)).toFixed(2)));
+            store.put({ ...req.result, stock: nextSt });
+          }
+        };
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Silencioso caso IndexedDB não esteja disponível
+  }
+}
+
+export async function markLocalSaleCancelled(
+  saleRecord: PDVPendingSaleRecord,
+  syncedOnServer: boolean,
+  reason?: string
+): Promise<void> {
+  try {
+    const db = await openPdvDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('pdv_pending_sales', 'readwrite');
+      const store = tx.objectStore('pdv_pending_sales');
+      const req = store.get(saleRecord.client_sale_uuid);
+      req.onsuccess = () => {
+        const base = req.result || saleRecord;
+        const cancelNote = reason ? `[CANCELADA: ${reason}]` : '[CANCELADA NO PDV]';
+        const mergedNotes = base.notes ? `${base.notes} | ${cancelNote}` : cancelNote;
+        store.put({
+          ...base,
+          sale_status: 'CANCELLED',
+          status: syncedOnServer ? 'synced' : 'pending',
+          notes: mergedNotes,
+        });
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Silencioso
+  }
 }
 
 export async function getPendingSales(status: 'pending' | 'synced' = 'pending'): Promise<PDVPendingSaleRecord[]> {

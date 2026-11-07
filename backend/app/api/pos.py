@@ -7,8 +7,20 @@ import tempfile
 import time
 import asyncio
 import logging
-from datetime import datetime
+import hashlib
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List
+
+BRT_TZ = timezone(timedelta(hours=-3))
+
+
+def _to_brt(dt: Optional[datetime]) -> Optional[datetime]:
+    """Converte qualquer datetime (UTC ou com offset) para o Horário Oficial de Brasília (UTC-3)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=BRT_TZ)
+    return dt.astimezone(BRT_TZ)
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status, Response
 from starlette.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -29,6 +41,7 @@ from app.models.company_settings import CompanySettings
 from app.models.product import Product
 from app.models.customer import Customer
 from app.models.seller_branch import SellerBranch
+from app.models.financial import FinancialCategory, FinancialTransaction, FinancialInstallment
 from app.integrators.horus_product_search import HorusProductSearch
 from app.models.pos import (
     POSSession,
@@ -43,13 +56,18 @@ from app.schemas.pos import (
     POSSessionCreate,
     POSSessionCloseRequest,
     POSSessionReopenRequest,
+    POSSaleCancelRequest,
     POSSessionResponse,
     POSSessionProductOut,
     POSSessionProductsListResponse,
     POSSaleCreate,
     POSSyncBatchRequest,
     POSSyncBatchResponse,
+    POSHorusSyncSendRequest,
+    POSHorusSyncDefaultsUpdateRequest,
 )
+from sqlalchemy.orm.attributes import flag_modified
+
 
 router = APIRouter(prefix="/companies/{company_id}/pos", tags=["pos-omnichannel"])
 logger = logging.getLogger("cronuz.pos")
@@ -204,6 +222,11 @@ def get_pos_config(
     has_supervisor_password = bool(
         settings and getattr(settings, "pdv_supervisor_password", None) and str(settings.pdv_supervisor_password).strip()
     )
+    supervisor_password_hash = (
+        hashlib.sha256(str(settings.pdv_supervisor_password).strip().encode("utf-8")).hexdigest()
+        if has_supervisor_password
+        else None
+    )
 
     return {
         "company_id": company_id,
@@ -214,6 +237,7 @@ def get_pos_config(
         "pdv_max_installments": max_installments,
         "pdv_min_installment_amount": min_installment_amount,
         "has_supervisor_password": has_supervisor_password,
+        "supervisor_password_hash": supervisor_password_hash,
         "horus_legacy_pagination": bool(getattr(settings, "horus_legacy_pagination", False)) if settings else False,
         "pdv_desktop_license_enabled": bool(getattr(settings, "pdv_desktop_license_enabled", False)) if settings else False,
         "pdv_desktop_expires_at": settings.pdv_desktop_expires_at.isoformat() if (settings and getattr(settings, "pdv_desktop_expires_at", None)) else None,
@@ -230,15 +254,18 @@ def get_pos_config(
 def list_pos_sessions(
     company_id: int,
     status_filter: Optional[str] = Query(None, alias="status"),
+    include_deleted: bool = Query(False, description="Incluir sessões excluídas (lixeira)"),
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
-    """Lista as sessões de PDV da empresa (abertas ou fechadas)."""
+    """Lista as sessões de PDV da empresa (abertas, fechadas ou excluídas na lixeira)."""
     _assert_pos_access(current_user, company_id, db)
 
     query = db.query(POSSession).filter(POSSession.company_id == company_id)
     if status_filter:
         query = query.filter(POSSession.status == status_filter.upper())
+    elif not include_deleted:
+        query = query.filter(POSSession.status != POSSessionStatus.DELETED.value)
 
     sessions = query.order_by(desc(POSSession.opened_at)).all()
     return sessions
@@ -504,6 +531,60 @@ def reopen_pos_session(
     session.status = POSSessionStatus.OPEN.value
     session.closed_at = None
     session.closed_by_user_id = None
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@router.put("/sessions/{session_id}/delete", response_model=POSSessionResponse)
+def delete_pos_session(
+    company_id: int,
+    session_id: int,
+    payload: POSSessionReopenRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Exclui logicamente (Soft Delete -> status DELETED) uma sessão de PDV mediante Senha do Supervisor.
+    As vendas ativas da sessão são estornadas (estoque devolvido e financeiro cancelado), mas o registro
+    da sessão permanece preservado na lixeira para auditoria ou eventual restauração.
+    """
+    _assert_pos_access(current_user, company_id, db)
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    configured_password = (getattr(settings, "pdv_supervisor_password", None) or "").strip() if settings else ""
+    if not configured_password:
+        raise HTTPException(
+            status_code=400,
+            detail="A Senha do Supervisor ainda não foi configurada. Acesse Configurações → Frente de Caixa (PDV) para defini-la.",
+        )
+
+    provided_password = (payload.supervisor_password or "").strip()
+    if provided_password != configured_password:
+        raise HTTPException(
+            status_code=403,
+            detail="Senha do supervisor incorreta. A exclusão da sessão não foi autorizada.",
+        )
+
+    session = db.query(POSSession).filter(
+        POSSession.id == session_id,
+        POSSession.company_id == company_id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada.")
+
+    # Estorna vendas ativas vinculadas à sessão caso existam
+    active_sales = db.query(POSSale).filter(
+        POSSale.session_id == session_id,
+        POSSale.company_id == company_id,
+        POSSale.status == "COMPLETED",
+    ).all()
+    for s in active_sales:
+        _revert_completed_pos_sale(db, s, reason="Sessão excluída pelo supervisor")
+
+    session.status = POSSessionStatus.DELETED.value
+    session.closed_at = datetime.utcnow()
+    session.closed_by_user_id = current_user.id
     db.commit()
     db.refresh(session)
     return session
@@ -1323,6 +1404,220 @@ async def get_pos_spreadsheet_chunk(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ROTINAS DE ESTOQUE, FINANCEIRO E CANCELAMENTO DE VENDA PDV
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _adjust_pos_sale_stock(db: Session, sale: POSSale, direction: int) -> None:
+    """
+    Ajusta o saldo dos produtos da venda:
+    - direction = -1: Baixa o estoque na efetivação da venda.
+    - direction = +1: Devolve (estorna) o estoque no cancelamento da venda.
+    """
+    for it in sale.items:
+        qty = max(0.0, float(it.quantity or 0.0))
+        if qty <= 0:
+            continue
+
+        bar_clean = str(it.barcode or "").strip()
+        sku_clean = str(it.sku or "").strip()
+        horus_clean = str(it.horus_item_code or "").strip()
+
+        # 1. Atualiza saldo no catálogo da sessão (POSSessionProduct), se houver sessão vinculada
+        if sale.session_id:
+            conds = []
+            if bar_clean and bar_clean != "SEM_BARRAS":
+                conds.append(POSSessionProduct.barcode == bar_clean)
+            if sku_clean:
+                conds.append(POSSessionProduct.sku == sku_clean)
+            if horus_clean:
+                conds.append(POSSessionProduct.horus_item_code == horus_clean)
+            if conds:
+                sess_prod = (
+                    db.query(POSSessionProduct)
+                    .filter(
+                        POSSessionProduct.session_id == sale.session_id,
+                        or_(*conds),
+                    )
+                    .first()
+                )
+                if sess_prod:
+                    updated_stock = float(sess_prod.stock or 0.0) + (direction * qty)
+                    sess_prod.stock = max(0.0, round(updated_stock, 2))
+
+        # 2. Atualiza saldo no cadastro geral de produtos da empresa (Product), se existir
+        prod = None
+        if it.product_id:
+            prod = (
+                db.query(Product)
+                .filter(Product.id == it.product_id, Product.company_id == sale.company_id)
+                .first()
+            )
+        if not prod and bar_clean and bar_clean != "SEM_BARRAS":
+            prod = (
+                db.query(Product)
+                .filter(
+                    Product.company_id == sale.company_id,
+                    or_(
+                        Product.ean_gtin == bar_clean,
+                        Product.barcode == bar_clean,
+                        Product.sku == bar_clean,
+                    ),
+                )
+                .first()
+            )
+        if not prod and sku_clean:
+            prod = (
+                db.query(Product)
+                .filter(Product.company_id == sale.company_id, Product.sku == sku_clean)
+                .first()
+            )
+        if prod:
+            updated_prod_stock = int(prod.stock_quantity or 0) + int(round(direction * qty))
+            prod.stock_quantity = max(0, updated_prod_stock)
+
+
+def _create_financial_for_pos_sale(db: Session, sale: POSSale) -> None:
+    """
+    Gera o lançamento financeiro (FinancialTransaction e FinancialInstallment)
+    correspondente a uma venda concluída no PDV.
+    """
+    total_val = round(float(sale.total_amount or 0.0), 2)
+    if total_val <= 0:
+        return
+
+    uuid_tag = f"[UUID:{sale.client_sale_uuid}]"
+    existing_tx = (
+        db.query(FinancialTransaction)
+        .filter(
+            FinancialTransaction.company_id == sale.company_id,
+            FinancialTransaction.description.ilike(f"%{uuid_tag}%"),
+        )
+        .first()
+    )
+    if existing_tx:
+        return
+
+    category = (
+        db.query(FinancialCategory)
+        .filter(
+            FinancialCategory.company_id == sale.company_id,
+            FinancialCategory.name.ilike("Venda%"),
+            FinancialCategory.type == "RECEIVABLE",
+        )
+        .first()
+    )
+    if not category:
+        category = FinancialCategory(
+            company_id=sale.company_id,
+            name="Venda de Produtos (PDV)",
+            type="RECEIVABLE",
+            is_system=True,
+            dre_group="1_Receita_Bruta",
+        )
+        db.add(category)
+        db.flush()
+
+    sold_dt = sale.sold_at or datetime.utcnow()
+    issue_dt = sold_dt.date() if hasattr(sold_dt, "date") else date.today()
+
+    _, _, _, inst_count = _parse_payment_breakdown(
+        sale.payment_method, sale.payment_details, total_val
+    )
+    num_inst = max(1, int(inst_count or 1)) if sale.payment_method == "CREDITO" else 1
+
+    fin_tx = FinancialTransaction(
+        company_id=sale.company_id,
+        customer_id=sale.customer_id,
+        category_id=category.id,
+        description=f"Venda PDV: {sale.sale_number} ({sale.payment_method}) {uuid_tag}",
+        type="RECEIVABLE",
+        transaction_status="CONFIRMADO",
+        total_amount=total_val,
+        issue_date=issue_dt,
+        first_due_date=issue_dt,
+        exclude_from_reports=False,
+    )
+    db.add(fin_tx)
+    db.flush()
+
+    amt_per_inst = round(total_val / num_inst, 2)
+    last_amt = round(total_val - (amt_per_inst * (num_inst - 1)), 2)
+
+    for i in range(num_inst):
+        due_dt = issue_dt if num_inst == 1 else (issue_dt + timedelta(days=30 * (i + 1)))
+        val = amt_per_inst if i < (num_inst - 1) else last_amt
+        inst = FinancialInstallment(
+            transaction_id=fin_tx.id,
+            number=i + 1,
+            due_date=due_dt,
+            amount=val,
+            status="PAID",
+            payment_date=sold_dt,
+            amount_paid=val,
+            exclude_from_reports=False,
+        )
+        db.add(inst)
+
+
+def _cancel_financial_for_pos_sale(db: Session, sale: POSSale) -> None:
+    """
+    Cancela/estorna o lançamento financeiro e as parcelas vinculadas à venda do PDV.
+    """
+    uuid_tag = f"[UUID:{sale.client_sale_uuid}]"
+    tx_list = (
+        db.query(FinancialTransaction)
+        .filter(
+            FinancialTransaction.company_id == sale.company_id,
+            or_(
+                FinancialTransaction.description.ilike(f"%{uuid_tag}%"),
+                FinancialTransaction.description.ilike(f"%Venda PDV: {sale.sale_number}%"),
+            ),
+        )
+        .all()
+    )
+    for tx in tx_list:
+        tx.transaction_status = "CANCELADO"
+        tx.exclude_from_reports = True
+        for inst in tx.installments:
+            inst.status = "CANCELLED"
+            inst.exclude_from_reports = True
+
+
+def _revert_completed_pos_sale(db: Session, sale: POSSale, reason: Optional[str] = None) -> bool:
+    """
+    Executa a reversão completa de uma venda de PDV:
+    1. Altera o status da venda para 'CANCELLED'.
+    2. Estorna os produtos para o estoque (POSSessionProduct e Product).
+    3. Subtrai a venda do totalizador da sessão (POSSession).
+    4. Cancela o lançamento financeiro vinculado (FinancialTransaction / FinancialInstallment).
+    """
+    if sale.status == "CANCELLED":
+        return False
+
+    sale.status = "CANCELLED"
+    cancel_stamp = datetime.utcnow().strftime("%d/%m/%Y %H:%M")
+    reason_str = f" — Motivo: {reason.strip()}" if (reason and reason.strip()) else ""
+    cancel_note = f"[CANCELADA EM {cancel_stamp}{reason_str}]"
+    sale.notes = f"{sale.notes} | {cancel_note}".strip(" |") if sale.notes else cancel_note
+
+    if sale.session_id:
+        sess = (
+            db.query(POSSession)
+            .filter(POSSession.id == sale.session_id, POSSession.company_id == sale.company_id)
+            .first()
+        )
+        if sess:
+            sess.total_sales_count = max(0, int(sess.total_sales_count or 1) - 1)
+            sess.total_sales_amount = max(
+                0.0, round(float(sess.total_sales_amount or 0.0) - float(sale.total_amount or 0.0), 2)
+            )
+
+    _adjust_pos_sale_stock(db, sale, direction=+1)
+    _cancel_financial_for_pos_sale(db, sale)
+    return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SINCRONIZAÇÃO EM LOTE DE VENDAS OFFLINE / ONLINE
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1336,8 +1631,9 @@ def sync_pos_sales(
     """
     Ingestão em lote de vendas realizadas no PDV (Offline ou Online).
     Garantia de IDEMPOTÊNCIA via 'client_sale_uuid'.
-    Se a venda já foi sincronizada anteriormente, não duplica.
-    Atualiza as estatísticas da sessão.
+    Se a venda já foi sincronizada anteriormente, não duplica (mas processa cancelamento
+    caso tenha sido cancelada offline posteriormente).
+    Baixa estoque, gera financeiro e atualiza as estatísticas da sessão.
     """
     _assert_pos_access(current_user, company_id, db)
 
@@ -1370,6 +1666,8 @@ def sync_pos_sales(
             continue
         seen_uuids_in_batch.add(uuid_key)
 
+        incoming_status = "CANCELLED" if str(getattr(s_in, "sale_status", "COMPLETED")).upper() == "CANCELLED" else "COMPLETED"
+
         # Verifica se já existe no banco (idempotência global)
         existing = db.query(POSSale).filter(
             POSSale.company_id == company_id,
@@ -1377,7 +1675,20 @@ def sync_pos_sales(
         ).first()
 
         if existing:
-            already_synced_count += 1
+            # Se a venda já existia como COMPLETED e foi cancelada offline, aplica a reversão completa!
+            if incoming_status == "CANCELLED" and existing.status != "CANCELLED":
+                try:
+                    _revert_completed_pos_sale(db, existing, reason="Cancelada no PDV (sincronização offline)")
+                    db.commit()
+                    success_count += 1
+                except Exception as cancel_err:
+                    db.rollback()
+                    logger.error("Falha ao sincronizar cancelamento da venda %s: %s", uuid_key, str(cancel_err))
+                    failed_count += 1
+                    errors.append({"uuid": uuid_key, "error": str(cancel_err)})
+                    continue
+            else:
+                already_synced_count += 1
             synced_uuids.append(uuid_key)
             continue
 
@@ -1439,9 +1750,10 @@ def sync_pos_sales(
                     db.flush()
                     target_customer_id = new_customer.id
 
+            target_sess_id = payload.session_id or s_in.session_id
             new_sale = POSSale(
                 company_id=company_id,
-                session_id=payload.session_id or s_in.session_id,
+                session_id=target_sess_id,
                 user_id=current_user.id,
                 client_sale_uuid=uuid_key,
                 sale_number=sale_num,
@@ -1457,7 +1769,7 @@ def sync_pos_sales(
                 sold_at=s_in.sold_at,
                 synced_at=datetime.utcnow(),
                 origin=s_in.origin or "pdv_offline",
-                status="COMPLETED",
+                status=incoming_status,
                 notes=s_in.notes,
             )
             db.add(new_sale)
@@ -1488,9 +1800,23 @@ def sync_pos_sales(
                 )
                 db.add(sale_item)
 
-            if session:
-                session.total_sales_count = (session.total_sales_count or 0) + 1
-                session.total_sales_amount = float(session.total_sales_amount or 0) + float(s_in.total_amount)
+            db.flush()
+            db.refresh(new_sale)
+
+            # Somente se a venda está CONCLUÍDA (COMPLETED): soma na sessão, baixa o estoque e gera o financeiro
+            if incoming_status == "COMPLETED":
+                target_sess_obj = session
+                if not target_sess_obj and target_sess_id:
+                    target_sess_obj = db.query(POSSession).filter(
+                        POSSession.id == target_sess_id,
+                        POSSession.company_id == company_id
+                    ).first()
+                if target_sess_obj:
+                    target_sess_obj.total_sales_count = (target_sess_obj.total_sales_count or 0) + 1
+                    target_sess_obj.total_sales_amount = float(target_sess_obj.total_sales_amount or 0) + float(s_in.total_amount)
+
+                _adjust_pos_sale_stock(db, new_sale, direction=-1)
+                _create_financial_for_pos_sale(db, new_sale)
 
             db.commit()
             success_count += 1
@@ -1515,6 +1841,77 @@ def sync_pos_sales(
     )
 
 
+@router.put("/sales/{sale_identifier}/cancel")
+def cancel_pos_sale(
+    company_id: int,
+    sale_identifier: str,
+    payload: POSSaleCancelRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Cancela uma venda do PDV mediante validação da Senha do Supervisor da empresa.
+    Reverte automaticamente:
+    - Status da venda para 'CANCELLED'
+    - Estoque dos itens (na sessão POSSessionProduct e no cadastro geral Product)
+    - Totais da sessão de caixa (POSSession)
+    - Lançamento financeiro vinculado (FinancialTransaction e FinancialInstallment)
+    """
+    _assert_pos_access(current_user, company_id, db)
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    configured_password = (getattr(settings, "pdv_supervisor_password", None) or "").strip() if settings else ""
+    if not configured_password:
+        raise HTTPException(
+            status_code=400,
+            detail="A Senha do Supervisor ainda não foi configurada. Acesse Configurações → Frente de Caixa (PDV) para defini-la.",
+        )
+
+    provided_password = (payload.supervisor_password or "").strip()
+    if provided_password != configured_password:
+        raise HTTPException(
+            status_code=403,
+            detail="Senha do supervisor incorreta. O cancelamento da venda não foi autorizado.",
+        )
+
+    clean_id = sale_identifier.strip()
+    conds = [
+        POSSale.client_sale_uuid == clean_id,
+        POSSale.sale_number == clean_id,
+    ]
+    if clean_id.isdigit():
+        conds.append(POSSale.id == int(clean_id))
+
+    sale = (
+        db.query(POSSale)
+        .filter(
+            POSSale.company_id == company_id,
+            or_(*conds),
+        )
+        .first()
+    )
+    if not sale:
+        raise HTTPException(
+            status_code=404,
+            detail="Venda não localizada no servidor. Caso tenha sido realizada offline, sincronize as vendas antes ou cancele localmente.",
+        )
+
+    was_reverted = _revert_completed_pos_sale(db, sale, reason=payload.reason)
+    db.commit()
+    db.refresh(sale)
+
+    return {
+        "status": "ok",
+        "already_cancelled": not was_reverted,
+        "sale_id": sale.id,
+        "client_sale_uuid": sale.client_sale_uuid,
+        "sale_number": sale.sale_number,
+        "sale_status": sale.status,
+        "notes": sale.notes,
+        "message": f"Venda {sale.sale_number} cancelada com sucesso. Estoque e financeiro estornados.",
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LISTAGEM & ACOMPANHAMENTO EM TEMPO REAL DAS VENDAS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1523,10 +1920,13 @@ def sync_pos_sales(
 def list_pos_sales(
     company_id: int,
     session_id: Optional[int] = Query(None),
+    start_date: Optional[str] = Query(None, description="Data inicial YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="Data final YYYY-MM-DD"),
     payment_method: Optional[str] = Query(None),
+    status_filter: Optional[str] = Query(None, alias="status"),
     search: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, le=1000),
     db: Session = Depends(get_db),
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
@@ -1536,12 +1936,46 @@ def list_pos_sales(
     """
     _assert_pos_access(current_user, company_id, db)
 
+    dt_start = None
+    if isinstance(start_date, str) and start_date.strip():
+        try:
+            dt_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+            if dt_start.tzinfo is None:
+                dt_start = dt_start.replace(tzinfo=BRT_TZ)
+        except Exception:
+            try:
+                dt_start = datetime.strptime(start_date[:10], "%Y-%m-%d").replace(tzinfo=BRT_TZ)
+            except Exception:
+                pass
+
+    dt_end = None
+    if isinstance(end_date, str) and end_date.strip():
+        try:
+            dt_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+            if len(end_date.strip()) == 10:
+                dt_end = dt_end.replace(hour=23, minute=59, second=59, microsecond=999999)
+            if dt_end.tzinfo is None:
+                dt_end = dt_end.replace(tzinfo=BRT_TZ)
+        except Exception:
+            try:
+                dt_end = datetime.strptime(end_date[:10], "%Y-%m-%d").replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=BRT_TZ
+                )
+            except Exception:
+                pass
+
     query = db.query(POSSale).filter(POSSale.company_id == company_id)
 
     if session_id:
         query = query.filter(POSSale.session_id == session_id)
+    if dt_start:
+        query = query.filter(POSSale.sold_at >= dt_start)
+    if dt_end:
+        query = query.filter(POSSale.sold_at <= dt_end)
     if payment_method:
         query = query.filter(POSSale.payment_method == payment_method.upper())
+    if status_filter and status_filter.upper() not in ("ALL", "TODAS", ""):
+        query = query.filter(POSSale.status == status_filter.upper())
     if search:
         search_like = f"%{search}%"
         query = query.filter(
@@ -1552,34 +1986,44 @@ def list_pos_sales(
             )
         )
 
-    # Métricas agregadas
-    total_count = query.count()
-    total_amount = db.query(func.sum(POSSale.total_amount)).filter(
-        POSSale.company_id == company_id,
-        (POSSale.session_id == session_id) if session_id else True,
-        POSSale.status == "COMPLETED"
+    # Métricas agregadas (separando concluídas e canceladas)
+    base_kpi_filter = [POSSale.company_id == company_id]
+    if session_id:
+        base_kpi_filter.append(POSSale.session_id == session_id)
+    if dt_start:
+        base_kpi_filter.append(POSSale.sold_at >= dt_start)
+    if dt_end:
+        base_kpi_filter.append(POSSale.sold_at <= dt_end)
+
+    completed_count = db.query(func.count(POSSale.id)).filter(
+        *base_kpi_filter, POSSale.status == "COMPLETED"
+    ).scalar() or 0
+    completed_amount = db.query(func.sum(POSSale.total_amount)).filter(
+        *base_kpi_filter, POSSale.status == "COMPLETED"
     ).scalar() or 0.0
 
-    # Agrupamento por método de pagamento
-    pay_summary = (
-        db.query(
-            POSSale.payment_method,
-            func.count(POSSale.id).label("count"),
-            func.sum(POSSale.total_amount).label("total")
-        )
-        .filter(
-            POSSale.company_id == company_id,
-            (POSSale.session_id == session_id) if session_id else True,
-            POSSale.status == "COMPLETED"
-        )
-        .group_by(POSSale.payment_method)
-        .all()
-    )
+    cancelled_count = db.query(func.count(POSSale.id)).filter(
+        *base_kpi_filter, POSSale.status == "CANCELLED"
+    ).scalar() or 0
+    cancelled_amount = db.query(func.sum(POSSale.total_amount)).filter(
+        *base_kpi_filter, POSSale.status == "CANCELLED"
+    ).scalar() or 0.0
 
-    by_payment = {
-        r.payment_method: {"count": r.count, "total": float(r.total or 0)}
-        for r in pay_summary
-    }
+    # Agrupamento por método de pagamento (desmembrando vendas MISTAS e considerando apenas COMPLETED)
+    completed_sales_for_pay = db.query(POSSale).filter(
+        *base_kpi_filter, POSSale.status == "COMPLETED"
+    ).all()
+    by_payment: dict = {}
+    for cs in completed_sales_for_pay:
+        b_map, _, _, _ = _parse_payment_breakdown(
+            cs.payment_method, cs.payment_details, float(cs.total_amount or 0.0)
+        )
+        for m_key, m_val in b_map.items():
+            if m_val > 0:
+                if m_key not in by_payment:
+                    by_payment[m_key] = {"count": 0, "total": 0.0}
+                by_payment[m_key]["count"] += 1
+                by_payment[m_key]["total"] = round(by_payment[m_key]["total"] + m_val, 2)
 
     # Registros paginados
     sales = query.order_by(desc(POSSale.sold_at), POSSale.id.desc()).offset(skip).limit(limit).all()
@@ -1603,7 +2047,8 @@ def list_pos_sales(
             }
             for it in s.items
         ]
-        sold_iso = s.sold_at.isoformat() if s.sold_at else None
+        sold_brt = _to_brt(s.sold_at)
+        sold_iso = sold_brt.isoformat() if sold_brt else None
         sales_result.append({
             "id": s.id,
             "client_sale_uuid": s.client_sale_uuid,
@@ -1621,17 +2066,21 @@ def list_pos_sales(
             "total_amount": float(s.total_amount),
             "items_count": s.items_count,
             "sold_at": sold_iso,
+            "sold_at_brt": sold_brt.strftime("%d/%m/%Y %H:%M") if sold_brt else "-",
             "created_at": sold_iso,
-            "synced_at": s.synced_at.isoformat() if s.synced_at else None,
+            "synced_at": _to_brt(s.synced_at).isoformat() if s.synced_at else None,
             "origin": s.origin,
             "status": s.status,
+            "notes": s.notes,
             "items": items_data,
         })
 
     return {
         "kpis": {
-            "total_sales": total_count,
-            "total_amount": float(total_amount),
+            "total_sales": completed_count,
+            "total_amount": float(completed_amount),
+            "cancelled_sales": cancelled_count,
+            "cancelled_amount": float(cancelled_amount),
             "by_payment_method": by_payment,
         },
         "sales": sales_result,
@@ -1716,9 +2165,11 @@ def get_pos_sales_report(
     if start_date:
         try:
             dt_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+            if dt_start.tzinfo is None:
+                dt_start = dt_start.replace(tzinfo=BRT_TZ)
         except Exception:
             try:
-                dt_start = datetime.strptime(start_date[:10], "%Y-%m-%d")
+                dt_start = datetime.strptime(start_date[:10], "%Y-%m-%d").replace(tzinfo=BRT_TZ)
             except Exception:
                 pass
 
@@ -1727,10 +2178,14 @@ def get_pos_sales_report(
         try:
             dt_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
             if len(end_date) == 10:
-                dt_end = dt_end.replace(hour=23, minute=59, second=59)
+                dt_end = dt_end.replace(hour=23, minute=59, second=59, microsecond=999999)
+            if dt_end.tzinfo is None:
+                dt_end = dt_end.replace(tzinfo=BRT_TZ)
         except Exception:
             try:
-                dt_end = datetime.strptime(end_date[:10], "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                dt_end = datetime.strptime(end_date[:10], "%Y-%m-%d").replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=BRT_TZ
+                )
             except Exception:
                 pass
 
@@ -1741,8 +2196,8 @@ def get_pos_sales_report(
         .filter(POSSale.company_id == company_id)
     )
 
-    if status:
-        query = query.filter(POSSale.status == status)
+    if status and status.upper() not in ("ALL", "TODAS", ""):
+        query = query.filter(POSSale.status == status.upper())
     if session_id:
         query = query.filter(POSSale.session_id == session_id)
     if dt_start:
@@ -1756,44 +2211,65 @@ def get_pos_sales_report(
 
     # Agregações
     unique_sale_ids = set()
+    completed_sale_ids = set()
+    cancelled_sale_ids = set()
     total_qty = 0.0
     total_revenue = 0.0
+    completed_revenue = 0.0
+    cancelled_revenue = 0.0
     by_payment = {}
 
     formatted_rows = []
     for item, sale, session in rows:
         unique_sale_ids.add(sale.id)
+        is_cancelled = (sale.status == "CANCELLED")
+        if is_cancelled:
+            cancelled_sale_ids.add(sale.id)
+        else:
+            completed_sale_ids.add(sale.id)
+
         qty = float(item.quantity or 0.0)
         u_price = float(item.unit_price or 0.0)
         t_price = float(item.total_price or 0.0)
-        total_qty += qty
-        total_revenue += t_price
+
+        if is_cancelled:
+            cancelled_revenue += t_price
+            if status and status.upper() == "CANCELLED":
+                total_qty += qty
+                total_revenue += t_price
+        else:
+            completed_revenue += t_price
+            total_qty += qty
+            total_revenue += t_price
 
         b_map, display_label, _, _ = _parse_payment_breakdown(
             sale.payment_method, sale.payment_details, float(sale.total_amount or 0.0)
         )
 
-        ratio = (t_price / float(sale.total_amount)) if float(sale.total_amount or 0.0) > 0 else 1.0
-        for m_key, m_val in b_map.items():
-            if m_val > 0:
-                if m_key not in by_payment:
-                    by_payment[m_key] = {"count": 0, "total": 0.0}
-                by_payment[m_key]["count"] += 1
-                by_payment[m_key]["total"] = round(by_payment[m_key]["total"] + (m_val * ratio), 2)
+        if not is_cancelled or (status and status.upper() == "CANCELLED"):
+            ratio = (t_price / float(sale.total_amount)) if float(sale.total_amount or 0.0) > 0 else 1.0
+            for m_key, m_val in b_map.items():
+                if m_val > 0:
+                    if m_key not in by_payment:
+                        by_payment[m_key] = {"count": 0, "total": 0.0}
+                    by_payment[m_key]["count"] += 1
+                    by_payment[m_key]["total"] = round(by_payment[m_key]["total"] + (m_val * ratio), 2)
 
         sess_name = session.name if session else (f"Sessão #{sale.session_id}" if sale.session_id else "Avulsa")
 
+        sold_brt = _to_brt(sale.sold_at)
         formatted_rows.append({
             "id": item.id,
             "sale_id": sale.id,
             "sale_number": sale.sale_number,
-            "sold_at": sale.sold_at.strftime("%d/%m/%Y %H:%M") if sale.sold_at else "-",
-            "sold_at_iso": sale.sold_at.isoformat() if sale.sold_at else None,
+            "sale_status": sale.status or "COMPLETED",
+            "sold_at": sold_brt.strftime("%d/%m/%Y %H:%M") if sold_brt else "-",
+            "sold_at_iso": sold_brt.isoformat() if sold_brt else None,
             "session_id": sale.session_id,
             "session_name": sess_name,
             "barcode": item.barcode or "",
             "sku": item.sku or "",
-            "title": item.title or "Sem descrição",
+            "title": (f"[CANCELADA] {item.title}" if is_cancelled and format in ("excel", "pdf") else (item.title or "Sem descrição")),
             "publisher": item.publisher or "",
             "quantity": qty,
             "unit_price": u_price,
@@ -1805,9 +2281,13 @@ def get_pos_sales_report(
 
     # Resumo
     kpis = {
-        "total_sales": len(unique_sale_ids),
+        "total_sales": len(completed_sale_ids) if (not status or status.upper() != "CANCELLED") else len(cancelled_sale_ids),
         "total_items": round(total_qty, 2),
         "total_amount": round(total_revenue, 2),
+        "completed_sales": len(completed_sale_ids),
+        "completed_amount": round(completed_revenue, 2),
+        "cancelled_sales": len(cancelled_sale_ids),
+        "cancelled_amount": round(cancelled_revenue, 2),
         "by_payment": by_payment,
     }
 
@@ -1858,7 +2338,7 @@ def get_pos_sales_report(
         if session_id:
             sess_obj = db.query(POSSession).filter(POSSession.id == session_id).first()
             periodo_txt += f"  |  Sessão: {sess_obj.name if sess_obj else session_id}"
-        periodo_txt += f"  |  Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        periodo_txt += f"  |  Gerado em: {datetime.now(BRT_TZ).strftime('%d/%m/%Y %H:%M')}"
 
         ws.merge_cells("A2:M2")
         ws["A2"] = periodo_txt
@@ -1987,7 +2467,7 @@ def get_pos_sales_report(
 
     # 3. Retorno PDF
     if format == "pdf":
-        subtitle_txt = f"Relatório Analítico de Itens Vendidos | Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        subtitle_txt = f"Relatório Analítico de Itens Vendidos | Emissão: {datetime.now(BRT_TZ).strftime('%d/%m/%Y %H:%M')}"
         if session_id:
             sess_obj = db.query(POSSession).filter(POSSession.id == session_id).first()
             subtitle_txt += f" | Sessão: {sess_obj.name if sess_obj else session_id}"
@@ -2132,6 +2612,8 @@ class PDVDesktopLicenseUpdateRequest(BaseModel):
     enabled: bool = True
     expires_at: Optional[str] = None  # YYYY-MM-DD ou ISO-8601
     range_sync_enabled: bool = True
+    horus_sync_enabled: Optional[bool] = None
+
 
 
 class HorusCatalogRangeRequest(BaseModel):
@@ -2188,6 +2670,20 @@ def _build_license_status_response(company: Company, settings: Optional[CompanyS
     exp_dt = getattr(settings, "pdv_desktop_expires_at", None) if settings else None
     lic_key = getattr(settings, "pdv_desktop_license_key", None) if settings else None
 
+    horus_sync_enabled = True
+    if settings and getattr(settings, "b2c_showcases_config", None):
+        raw_cfg = settings.b2c_showcases_config
+        if isinstance(raw_cfg, str):
+            try:
+                raw_cfg = json.loads(raw_cfg)
+            except Exception:
+                raw_cfg = {}
+        if isinstance(raw_cfg, dict):
+            pdv_sync_cfg = raw_cfg.get("pdv_horus_sync") or {}
+            if isinstance(pdv_sync_cfg, dict) and "enabled" in pdv_sync_cfg:
+                horus_sync_enabled = bool(pdv_sync_cfg["enabled"])
+
+
     days_remaining = None
     is_expired = True
     exp_iso = None
@@ -2219,7 +2715,9 @@ def _build_license_status_response(company: Company, settings: Optional[CompanyS
         "module_pdv": bool(company.module_pdv),
         "enabled": enabled,
         "range_sync_enabled": range_sync,
+        "horus_sync_enabled": horus_sync_enabled,
         "expires_at": exp_iso,
+
         "expires_at_br": exp_br,
         "days_remaining": days_remaining,
         "is_expired": is_expired,
@@ -2311,6 +2809,24 @@ def update_pdv_desktop_license(
     settings.pdv_desktop_license_enabled = bool(payload.enabled)
     settings.pdv_horus_range_sync_enabled = bool(payload.range_sync_enabled)
     settings.pdv_desktop_expires_at = exp_dt
+
+    if payload.horus_sync_enabled is not None:
+        raw_cfg = getattr(settings, "b2c_showcases_config", None) or {}
+        if isinstance(raw_cfg, str):
+            try:
+                raw_cfg = json.loads(raw_cfg)
+            except Exception:
+                raw_cfg = {}
+        if not isinstance(raw_cfg, dict):
+            raw_cfg = {}
+        pdv_sync_cfg = raw_cfg.get("pdv_horus_sync") or {}
+        if not isinstance(pdv_sync_cfg, dict):
+            pdv_sync_cfg = {}
+        pdv_sync_cfg["enabled"] = bool(payload.horus_sync_enabled)
+        raw_cfg["pdv_horus_sync"] = pdv_sync_cfg
+        settings.b2c_showcases_config = dict(raw_cfg)
+        flag_modified(settings, "b2c_showcases_config")
+
 
     if exp_str:
         settings.pdv_desktop_license_key = _generate_pdv_desktop_license_key(
@@ -2650,3 +3166,629 @@ async def sync_horus_catalog_by_range(
         "horus_legacy_pagination": bool(getattr(settings, "horus_legacy_pagination", False)),
         "items": formatted_items,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SINTETIZAÇÃO DE VENDAS DO PDV E ENVIO DE PEDIDOS AO HORUS ERP (MÁX R$ 10.000)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _upper_horus_params(d: dict) -> dict:
+    """Garante que todas as chaves e valores string sejam enviados em CAIXA ALTA ao Horus ERP (Regra 11)."""
+    out = {}
+    for k, v in d.items():
+        if v is None or v == "":
+            continue
+        if isinstance(v, str):
+            out[str(k).upper()] = v.strip().upper()
+        else:
+            out[str(k).upper()] = v
+    return out
+
+
+def _extract_horus_err_msg(resp: object) -> Optional[str]:
+    """Retorna mensagem de falha do Horus caso o retorno indique erro."""
+    if isinstance(resp, list) and len(resp) > 0 and isinstance(resp[0], dict):
+        first = resp[0]
+        if first.get("Falha") or str(first.get("FALHA") or "").upper() == "S":
+            return str(first.get("Mensagem") or first.get("MENSAGEM") or first)
+    elif isinstance(resp, dict):
+        if resp.get("Falha") or str(resp.get("FALHA") or "").upper() == "S":
+            return str(resp.get("Mensagem") or resp.get("MENSAGEM") or resp)
+    return None
+
+
+@router.get("/horus-sync/defaults")
+def get_pos_horus_sync_defaults(
+    company_id: int,
+    session_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Retorna os parâmetros padrão do Horus configurados para a empresa (ou sessão/filial),
+    facilitando o preenchimento na tela de Sintetização & Envio de Vendas para o Horus.
+    """
+    _assert_pos_access(current_user, company_id, db)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+
+    cod_empresa = str(getattr(settings, "horus_company", "") or "").strip()
+    cod_filial = str(getattr(settings, "horus_branch", "") or "").strip()
+    branch_name = None
+
+    if session_id:
+        sess = db.query(POSSession).filter(
+            POSSession.id == session_id,
+            POSSession.company_id == company_id,
+        ).first()
+        if sess and sess.branch_id:
+            br = db.query(SellerBranch).filter(SellerBranch.id == sess.branch_id).first()
+            if br:
+                cod_empresa = str(br.cod_empresa or cod_empresa).strip()
+                cod_filial = str(br.cod_filial or cod_filial).strip()
+                branch_name = br.nome
+
+    b2c_cfg = {}
+    pdv_sync_cfg = {}
+    session_saved_cfg = {}
+    if settings and getattr(settings, "b2c_showcases_config", None):
+        raw_cfg = settings.b2c_showcases_config
+        if isinstance(raw_cfg, str):
+            try:
+                raw_cfg = json.loads(raw_cfg)
+            except Exception:
+                raw_cfg = {}
+        if isinstance(raw_cfg, dict):
+            b2c_cfg = raw_cfg.get("horus_integration") or {}
+            pdv_sync_cfg = raw_cfg.get("pdv_horus_sync") or {}
+            if session_id and isinstance(pdv_sync_cfg.get("sessions"), dict):
+                session_saved_cfg = pdv_sync_cfg["sessions"].get(str(session_id)) or {}
+
+    def _pick(key: str, default_val: str = "") -> str:
+        if session_saved_cfg and session_saved_cfg.get(key) not in (None, ""):
+            return str(session_saved_cfg.get(key)).strip()
+        if pdv_sync_cfg and pdv_sync_cfg.get(key) not in (None, ""):
+            return str(pdv_sync_cfg.get(key)).strip()
+        return default_val
+
+    fallback_param_fiscal = str(
+        b2c_cfg.get("cod_param_fiscal_intra")
+        or b2c_cfg.get("cod_param_fiscal_inter")
+        or "1"
+    ).strip()
+
+    return {
+        "company_id": company_id,
+        "cod_empresa": cod_empresa,
+        "cod_filial": cod_filial,
+        "branch_name": branch_name,
+        "horus_sync_enabled": bool(pdv_sync_cfg.get("enabled", True)) if isinstance(pdv_sync_cfg, dict) else True,
+        "cod_cli": _pick("cod_cli", ""),
+        "client_name": _pick("client_name", ""),
+        "tipo_pedido": _pick("tipo_pedido", str(b2c_cfg.get("tipo_pedido") or "L").strip()).upper(),
+        "cod_param_fiscal": _pick("cod_param_fiscal", fallback_param_fiscal),
+        "cod_metodo": _pick("cod_metodo", str(b2c_cfg.get("cod_metodo") or "").strip()),
+        "cod_tpo_end": _pick("cod_tpo_end", str(b2c_cfg.get("cod_endereco") or "1").strip()),
+        "cod_transp": _pick("cod_transp", str(b2c_cfg.get("cod_transp") or "").strip()),
+        "frete_emit_dest": _pick("frete_emit_dest", str(b2c_cfg.get("frete_emit_dest") or "E").strip()).upper(),
+        "status_envio_erp": _pick("status_envio_erp", str(b2c_cfg.get("status_envio_erp") or "").strip()).upper(),
+        "obs_extra": _pick("obs_extra", ""),
+        "max_order_amount": 10000.0,
+    }
+
+
+@router.put("/horus-sync/defaults")
+def update_pos_horus_sync_defaults(
+    company_id: int,
+    payload: POSHorusSyncDefaultsUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Salva os parâmetros padrão de envio ao Horus (COD_CLI, COD_TRANSP, CFOP, Tipo Pedido, etc.)
+    para o seller (e opcionalmente por sessão do PDV), mantendo-os guardados para os próximos envios.
+    """
+    _assert_pos_access(current_user, company_id, db)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings:
+        settings = CompanySettings(company_id=company_id)
+        db.add(settings)
+
+    raw_cfg = getattr(settings, "b2c_showcases_config", None) or {}
+    if isinstance(raw_cfg, str):
+        try:
+            raw_cfg = json.loads(raw_cfg)
+        except Exception:
+            raw_cfg = {}
+    if not isinstance(raw_cfg, dict):
+        raw_cfg = {}
+
+    pdv_sync_cfg = raw_cfg.get("pdv_horus_sync") or {}
+    if not isinstance(pdv_sync_cfg, dict):
+        pdv_sync_cfg = {}
+
+    new_vals = {
+        "cod_cli": str(payload.cod_cli or "").strip().upper(),
+        "client_name": str(payload.client_name or "").strip(),
+        "cod_transp": str(payload.cod_transp or "").strip().upper(),
+        "cod_param_fiscal": str(payload.cod_param_fiscal or "1").strip().upper(),
+        "tipo_pedido": str(payload.tipo_pedido or "L").strip().upper(),
+        "cod_metodo": str(payload.cod_metodo or "").strip().upper(),
+        "cod_tpo_end": str(payload.cod_tpo_end or "1").strip().upper(),
+        "frete_emit_dest": str(payload.frete_emit_dest or "E").strip().upper(),
+        "status_envio_erp": str(payload.status_envio_erp or "").strip().upper(),
+        "obs_extra": str(payload.obs_extra or "").strip().upper(),
+    }
+
+    # Sempre atualiza o padrão geral do seller e, se houver session_id, também salva para a sessão
+    for k, v in new_vals.items():
+        pdv_sync_cfg[k] = v
+
+    if payload.session_id:
+        sessions_map = pdv_sync_cfg.get("sessions") or {}
+        if not isinstance(sessions_map, dict):
+            sessions_map = {}
+        sessions_map[str(payload.session_id)] = dict(new_vals)
+        pdv_sync_cfg["sessions"] = sessions_map
+
+    raw_cfg["pdv_horus_sync"] = pdv_sync_cfg
+    settings.b2c_showcases_config = dict(raw_cfg)
+    flag_modified(settings, "b2c_showcases_config")
+
+    db.commit()
+    db.refresh(settings)
+
+    return get_pos_horus_sync_defaults(
+        company_id=company_id,
+        session_id=payload.session_id,
+        db=db,
+        current_user=current_user,
+    )
+
+
+
+@router.get("/horus-sync/lookup-client")
+async def lookup_horus_client_for_pos(
+    company_id: int,
+    query: str = Query(..., description="CPF, CNPJ ou COD_CLI para localizar no Horus"),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Busca um cliente no Horus ERP por CPF, CNPJ ou COD_CLI para auxiliar no preenchimento
+    do Código do Cliente antes de enviar as vendas sintetizadas.
+    """
+    _assert_pos_access(current_user, company_id, db)
+    from app.integrators.horus_clients import HorusClients
+
+    clean_digits = "".join(filter(str.isdigit, query or ""))
+    if not clean_digits:
+        raise HTTPException(status_code=400, detail="Informe um código, CPF ou CNPJ válido.")
+
+    horus_clients = HorusClients(db, company_id)
+    try:
+        if len(clean_digits) == 11:
+            params = {"CPF": clean_digits}
+        elif len(clean_digits) == 14:
+            params = {"CNPJ": clean_digits}
+        else:
+            params = {"COD_CLI": clean_digits}
+
+        res = await horus_clients.get("Busca_Cliente", params=params)
+        err = _extract_horus_err_msg(res)
+        if err:
+            raise HTTPException(status_code=404, detail=f"Horus: {err}")
+
+        item = res[0] if isinstance(res, list) and len(res) > 0 else (res if isinstance(res, dict) else None)
+        if not item:
+            raise HTTPException(status_code=404, detail="Cliente não localizado no Horus.")
+
+        cod_cli = str(item.get("COD_CLI") or item.get("CODIGO") or "").strip()
+        nom_cli = str(item.get("NOM_CLI") or item.get("NOME") or item.get("RAZAO_SOCIAL") or "").strip()
+        doc = str(item.get("CNPJ") or item.get("CPF") or clean_digits).strip()
+        uf = str(item.get("SIGLA_UF") or item.get("UF") or "").strip()
+
+        return {
+            "found": True,
+            "cod_cli": cod_cli,
+            "name": nom_cli,
+            "document": doc,
+            "uf": uf,
+            "raw": item,
+        }
+    finally:
+        await horus_clients.close()
+
+
+@router.post("/horus-sync/send")
+async def send_synthesized_pos_sales_to_horus(
+    company_id: int,
+    payload: POSHorusSyncSendRequest,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Sintetiza (unifica) os itens das vendas selecionadas do PDV e envia um ou mais pedidos
+    para o Horus ERP via InsPedidoVenda + InsItensPedidoVenda, respeitando rigorosamente o
+    limite máximo de R$ 10.000,00 por pedido e fechando 100% o valor das vendas selecionadas.
+    """
+    import math
+    from app.integrators.horus_clients import HorusClients
+
+    _assert_pos_access(current_user, company_id, db)
+
+    cod_cli = (payload.cod_cli or "").strip().upper()
+    if not cod_cli:
+        raise HTTPException(status_code=400, detail="Informe o Código do Cliente no Horus (COD_CLI).")
+
+    if not payload.sale_ids:
+        raise HTTPException(status_code=400, detail="Selecione ao menos uma venda para sintetizar e enviar ao Horus.")
+
+    sales = (
+        db.query(POSSale)
+        .filter(
+            POSSale.company_id == company_id,
+            POSSale.id.in_(payload.sale_ids),
+            POSSale.status == "COMPLETED",
+        )
+        .order_by(POSSale.sold_at.asc(), POSSale.id.asc())
+        .all()
+    )
+    if not sales:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhuma venda concluída encontrada para os IDs selecionados.",
+        )
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings or not getattr(settings, "horus_enabled", False):
+        raise HTTPException(
+            status_code=400,
+            detail="A integração com o Horus ERP não está habilitada nas configurações desta empresa.",
+        )
+
+    # Resolve Empresa e Filial (priorizando a filial da sessão quando vinculada)
+    cod_empresa = str(getattr(settings, "horus_company", "") or "").strip().upper()
+    cod_filial = str(getattr(settings, "horus_branch", "") or "").strip().upper()
+    sess_title = "VENDAS GERAIS"
+
+    target_session_id = payload.session_id or sales[0].session_id
+    if target_session_id:
+        sess = db.query(POSSession).filter(
+            POSSession.id == target_session_id,
+            POSSession.company_id == company_id,
+        ).first()
+        if sess:
+            sess_title = (sess.title or sess.code or f"SESSAO {sess.id}").strip().upper()
+            if sess.branch_id:
+                br = db.query(SellerBranch).filter(SellerBranch.id == sess.branch_id).first()
+                if br:
+                    cod_empresa = str(br.cod_empresa or cod_empresa).strip().upper()
+                    cod_filial = str(br.cod_filial or cod_filial).strip().upper()
+
+    # 1. Coleta todos os itens das vendas selecionadas rateando eventual desconto global da venda
+    # para que a soma dos itens feche exatos 100% com o valor vendido em cada venda
+    grouped_by_barcode: dict = {}
+    selected_sales_total = 0.0
+
+    for s in sales:
+        sale_total = round(float(s.total_amount or 0.0), 2)
+        selected_sales_total = round(selected_sales_total + sale_total, 2)
+        sale_items = list(s.items or [])
+        if not sale_items:
+            continue
+
+        raw_items_sum = round(sum(float(it.total_price or 0.0) for it in sale_items), 2)
+        ratio = (sale_total / raw_items_sum) if (raw_items_sum > 0 and abs(raw_items_sum - sale_total) >= 0.01) else 1.0
+
+        remaining_sale_val = sale_total
+        for idx, it in enumerate(sale_items):
+            qty = max(1, int(round(float(it.quantity or 1))))
+            if idx == len(sale_items) - 1 and ratio != 1.0:
+                net_item_total = round(max(0.01, remaining_sale_val), 2)
+            else:
+                net_item_total = round(float(it.total_price or 0.0) * ratio, 2)
+                remaining_sale_val = round(remaining_sale_val - net_item_total, 2)
+
+            bcode = str(it.barcode or it.sku or it.horus_item_code or f"ITEM-{it.id}").strip().upper()
+            if bcode not in grouped_by_barcode:
+                grouped_by_barcode[bcode] = {
+                    "barcode": bcode,
+                    "sku": str(it.sku or "").strip().upper() or None,
+                    "horus_item_code": str(it.horus_item_code or "").strip().upper() or None,
+                    "product_id": it.product_id,
+                    "title": str(it.title or "Item PDV").strip(),
+                    "qty": 0,
+                    "total_price": 0.0,
+                }
+            grouped_by_barcode[bcode]["qty"] += qty
+            grouped_by_barcode[bcode]["total_price"] = round(
+                grouped_by_barcode[bcode]["total_price"] + net_item_total, 2
+            )
+            if not grouped_by_barcode[bcode]["horus_item_code"] and it.horus_item_code:
+                grouped_by_barcode[bcode]["horus_item_code"] = str(it.horus_item_code).strip().upper()
+
+    if not grouped_by_barcode:
+        raise HTTPException(status_code=400, detail="As vendas selecionadas não possuem itens válidos para envio.")
+
+    horus_clients = HorusClients(db, company_id)
+    try:
+        # 2. Resolve COD_ITEM de cada produto sintetizado e garante fechamento exato de centavos
+        synthesized_lines = []
+        for bcode, g in grouped_by_barcode.items():
+            cod_item_val = g["horus_item_code"]
+
+            # Busca no cadastro local se ainda não tiver cod_item numérico/válido
+            if (not cod_item_val or cod_item_val == bcode and len(bcode) >= 10) and g["product_id"]:
+                p_obj = db.query(Product).filter(Product.id == g["product_id"]).first()
+                if p_obj and p_obj.horus_cod_item:
+                    cod_item_val = str(p_obj.horus_cod_item).strip().upper()
+
+            if not cod_item_val or (cod_item_val == bcode and len(bcode) >= 10):
+                p_by_ean = (
+                    db.query(Product)
+                    .filter(
+                        Product.company_id == company_id,
+                        or_(Product.ean_gtin == bcode, Product.sku == bcode),
+                    )
+                    .first()
+                )
+                if p_by_ean and p_by_ean.horus_cod_item:
+                    cod_item_val = str(p_by_ean.horus_cod_item).strip().upper()
+
+            if not cod_item_val or (cod_item_val == bcode and len(bcode) >= 10):
+                try:
+                    acervo = await horus_clients.get("Busca_Acervo", params={"BARRAS_ISBN": bcode})
+                    if isinstance(acervo, list) and len(acervo) > 0 and isinstance(acervo[0], dict) and not acervo[0].get("Falha"):
+                        found_cod = str(acervo[0].get("COD_ITEM") or acervo[0].get("CODIGO") or "").strip().upper()
+                        if found_cod:
+                            cod_item_val = found_cod
+                except Exception:
+                    pass
+
+            if not cod_item_val:
+                cod_item_val = g["sku"] or bcode
+
+            total_qty = int(g["qty"])
+            total_val = round(float(g["total_price"]), 2)
+            base_unit = round(total_val / total_qty, 2)
+            reconstructed = round(base_unit * total_qty, 2)
+            diff = round(total_val - reconstructed, 2)
+
+            if abs(diff) < 0.005 or total_qty == 1:
+                final_unit = round(total_val / total_qty, 2)
+                synthesized_lines.append({
+                    "barcode": bcode,
+                    "cod_item": cod_item_val,
+                    "title": g["title"],
+                    "qty": total_qty,
+                    "unit_price": final_unit,
+                    "total_price": round(final_unit * total_qty, 2),
+                })
+            else:
+                # Divide em (total_qty - 1) unidades com base_unit e 1 unidade ajustada com o centavo residual
+                main_qty = total_qty - 1
+                adj_unit = round(base_unit + diff, 2)
+                if adj_unit > 0:
+                    synthesized_lines.append({
+                        "barcode": bcode,
+                        "cod_item": cod_item_val,
+                        "title": g["title"],
+                        "qty": main_qty,
+                        "unit_price": base_unit,
+                        "total_price": round(base_unit * main_qty, 2),
+                    })
+                    synthesized_lines.append({
+                        "barcode": bcode,
+                        "cod_item": cod_item_val,
+                        "title": g["title"],
+                        "qty": 1,
+                        "unit_price": adj_unit,
+                        "total_price": adj_unit,
+                    })
+                else:
+                    synthesized_lines.append({
+                        "barcode": bcode,
+                        "cod_item": cod_item_val,
+                        "title": g["title"],
+                        "qty": total_qty,
+                        "unit_price": base_unit,
+                        "total_price": reconstructed,
+                    })
+
+        # 3. Quebra automática em Lotes (Pedidos) respeitando o teto máximo de R$ 10.000,00 por pedido
+        max_limit = min(10000.0, max(100.0, float(payload.max_order_amount or 10000.0)))
+        batches = []
+        current_batch = []
+        current_batch_total = 0.0
+
+        for line in synthesized_lines:
+            rem_qty = int(line["qty"])
+            u_price = float(line["unit_price"])
+
+            while rem_qty > 0:
+                space_left = round(max_limit - current_batch_total, 2)
+                if u_price <= 0:
+                    fit_qty = rem_qty
+                else:
+                    fit_qty = int(math.floor((space_left + 1e-6) / u_price))
+
+                if fit_qty <= 0:
+                    if current_batch:
+                        batches.append({
+                            "items": current_batch,
+                            "total_amount": round(current_batch_total, 2),
+                            "total_qty": sum(i["qty"] for i in current_batch),
+                        })
+                        current_batch = []
+                        current_batch_total = 0.0
+                        continue
+                    else:
+                        # Caso extremo: 1 única unidade custa mais que o limite
+                        fit_qty = 1
+
+                take_qty = min(rem_qty, fit_qty)
+                part_total = round(take_qty * u_price, 2)
+                current_batch.append({
+                    "barcode": line["barcode"],
+                    "cod_item": line["cod_item"],
+                    "title": line["title"],
+                    "qty": take_qty,
+                    "unit_price": u_price,
+                    "total_price": part_total,
+                })
+                current_batch_total = round(current_batch_total + part_total, 2)
+                rem_qty -= take_qty
+
+                if rem_qty > 0:
+                    batches.append({
+                        "items": current_batch,
+                        "total_amount": round(current_batch_total, 2),
+                        "total_qty": sum(i["qty"] for i in current_batch),
+                    })
+                    current_batch = []
+                    current_batch_total = 0.0
+
+        if current_batch:
+            batches.append({
+                "items": current_batch,
+                "total_amount": round(current_batch_total, 2),
+                "total_qty": sum(i["qty"] for i in current_batch),
+            })
+
+        # 4. Envia cada lote (pedido) para o Horus ERP via InsPedidoVenda + InsItensPedidoVenda
+        now_tag = datetime.now(BRT_TZ).strftime("%y%m%d%H%M%S")
+        tipo_ped = str(payload.tipo_pedido or "L").strip().upper()[:1] or "L"
+        created_orders = []
+        all_warnings = []
+
+        for idx, batch in enumerate(batches, start=1):
+            cod_origem = f"PDV-{company_id}-{now_tag}-{idx}".upper()
+            obs_parts = [
+                f"PDV SINTETIZADO | {sess_title}",
+                f"LOTE {idx}/{len(batches)}",
+                f"{len(sales)} VENDA(S)",
+            ]
+            if payload.obs_extra and payload.obs_extra.strip():
+                obs_parts.append(payload.obs_extra.strip().upper())
+            obs_pedido = " | ".join(obs_parts).upper()[:240]
+
+            pedido_params = {
+                "TIPO_PEDIDO_V_T_D": tipo_ped,
+                "COD_PEDIDO_ORIGEM": cod_origem,
+                "COD_CLI": cod_cli,
+                "OBS_PEDIDO": obs_pedido,
+            }
+            if cod_empresa:
+                pedido_params["COD_EMPRESA"] = cod_empresa
+            if cod_filial:
+                pedido_params["COD_FILIAL"] = cod_filial
+            if payload.cod_param_fiscal and payload.cod_param_fiscal.strip():
+                pedido_params["COD_PARAM_FISCAL"] = payload.cod_param_fiscal.strip().upper()
+            if payload.cod_metodo and payload.cod_metodo.strip():
+                pedido_params["COD_METODO"] = payload.cod_metodo.strip().upper()
+            if payload.cod_tpo_end and payload.cod_tpo_end.strip():
+                pedido_params["COD_TPO_END"] = payload.cod_tpo_end.strip().upper()
+            if payload.cod_transp and payload.cod_transp.strip():
+                pedido_params["COD_TRANSP"] = payload.cod_transp.strip().upper()
+            if payload.frete_emit_dest and payload.frete_emit_dest.strip():
+                pedido_params["FRETE_EMIT_DEST"] = payload.frete_emit_dest.strip().upper()
+
+            pedido_params = _upper_horus_params(pedido_params)
+            ped_res = await horus_clients.get("InsPedidoVenda", params=pedido_params)
+            ped_err = _extract_horus_err_msg(ped_res)
+            if ped_err:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"O Horus recusou a criação do Pedido (Lote {idx}/{len(batches)}): {ped_err}",
+                )
+
+            cod_ped_venda = None
+            if isinstance(ped_res, list) and len(ped_res) > 0 and isinstance(ped_res[0], dict):
+                cod_ped_venda = str(ped_res[0].get("COD_PED_VENDA") or "").strip().upper() or None
+            elif isinstance(ped_res, dict):
+                cod_ped_venda = str(ped_res.get("COD_PED_VENDA") or "").strip().upper() or None
+
+            if not cod_ped_venda:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"O Horus não retornou o número do pedido (COD_PED_VENDA) no Lote {idx}/{len(batches)}. Resposta: {ped_res}",
+                )
+
+            items_inserted = 0
+            batch_warnings = []
+            for b_it in batch["items"]:
+                item_params = {
+                    "COD_PED_VENDA": cod_ped_venda,
+                    "COD_ITEM": b_it["cod_item"],
+                    "QTD_PEDIDA": b_it["qty"],
+                    "VLR_LIQUIDO": round(float(b_it["unit_price"]), 2),
+                    "COD_CLI": cod_cli,
+                }
+                if cod_empresa:
+                    item_params["COD_EMPRESA"] = cod_empresa
+                if cod_filial:
+                    item_params["COD_FILIAL"] = cod_filial
+
+                item_params = _upper_horus_params(item_params)
+                it_res = await horus_clients.get("InsItensPedidoVenda", params=item_params)
+                it_err = _extract_horus_err_msg(it_res)
+                if it_err:
+                    warn_msg = f"Lote {idx} (Pedido #{cod_ped_venda}) - Item {b_it['barcode']} (COD_ITEM {b_it['cod_item']}): {it_err}"
+                    batch_warnings.append(warn_msg)
+                    all_warnings.append(warn_msg)
+                else:
+                    items_inserted += 1
+
+            # Opcional: avançar status no Horus se solicitado (ex: LEX / LAP)
+            target_erp_status = (payload.status_envio_erp or "").strip().upper()
+            if target_erp_status:
+                alt_params = _upper_horus_params({
+                    "COD_EMPRESA": cod_empresa,
+                    "COD_FILIAL": cod_filial,
+                    "COD_CLI": cod_cli,
+                    "COD_PED_VENDA": cod_ped_venda,
+                    "STA_PEDIDO": target_erp_status,
+                })
+                try:
+                    alt_res = await horus_clients.get("AltStatus_Pedido", params=alt_params)
+                    alt_err = _extract_horus_err_msg(alt_res)
+                    if alt_err:
+                        all_warnings.append(f"Pedido #{cod_ped_venda} (AltStatus_Pedido {target_erp_status}): {alt_err}")
+                except Exception as e_alt:
+                    all_warnings.append(f"Pedido #{cod_ped_venda} (AltStatus_Pedido): {e_alt}")
+
+            created_orders.append({
+                "batch_number": idx,
+                "cod_ped_venda": cod_ped_venda,
+                "cod_pedido_origem": cod_origem,
+                "items_sent": items_inserted,
+                "items_total": len(batch["items"]),
+                "total_qty": batch["total_qty"],
+                "total_amount": batch["total_amount"],
+                "warnings": batch_warnings,
+            })
+
+        # 5. Marca nas vendas selecionadas os números dos pedidos gerados no Horus para rastreabilidade
+        ped_codes_str = ",".join(o["cod_ped_venda"] for o in created_orders)
+        stamp = f"[HORUS_PED:{ped_codes_str}]"
+        for s in sales:
+            existing_notes = (s.notes or "").strip()
+            if stamp not in existing_notes:
+                s.notes = f"{existing_notes} | {stamp}".strip(" |") if existing_notes else stamp
+        db.commit()
+
+        return {
+            "status": "ok",
+            "sales_processed": len(sales),
+            "selected_sales_total": selected_sales_total,
+            "batches_count": len(created_orders),
+            "orders": created_orders,
+            "warnings": all_warnings,
+            "message": (
+                f"{len(created_orders)} pedido(s) enviado(s) ao Horus ERP com sucesso: "
+                f"{', '.join('#' + o['cod_ped_venda'] for o in created_orders)}!"
+            ),
+        }
+    finally:
+        await horus_clients.close()
+

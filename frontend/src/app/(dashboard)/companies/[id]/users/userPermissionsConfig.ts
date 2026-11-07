@@ -28,7 +28,8 @@ import {
   FileCode2,
   Globe,
   Settings,
-  Store
+  Store,
+  Send
 } from 'lucide-react';
 
 export interface InitialPageOption {
@@ -40,8 +41,10 @@ export interface InitialPageOption {
 export const INITIAL_PAGE_OPTIONS: InitialPageOption[] = [
   { value: 'DEFAULT', label: 'Padrão (Dashboard / Catálogo)', group: 'Visão Geral' },
   { value: '/b2c-storefront', label: 'B2C (Loja Aberta & Cupons)', group: 'Canais de Venda & Balcão' },
-  { value: '/pdv', label: 'Ponto de Venda (PDV)', group: 'Canais de Venda & Balcão' },
+  { value: '/pdv', label: 'PDV — Frente de Caixa', group: 'Canais de Venda & Balcão' },
+  { value: '/pdv/horus-sync', label: 'PDV — Sincronizar com Horus', group: 'Canais de Venda & Balcão' },
   { value: '/product-search', label: 'Busca Preço & Endereçamento', group: 'Canais de Venda & Balcão' },
+
   { value: '/encomendas', label: 'Encomendas de Clientes', group: 'Canais de Venda & Balcão' },
   { value: '/orders', label: 'Gestão de Pedidos', group: 'Canais de Venda & Balcão' },
   { value: '/orders/intake', label: 'Mesa de Pedidos (Intake B2B)', group: 'Canais de Venda & Balcão' },
@@ -138,12 +141,21 @@ export const MODULE_PERMISSIONS_LIST: ModulePermissionItem[] = [
   },
   {
     id: 'pdv',
-    label: 'Ponto de Venda (PDV)',
+    label: 'PDV — Frente de Caixa',
     description: 'Frente de caixa rápido, leitor de barras e vale-livro',
     category: 'sales_channels',
     icon: MonitorSmartphone,
     companyCheck: (c) => Boolean(c?.module_pdv),
   },
+  {
+    id: 'pdv_horus_sync',
+    label: 'PDV — Sincronizar com Horus',
+    description: 'Sintetização de vendas do PDV e envio de pedidos em lote para o Horus ERP',
+    category: 'sales_channels',
+    icon: Send,
+    companyCheck: (c) => Boolean(c?.module_pdv),
+  },
+
   {
     id: 'busca_preco',
     label: 'Busca Preço & Endereçamento',

@@ -91,6 +91,7 @@ export default function CompanyModulesPage() {
   const [pdvLicense, setPdvLicense] = useState<{
     enabled: boolean;
     range_sync_enabled: boolean;
+    horus_sync_enabled: boolean;
     expires_at: string;
     expires_at_br?: string | null;
     days_remaining?: number | null;
@@ -100,6 +101,7 @@ export default function CompanyModulesPage() {
   }>({
     enabled: false,
     range_sync_enabled: false,
+    horus_sync_enabled: true,
     expires_at: '',
   });
   const [savingPdvLicense, setSavingPdvLicense] = useState(false);
@@ -118,6 +120,7 @@ export default function CompanyModulesPage() {
           setPdvLicense({
             enabled: !!data.enabled,
             range_sync_enabled: !!data.range_sync_enabled,
+            horus_sync_enabled: data.horus_sync_enabled ?? true,
             expires_at: data.expires_at || '',
             expires_at_br: data.expires_at_br,
             days_remaining: data.days_remaining,
@@ -147,6 +150,7 @@ export default function CompanyModulesPage() {
             enabled: nextState.enabled,
             expires_at: nextState.expires_at || null,
             range_sync_enabled: nextState.range_sync_enabled,
+            horus_sync_enabled: nextState.horus_sync_enabled,
           }),
         }
       );
@@ -159,6 +163,7 @@ export default function CompanyModulesPage() {
       setPdvLicense({
         enabled: !!data.enabled,
         range_sync_enabled: !!data.range_sync_enabled,
+        horus_sync_enabled: data.horus_sync_enabled ?? true,
         expires_at: data.expires_at || '',
         expires_at_br: data.expires_at_br,
         days_remaining: data.days_remaining,
@@ -166,7 +171,8 @@ export default function CompanyModulesPage() {
         status_label: data.status_label,
         license_key: data.license_key,
       });
-      toast.success('Licença e chave do Horus PDV Desktop atualizadas com sucesso!');
+      toast.success('Configurações do PDV atualizadas com sucesso!');
+
     } catch (e: any) {
       toast.error(`Erro de rede: ${e?.message || e}`);
     } finally {
@@ -965,7 +971,7 @@ export default function CompanyModulesPage() {
                               </span>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                               <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
                                 <div>
                                   <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
@@ -1007,7 +1013,29 @@ export default function CompanyModulesPage() {
                                   colorClass="bg-emerald-600"
                                 />
                               </div>
+
+                              <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+                                <div>
+                                  <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                    Liberar Sincronizar com Horus (Envio de Vendas)
+                                  </p>
+                                  <p className="text-[11px] text-slate-500">
+                                    Exibe a tela &quot;Sincronizar com Horus&quot; no menu lateral do PDV do Seller.
+                                  </p>
+                                </div>
+                                <Switch
+                                  active={pdvLicense.horus_sync_enabled}
+                                  onClick={() => {
+                                    const nextSync = !pdvLicense.horus_sync_enabled;
+                                    setPdvLicense((prev) => ({ ...prev, horus_sync_enabled: nextSync }));
+                                    handleSavePdvDesktopLicense({ horus_sync_enabled: nextSync });
+                                  }}
+                                  disabled={savingPdvLicense}
+                                  colorClass="bg-teal-600"
+                                />
+                              </div>
                             </div>
+
 
                             <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-3 pt-1">
                               <div className="flex flex-col sm:flex-row sm:items-end gap-2 flex-1">

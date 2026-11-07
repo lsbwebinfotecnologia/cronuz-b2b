@@ -57,6 +57,7 @@ import {
   getPendingSales, 
   markSalesAsSynced, 
   getUnsyncedSalesCount,
+  adjustLocalCatalogStock,
   setPdvSetting,
   getPdvSetting,
   playSuccessBeep, 
@@ -367,6 +368,7 @@ export default function PDVPage() {
           total_amount: s.total_amount,
           items_count: s.items_count,
           sold_at: s.sold_at,
+          sale_status: s.sale_status || 'COMPLETED',
           origin: s.origin,
           notes: s.notes,
           items: s.items.map((it) => ({
@@ -524,6 +526,7 @@ export default function PDVPage() {
             setPdvMinInstallmentAmount(minInst);
             await setPdvSetting('pdv_max_installments', maxInst);
             await setPdvSetting('pdv_min_installment_amount', minInst);
+            await setPdvSetting('supervisor_password_hash', cfg.supervisor_password_hash || null);
           } else if (res.status === 403) {
             setIsModuleAllowed(false);
             await setPdvSetting('isModuleAllowed', false);
@@ -1225,6 +1228,7 @@ export default function PDVPage() {
       items_count: itemsCount,
       sold_at: now.toISOString(),
       status: 'pending',
+      sale_status: 'COMPLETED',
       origin: 'pdv_offline',
       notes: saleNotes || undefined,
       items: itemsRecord,
@@ -1232,6 +1236,8 @@ export default function PDVPage() {
 
     try {
       await savePendingSale(saleRecord);
+      await adjustLocalCatalogStock(itemsRecord, -1);
+      await loadSampleCatalog();
       playSuccessBeep();
 
       const newUnsynced = await getUnsyncedSalesCount();
@@ -2779,6 +2785,7 @@ export default function PDVPage() {
         onClose={() => setIsSessionModalOpen(false)}
         activeSession={activeSession}
         onSelectSession={handleSelectSession}
+        localCatalogCount={catalogCount}
       />
 
       <POSSalesHistoryModal
@@ -2786,6 +2793,12 @@ export default function PDVPage() {
         onClose={() => setIsHistoryModalOpen(false)}
         onTriggerSync={triggerSync}
         isSyncing={isSyncing}
+        activeSession={activeSession}
+        onSaleCancelled={async () => {
+          const remaining = await getUnsyncedSalesCount();
+          setUnsyncedCount(remaining);
+          await loadSampleCatalog();
+        }}
       />
 
       <POSReceiptModal

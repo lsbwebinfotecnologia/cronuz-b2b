@@ -9,6 +9,7 @@ import enum
 class POSSessionStatus(str, enum.Enum):
     OPEN = "OPEN"
     CLOSED = "CLOSED"
+    DELETED = "DELETED"
 
 
 class POSCatalogSource(str, enum.Enum):

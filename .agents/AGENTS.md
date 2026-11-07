@@ -310,5 +310,22 @@ git push origin --delete feature/nome-da-funcionalidade
    - **Diagnóstico Técnico Completo e Auditoria**:
      - Informações técnicas aprofundadas (códigos de retorno de APIs externas como `001001`/`003039`, endpoints chamados, status HTTP, payloads sanitizados para auditoria e logs de integração) devem ficar **exclusivamente** restritas ao painel **Master** e aos logs internos do servidor.
 
+---
+
+## 🕒 13. Padrão Obrigatório de Fuso Horário (`America/Sao_Paulo` — Horário Oficial de Brasília `UTC-3`)
+
+> [!IMPORTANT]
+> **Todas as camadas da arquitetura (Sistema Operacional Linux, Banco de Dados PostgreSQL, Pool de Conexões SQLAlchemy, Relatórios Excel/PDF e Interfaces Frontend) DEVEM operar rigorosamente no Horário Oficial de Brasília (`America/Sao_Paulo` / `UTC-3`).**
+
+### Diretrizes Arquiteturais Mandatórias:
+1. **Sistema Operacional e Banco de Dados PostgreSQL (Local e Produção)**:
+   - O servidor Linux deve manter `timedatectl set-timezone America/Sao_Paulo`.
+   - O banco PostgreSQL (`cronuz_b2b`) e o usuário `cronuz_admin` devem ter `timezone = 'America/Sao_Paulo'` configurado permanentemente (`ALTER DATABASE cronuz_b2b SET timezone TO 'America/Sao_Paulo'; ALTER ROLE cronuz_admin SET timezone TO 'America/Sao_Paulo';`).
+2. **Pool de Conexões SQLAlchemy (`backend/app/db/session.py`)**:
+   - O `create_engine` deve obrigatoriamente incluir `connect_args={"options": "-c timezone=America/Sao_Paulo"}` e `os.environ["TZ"] = "America/Sao_Paulo"`, garantindo que toda sessão de banco de dados retorne e interprete `DateTime(timezone=True)` no horário de Brasília.
+3. **Formatação em Relatórios e Exportações (`strftime`)**:
+   - Antes de formatar qualquer `datetime` no backend para exibição textual, JSON formatado, Excel (`.xlsx`) ou PDF (`.pdf`), deve-se converter explicitamente para `BRT_TZ = timezone(timedelta(hours=-3))` (`dt.astimezone(BRT_TZ)`), evitando que carimbos em UTC (`+00:00`) sejam impressos com 3 horas a mais.
+
+
 
 
