@@ -25,6 +25,12 @@ import {
   PackageCheck,
   Bell,
   Mail,
+  Upload,
+  UserPlus,
+  KeyRound,
+  History,
+  MapPin,
+  ArrowLeft,
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -82,6 +88,31 @@ export default function SellerB2CStorefrontManagementPage({
   const [orderStatusFilter, setOrderStatusFilter] = useState('ALL');
   const [customerSearch, setCustomerSearch] = useState('');
   const [onlyStockAlerts, setOnlyStockAlerts] = useState(false);
+
+  // Customer 360 Detail View, Manual Registration & Excel Migration States
+  const [selectedCustomer360, setSelectedCustomer360] = useState<any | null>(null);
+  const [loadingCustomer360, setLoadingCustomer360] = useState(false);
+  const [customerDetailTab, setCustomerDetailTab] = useState<'orders' | 'coupons' | 'logins' | 'profile'>('orders');
+  const [showNewCustomerModal, setShowNewCustomerModal] = useState(false);
+  const [showImportCustomersModal, setShowImportCustomersModal] = useState(false);
+  const [savingCustomer, setSavingCustomer] = useState(false);
+  const [importingCustomers, setImportingCustomers] = useState(false);
+  const [sendingResetForId, setSendingResetForId] = useState<number | null>(null);
+  const [importResultSummary, setImportResultSummary] = useState<any | null>(null);
+  const [customerForm, setCustomerForm] = useState({
+    name: '',
+    cpf: '',
+    email: '',
+    phone: '',
+    zip_code: '',
+    street: '',
+    number: '',
+    complement: '',
+    neighborhood: '',
+    city: '',
+    state: '',
+    password: '',
+  });
 
   // Order Detail Modal ("Olhinho")
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
@@ -950,6 +981,144 @@ export default function SellerB2CStorefrontManagementPage({
 
   const formatBRL = (val: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(val || 0));
+
+  const openCustomer360View = async (customerId: number | null) => {
+    if (!customerId) {
+      toast.info('Este registro é um visitante de alerta Avise-me sem cadastro completo.');
+      return;
+    }
+    setLoadingCustomer360(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/customers/${customerId}/details`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Não foi possível carregar a ficha do cliente.');
+      setSelectedCustomer360(data);
+      setCustomerDetailTab('orders');
+      setCustomerForm({
+        name: data.customer?.name || '',
+        cpf: data.customer?.cpf || '',
+        email: data.customer?.email || '',
+        phone: data.customer?.phone || '',
+        zip_code: data.customer?.address?.zip_code || '',
+        street: data.customer?.address?.street || '',
+        number: data.customer?.address?.number || '',
+        complement: data.customer?.address?.complement || '',
+        neighborhood: data.customer?.address?.neighborhood || '',
+        city: data.customer?.address?.city || '',
+        state: data.customer?.address?.state || '',
+        password: '',
+      });
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao abrir ficha do cliente.');
+    } finally {
+      setLoadingCustomer360(false);
+    }
+  };
+
+  const handleSaveManualCustomer = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!customerForm.name.trim() || !customerForm.cpf.trim() || !customerForm.email.trim()) {
+      toast.error('Nome completo, CPF e E-mail são obrigatórios.');
+      return;
+    }
+    setSavingCustomer(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/customers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(customerForm),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Falha ao salvar cliente.');
+      toast.success(data.message || 'Cliente salvo com sucesso!');
+      setShowNewCustomerModal(false);
+      await loadAllData();
+      if (selectedCustomer360?.customer?.id) {
+        await openCustomer360View(selectedCustomer360.customer.id);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao salvar cadastro do cliente.');
+    } finally {
+      setSavingCustomer(false);
+    }
+  };
+
+  const handleDownloadCustomerImportTemplate = async () => {
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/customers/import-template`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('Falha ao baixar planilha modelo.');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Modelo_Importacao_Clientes_B2C.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao baixar modelo Excel.');
+    }
+  };
+
+  const handleUploadCustomersSpreadsheet = async (file: File | null) => {
+    if (!file) return;
+    const MAX_BYTES = 10 * 1024 * 1024; // Regra mandatória: 10 MB para planilhas
+    if (file.size > MAX_BYTES) {
+      toast.error('O arquivo excede o limite máximo permitido de 10 MB para planilhas de importação.');
+      return;
+    }
+    setImportingCustomers(true);
+    setImportResultSummary(null);
+    try {
+      const token = getToken();
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`${apiBase}/b2c/customers/import`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Falha na importação da planilha.');
+      setImportResultSummary(data);
+      toast.success(data.message || 'Planilha de clientes importada com sucesso!');
+      await loadAllData();
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao importar planilha de clientes.');
+    } finally {
+      setImportingCustomers(false);
+    }
+  };
+
+  const handleSendCustomerPasswordReset = async (customerId: number) => {
+    setSendingResetForId(customerId);
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiBase}/b2c/customers/${customerId}/send-password-reset`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Não foi possível enviar o token de senha.');
+      toast.success(data.message || 'E-mail de recuperação/criação de senha enviado ao cliente!');
+      if (selectedCustomer360?.customer?.id === customerId) {
+        await openCustomer360View(customerId);
+      }
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao disparar recuperação de senha.');
+    } finally {
+      setSendingResetForId(null);
+    }
+  };
 
   const storePublicUrl = `/loja/${getUser()?.company_id || 4}`;
 
@@ -2219,184 +2388,1070 @@ export default function SellerB2CStorefrontManagementPage({
       )}
 
       {/* ===================================================================== */}
-      {/* VIEW 3: CLIENTES B2C & BANDEIRA "AVISE-ME" (/b2c-storefront/customers)*/}
+      {/* VIEW 3: CLIENTES B2C & FICHA 360º (/b2c-storefront/customers)          */}
       {/* ===================================================================== */}
       {effectiveSection === 'customers' && (
         <div className="space-y-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-sm">
-            <div>
-              <h1 className="text-base sm:text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Users className="w-5 h-5 text-indigo-600" />
-                Clientes da Loja &amp; Alertas Avise-me ({b2cCustomers.length})
-              </h1>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Acompanhe os clientes cadastrados no B2C e os produtos sem estoque marcados com a bandeira Avise-me.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setOnlyStockAlerts(false)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  !onlyStockAlerts
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                }`}
-              >
-                Todos os Clientes
-              </button>
-              <button
-                type="button"
-                onClick={() => setOnlyStockAlerts(true)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                  onlyStockAlerts
-                    ? 'bg-amber-600 text-white shadow-sm'
-                    : 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
-                }`}
-              >
-                <Bell className="w-3.5 h-3.5" />
-                Com Bandeira Avise-me ({pendingAviseMeCount})
-              </button>
-
-              <div className="relative w-full sm:w-64">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                <input
-                  type="text"
-                  placeholder="Buscar nome, e-mail, CPF ou livro..."
-                  value={customerSearch}
-                  onChange={(e) => setCustomerSearch(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && loadAllData()}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
-                  <th className="py-3 px-4">Cliente</th>
-                  <th className="py-3 px-4">E-mail / Contato</th>
-                  <th className="py-3 px-4">Itens com Bandeira 🔔 Avise-me</th>
-                  <th className="py-3 px-4 text-center">Pedidos B2C</th>
-                  <th className="py-3 px-4 text-right">Total Comprado</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-                {b2cCustomers.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="py-12 text-center text-slate-400">
-                      Nenhum cliente ou solicitação Avise-me encontrada.
-                    </td>
-                  </tr>
-                ) : (
-                  b2cCustomers.map((cust) => {
-                    const alerts = Array.isArray(cust.stock_alerts) ? cust.stock_alerts : [];
-                    return (
-                      <tr key={cust.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 align-top">
-                        <td className="py-3.5 px-4">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-bold text-slate-900 dark:text-white">{cust.name}</span>
-                            {cust.has_avise_me && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 text-[10px] font-extrabold">
-                                <Bell className="w-3 h-3" />
-                                AVISE-ME
-                              </span>
-                            )}
-                          </div>
-                          {cust.cpf && (
-                            <span className="block font-mono text-[11px] text-slate-500 mt-0.5">
-                              CPF: {cust.cpf}
-                            </span>
-                          )}
-                          {(cust.city || cust.state) && (
-                            <span className="block text-[11px] text-slate-400">
-                              {cust.city}/{cust.state}
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="py-3.5 px-4">
-                          <span className="font-semibold text-slate-800 dark:text-slate-200 block">
-                            {cust.email || '—'}
+          {selectedCustomer360 ? (
+            /* ── TELA DEDICADA 360º DO CLIENTE B2C (COM MENUS INTERNOS) ── */
+            <div className="space-y-4">
+              {/* Barra Superior de Navegação e Identificação do Cliente */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm space-y-4">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCustomer360(null)}
+                      className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 cursor-pointer shrink-0"
+                      title="Voltar para a lista de clientes"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                    </button>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h1 className="text-base sm:text-xl font-extrabold text-slate-900 dark:text-white">
+                          {selectedCustomer360.customer?.name}
+                        </h1>
+                        {selectedCustomer360.customer?.has_password ? (
+                          <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 text-[11px] font-bold">
+                            ✓ Senha Ativa
                           </span>
-                          {cust.phone && (
-                            <span className="text-[11px] text-slate-500 block mt-0.5">
-                              Tel: {cust.phone}
-                            </span>
-                          )}
-                        </td>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 text-[11px] font-bold">
+                            ⏳ Aguardando Definição de Senha (1º Acesso)
+                          </span>
+                        )}
+                        {selectedCustomer360.customer?.origin === 'EXCEL_MIGRATION' && (
+                          <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300 text-[11px] font-bold">
+                            Migrado via Planilha
+                          </span>
+                        )}
+                        {selectedCustomer360.customer?.horus_cod_cli && (
+                          <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 text-[11px] font-mono">
+                            Horus #{selectedCustomer360.customer.horus_cod_cli}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1 font-mono">
+                        CPF: <strong>{selectedCustomer360.customer?.cpf || 'Não informado'}</strong> • E-mail:{' '}
+                        <strong>{selectedCustomer360.customer?.email || 'Não informado'}</strong> • Tel:{' '}
+                        <strong>{selectedCustomer360.customer?.phone || 'Não informado'}</strong>
+                      </p>
+                    </div>
+                  </div>
 
-                        <td className="py-3.5 px-4">
-                          {alerts.length === 0 ? (
-                            <span className="text-slate-400 text-[11px]">Nenhum item solicitado</span>
-                          ) : (
-                            <div className="space-y-1.5">
-                              {alerts.map((al: any) => {
-                                const isPending = al.status === 'PENDING';
-                                const hasReturnedStock = Number(al.current_stock || 0) > 0;
-                                return (
-                                  <div
-                                    key={al.id}
-                                    className={`p-2 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
-                                      isPending
-                                        ? 'border-amber-200 bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/30'
-                                        : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/40 opacity-75'
-                                    }`}
-                                  >
-                                    <div>
-                                      <p className="font-bold text-slate-900 dark:text-white text-xs">
-                                        {al.product_name}
-                                      </p>
-                                      <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 mt-0.5">
-                                        <span className="font-mono">SKU/ISBN: {al.ean_gtin || al.sku}</span>
-                                        <span
-                                          className={`font-bold px-1.5 py-0.5 rounded ${
-                                            hasReturnedStock
-                                              ? 'bg-emerald-100 text-emerald-700'
-                                              : 'bg-rose-100 text-rose-700'
-                                          }`}
-                                        >
-                                          Saldo Atual: {al.current_stock || 0} un.
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={sendingResetForId === selectedCustomer360.customer?.id}
+                      onClick={() => handleSendCustomerPasswordReset(selectedCustomer360.customer.id)}
+                      className="px-3.5 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                      {sendingResetForId === selectedCustomer360.customer?.id
+                        ? 'Enviando Token...'
+                        : 'Enviar Token de Recuperação de Senha'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomerDetailTab('profile')}
+                      className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      Editar Cadastro
+                    </button>
+                  </div>
+                </div>
+
+                {/* KPIs Resumo do Cliente */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700">
+                    <span className="text-[11px] font-semibold text-slate-500 block">Pedidos Realizados</span>
+                    <span className="text-lg font-extrabold text-slate-900 dark:text-white">
+                      {selectedCustomer360.metrics?.orders_count || 0}
+                    </span>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/70 dark:border-emerald-900/50">
+                    <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 block">
+                      Total Comprado na Loja
+                    </span>
+                    <span className="text-lg font-extrabold text-emerald-700 dark:text-emerald-400">
+                      {formatBRL(selectedCustomer360.metrics?.total_spent || 0)}
+                    </span>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/70 dark:border-indigo-900/50">
+                    <span className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 block">
+                      Cupons Utilizados / Economia
+                    </span>
+                    <span className="text-lg font-extrabold text-indigo-700 dark:text-indigo-300">
+                      {selectedCustomer360.metrics?.coupons_used_count || 0} ({formatBRL(selectedCustomer360.metrics?.total_discount_coupons || 0)})
+                    </span>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/50">
+                    <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300 block">
+                      Acessos / Logins Registrados
+                    </span>
+                    <span className="text-lg font-extrabold text-amber-800 dark:text-amber-300">
+                      {selectedCustomer360.metrics?.logins_count || 0}
+                    </span>
+                    <span className="block text-[10px] text-slate-500 truncate">
+                      {selectedCustomer360.customer?.last_login_at
+                        ? `Último: ${new Date(selectedCustomer360.customer.last_login_at).toLocaleString('pt-BR')}`
+                        : 'Sem login recente'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Menus Internos da Ficha do Cliente */}
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  {[
+                    {
+                      id: 'orders',
+                      label: `Pedidos do Cliente (${selectedCustomer360.orders?.length || 0})`,
+                      icon: ShoppingBag,
+                    },
+                    {
+                      id: 'coupons',
+                      label: `Cupons Utilizados & Carteira (${(selectedCustomer360.coupon_redemptions?.length || 0) + (selectedCustomer360.assigned_coupons?.length || 0)})`,
+                      icon: Ticket,
+                    },
+                    {
+                      id: 'logins',
+                      label: `Logins, Acessos & LGPD (${(selectedCustomer360.login_history?.length || 0) + (selectedCustomer360.lgpd_consents?.length || 0)})`,
+                      icon: History,
+                    },
+                    {
+                      id: 'profile',
+                      label: 'Detalhes do Cadastro & Endereço',
+                      icon: MapPin,
+                    },
+                  ].map((tb) => {
+                    const IconC = tb.icon;
+                    const active = customerDetailTab === tb.id;
+                    return (
+                      <button
+                        key={tb.id}
+                        type="button"
+                        onClick={() => setCustomerDetailTab(tb.id as any)}
+                        className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          active
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                        }`}
+                      >
+                        <IconC className="w-3.5 h-3.5" />
+                        {tb.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ABA 1: PEDIDOS DO CLIENTE & ÚLTIMOS PEDIDOS */}
+              {customerDetailTab === 'orders' && (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <ShoppingBag className="w-4 h-4 text-indigo-600" />
+                      Histórico Completo de Pedidos do Cliente
+                    </h3>
+                  </div>
+
+                  {!selectedCustomer360.orders?.length ? (
+                    <div className="py-12 text-center text-xs text-slate-400">
+                      Este cliente ainda não realizou pedidos na loja B2C.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold uppercase text-slate-500">
+                            <th className="py-3 px-4">Pedido</th>
+                            <th className="py-3 px-4">Data</th>
+                            <th className="py-3 px-4">Itens Comprados</th>
+                            <th className="py-3 px-4">Cupom / Desconto</th>
+                            <th className="py-3 px-4">Total Pago</th>
+                            <th className="py-3 px-4">Status / ERP</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {selectedCustomer360.orders.map((ord: any) => {
+                            const stStep =
+                              B2C_ORDER_STATUS_STEPS.find((s) => s.key === ord.status) ||
+                              B2C_ORDER_STATUS_STEPS[0];
+                            return (
+                              <tr key={ord.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                                <td className="py-3 px-4 font-extrabold text-slate-900 dark:text-white">
+                                  #{ord.id}
+                                  <span className="block text-[10px] font-normal text-slate-400">
+                                    {ord.payment_method}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 font-mono text-slate-600 dark:text-slate-300">
+                                  {ord.created_at ? new Date(ord.created_at).toLocaleString('pt-BR') : '—'}
+                                </td>
+                                <td className="py-3 px-4">
+                                  <div className="space-y-0.5">
+                                    {(ord.items || []).map((it: any) => (
+                                      <div key={it.id} className="text-slate-700 dark:text-slate-200">
+                                        <strong>{it.quantity}x</strong> {it.name}{' '}
+                                        <span className="text-[10px] font-mono text-slate-400">
+                                          ({it.ean_isbn || it.sku})
                                         </span>
                                       </div>
-                                    </div>
-                                    {isPending ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleUpdateStockNotifyStatus(al.id, 'NOTIFIED')}
-                                        className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold shrink-0 cursor-pointer"
-                                      >
-                                        Avisar / Atendido
-                                      </button>
-                                    ) : (
-                                      <span className="text-[10px] font-bold text-emerald-600">
-                                        ✓ Avisado
-                                      </span>
-                                    )}
+                                    ))}
                                   </div>
-                                );
-                              })}
+                                </td>
+                                <td className="py-3 px-4">
+                                  {ord.coupon_code ? (
+                                    <div>
+                                      <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                        {ord.coupon_code}
+                                      </span>
+                                      <span className="block text-[11px] text-emerald-600 font-bold">
+                                        -{formatBRL(ord.discount_applied)}
+                                      </span>
+                                      {ord.residual_coupon_code && (
+                                        <span className="block text-[10px] font-mono text-amber-700">
+                                          Residual: {ord.residual_coupon_code}
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-4 font-extrabold text-slate-900 dark:text-white">
+                                  {formatBRL(ord.difference_paid)}
+                                  <span className="block text-[10px] font-normal text-slate-400">
+                                    Subtotal: {formatBRL(ord.subtotal)} | Frete: {formatBRL(ord.freight)}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold ${stStep.badge}`}>
+                                    {ord.status_label}
+                                  </span>
+                                  {ord.horus_pedido_venda && (
+                                    <span className="block mt-1 font-mono text-[10px] text-emerald-700 font-bold">
+                                      Horus #{ord.horus_pedido_venda}
+                                    </span>
+                                  )}
+                                  {ord.tracking_code && (
+                                    <span className="block font-mono text-[10px] text-indigo-600">
+                                      Rastreio: {ord.tracking_code}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ABA 2: CUPONS UTILIZADOS & CARTEIRA DE BENEFÍCIOS DO CLIENTE */}
+              {customerDetailTab === 'coupons' && (
+                <div className="space-y-4">
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm space-y-3">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <Ticket className="w-4 h-4 text-indigo-600" />
+                      Histórico de Cupons Utilizados em Pedidos ({selectedCustomer360.coupon_redemptions?.length || 0})
+                    </h3>
+                    {!selectedCustomer360.coupon_redemptions?.length ? (
+                      <p className="text-xs text-slate-400 py-6 text-center">
+                        Nenhum cupom resgatado por este cliente até o momento.
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold uppercase text-slate-500">
+                              <th className="py-2.5 px-4">Data</th>
+                              <th className="py-2.5 px-4">Código Utilizado</th>
+                              <th className="py-2.5 px-4">Campanha / Lote</th>
+                              <th className="py-2.5 px-4">Pedido</th>
+                              <th className="py-2.5 px-4 text-right">Saldo Anterior</th>
+                              <th className="py-2.5 px-4 text-right">Desconto Aplicado</th>
+                              <th className="py-2.5 px-4 text-right">Saldo Residual</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {selectedCustomer360.coupon_redemptions.map((red: any) => (
+                              <tr key={red.id}>
+                                <td className="py-2.5 px-4 font-mono text-slate-500">
+                                  {red.created_at ? new Date(red.created_at).toLocaleString('pt-BR') : '—'}
+                                </td>
+                                <td className="py-2.5 px-4 font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                  {red.coupon_code}
+                                </td>
+                                <td className="py-2.5 px-4 text-slate-700 dark:text-slate-300">
+                                  {red.batch_name || 'Cupom Individual'}
+                                  {red.partner_company_name ? ` (${red.partner_company_name})` : ''}
+                                </td>
+                                <td className="py-2.5 px-4 font-bold">
+                                  {red.order_id ? `#${red.order_id}` : '—'}
+                                </td>
+                                <td className="py-2.5 px-4 text-right font-mono">
+                                  {formatBRL(red.previous_balance)}
+                                </td>
+                                <td className="py-2.5 px-4 text-right font-extrabold text-emerald-600">
+                                  -{formatBRL(red.discount_applied)}
+                                </td>
+                                <td className="py-2.5 px-4 text-right">
+                                  <span className="font-bold text-amber-700">
+                                    {formatBRL(red.remaining_balance)}
+                                  </span>
+                                  {red.residual_coupon_code && (
+                                    <span className="block text-[10px] font-mono text-indigo-600">
+                                      Novo: {red.residual_coupon_code}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm space-y-3">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Carteira de Cupons Atribuídos ao CPF / E-mail ({selectedCustomer360.assigned_coupons?.length || 0})
+                    </h3>
+                    {!selectedCustomer360.assigned_coupons?.length ? (
+                      <p className="text-xs text-slate-400 py-4 text-center">
+                        Nenhum cupom nominal vinculado diretamente ao CPF/E-mail deste cliente.
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {selectedCustomer360.assigned_coupons.map((cp: any) => (
+                          <div
+                            key={cp.id}
+                            className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 space-y-1.5"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono font-extrabold text-sm text-indigo-600 dark:text-indigo-400">
+                                {cp.code}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200">
+                                {cp.status}
+                              </span>
                             </div>
-                          )}
-                        </td>
+                            <p className="text-[11px] text-slate-500">{cp.batch_name}</p>
+                            <div className="flex justify-between text-xs pt-1 border-t border-slate-200/70 dark:border-slate-700">
+                              <span>Valor Inicial: <strong>{formatBRL(cp.initial_value)}</strong></span>
+                              <span className="text-emerald-600 font-bold">
+                                Saldo: {formatBRL(cp.current_balance)}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
-                        <td className="py-3.5 px-4 text-center font-bold">
-                          {cust.orders_count || 0}
-                        </td>
+              {/* ABA 3: LOGINS, ACESSOS & ACEITES LGPD */}
+              {customerDetailTab === 'logins' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm space-y-3">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <History className="w-4 h-4 text-indigo-600" />
+                      Histórico de Logins, Acessos e Senha ({selectedCustomer360.login_history?.length || 0})
+                    </h3>
+                    {!selectedCustomer360.login_history?.length ? (
+                      <p className="text-xs text-slate-400 py-8 text-center">
+                        Nenhum evento de login ou redefinição de senha registrado ainda para este cliente.
+                      </p>
+                    ) : (
+                      <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                        {selectedCustomer360.login_history.map((lg: any, idx: number) => (
+                          <div
+                            key={idx}
+                            className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 text-xs space-y-1"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-indigo-700 dark:text-indigo-300">
+                                {lg.event === 'LOGIN'
+                                  ? '🔑 Login realizado na Loja B2C'
+                                  : lg.event === 'REGISTER'
+                                  ? '✨ Cadastro / Ativação de Conta'
+                                  : lg.event === 'FIRST_ACCESS_PASSWORD_SET'
+                                  ? '🔐 Definição de Senha em 1º Acesso'
+                                  : lg.event === 'PASSWORD_RESET_COMPLETED'
+                                  ? '✅ Senha Redefinida via Token'
+                                  : lg.event === 'PASSWORD_RESET_SENT_BY_SELLER'
+                                  ? '📧 Token de Senha Enviado pelo Painel'
+                                  : lg.event}
+                              </span>
+                              <span className="font-mono text-[11px] text-slate-500">
+                                {lg.at ? new Date(lg.at).toLocaleString('pt-BR') : '—'}
+                              </span>
+                            </div>
+                            {lg.detail && <p className="text-slate-600 dark:text-slate-300">{lg.detail}</p>}
+                            {(lg.ip || lg.user_agent) && (
+                              <p className="text-[10px] font-mono text-slate-400 truncate">
+                                IP: {lg.ip || '—'} • Dispositivo: {lg.user_agent || '—'}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-                        <td className="py-3.5 px-4 text-right font-extrabold text-emerald-600">
-                          {formatBRL(cust.total_spent || 0)}
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm space-y-3">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                      Termos de Consentimento LGPD Aceitos ({selectedCustomer360.lgpd_consents?.length || 0})
+                    </h3>
+                    {!selectedCustomer360.lgpd_consents?.length ? (
+                      <p className="text-xs text-slate-400 py-8 text-center">
+                        Nenhum aceite LGPD registrado no checkout ainda.
+                      </p>
+                    ) : (
+                      <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                        {selectedCustomer360.lgpd_consents.map((c: any) => (
+                          <div
+                            key={c.id}
+                            className="p-3 rounded-xl border border-emerald-200/70 dark:border-emerald-900/40 bg-emerald-50/30 dark:bg-emerald-950/10 text-xs space-y-1"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-emerald-800 dark:text-emerald-300">
+                                ✓ Aceite LGPD ({c.terms_version})
+                              </span>
+                              <span className="font-mono text-[11px] text-slate-500">
+                                {c.accepted_at ? new Date(c.accepted_at).toLocaleString('pt-BR') : '—'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                              Marketing Opt-in: <strong>{c.marketing_opt_in ? 'Sim' : 'Não'}</strong> • IP:{' '}
+                              <span className="font-mono">{c.ip_address || '—'}</span>
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ABA 4: DETALHES DO CADASTRO & ENDEREÇO (EDIÇÃO RÁPIDA) */}
+              {customerDetailTab === 'profile' && (
+                <form
+                  onSubmit={handleSaveManualCustomer}
+                  className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm space-y-4"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                        Dados Cadastrais &amp; Endereço do Cliente B2C
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Mantenha o CPF e o E-mail atualizados para que o cliente possa recuperar a senha e acompanhar seus pedidos.
+                      </p>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={savingCustomer}
+                      className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm cursor-pointer disabled:opacity-50"
+                    >
+                      {savingCustomer ? 'Salvando...' : 'Salvar Alterações'}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        Nome Completo *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={customerForm.name}
+                        onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        CPF (Obrigatório) *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={customerForm.cpf}
+                        onChange={(e) => setCustomerForm({ ...customerForm, cpf: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        Telefone / WhatsApp
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.phone}
+                        onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        E-mail (Obrigatório p/ Recuperação de Senha) *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        value={customerForm.email}
+                        onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        Definir / Redefinir Senha Manualmente (Opcional - mín. 6 dígitos)
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="Deixe em branco para manter a senha atual"
+                        value={customerForm.password}
+                        onChange={(e) => setCustomerForm({ ...customerForm, password: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        CEP
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.zip_code}
+                        onChange={(e) => setCustomerForm({ ...customerForm, zip_code: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        Logradouro / Rua
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.street}
+                        onChange={(e) => setCustomerForm({ ...customerForm, street: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        Número
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.number}
+                        onChange={(e) => setCustomerForm({ ...customerForm, number: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        Complemento
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.complement}
+                        onChange={(e) => setCustomerForm({ ...customerForm, complement: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        Bairro
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.neighborhood}
+                        onChange={(e) => setCustomerForm({ ...customerForm, neighborhood: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        Cidade
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.city}
+                        onChange={(e) => setCustomerForm({ ...customerForm, city: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                        UF
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={2}
+                        value={customerForm.state}
+                        onChange={(e) => setCustomerForm({ ...customerForm, state: e.target.value.toUpperCase() })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono uppercase"
+                      />
+                    </div>
+                  </div>
+                </form>
+              )}
+            </div>
+          ) : (
+            /* ── LISTAGEM DE CLIENTES B2C + IMPORTAÇÃO DE PLANILHA EXCEL + CADASTRO ── */
+            <>
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-sm">
+                <div>
+                  <h1 className="text-base sm:text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Users className="w-5 h-5 text-indigo-600" />
+                    Clientes da Loja B2C &amp; Alertas Avise-me ({b2cCustomers.length})
+                  </h1>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Clique em qualquer cliente para abrir a ficha 360º (Pedidos, Cupons Utilizados, Logins e Cadastro) ou importe planilhas Excel para migração de clientes.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportResultSummary(null);
+                      setShowImportCustomersModal(true);
+                    }}
+                    className="px-3.5 py-2 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    Importar Planilha Excel (Migração)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomerForm({
+                        name: '',
+                        cpf: '',
+                        email: '',
+                        phone: '',
+                        zip_code: '',
+                        street: '',
+                        number: '',
+                        complement: '',
+                        neighborhood: '',
+                        city: '',
+                        state: '',
+                        password: '',
+                      });
+                      setShowNewCustomerModal(true);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm cursor-pointer"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" />
+                    Novo Cliente B2C
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOnlyStockAlerts(false)}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      !onlyStockAlerts
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    Todos os Clientes ({b2cCustomers.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOnlyStockAlerts(true)}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                      onlyStockAlerts
+                        ? 'bg-amber-600 text-white shadow-sm'
+                        : 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                    }`}
+                  >
+                    <Bell className="w-3.5 h-3.5" />
+                    Com Bandeira Avise-me ({pendingAviseMeCount})
+                  </button>
+                </div>
+
+                <div className="relative w-full sm:w-80">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="Buscar nome, e-mail, CPF ou livro..."
+                    value={customerSearch}
+                    onChange={(e) => setCustomerSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && loadAllData()}
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 text-[11px] font-bold uppercase text-slate-500">
+                      <th className="py-3 px-4">Cliente / CPF</th>
+                      <th className="py-3 px-4">E-mail / Contato</th>
+                      <th className="py-3 px-4">Acesso / Logins</th>
+                      <th className="py-3 px-4 text-center">Cupons Usados</th>
+                      <th className="py-3 px-4 text-center">Pedidos B2C</th>
+                      <th className="py-3 px-4 text-right">Total Comprado</th>
+                      <th className="py-3 px-4 text-right">Ficha 360º</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+                    {b2cCustomers.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-12 text-center text-slate-400">
+                          Nenhum cliente ou solicitação Avise-me encontrada.
                         </td>
                       </tr>
-                    );
-                  })
+                    ) : (
+                      b2cCustomers.map((cust) => {
+                        const alerts = Array.isArray(cust.stock_alerts) ? cust.stock_alerts : [];
+                        return (
+                          <tr
+                            key={cust.id}
+                            onClick={() => cust.customer_id && openCustomer360View(cust.customer_id)}
+                            className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 align-top cursor-pointer"
+                          >
+                            <td className="py-3.5 px-4">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-bold text-slate-900 dark:text-white">{cust.name}</span>
+                                {cust.has_avise_me && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 text-[10px] font-extrabold">
+                                    <Bell className="w-3 h-3" />
+                                    AVISE-ME ({alerts.length})
+                                  </span>
+                                )}
+                                {cust.origin === 'EXCEL_MIGRATION' && (
+                                  <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300 text-[10px] font-bold">
+                                    Migrado
+                                  </span>
+                                )}
+                              </div>
+                              {cust.cpf && (
+                                <span className="block font-mono text-[11px] text-slate-500 mt-0.5">
+                                  CPF: {cust.cpf}
+                                </span>
+                              )}
+                              {(cust.city || cust.state) && (
+                                <span className="block text-[11px] text-slate-400">
+                                  {cust.city}/{cust.state}
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="py-3.5 px-4">
+                              <span className="font-semibold text-slate-800 dark:text-slate-200 block">
+                                {cust.email || '—'}
+                              </span>
+                              {cust.phone && (
+                                <span className="text-[11px] text-slate-500 block mt-0.5">
+                                  Tel: {cust.phone}
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="py-3.5 px-4">
+                              {cust.has_password ? (
+                                <span className="inline-block px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300 text-[10px] font-bold">
+                                  ✓ Senha Ativa
+                                </span>
+                              ) : (
+                                <span className="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300 text-[10px] font-bold">
+                                  1º Acesso / Recuperar
+                                </span>
+                              )}
+                              <span className="block text-[11px] text-slate-500 mt-1">
+                                {cust.logins_count || 0} login(s)
+                                {cust.last_login_at
+                                  ? ` • ${new Date(cust.last_login_at).toLocaleDateString('pt-BR')}`
+                                  : ''}
+                              </span>
+                            </td>
+
+                            <td className="py-3.5 px-4 text-center font-bold text-indigo-600 dark:text-indigo-400">
+                              {cust.coupons_used_count || 0}
+                            </td>
+
+                            <td className="py-3.5 px-4 text-center font-bold">
+                              {cust.orders_count || 0}
+                            </td>
+
+                            <td className="py-3.5 px-4 text-right font-extrabold text-emerald-600">
+                              {formatBRL(cust.total_spent || 0)}
+                            </td>
+
+                            <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                              {cust.customer_id ? (
+                                <button
+                                  type="button"
+                                  disabled={loadingCustomer360}
+                                  onClick={() => openCustomer360View(cust.customer_id)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 dark:bg-slate-800 text-xs font-bold text-slate-700 hover:text-indigo-600 dark:text-slate-200 cursor-pointer"
+                                >
+                                  <Eye className="w-3.5 h-3.5 text-indigo-600" />
+                                  Abrir Cliente
+                                </button>
+                              ) : (
+                                <span className="text-[11px] text-slate-400">Visitante</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {/* MODAL: CADASTRO MANUAL DE CLIENTE B2C */}
+          {showNewCustomerModal && (
+            <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-xl space-y-4 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <UserPlus className="w-5 h-5 text-indigo-600" />
+                      Cadastrar Cliente no B2C
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Informe CPF e E-mail obrigatórios para que o cliente possa recuperar a senha ou ativar o acesso na loja.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewCustomerModal(false)}
+                    className="text-xs font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    Fechar ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveManualCustomer} className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Nome Completo *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={customerForm.name}
+                        onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
+                        placeholder="Ex: MARIA SILVA"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        CPF (Obrigatório) *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={customerForm.cpf}
+                        onChange={(e) => setCustomerForm({ ...customerForm, cpf: e.target.value })}
+                        placeholder="000.000.000-00"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        E-mail (Obrigatório p/ Recuperação de Senha) *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        value={customerForm.email}
+                        onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
+                        placeholder="cliente@email.com.br"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Telefone / Celular
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.phone}
+                        onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
+                        placeholder="(11) 99999-8888"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        CEP
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.zip_code}
+                        onChange={(e) => setCustomerForm({ ...customerForm, zip_code: e.target.value })}
+                        placeholder="00000-000"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Cidade
+                      </label>
+                      <input
+                        type="text"
+                        value={customerForm.city}
+                        onChange={(e) => setCustomerForm({ ...customerForm, city: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        UF
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={2}
+                        value={customerForm.state}
+                        onChange={(e) => setCustomerForm({ ...customerForm, state: e.target.value.toUpperCase() })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono uppercase"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setShowNewCustomerModal(false)}
+                      className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingCustomer}
+                      className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      {savingCustomer ? 'Salvando...' : 'Salvar Cliente B2C'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: IMPORTAR PLANILHA EXCEL (.XLSX / .CSV) PARA MIGRAÇÃO DE CLIENTES */}
+          {showImportCustomersModal && (
+            <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-xl w-full p-5 sm:p-6 shadow-xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <Upload className="w-5 h-5 text-emerald-600" />
+                      Importar Clientes B2C via Planilha Excel (Migração)
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Ideal para migrar clientes de outra loja virtual para o Cronuz B2C.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowImportCustomersModal(false)}
+                    className="text-xs font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    Fechar ✕
+                  </button>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 text-xs space-y-2">
+                  <p className="font-bold text-indigo-950 dark:text-indigo-200">
+                    Como funciona a migração de clientes e recuperação de senha:
+                  </p>
+                  <ul className="list-disc pl-4 space-y-1 text-slate-600 dark:text-slate-300">
+                    <li>
+                      Os campos <strong>CPF (11 dígitos)</strong> e <strong>E-mail</strong> são obrigatórios em cada linha;
+                    </li>
+                    <li>
+                      Quando o cliente migrado acessar a loja B2C pela primeira vez, ele poderá clicar em{' '}
+                      <strong>&ldquo;Esqueci minha senha&rdquo;</strong> ou informar o CPF/E-mail no checkout para receber o token de segurança no e-mail cadastrado;
+                    </li>
+                    <li>
+                      Limite máximo de arquivo: <strong>10 MB</strong> (formatos <code>.xlsx</code> ou <code>.csv</code>).
+                    </li>
+                  </ul>
+                  <button
+                    type="button"
+                    onClick={handleDownloadCustomerImportTemplate}
+                    className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 font-bold text-xs cursor-pointer hover:bg-indigo-50"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Baixar Planilha Modelo (.xlsx)
+                  </button>
+                </div>
+
+                <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl p-5 text-center space-y-2">
+                  <input
+                    type="file"
+                    accept=".xlsx,.csv"
+                    disabled={importingCustomers}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] || null;
+                      if (f) handleUploadCustomersSpreadsheet(f);
+                    }}
+                    className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-emerald-600 file:text-white hover:file:bg-emerald-700 cursor-pointer"
+                  />
+                  {importingCustomers && (
+                    <p className="text-xs font-bold text-indigo-600 animate-pulse">
+                      Processando planilha e migrando clientes...
+                    </p>
+                  )}
+                </div>
+
+                {importResultSummary && (
+                  <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/70 dark:bg-emerald-950/30 text-xs space-y-1.5">
+                    <p className="font-bold text-emerald-900 dark:text-emerald-200">
+                      ✓ {importResultSummary.message}
+                    </p>
+                    <p className="text-slate-600 dark:text-slate-300">
+                      Novos cadastrados: <strong>{importResultSummary.created_count}</strong> • Atualizados:{' '}
+                      <strong>{importResultSummary.updated_count}</strong> • Ignorados:{' '}
+                      <strong>{importResultSummary.skipped_count}</strong>
+                    </p>
+                    {Array.isArray(importResultSummary.skipped_rows) &&
+                      importResultSummary.skipped_rows.length > 0 && (
+                        <div className="max-h-28 overflow-y-auto pt-1 text-[11px] font-mono text-rose-600">
+                          {importResultSummary.skipped_rows.map((sk: any, i: number) => (
+                            <div key={i}>
+                              Linha {sk.row} ({sk.name}): {sk.reason}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                  </div>
                 )}
-              </tbody>
-            </table>
-          </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

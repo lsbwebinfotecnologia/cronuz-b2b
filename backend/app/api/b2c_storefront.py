@@ -7,7 +7,8 @@ from datetime import datetime, date, timezone
 from decimal import Decimal
 from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, and_
 from sqlalchemy.orm import Session
@@ -137,6 +138,21 @@ class B2CTestEmailRequest(BaseModel):
 class B2COrderSendEmailRequest(BaseModel):
     event_status: Optional[str] = None
     override_email: Optional[str] = None
+
+
+class B2CCustomerManualUpsertRequest(BaseModel):
+    name: str
+    cpf: str
+    email: str
+    phone: Optional[str] = None
+    zip_code: Optional[str] = None
+    street: Optional[str] = None
+    number: Optional[str] = None
+    complement: Optional[str] = None
+    neighborhood: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    password: Optional[str] = None
 
 
 class B2CSendToHorusRequest(BaseModel):
@@ -6105,6 +6121,58 @@ def register_b2c_stock_notify(
     }
 
 
+def _parse_b2c_customer_meta(cust: Customer) -> Dict[str, Any]:
+    raw_txt = getattr(cust, "royalties_data", None)
+    if raw_txt and str(raw_txt).strip().startswith("{"):
+        try:
+            parsed = _json.loads(raw_txt)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    return {}
+
+
+def _save_b2c_customer_meta(cust: Customer, meta: Dict[str, Any]) -> None:
+    try:
+        cust.royalties_data = _json.dumps(meta, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _append_b2c_customer_login_event(
+    cust: Customer,
+    event_type: str,
+    request: Optional[Request] = None,
+    detail: Optional[str] = None,
+) -> None:
+    meta = _parse_b2c_customer_meta(cust)
+    meta["b2c_customer"] = True
+    history = meta.get("login_history") if isinstance(meta.get("login_history"), list) else []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    ip_addr = ""
+    ua = ""
+    if request:
+        ip_addr = (
+            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else "")
+        )
+        ua = (request.headers.get("user-agent") or "")[:240]
+    history.insert(
+        0,
+        {
+            "at": now_iso,
+            "event": event_type,
+            "ip": ip_addr,
+            "user_agent": ua,
+            "detail": detail or "",
+        },
+    )
+    meta["login_history"] = history[:50]
+    meta["last_login_at"] = now_iso
+    _save_b2c_customer_meta(cust, meta)
+
+
 @router.get("/customers")
 def list_b2c_customers_and_alerts(
     search: Optional[str] = Query(None),
@@ -6159,8 +6227,16 @@ def list_b2c_customers_and_alerts(
         if o.customer_id:
             orders_by_cust.setdefault(o.customer_id, []).append(o)
 
-    # Customers who bought in B2C or have password_hash or match stock alerts
-    all_customers = db.query(Customer).filter(Customer.company_id == cid).order_by(Customer.id.desc()).limit(500).all()
+    # Coupon redemptions count per CPF/email/customer_id
+    all_reds = db.query(B2CCouponRedemption).filter(B2CCouponRedemption.company_id == cid).all()
+    reds_by_cpf: Dict[str, int] = {}
+    for r in all_reds:
+        rcpf = _clean_digits(r.customer_cpf)
+        if rcpf:
+            reds_by_cpf[rcpf] = reds_by_cpf.get(rcpf, 0) + 1
+
+    # Customers who bought in B2C, have password_hash, were migrated/created in B2C, or match stock alerts
+    all_customers = db.query(Customer).filter(Customer.company_id == cid).order_by(Customer.id.desc()).limit(1000).all()
     seen_emails = set()
     customer_rows: List[Dict[str, Any]] = []
 
@@ -6168,7 +6244,14 @@ def list_b2c_customers_and_alerts(
         em = (c.email or "").strip().lower()
         c_orders = orders_by_cust.get(c.id, [])
         c_alerts = alerts_by_email.get(em, []) if em else []
-        is_b2c = bool(c.password_hash or len(c_orders) > 0 or len(c_alerts) > 0)
+        c_meta = _parse_b2c_customer_meta(c)
+        is_b2c = bool(
+            c.password_hash
+            or len(c_orders) > 0
+            or len(c_alerts) > 0
+            or c_meta.get("b2c_customer")
+            or getattr(c, "segment", "") in ("B2C_STOREFRONT", "B2C_MIGRATED")
+        )
         if not is_b2c:
             continue
         if em:
@@ -6178,6 +6261,10 @@ def list_b2c_customers_and_alerts(
         if only_stock_alerts and len(pending_alerts) == 0:
             continue
 
+        cpf_clean = _clean_digits(getattr(c, "document", ""))
+        login_hist = c_meta.get("login_history") if isinstance(c_meta.get("login_history"), list) else []
+        addr = c.addresses[0] if getattr(c, "addresses", None) else None
+
         row = {
             "id": f"cust-{c.id}",
             "customer_id": c.id,
@@ -6185,8 +6272,13 @@ def list_b2c_customers_and_alerts(
             "cpf": getattr(c, "document", "") or "",
             "email": c.email or "",
             "phone": c.phone or "",
-            "city": c.city or "",
-            "state": c.state or "",
+            "city": (getattr(addr, "city", "") if addr else "") or (c.city or ""),
+            "state": (getattr(addr, "state", "") if addr else "") or (c.state or ""),
+            "has_password": bool(c.password_hash),
+            "origin": c_meta.get("origin") or getattr(c, "segment", "") or ("B2C_STOREFRONT" if c.password_hash else "CHECKOUT"),
+            "logins_count": len(login_hist),
+            "last_login_at": c_meta.get("last_login_at") or (login_hist[0].get("at") if login_hist else None),
+            "coupons_used_count": reds_by_cpf.get(cpf_clean, 0),
             "orders_count": len(c_orders),
             "total_spent": round(sum(float(o.total or 0) for o in c_orders), 2),
             "has_avise_me": len(pending_alerts) > 0,
@@ -6213,6 +6305,11 @@ def list_b2c_customers_and_alerts(
                 "phone": "",
                 "city": "",
                 "state": "",
+                "has_password": False,
+                "origin": "LEAD_AVISE_ME",
+                "logins_count": 0,
+                "last_login_at": None,
+                "coupons_used_count": 0,
                 "orders_count": 0,
                 "total_spent": 0.0,
                 "has_avise_me": len(pending_alerts) > 0,
@@ -6235,14 +6332,690 @@ def list_b2c_customers_and_alerts(
             )
         ]
 
-    # Sort: customers with active "Avise-me" first, then most recent
-    customer_rows.sort(key=lambda x: (1 if x.get("has_avise_me") else 0, x.get("orders_count") or 0), reverse=True)
+    # Sort: customers with active "Avise-me" first, then most orders, then most recent
+    customer_rows.sort(
+        key=lambda x: (
+            1 if x.get("has_avise_me") else 0,
+            x.get("orders_count") or 0,
+            x.get("customer_id") or 0,
+        ),
+        reverse=True,
+    )
 
     return {
         "customers": customer_rows,
         "stock_notifications": enriched_notifications,
         "pending_alerts_count": sum(1 for n in enriched_notifications if n.get("status") == "PENDING"),
     }
+
+
+@router.get("/customers/import-template")
+def download_b2c_customers_import_template(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Gera planilha Excel (.xlsx) modelo para importação/migração de clientes B2C (com CPF e E-mail obrigatórios).
+    """
+    import io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Clientes B2C"
+
+    headers = [
+        "NOME COMPLETO",
+        "CPF (OBRIGATORIO)",
+        "EMAIL (OBRIGATORIO)",
+        "TELEFONE / CELULAR",
+        "CEP",
+        "ENDERECO / RUA",
+        "NUMERO",
+        "COMPLEMENTO",
+        "BAIRRO",
+        "CIDADE",
+        "UF",
+    ]
+    ws.append(headers)
+    header_fill = PatternFill(start_color="312E81", end_color="312E81", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=10)
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    ws.append(
+        [
+            "MARIA SILVA EXEMPLO",
+            "123.456.789-01",
+            "maria.silva@exemplo.com.br",
+            "(11) 99999-8888",
+            "01310-100",
+            "AVENIDA PAULISTA",
+            "1000",
+            "CONJ 101",
+            "BELA VISTA",
+            "SAO PAULO",
+            "SP",
+        ]
+    )
+
+    widths = [30, 20, 32, 20, 14, 30, 12, 18, 22, 22, 8]
+    for idx, w in enumerate(widths, start=1):
+        col_letter = openpyxl.utils.get_column_letter(idx)
+        ws.column_dimensions[col_letter].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="Modelo_Importacao_Clientes_B2C.xlsx"'},
+    )
+
+
+@router.post("/customers")
+def create_or_update_b2c_customer_manual(
+    data: B2CCustomerManualUpsertRequest,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Cadastra ou atualiza manualmente um cliente no ambiente B2C (com CPF e E-mail obrigatórios).
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    cpf_digits = _clean_digits(data.cpf)
+    if len(cpf_digits) != 11:
+        raise HTTPException(status_code=400, detail="Informe um CPF válido com 11 dígitos.")
+    email_clean = (data.email or "").strip().lower()
+    if not email_clean or "@" not in email_clean:
+        raise HTTPException(status_code=400, detail="Informe um e-mail válido (obrigatório para recuperação de senha e notificações).")
+    name_clean = (data.name or "").strip().upper()
+    if not name_clean:
+        raise HTTPException(status_code=400, detail="Informe o nome completo do cliente.")
+
+    cust = (
+        db.query(Customer)
+        .filter(
+            Customer.company_id == cid,
+            or_(Customer.document == cpf_digits, func.lower(Customer.email) == email_clean),
+        )
+        .first()
+    )
+    created_new = False
+    if not cust:
+        cust = Customer(
+            company_id=cid,
+            name=name_clean,
+            corporate_name=name_clean,
+            document=cpf_digits,
+            email=email_clean,
+            phone=(data.phone or "").strip(),
+            customer_type="PF",
+            crm_status="ACTIVE",
+            segment="B2C_STOREFRONT",
+            city=(data.city or "").strip().upper(),
+            state=(data.state or "")[:2].upper(),
+        )
+        db.add(cust)
+        db.flush()
+        created_new = True
+    else:
+        cust.name = name_clean
+        cust.corporate_name = name_clean
+        cust.document = cpf_digits
+        cust.email = email_clean
+        if data.phone is not None:
+            cust.phone = data.phone.strip()
+        if data.city is not None:
+            cust.city = data.city.strip().upper()
+        if data.state is not None:
+            cust.state = data.state.strip()[:2].upper()
+        if not cust.segment:
+            cust.segment = "B2C_STOREFRONT"
+
+    if data.password and len(data.password.strip()) >= 6:
+        cust.password_hash = security.get_password_hash(data.password.strip())
+
+    meta = _parse_b2c_customer_meta(cust)
+    meta["b2c_customer"] = True
+    if created_new:
+        meta["origin"] = "MANUAL_PANEL"
+        meta["created_by_seller_at"] = datetime.now(timezone.utc).isoformat()
+    _save_b2c_customer_meta(cust, meta)
+
+    if data.zip_code or data.street or data.city:
+        addr = db.query(Address).filter(Address.customer_id == cust.id).first()
+        if not addr:
+            addr = Address(
+                customer_id=cust.id,
+                street=(data.street or "").strip().upper(),
+                number=(data.number or "S/N").strip().upper(),
+                complement=(data.complement or "").strip().upper() if data.complement else None,
+                neighborhood=(data.neighborhood or "").strip().upper(),
+                city=(data.city or cust.city or "").strip().upper(),
+                state=((data.state or cust.state or "SP")[:2]).upper(),
+                zip_code=_clean_digits(data.zip_code),
+                type="MAIN",
+            )
+            db.add(addr)
+        else:
+            if data.street is not None:
+                addr.street = data.street.strip().upper()
+            if data.number is not None:
+                addr.number = (data.number or "S/N").strip().upper()
+            if data.complement is not None:
+                addr.complement = data.complement.strip().upper() or None
+            if data.neighborhood is not None:
+                addr.neighborhood = data.neighborhood.strip().upper()
+            if data.city is not None:
+                addr.city = data.city.strip().upper()
+            if data.state is not None:
+                addr.state = (data.state or "SP")[:2].upper()
+            if data.zip_code is not None:
+                addr.zip_code = _clean_digits(data.zip_code)
+
+    db.commit()
+    db.refresh(cust)
+    return {
+        "message": (
+            f"Cliente {cust.name} cadastrado com sucesso no B2C!"
+            if created_new
+            else f"Cadastro de {cust.name} atualizado com sucesso!"
+        ),
+        "customer_id": cust.id,
+        "created": created_new,
+    }
+
+
+@router.post("/customers/import")
+async def import_b2c_customers_spreadsheet(
+    file: UploadFile = File(...),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Importa planilha Excel (.xlsx) ou CSV de clientes para migração de outra loja para o Cronuz B2C.
+    Regra mandatória: Limite máximo de 10 MB para planilhas e validação de CPF + E-mail obrigatórios.
+    Clientes importados ficam prontos para recuperar/criar senha via 'Esqueci minha senha' ou Primeiro Acesso.
+    """
+    import io
+    import csv
+
+    cid = _resolve_seller_company_id(current_user, company_id)
+    MAX_SHEET_BYTES = 10 * 1024 * 1024  # 10 MB
+    file_bytes = await file.read()
+    if len(file_bytes) > MAX_SHEET_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="O arquivo excede o limite máximo permitido de 10 MB para este tipo de envio.",
+        )
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="O arquivo enviado está vazio.")
+
+    filename = (file.filename or "").lower()
+    raw_rows: List[List[Any]] = []
+
+    if filename.endswith(".csv") or filename.endswith(".txt"):
+        text_content = ""
+        for enc in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                text_content = file_bytes.decode(enc)
+                break
+            except Exception:
+                continue
+        delimiter = ";" if text_content.count(";") >= text_content.count(",") else ","
+        reader = csv.reader(io.StringIO(text_content), delimiter=delimiter)
+        for r in reader:
+            raw_rows.append(r)
+    else:
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+            ws = wb.active
+            for r in ws.iter_rows(values_only=True):
+                raw_rows.append(list(r))
+            wb.close()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Não foi possível ler a planilha Excel. Envie um arquivo .xlsx ou .csv válido ({exc}).",
+            )
+
+    if len(raw_rows) < 2:
+        raise HTTPException(status_code=400, detail="A planilha não possui linhas de dados para importar.")
+
+    header_row = [str(c or "").strip().upper() for c in raw_rows[0]]
+
+    def _find_col(keywords: List[str], default_idx: Optional[int] = None) -> Optional[int]:
+        for idx, col_name in enumerate(header_row):
+            for kw in keywords:
+                if kw in col_name:
+                    return idx
+        return default_idx
+
+    idx_name = _find_col(["NOME", "CLIENTE", "NAME"], 0)
+    idx_cpf = _find_col(["CPF", "DOCUMENTO", "DOC"], 1)
+    idx_email = _find_col(["EMAIL", "E-MAIL"], 2)
+    idx_phone = _find_col(["TEL", "CEL", "FONE", "WHATS", "PHONE"], 3)
+    idx_cep = _find_col(["CEP", "ZIP"], 4)
+    idx_street = _find_col(["ENDERECO", "ENDEREÇO", "RUA", "LOGRADOURO"], 5)
+    idx_number = _find_col(["NUMERO", "NÚMERO", "NUM"], 6)
+    idx_comp = _find_col(["COMPLEMENTO", "COMPL"], 7)
+    idx_neigh = _find_col(["BAIRRO"], 8)
+    idx_city = _find_col(["CIDADE", "MUNICIPIO", "MUNICÍPIO"], 9)
+    idx_uf = _find_col(["UF", "ESTADO"], 10)
+
+    def _cell(row_vals: List[Any], col_i: Optional[int]) -> str:
+        if col_i is None or col_i >= len(row_vals):
+            return ""
+        val = row_vals[col_i]
+        if val is None:
+            return ""
+        if isinstance(val, float) and val.is_integer():
+            return str(int(val)).strip()
+        return str(val).strip()
+
+    existing_customers = db.query(Customer).filter(Customer.company_id == cid).all()
+    by_cpf: Dict[str, Customer] = {}
+    by_email: Dict[str, Customer] = {}
+    for ec in existing_customers:
+        d = _clean_digits(ec.document)
+        if d:
+            by_cpf[d] = ec
+        em = (ec.email or "").strip().lower()
+        if em:
+            by_email[em] = ec
+
+    created_count = 0
+    updated_count = 0
+    skipped_rows: List[Dict[str, Any]] = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for line_num, r in enumerate(raw_rows[1:], start=2):
+        if not any(r):
+            continue
+        raw_name = _cell(r, idx_name).upper()
+        raw_cpf = _clean_digits(_cell(r, idx_cpf))
+        if 0 < len(raw_cpf) < 11:
+            raw_cpf = raw_cpf.zfill(11)
+        raw_email = _cell(r, idx_email).lower()
+
+        if not raw_cpf and not raw_email and not raw_name:
+            continue
+
+        if len(raw_cpf) != 11:
+            skipped_rows.append({"row": line_num, "name": raw_name or "—", "reason": f"CPF inválido ou ausente ({_cell(r, idx_cpf)})"})
+            continue
+        if not raw_email or "@" not in raw_email:
+            skipped_rows.append({"row": line_num, "name": raw_name or raw_cpf, "reason": "E-mail obrigatório ausente ou inválido"})
+            continue
+
+        final_name = raw_name or raw_email.split("@")[0].upper()
+        phone_val = _cell(r, idx_phone)
+        cep_val = _clean_digits(_cell(r, idx_cep))
+        street_val = _cell(r, idx_street).upper()
+        num_val = _cell(r, idx_number).upper() or "S/N"
+        comp_val = _cell(r, idx_comp).upper()
+        neigh_val = _cell(r, idx_neigh).upper()
+        city_val = _cell(r, idx_city).upper()
+        uf_val = _cell(r, idx_uf).upper()[:2]
+
+        cust = by_cpf.get(raw_cpf) or by_email.get(raw_email)
+        if not cust:
+            cust = Customer(
+                company_id=cid,
+                name=final_name,
+                corporate_name=final_name,
+                document=raw_cpf,
+                email=raw_email,
+                phone=phone_val,
+                customer_type="PF",
+                crm_status="ACTIVE",
+                segment="B2C_MIGRATED",
+                city=city_val,
+                state=uf_val,
+            )
+            meta = {
+                "b2c_customer": True,
+                "origin": "EXCEL_MIGRATION",
+                "migrated_at": now_iso,
+            }
+            _save_b2c_customer_meta(cust, meta)
+            db.add(cust)
+            db.flush()
+            by_cpf[raw_cpf] = cust
+            by_email[raw_email] = cust
+            created_count += 1
+        else:
+            if final_name and (not cust.name or cust.name.upper().startswith("CLIENTE CPF")):
+                cust.name = final_name
+                cust.corporate_name = final_name
+            elif final_name:
+                cust.name = final_name
+            cust.document = raw_cpf
+            cust.email = raw_email
+            if phone_val:
+                cust.phone = phone_val
+            if city_val:
+                cust.city = city_val
+            if uf_val:
+                cust.state = uf_val
+            if not cust.segment:
+                cust.segment = "B2C_MIGRATED"
+            meta = _parse_b2c_customer_meta(cust)
+            meta["b2c_customer"] = True
+            meta["origin"] = meta.get("origin") or "EXCEL_MIGRATION"
+            meta["last_imported_at"] = now_iso
+            _save_b2c_customer_meta(cust, meta)
+            updated_count += 1
+
+        if cep_val or street_val or city_val:
+            addr = db.query(Address).filter(Address.customer_id == cust.id).first()
+            if not addr:
+                addr = Address(
+                    customer_id=cust.id,
+                    street=street_val or "ENDEREÇO NÃO INFORMADO",
+                    number=num_val,
+                    complement=comp_val or None,
+                    neighborhood=neigh_val or "",
+                    city=city_val or "",
+                    state=uf_val or "SP",
+                    zip_code=cep_val or "",
+                    type="MAIN",
+                )
+                db.add(addr)
+            else:
+                if street_val:
+                    addr.street = street_val
+                if num_val:
+                    addr.number = num_val
+                if comp_val:
+                    addr.complement = comp_val
+                if neigh_val:
+                    addr.neighborhood = neigh_val
+                if city_val:
+                    addr.city = city_val
+                if uf_val:
+                    addr.state = uf_val
+                if cep_val:
+                    addr.zip_code = cep_val
+
+    db.commit()
+    return {
+        "message": (
+            f"Importação concluída: {created_count} novo(s) cliente(s) cadastrado(s) e "
+            f"{updated_count} atualizado(s) com sucesso!"
+        ),
+        "created_count": created_count,
+        "updated_count": updated_count,
+        "skipped_count": len(skipped_rows),
+        "skipped_rows": skipped_rows[:30],
+    }
+
+
+@router.get("/customers/{customer_id}/details")
+def get_b2c_customer_360_details(
+    customer_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Ficha 360º do Cliente B2C:
+    - Dados cadastrais completos e endereço de entrega;
+    - Histórico de Pedidos e Últimos Pedidos do cliente;
+    - Cupons utilizados (auditoria de resgates + saldo residual) e cupons disponíveis atribuídos ao CPF/E-mail;
+    - Histórico de Logins, Acessos, Recuperações de Senha e Aceites LGPD;
+    - Alertas 'Avise-me' solicitados pelo cliente.
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    cust = db.query(Customer).filter(Customer.id == customer_id, Customer.company_id == cid).first()
+    if not cust:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+
+    cpf_digits = _clean_digits(cust.document)
+    email_clean = (cust.email or "").strip().lower()
+    addr = cust.addresses[0] if getattr(cust, "addresses", None) else None
+    cust_meta = _parse_b2c_customer_meta(cust)
+
+    # 1. Pedidos do Cliente no B2C
+    order_filters = [Order.customer_id == cust.id]
+    orders = (
+        db.query(Order)
+        .filter(Order.company_id == cid, Order.origin == "b2c_storefront", or_(*order_filters))
+        .order_by(Order.created_at.desc())
+        .all()
+    )
+    order_ids = [o.id for o in orders]
+    reds_by_order: Dict[int, B2CCouponRedemption] = {}
+    if order_ids:
+        for r in (
+            db.query(B2CCouponRedemption)
+            .filter(B2CCouponRedemption.company_id == cid, B2CCouponRedemption.order_id.in_(order_ids))
+            .all()
+        ):
+            if r.order_id:
+                reds_by_order[r.order_id] = r
+
+    serialized_orders = []
+    for o in orders:
+        norm_st = _normalize_b2c_order_status(o.status)
+        o_meta = _parse_order_meta(o)
+        red = reds_by_order.get(o.id)
+        serialized_orders.append(
+            {
+                "id": o.id,
+                "status": norm_st,
+                "status_label": B2C_STATUS_LABELS.get(norm_st, norm_st),
+                "subtotal": float(o.subtotal or 0),
+                "freight": float(red.order_freight or 0) if red else float(o_meta.get("freight_value") or 0),
+                "discount_applied": float(red.discount_applied or 0) if red else float(o.discount or 0),
+                "difference_paid": float(red.difference_paid or 0) if red else float(o.total or 0),
+                "total": float(o.total or 0),
+                "coupon_code": (red.coupon_code if red else None) or o_meta.get("coupon_code") or "",
+                "residual_coupon_code": (red.residual_coupon_code if red else None) or o_meta.get("residual_coupon_code") or "",
+                "payment_method": o_meta.get("payment_method") or o.payment_condition or "PIX",
+                "payment_gateway": o_meta.get("payment_gateway") or "",
+                "horus_pedido_venda": o.horus_pedido_venda or o_meta.get("horus_pedido_venda") or "",
+                "invoice_number": o.invoice_number or "",
+                "tracking_code": o.tracking_code or "",
+                "items_count": sum(int(it.quantity or 0) for it in (o.items or [])),
+                "items": [
+                    {
+                        "id": it.id,
+                        "sku": it.sku,
+                        "ean_isbn": it.ean_isbn or it.sku,
+                        "name": it.name,
+                        "quantity": it.quantity,
+                        "unit_price": float(it.unit_price or 0),
+                        "total_price": float(it.total_price or 0),
+                    }
+                    for it in (o.items or [])
+                ],
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+            }
+        )
+
+    # 2. Cupons Utilizados (Redemptions) e Cupons Atribuídos ao Cliente
+    red_filters = [B2CCouponRedemption.customer_id == cust.id]
+    if len(cpf_digits) == 11:
+        red_filters.append(B2CCouponRedemption.customer_cpf == cpf_digits)
+    if email_clean:
+        red_filters.append(func.lower(B2CCouponRedemption.customer_email) == email_clean)
+
+    redemptions = (
+        db.query(B2CCouponRedemption)
+        .filter(B2CCouponRedemption.company_id == cid, or_(*red_filters))
+        .order_by(B2CCouponRedemption.created_at.desc())
+        .all()
+    )
+    serialized_redemptions = [
+        {
+            "id": r.id,
+            "order_id": r.order_id,
+            "coupon_code": r.coupon_code,
+            "batch_name": r.batch.name if r.batch else None,
+            "partner_company_name": r.batch.partner_company_name if r.batch else None,
+            "order_subtotal": float(r.order_subtotal or 0),
+            "order_freight": float(r.order_freight or 0),
+            "discount_applied": float(r.discount_applied or 0),
+            "previous_balance": float(r.previous_balance or 0),
+            "remaining_balance": float(r.remaining_balance or 0),
+            "residual_coupon_code": r.residual_coupon_code,
+            "difference_paid": float(r.difference_paid or 0),
+            "status": r.status,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in redemptions
+    ]
+
+    cp_filters = []
+    if len(cpf_digits) == 11:
+        cp_filters.append(B2CCoupon.assigned_cpf == cpf_digits)
+    if email_clean:
+        cp_filters.append(func.lower(B2CCoupon.assigned_email) == email_clean)
+
+    assigned_coupons = []
+    if cp_filters:
+        for c in (
+            db.query(B2CCoupon)
+            .filter(B2CCoupon.company_id == cid, or_(*cp_filters))
+            .order_by(B2CCoupon.created_at.desc())
+            .all()
+        ):
+            assigned_coupons.append(
+                {
+                    "id": c.id,
+                    "code": c.code,
+                    "coupon_mode": c.coupon_mode,
+                    "batch_name": c.batch.name if c.batch else "Cupom Avulso",
+                    "discount_type": getattr(c, "discount_type", "FIXED_BRL") or "FIXED_BRL",
+                    "initial_value": float(c.initial_value or 0),
+                    "current_balance": float(c.current_balance or 0),
+                    "used_amount": float(c.used_amount or 0),
+                    "status": c.status,
+                    "generated_child_code": c.generated_child_code,
+                    "valid_until": c.valid_until.isoformat() if c.valid_until else None,
+                    "used_at": c.used_at.isoformat() if c.used_at else None,
+                    "created_at": c.created_at.isoformat() if c.created_at else None,
+                }
+            )
+
+    # 3. Histórico de Logins / Acessos + Aceites LGPD
+    login_history = list(cust_meta.get("login_history") if isinstance(cust_meta.get("login_history"), list) else [])
+    lgpd_filters = [B2CLgpdConsent.customer_id == cust.id]
+    if len(cpf_digits) == 11:
+        lgpd_filters.append(B2CLgpdConsent.customer_cpf == cpf_digits)
+    if email_clean:
+        lgpd_filters.append(func.lower(B2CLgpdConsent.customer_email) == email_clean)
+
+    lgpd_rows = (
+        db.query(B2CLgpdConsent)
+        .filter(B2CLgpdConsent.company_id == cid, or_(*lgpd_filters))
+        .order_by(B2CLgpdConsent.accepted_at.desc())
+        .limit(30)
+        .all()
+    )
+    lgpd_consents = [
+        {
+            "id": l.id,
+            "ip_address": l.ip_address or "",
+            "user_agent": l.user_agent or "",
+            "terms_version": l.terms_version or "v1.0",
+            "marketing_opt_in": bool(l.marketing_opt_in),
+            "accepted_at": l.accepted_at.isoformat() if l.accepted_at else None,
+        }
+        for l in lgpd_rows
+    ]
+
+    # 4. Alertas Avise-me
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == cid).first()
+    raw_cfg = getattr(settings, "b2c_showcases_config", None) if settings else None
+    notifications = (
+        raw_cfg.get("stock_notifications", [])
+        if isinstance(raw_cfg, dict) and isinstance(raw_cfg.get("stock_notifications"), list)
+        else []
+    )
+    cust_alerts = [
+        n
+        for n in notifications
+        if isinstance(n, dict) and email_clean and str(n.get("email") or "").strip().lower() == email_clean
+    ]
+
+    return {
+        "customer": {
+            "id": cust.id,
+            "name": cust.name,
+            "cpf": cust.document or "",
+            "email": cust.email or "",
+            "phone": cust.phone or "",
+            "has_password": bool(cust.password_hash),
+            "origin": cust_meta.get("origin") or cust.segment or "B2C_STOREFRONT",
+            "horus_cod_cli": cust.horus_cod_cli,
+            "created_at": cust.created_at.isoformat() if cust.created_at else None,
+            "updated_at": cust.updated_at.isoformat() if cust.updated_at else None,
+            "last_login_at": cust_meta.get("last_login_at"),
+            "address": {
+                "zip_code": getattr(addr, "zip_code", "") if addr else "",
+                "street": getattr(addr, "street", "") if addr else "",
+                "number": getattr(addr, "number", "") if addr else "",
+                "complement": getattr(addr, "complement", "") if addr else "",
+                "neighborhood": getattr(addr, "neighborhood", "") if addr else "",
+                "city": (getattr(addr, "city", "") if addr else "") or (cust.city or ""),
+                "state": (getattr(addr, "state", "") if addr else "") or (cust.state or ""),
+            },
+        },
+        "metrics": {
+            "orders_count": len(serialized_orders),
+            "total_spent": round(sum(float(o["total"] or 0) for o in serialized_orders), 2),
+            "total_discount_coupons": round(sum(float(r["discount_applied"] or 0) for r in serialized_redemptions), 2),
+            "coupons_used_count": len(serialized_redemptions),
+            "assigned_coupons_count": len(assigned_coupons),
+            "logins_count": len(login_history),
+            "lgpd_consents_count": len(lgpd_consents),
+        },
+        "orders": serialized_orders,
+        "coupon_redemptions": serialized_redemptions,
+        "assigned_coupons": assigned_coupons,
+        "login_history": login_history,
+        "lgpd_consents": lgpd_consents,
+        "stock_alerts": cust_alerts,
+    }
+
+
+@router.post("/customers/{customer_id}/send-password-reset")
+def seller_send_b2c_customer_password_reset(
+    customer_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Dispara diretamente pelo painel do Seller o e-mail de Recuperação / Criação de Senha para o cliente B2C.
+    Ideal para clientes migrados via planilha Excel.
+    """
+    cid = _resolve_seller_company_id(current_user, company_id)
+    cust = db.query(Customer).filter(Customer.id == customer_id, Customer.company_id == cid).first()
+    if not cust:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    if not cust.email or "@" not in cust.email:
+        raise HTTPException(status_code=400, detail="Este cliente não possui um e-mail válido cadastrado.")
+
+    req_data = B2CAuthForgotPasswordRequest(company_id=cid, identifier=cust.email)
+    res = forgot_b2c_customer_password(data=req_data, db=db)
+    _append_b2c_customer_login_event(
+        cust,
+        event_type="PASSWORD_RESET_SENT_BY_SELLER",
+        detail=f"Token de acesso/recuperação enviado pelo painel para {cust.email}",
+    )
+    db.commit()
+    return res
 
 
 @router.patch("/customers/stock-notify/{notify_id}")
@@ -6625,6 +7398,7 @@ def check_b2c_customer_identity(
 @router.post("/public/auth/login")
 def login_b2c_customer(
     data: B2CAuthLoginRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     cust = _find_b2c_customer_by_identifier(db, data.company_id, data.identifier)
@@ -6634,12 +7408,14 @@ def login_b2c_customer(
     if cust.password_hash:
         if not security.verify_password(data.password, cust.password_hash):
             raise HTTPException(status_code=401, detail="Senha incorreta. Tente novamente ou clique em 'Esqueci minha senha'.")
+        _append_b2c_customer_login_event(cust, event_type="LOGIN", request=request, detail="Login realizado com senha na Loja B2C")
     else:
         # First password definition for legacy B2C customer without password_hash
         if len(data.password.strip()) < 6:
             raise HTTPException(status_code=400, detail="Crie uma senha com pelo menos 6 caracteres.")
         cust.password_hash = security.get_password_hash(data.password.strip())
-        db.commit()
+        _append_b2c_customer_login_event(cust, event_type="FIRST_ACCESS_PASSWORD_SET", request=request, detail="Definição de senha no Primeiro Acesso B2C")
+    db.commit()
 
     token = security.create_access_token(
         subject=f"b2c_customer:{cust.id}",
@@ -6655,6 +7431,7 @@ def login_b2c_customer(
 @router.post("/public/auth/register")
 def register_b2c_customer(
     data: B2CAuthRegisterRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     cpf_digits = _clean_digits(data.cpf)
@@ -6689,6 +7466,7 @@ def register_b2c_customer(
             phone=(data.phone or "").strip(),
             customer_type="PF",
             crm_status="ACTIVE",
+            segment="B2C_STOREFRONT",
             city=data.city or "",
             state=(data.state or "")[:2].upper(),
             password_hash=security.get_password_hash(data.password.strip()),
@@ -6706,6 +7484,8 @@ def register_b2c_customer(
             cust.state = data.state[:2].upper()
         cust.password_hash = security.get_password_hash(data.password.strip())
         db.flush()
+
+    _append_b2c_customer_login_event(cust, event_type="REGISTER", request=request, detail="Cadastro / Ativação de conta na Loja B2C")
 
     if data.zip_code and data.street:
         addr = db.query(Address).filter(Address.customer_id == cust.id).first()
@@ -6911,6 +7691,7 @@ def forgot_b2c_customer_password(
 @router.post("/public/auth/reset-password")
 def reset_b2c_customer_password(
     data: B2CAuthResetPasswordRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     cust = _find_b2c_customer_by_identifier(db, data.company_id, data.identifier)
@@ -6934,6 +7715,7 @@ def reset_b2c_customer_password(
         raise HTTPException(status_code=400, detail="Token de segurança incorreto. Verifique os 6 dígitos enviados por e-mail.")
 
     cust.password_hash = security.get_password_hash(new_pwd)
+    _append_b2c_customer_login_event(cust, event_type="PASSWORD_RESET_COMPLETED", request=request, detail="Senha redefinida via Token de Segurança")
     db.commit()
     _B2C_PASSWORD_RESET_CODES.pop(key, None)
 
