@@ -62,19 +62,28 @@ export default function POSReceiptModal({
           </div>
 
           <div className="space-y-1.5 border-b border-dashed border-slate-300 dark:border-slate-700 pb-3">
-            {sale.items.map((it, idx) => (
-              <div key={idx} className="flex justify-between items-start">
-                <div className="flex-1 pr-2">
-                  <span className="font-semibold block truncate">{it.title}</span>
-                  <span className="text-[10px] text-slate-500">
-                    {it.quantity} x R$ {Number(it.unit_price).toFixed(2)}
+            {sale.items.map((it, idx) => {
+              const gross = Number((Number(it.unit_price) * Number(it.quantity)).toFixed(2));
+              const itemDisc = Number((it.discount ?? Math.max(0, gross - Number(it.total_price))).toFixed(2));
+              return (
+                <div key={idx} className="flex justify-between items-start">
+                  <div className="flex-1 pr-2">
+                    <span className="font-semibold block truncate">{it.title}</span>
+                    <span className="text-[10px] text-slate-500">
+                      {it.quantity} x R$ {Number(it.unit_price).toFixed(2)}
+                      {itemDisc > 0 && (
+                        <span className="text-rose-500 font-semibold ml-1">
+                          (-R$ {itemDisc.toFixed(2)} desc.)
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <span className="font-bold whitespace-nowrap">
+                    R$ {Number(it.total_price).toFixed(2)}
                   </span>
                 </div>
-                <span className="font-bold whitespace-nowrap">
-                  R$ {Number(it.total_price).toFixed(2)}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="space-y-1 text-right pt-1">

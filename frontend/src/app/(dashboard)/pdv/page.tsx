@@ -80,6 +80,10 @@ import { maskCPF } from '@/lib/validators';
 interface CartItem extends PDVCatalogItem {
   cart_item_id?: string;
   quantity: number;
+  discount?: number;
+  discount_source?: 'NONE' | 'ITEM' | 'PRORATED';
+  discount_mode_applied?: 'BRL' | 'PCT';
+  discount_val_applied?: number;
 }
 
 interface CustomerOption {
@@ -199,6 +203,11 @@ export default function PDVPage() {
     cartRef.current = cart;
   }, [cart]);
   const [globalDiscount, setGlobalDiscount] = useState<number>(0);
+  const [discountMode, setDiscountMode] = useState<'BRL' | 'PCT'>('BRL');
+  const [discountInputVal, setDiscountInputVal] = useState<number>(0);
+  const [selectedCartItemKey, setSelectedCartItemKey] = useState<string | null>(null);
+  const [activeProratedDiscount, setActiveProratedDiscount] = useState<{ mode: 'BRL' | 'PCT'; val: number } | null>(null);
+  const [discountStatusText, setDiscountStatusText] = useState<string>('');
 
   // Consumidor & Fixação 📌
   const [customerMode, setCustomerMode] = useState<'final' | 'manual' | 'registered'>('final');
@@ -635,6 +644,78 @@ export default function PDVPage() {
     }
   }, [companyId, activeSession]);
 
+  // ─── Função pura de recálculo de descontos (Item / Rateado na Venda) ──────
+  const computeCartWithDiscounts = useCallback((
+    items: CartItem[],
+    prorated: { mode: 'BRL' | 'PCT'; val: number } | null
+  ): { items: CartItem[]; totalDiscount: number } => {
+    if (items.length === 0) {
+      return { items: [], totalDiscount: 0 };
+    }
+
+    if (prorated && prorated.val > 0) {
+      const grossList = items.map((it) => Number((it.price * it.quantity).toFixed(2)));
+      const totalGross = Number(grossList.reduce((a, b) => a + b, 0).toFixed(2));
+      if (totalGross <= 0) {
+        return {
+          items: items.map((it) => ({ ...it, discount: 0, discount_source: 'NONE' })),
+          totalDiscount: 0,
+        };
+      }
+      const totalDisc =
+        prorated.mode === 'PCT'
+          ? Number((totalGross * (Math.min(prorated.val, 100) / 100)).toFixed(2))
+          : Number(Math.min(prorated.val, totalGross).toFixed(2));
+
+      const shares = grossList.map((g) => {
+        const sh = Number((totalDisc * (g / totalGross)).toFixed(2));
+        return Math.min(sh, g);
+      });
+      const sumShares = Number(shares.reduce((a, b) => a + b, 0).toFixed(2));
+      const diff = Number((totalDisc - sumShares).toFixed(2));
+      if (diff !== 0 && shares.length > 0) {
+        for (let i = shares.length - 1; i >= 0; i--) {
+          const candidate = Number((shares[i] + diff).toFixed(2));
+          if (candidate >= 0 && candidate <= grossList[i]) {
+            shares[i] = candidate;
+            break;
+          }
+        }
+      }
+
+      const updated = items.map((it, idx) => ({
+        ...it,
+        discount: shares[idx],
+        discount_source: 'PRORATED' as const,
+        discount_mode_applied: prorated.mode,
+        discount_val_applied: prorated.val,
+      }));
+      const finalDisc = Number(shares.reduce((a, b) => a + b, 0).toFixed(2));
+      return { items: updated, totalDiscount: finalDisc };
+    }
+
+    // Sem rateio global ativo: preserva descontos individuais por item (recalculando % se a qtd mudou)
+    const updated = items.map((it) => {
+      const gross = Number((it.price * it.quantity).toFixed(2));
+      if (it.discount_source === 'ITEM') {
+        const mApp = it.discount_mode_applied || 'BRL';
+        const vApp = Number(it.discount_val_applied || 0);
+        const disc =
+          mApp === 'PCT'
+            ? Number((gross * (Math.min(vApp, 100) / 100)).toFixed(2))
+            : Number(Math.min(vApp, gross).toFixed(2));
+        return { ...it, discount: disc };
+      }
+      const clamped = Number(Math.min(Number(it.discount || 0), gross).toFixed(2));
+      return { ...it, discount: clamped };
+    });
+
+    const totalDiscount = Number(
+      updated.reduce((acc, it) => acc + Number(it.discount || 0), 0).toFixed(2)
+    );
+    return { items: updated, totalDiscount };
+  }, []);
+
   // ─── 4. Adicionar ao Carrinho com Validação de Saldo ───────────────────────
   const addToCart = useCallback((product: PDVCatalogItem) => {
     const existing = cart.find((i) => i.barcode === product.barcode);
@@ -659,19 +740,37 @@ export default function PDVPage() {
 
     setCart((prev) => {
       const found = prev.find((i) => i.barcode === product.barcode);
+      let nextCart: CartItem[];
+      let targetKey: string;
       if (found) {
-        return prev.map((i) =>
+        targetKey = found.cart_item_id || found.barcode;
+        nextCart = prev.map((i) =>
           i.barcode === product.barcode ? { ...i, quantity: i.quantity + 1 } : i
         );
+      } else {
+        const cartItemId = `${product.barcode}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        targetKey = cartItemId;
+        nextCart = [
+          ...prev,
+          {
+            ...product,
+            cart_item_id: cartItemId,
+            quantity: 1,
+            discount: 0,
+            discount_source: 'NONE',
+          },
+        ];
       }
-      const cartItemId = `${product.barcode}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      return [...prev, { ...product, cart_item_id: cartItemId, quantity: 1 }];
+      setSelectedCartItemKey(targetKey);
+      const { items: recomputed, totalDiscount } = computeCartWithDiscounts(nextCart, activeProratedDiscount);
+      setGlobalDiscount(totalDiscount);
+      return recomputed;
     });
 
     playSuccessBeep();
     const newQty = currentQtyInCart + 1;
     triggerFeedback('success', `Adicionado: ${product.title.substring(0, 35)}...`, `Qtd no carrinho: ${newQty} • R$ ${(product.price * newQty).toFixed(2)}`);
-  }, [cart, isStockValidationActive, triggerFeedback]);
+  }, [cart, isStockValidationActive, triggerFeedback, computeCartWithDiscounts, activeProratedDiscount]);
 
   // ─── 5. Omnibar: Bipe de Código ou Busca Textual ───────────────────────────
   const handleOmnibarSubmit = useCallback(async (codeToProcess?: string) => {
@@ -826,7 +925,7 @@ export default function PDVPage() {
     setTimeout(() => omnibarInputRef.current?.focus(), 50);
   }, [omnibarInput, companyId, activeSession, addToCart, performSearch, triggerFeedback]);
 
-  // ─── 6. Manipulação do Carrinho ───────────────────────────────────────────
+  // ─── 6. Manipulação do Carrinho & Descontos (Item / Rateado) ─────────────
   const updateQuantity = useCallback((itemKey: string, delta: number) => {
     const item = cart.find((i) => (i.cart_item_id && i.cart_item_id === itemKey) || i.barcode === itemKey);
     if (!item) return;
@@ -841,8 +940,8 @@ export default function PDVPage() {
       }
     }
 
-    setCart((prev) =>
-      prev
+    setCart((prev) => {
+      const nextCart = prev
         .map((i) => {
           if ((i.cart_item_id && i.cart_item_id === itemKey) || i.barcode === itemKey) {
             const newQty = i.quantity + delta;
@@ -850,17 +949,119 @@ export default function PDVPage() {
           }
           return i;
         })
-        .filter(Boolean) as CartItem[]
-    );
-  }, [cart, isStockValidationActive, triggerFeedback]);
+        .filter(Boolean) as CartItem[];
+      const { items: recomputed, totalDiscount } = computeCartWithDiscounts(nextCart, activeProratedDiscount);
+      setGlobalDiscount(totalDiscount);
+      return recomputed;
+    });
+  }, [cart, isStockValidationActive, triggerFeedback, computeCartWithDiscounts, activeProratedDiscount]);
 
   const removeItem = useCallback((itemKey: string) => {
-    setCart((prev) => prev.filter((i) => (i.cart_item_id ? i.cart_item_id !== itemKey : i.barcode !== itemKey)));
+    setCart((prev) => {
+      const nextCart = prev.filter((i) => (i.cart_item_id ? i.cart_item_id !== itemKey : i.barcode !== itemKey));
+      const { items: recomputed, totalDiscount } = computeCartWithDiscounts(nextCart, activeProratedDiscount);
+      setGlobalDiscount(totalDiscount);
+      if (selectedCartItemKey === itemKey) {
+        const last = recomputed[recomputed.length - 1];
+        setSelectedCartItemKey(last ? (last.cart_item_id || last.barcode) : null);
+      }
+      return recomputed;
+    });
+  }, [computeCartWithDiscounts, activeProratedDiscount, selectedCartItemKey]);
+
+  const applyCartDiscount = useCallback((scope: 'SALE' | 'ITEM') => {
+    if (cart.length === 0) {
+      toast.warning('Adicione itens ao carrinho antes de aplicar desconto.');
+      return;
+    }
+    const val = Math.max(0, Number(discountInputVal || 0));
+    if (val <= 0) {
+      toast.info('Informe um valor ou percentual de desconto maior que zero.');
+      return;
+    }
+
+    if (scope === 'ITEM') {
+      setActiveProratedDiscount(null);
+      setCart((prev) => {
+        // Se antes estava com rateio na venda toda, limpa os outros itens rateados e aplica no item selecionado
+        let targetIdx = prev.findIndex(
+          (i, idx) => (i.cart_item_id || `${i.barcode}-${idx}`) === selectedCartItemKey || i.barcode === selectedCartItemKey
+        );
+        if (targetIdx < 0) targetIdx = prev.length - 1;
+
+        const nextCart = prev.map((it, idx) => {
+          const baseItem: CartItem =
+            it.discount_source === 'PRORATED'
+              ? { ...it, discount: 0, discount_source: 'NONE' }
+              : { ...it };
+          if (idx !== targetIdx) return baseItem;
+
+          const gross = Number((baseItem.price * baseItem.quantity).toFixed(2));
+          const discItem =
+            discountMode === 'PCT'
+              ? Number((gross * (Math.min(val, 100) / 100)).toFixed(2))
+              : Number(Math.min(val, gross).toFixed(2));
+          return {
+            ...baseItem,
+            discount: discItem,
+            discount_source: 'ITEM' as const,
+            discount_mode_applied: discountMode,
+            discount_val_applied: val,
+          };
+        });
+
+        const totalDisc = Number(
+          nextCart.reduce((acc, it) => acc + Number(it.discount || 0), 0).toFixed(2)
+        );
+        setGlobalDiscount(totalDisc);
+        const appliedItem = nextCart[targetIdx];
+        const itemDisc = Number(appliedItem.discount || 0);
+        setDiscountStatusText(
+          `🎯 Desconto no item "${appliedItem.title.substring(0, 22)}": - R$ ${itemDisc.toFixed(2)}`
+        );
+        toast.success(`Desconto de R$ ${itemDisc.toFixed(2)} aplicado em "${appliedItem.title.substring(0, 28)}"`);
+        return nextCart;
+      });
+      return;
+    }
+
+    // scope === 'SALE' (Ratear proporcionalmente na venda toda)
+    const proratedCfg = { mode: discountMode, val };
+    setActiveProratedDiscount(proratedCfg);
+    setCart((prev) => {
+      const { items: recomputed, totalDiscount } = computeCartWithDiscounts(prev, proratedCfg);
+      setGlobalDiscount(totalDiscount);
+      setDiscountStatusText(
+        `📊 Desconto rateado em ${recomputed.length} item(ns): - R$ ${totalDiscount.toFixed(2)}`
+      );
+      toast.success(`Desconto de R$ ${totalDiscount.toFixed(2)} rateado entre os itens da venda!`);
+      return recomputed;
+    });
+  }, [cart.length, discountInputVal, discountMode, selectedCartItemKey, computeCartWithDiscounts]);
+
+  const clearDiscounts = useCallback(() => {
+    setDiscountInputVal(0);
+    setActiveProratedDiscount(null);
+    setGlobalDiscount(0);
+    setDiscountStatusText('');
+    setCart((prev) =>
+      prev.map((it) => ({
+        ...it,
+        discount: 0,
+        discount_source: 'NONE',
+        discount_mode_applied: undefined,
+        discount_val_applied: undefined,
+      }))
+    );
   }, []);
 
   const clearCart = useCallback(() => {
     setCart([]);
     setGlobalDiscount(0);
+    setDiscountInputVal(0);
+    setActiveProratedDiscount(null);
+    setDiscountStatusText('');
+    setSelectedCartItemKey(null);
     setCashReceived('');
     setSelectedInstallments(1);
     setSplitPayments([]);
@@ -956,17 +1157,23 @@ export default function PDVPage() {
     const now = new Date();
     const saleNumber = `PDV-${now.getFullYear().toString().slice(-2)}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}-${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}`;
 
-    const itemsRecord: PDVSaleItemRecord[] = cart.map((it) => ({
-      barcode: it.barcode,
-      sku: it.sku,
-      title: it.title,
-      publisher: it.publisher,
-      quantity: it.quantity,
-      unit_price: it.price,
-      total_price: it.price * it.quantity,
-      horus_item_code: it.horus_item_code,
-      product_id: it.product_id,
-    }));
+    const itemsRecord: PDVSaleItemRecord[] = cart.map((it) => {
+      const gross = Number((it.price * it.quantity).toFixed(2));
+      const itemDisc = Number((it.discount || 0).toFixed(2));
+      const netTotal = Number(Math.max(0, gross - itemDisc).toFixed(2));
+      return {
+        barcode: it.barcode,
+        sku: it.sku,
+        title: it.title,
+        publisher: it.publisher,
+        quantity: it.quantity,
+        unit_price: it.price,
+        discount: itemDisc,
+        total_price: netTotal,
+        horus_item_code: it.horus_item_code,
+        product_id: it.product_id,
+      };
+    });
 
     let pDetails = '';
     if (paymentMethod === 'DINHEIRO') {
@@ -1698,22 +1905,59 @@ export default function PDVPage() {
             ) : (
               cart.map((item, idx) => {
                 const itemKey = item.cart_item_id || `${item.barcode}-${idx}`;
+                const isSelected =
+                  selectedCartItemKey === itemKey ||
+                  selectedCartItemKey === item.barcode ||
+                  (!selectedCartItemKey && idx === cart.length - 1);
+                const gross = Number((item.price * item.quantity).toFixed(2));
+                const itemDisc = Number((item.discount || 0).toFixed(2));
+                const net = Number(Math.max(0, gross - itemDisc).toFixed(2));
+
                 return (
                   <div
                     key={itemKey}
-                    className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 flex items-center justify-between gap-2"
+                    onClick={() => setSelectedCartItemKey(itemKey)}
+                    className={`p-2.5 rounded-xl border transition cursor-pointer flex items-center justify-between gap-2 ${
+                      isSelected
+                        ? 'border-indigo-500 dark:border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 ring-1 ring-indigo-500/20'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 hover:border-slate-300 dark:hover:border-slate-700'
+                    }`}
                   >
                     <div className="flex-1 min-w-0 pr-1">
-                      <span className="font-semibold text-xs text-slate-900 dark:text-white truncate block leading-snug">
-                        {item.title}
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        R$ {item.price.toFixed(2)} un • Sub: <strong className="text-slate-700 dark:text-slate-200">R$ {(item.price * item.quantity).toFixed(2)}</strong>
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold text-xs text-slate-900 dark:text-white truncate block leading-snug">
+                          {item.title}
+                        </span>
+                        {isSelected && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 shrink-0">
+                            Selecionado
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400 mt-0.5">
+                        <span>R$ {item.price.toFixed(2)} un</span>
+                        <span>•</span>
+                        {itemDisc > 0 ? (
+                          <>
+                            <span className="line-through text-slate-400">R$ {gross.toFixed(2)}</span>
+                            <span className="font-semibold text-rose-500">
+                              (-R$ {itemDisc.toFixed(2)} {item.discount_source === 'ITEM' ? '🎯' : '📊'})
+                            </span>
+                            <strong className="text-emerald-600 dark:text-emerald-400">R$ {net.toFixed(2)}</strong>
+                          </>
+                        ) : (
+                          <span>
+                            Sub: <strong className="text-slate-700 dark:text-slate-200">R$ {gross.toFixed(2)}</strong>
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Quantity Stepper */}
-                    <div className="flex items-center gap-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5 shrink-0">
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5 shrink-0"
+                    >
                       <button
                         onClick={() => updateQuantity(itemKey, -1)}
                         className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-600 dark:text-slate-300"
@@ -1730,7 +1974,10 @@ export default function PDVPage() {
                     </div>
 
                     <button
-                      onClick={() => removeItem(itemKey)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeItem(itemKey);
+                      }}
                       className="p-1 text-slate-400 hover:text-rose-500 transition shrink-0"
                       title="Remover item"
                     >
@@ -1743,20 +1990,113 @@ export default function PDVPage() {
           </div>
 
           {/* Cart Summary & Checkout Trigger */}
-          <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-3 shrink-0">
+          <div className="p-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-2.5 shrink-0">
             
-            {/* Desconto */}
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>Desconto:</span>
-              <CurrencyInput
-                prefixStr="R$ "
-                allowEmpty={true}
-                placeholder="0,00"
-                value={globalDiscount}
-                onChangeValue={(val) => setGlobalDiscount(val)}
-                className="w-28 px-2 py-1 text-right font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold outline-none focus:ring-1 focus:ring-emerald-500"
-              />
+            {/* Painel de Desconto (R$ ou % | No Item ou Rateado na Venda) */}
+            <div className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-900/90 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                    Desconto
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {/* Alternador R$ / % */}
+                  <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 p-0.5 bg-slate-100 dark:bg-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDiscountMode('BRL');
+                        setDiscountInputVal(0);
+                      }}
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
+                        discountMode === 'BRL'
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                      }`}
+                    >
+                      R$
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDiscountMode('PCT');
+                        setDiscountInputVal(0);
+                      }}
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
+                        discountMode === 'PCT'
+                          ? 'bg-indigo-600 text-white shadow-2xs'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                      }`}
+                    >
+                      %
+                    </button>
+                  </div>
+
+                  <CurrencyInput
+                    prefixStr={discountMode === 'BRL' ? 'R$ ' : ''}
+                    suffixStr={discountMode === 'PCT' ? '%' : ''}
+                    max={discountMode === 'PCT' ? 100 : undefined}
+                    allowEmpty={true}
+                    placeholder="0,00"
+                    value={discountInputVal}
+                    onChangeValue={(val) => setDiscountInputVal(val)}
+                    className="w-28 px-2 py-1 text-right font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-bold outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => applyCartDiscount('SALE')}
+                  disabled={cart.length === 0}
+                  className="flex-1 py-1.5 px-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold transition disabled:opacity-40"
+                  title="Rateia o desconto proporcionalmente entre todos os itens da venda"
+                >
+                  📊 Ratear na Venda
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyCartDiscount('ITEM')}
+                  disabled={cart.length === 0}
+                  className="flex-1 py-1.5 px-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold transition disabled:opacity-40"
+                  title="Aplica o desconto apenas no item selecionado na lista acima"
+                >
+                  🎯 No Item
+                </button>
+                {globalDiscount > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearDiscounts}
+                    className="py-1.5 px-2 rounded-lg border border-rose-200 dark:border-rose-800/60 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 text-[10px] font-bold transition"
+                    title="Zerar todos os descontos"
+                  >
+                    Zerar
+                  </button>
+                )}
+              </div>
+
+              {(globalDiscount > 0 || discountStatusText) && (
+                <div className="flex items-center justify-between text-[10px] pt-1 border-t border-slate-100 dark:border-slate-800">
+                  <span className="text-slate-500 dark:text-slate-400 truncate pr-2">
+                    {discountStatusText || 'Desconto ativo no carrinho'}
+                  </span>
+                  <span className="font-mono font-bold text-rose-600 dark:text-rose-400 shrink-0">
+                    - R$ {globalDiscount.toFixed(2)}
+                  </span>
+                </div>
+              )}
             </div>
+
+            {globalDiscount > 0 && (
+              <div className="flex justify-between items-center text-xs text-slate-500 px-0.5">
+                <span>Subtotal Bruto: R$ {subtotal.toFixed(2)}</span>
+                <span className="font-bold text-rose-500">Desc: - R$ {globalDiscount.toFixed(2)}</span>
+              </div>
+            )}
 
             <div className="flex justify-between items-baseline pt-2 border-t border-slate-200 dark:border-slate-700">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-500">TOTAL DA VENDA:</span>
@@ -1824,21 +2164,58 @@ export default function PDVPage() {
             <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
               {cart.map((item, idx) => {
                 const itemKey = item.cart_item_id || `${item.barcode}-${idx}`;
+                const isSelected =
+                  selectedCartItemKey === itemKey ||
+                  selectedCartItemKey === item.barcode ||
+                  (!selectedCartItemKey && idx === cart.length - 1);
+                const gross = Number((item.price * item.quantity).toFixed(2));
+                const itemDisc = Number((item.discount || 0).toFixed(2));
+                const net = Number(Math.max(0, gross - itemDisc).toFixed(2));
+
                 return (
                   <div
                     key={itemKey}
-                    className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-between"
+                    onClick={() => setSelectedCartItemKey(itemKey)}
+                    className={`p-3 rounded-xl border transition cursor-pointer flex items-center justify-between ${
+                      isSelected
+                        ? 'border-indigo-500 dark:border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 ring-1 ring-indigo-500/20'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40'
+                    }`}
                   >
                     <div className="flex-1 min-w-0 pr-2">
-                      <span className="font-bold text-xs text-slate-900 dark:text-white truncate block">
-                        {item.title}
-                      </span>
-                      <span className="text-[11px] text-slate-400">
-                        R$ {item.price.toFixed(2)} un • Sub: <strong>R$ {(item.price * item.quantity).toFixed(2)}</strong>
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-slate-900 dark:text-white truncate block">
+                          {item.title}
+                        </span>
+                        {isSelected && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 shrink-0">
+                            Selecionado
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400 mt-0.5">
+                        <span>R$ {item.price.toFixed(2)} un</span>
+                        <span>•</span>
+                        {itemDisc > 0 ? (
+                          <>
+                            <span className="line-through text-slate-400">R$ {gross.toFixed(2)}</span>
+                            <span className="font-semibold text-rose-500">
+                              (-R$ {itemDisc.toFixed(2)} {item.discount_source === 'ITEM' ? '🎯' : '📊'})
+                            </span>
+                            <strong className="text-emerald-600 dark:text-emerald-400">R$ {net.toFixed(2)}</strong>
+                          </>
+                        ) : (
+                          <span>
+                            Sub: <strong>R$ {gross.toFixed(2)}</strong>
+                          </span>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg p-0.5">
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg p-0.5"
+                    >
                       <button
                         onClick={() => updateQuantity(itemKey, -1)}
                         className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
@@ -1855,7 +2232,10 @@ export default function PDVPage() {
                     </div>
 
                     <button
-                      onClick={() => removeItem(itemKey)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeItem(itemKey);
+                      }}
                       className="p-1.5 text-slate-400 hover:text-rose-500 ml-2"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -1866,6 +2246,99 @@ export default function PDVPage() {
             </div>
 
             <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-3">
+              {/* Painel de Desconto Mobile (R$ ou % | No Item ou Rateado na Venda) */}
+              <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                      Desconto
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 p-0.5 bg-slate-100 dark:bg-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDiscountMode('BRL');
+                          setDiscountInputVal(0);
+                        }}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-md transition ${
+                          discountMode === 'BRL'
+                            ? 'bg-emerald-600 text-white'
+                            : 'text-slate-600 dark:text-slate-400'
+                        }`}
+                      >
+                        R$
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDiscountMode('PCT');
+                          setDiscountInputVal(0);
+                        }}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-md transition ${
+                          discountMode === 'PCT'
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-slate-600 dark:text-slate-400'
+                        }`}
+                      >
+                        %
+                      </button>
+                    </div>
+                    <CurrencyInput
+                      prefixStr={discountMode === 'BRL' ? 'R$ ' : ''}
+                      suffixStr={discountMode === 'PCT' ? '%' : ''}
+                      max={discountMode === 'PCT' ? 100 : undefined}
+                      allowEmpty={true}
+                      placeholder="0,00"
+                      value={discountInputVal}
+                      onChangeValue={(val) => setDiscountInputVal(val)}
+                      className="w-28 px-2.5 py-1.5 text-right font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-bold outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => applyCartDiscount('SALE')}
+                    disabled={cart.length === 0}
+                    className="flex-1 py-2 px-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition disabled:opacity-40"
+                  >
+                    📊 Ratear na Venda
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyCartDiscount('ITEM')}
+                    disabled={cart.length === 0}
+                    className="flex-1 py-2 px-2.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-xs font-bold transition disabled:opacity-40"
+                  >
+                    🎯 No Item
+                  </button>
+                  {globalDiscount > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearDiscounts}
+                      className="py-2 px-2.5 rounded-lg border border-rose-200 dark:border-rose-800/60 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 text-xs font-bold transition"
+                    >
+                      Zerar
+                    </button>
+                  )}
+                </div>
+
+                {globalDiscount > 0 && (
+                  <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-100 dark:border-slate-800">
+                    <span className="text-slate-500 truncate pr-2">
+                      {discountStatusText || 'Desconto ativo'}
+                    </span>
+                    <span className="font-mono font-bold text-rose-600 shrink-0">
+                      - R$ {globalDiscount.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </div>
+
               <div className="flex justify-between items-baseline">
                 <span className="text-xs font-bold uppercase text-slate-500">TOTAL:</span>
                 <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">

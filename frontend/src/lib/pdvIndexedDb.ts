@@ -28,6 +28,7 @@ export interface PDVSaleItemRecord {
   publisher?: string;
   quantity: number;
   unit_price: number;
+  discount?: number;
   total_price: number;
   horus_item_code?: string;
   product_id?: number;
