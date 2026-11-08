@@ -49,3 +49,4 @@ def send_smtp_email(
                 pass
             server.login(smtp_username, smtp_password)
             server.send_message(msg)
+    return True

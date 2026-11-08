@@ -765,7 +765,8 @@ def _send_b2c_order_email(
         }
 
         if sync_send:
-            return bool(send_smtp_email(**smtp_args))
+            send_smtp_email(**smtp_args)
+            return True
 
         def _bg_send():
             try:
@@ -1593,6 +1594,18 @@ def send_b2c_test_email(
         subject = _apply_vars(email_cfg.get("paid_subject") or "")
         intro_text = _apply_vars(email_cfg.get("paid_message") or email_cfg.get("paid_body") or "")
         badge_bg, badge_color, badge_label = "#d1fae5", "#047857", "✅ Pagamento Aprovado"
+    elif norm_st == "SEPARATION":
+        subject = _apply_vars(email_cfg.get("separation_subject") or f"Seu pedido #{sample_id} está em separação | {store_name}")
+        intro_text = _apply_vars(email_cfg.get("separation_message") or email_cfg.get("separation_body") or "")
+        badge_bg, badge_color, badge_label = "#e0e7ff", "#4338ca", "📦 Pedido em Separação"
+    elif norm_st == "FINALIZED":
+        subject = _apply_vars(email_cfg.get("finalized_subject") or f"Pedido #{sample_id} finalizado e pronto para envio | {store_name}")
+        intro_text = _apply_vars(email_cfg.get("finalized_message") or email_cfg.get("finalized_body") or "")
+        badge_bg, badge_color, badge_label = "#dbeafe", "#1d4ed8", "🚚 Pedido Finalizado • Pronto para Envio"
+    elif norm_st == "DELIVERED":
+        subject = _apply_vars(email_cfg.get("delivered_subject") or f"Pedido #{sample_id} entregue! | {store_name}")
+        intro_text = _apply_vars(email_cfg.get("delivered_message") or email_cfg.get("delivered_body") or "")
+        badge_bg, badge_color, badge_label = "#dcfce7", "#15803d", "🎉 Pedido Entregue"
     elif norm_st in ("CANCELLED", "CANCELED"):
         subject = _apply_vars(email_cfg.get("canceled_subject") or "")
         intro_text = _apply_vars(email_cfg.get("canceled_message") or email_cfg.get("canceled_body") or "")
@@ -1659,22 +1672,23 @@ def send_b2c_test_email(
         f"</div>"
     )
 
-    ok = send_smtp_email(
-        smtp_host=smtp_cfg.smtp_host,
-        smtp_port=int(smtp_cfg.smtp_port or 587),
-        smtp_username=smtp_cfg.smtp_username or "",
-        smtp_password=smtp_cfg.smtp_password or "",
-        smtp_from=smtp_cfg.smtp_from_email or smtp_cfg.smtp_username or "noreply@cronuz.com.br",
-        to_email=to_email,
-        subject=subject,
-        html_content=html_content,
-        use_ssl=bool(smtp_cfg.smtp_use_ssl),
-        bcc_email=None,
-    )
-    if not ok:
+    try:
+        send_smtp_email(
+            smtp_host=smtp_cfg.smtp_host,
+            smtp_port=int(smtp_cfg.smtp_port or 587),
+            smtp_username=smtp_cfg.smtp_username or "",
+            smtp_password=smtp_cfg.smtp_password or "",
+            smtp_from=smtp_cfg.smtp_from_email or smtp_cfg.smtp_username or "noreply@cronuz.com.br",
+            to_email=to_email,
+            subject=subject,
+            html_content=html_content,
+            use_ssl=bool(smtp_cfg.smtp_use_ssl),
+            bcc_email=None,
+        )
+    except Exception as exc:
         raise HTTPException(
             status_code=400,
-            detail=f"O servidor SMTP ({smtp_cfg.smtp_host}:{smtp_cfg.smtp_port or 587}) recusou ou falhou no envio para {to_email}. Verifique usuário e senha SMTP.",
+            detail=f"O servidor SMTP ({smtp_cfg.smtp_host}:{smtp_cfg.smtp_port or 587}) recusou ou falhou no envio para {to_email}: {exc}",
         )
 
     return {
