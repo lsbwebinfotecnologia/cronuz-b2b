@@ -52,6 +52,7 @@ class ModuleUpdate(BaseModel):
     module_order_intake: Optional[bool] = None
     module_b2c_storefront: Optional[bool] = None
     module_horus_api_bridge: Optional[bool] = None
+    module_mercadolivre: Optional[bool] = None
 
 
 class HorusTestRequest(BaseModel):

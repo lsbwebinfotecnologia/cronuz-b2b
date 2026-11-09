@@ -13,7 +13,7 @@ export default function DashboardLayout({
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const pathname = usePathname();
   const isFullWidthRoute = pathname?.startsWith('/proposals/desk') || pathname?.startsWith('/orders/intake');
-  const isWideSplitRoute = pathname?.startsWith('/companies/') || pathname?.startsWith('/settings');
+  const isWideSplitRoute = pathname?.startsWith('/companies/') || pathname?.startsWith('/settings') || pathname?.startsWith('/mercadolivre');
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50">

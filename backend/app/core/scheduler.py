@@ -427,5 +427,19 @@ def start_scheduler():
     except Exception as _e_job_b2c_stock:
         logger.warning(f"Falha ao registrar job de estoque B2C Horus: {_e_job_b2c_stock}")
 
+    # Sincronização Delta de Estoque Horus/Cronuz -> Mercado Livre (a cada 15 minutos)
+    try:
+        from app.api.mercadolivre import run_mercadolivre_stock_sync_job
+        scheduler.add_job(
+            run_mercadolivre_stock_sync_job,
+            IntervalTrigger(minutes=15),
+            id="job_mercadolivre_stock_sync",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+        )
+    except Exception as _e_job_meli:
+        logger.warning(f"Falha ao registrar job do Mercado Livre: {_e_job_meli}")
+
     scheduler.start()
     logger.info("Cronuz BG Scheduler Started - Jobs: NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice, Authors SSL Sync, B2C Horus Stock Sync")

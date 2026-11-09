@@ -146,6 +146,17 @@ class CompanySettingsBase(BaseModel):
     horus_bridge_allow_financial_sql: Optional[bool] = True
     horus_bridge_custom_gateway_url: Optional[str] = None
 
+    meli_enabled: Optional[bool] = False
+    meli_app_id: Optional[str] = None
+    meli_client_secret: Optional[str] = None
+    meli_redirect_uri: Optional[str] = None
+    meli_user_id: Optional[str] = None
+    meli_nickname: Optional[str] = None
+    meli_access_token: Optional[str] = None
+    meli_refresh_token: Optional[str] = None
+    meli_token_expires_at: Optional[datetime] = None
+    meli_preset_config: Optional[Dict[str, Any]] = None
+
 
 class CompanySettingsUpdate(CompanySettingsBase):
     pass

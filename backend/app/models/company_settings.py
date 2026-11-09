@@ -192,6 +192,18 @@ class CompanySettings(Base):
     horus_bridge_allow_financial_sql  = Column(Boolean, default=True, nullable=False, server_default="true")
     horus_bridge_custom_gateway_url   = Column(String(255), nullable=True)
 
+    # ── Módulo Mercado Livre (OAuth2, Pré-configurações, Categorias & Sync) ──
+    meli_enabled                      = Column(Boolean, default=False, nullable=False, server_default="false")
+    meli_app_id                       = Column(String(100), nullable=True)
+    meli_client_secret                = Column(String(255), nullable=True)
+    meli_redirect_uri                 = Column(String(500), nullable=True)
+    meli_user_id                      = Column(String(100), nullable=True, index=True)
+    meli_nickname                     = Column(String(150), nullable=True)
+    meli_access_token                 = Column(String(1000), nullable=True)
+    meli_refresh_token                = Column(String(1000), nullable=True)
+    meli_token_expires_at             = Column(DateTime(timezone=True), nullable=True)
+    meli_preset_config                = Column(JSON, nullable=True)
+
     # ────────────────────────────────────────────────────────────────────────────
 
     company = relationship("Company")

@@ -331,6 +331,7 @@ export default function CompanyModulesPage() {
       module_encomendas: company.module_encomendas ?? false,
       module_order_intake: company.module_order_intake ?? false,
       module_b2c_storefront: company.module_b2c_storefront ?? false,
+      module_mercadolivre: company.module_mercadolivre ?? false,
       [moduleName]: !currentValue,
     };
 
@@ -422,6 +423,14 @@ export default function CompanyModulesPage() {
           colorClass: 'bg-fuchsia-600',
           badge: 'B2C',
           configHref: `/companies/${companyId}/tray`,
+        },
+        {
+          key: 'module_mercadolivre',
+          title: 'Mercado Livre (Hub Integrador)',
+          desc: 'Criação de anúncios em 1 clique, pré-configuração de categorias (MLB1196), sync Delta de estoque Horus/Cronuz e recepção de pedidos.',
+          icon: ShoppingBag,
+          colorClass: 'bg-amber-500',
+          badge: 'Meli Hub',
         },
         {
           key: 'module_orders',

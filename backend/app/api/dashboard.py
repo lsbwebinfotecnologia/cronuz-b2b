@@ -93,10 +93,26 @@ def get_dashboard_metrics(
         or (getattr(settings, "tray_enabled", False) if settings else False)
         or (getattr(settings, "b2c_storefront_open", False) if settings else False)
     )
+    module_mercadolivre = False if is_master_global else bool(
+        (getattr(company, "module_mercadolivre", False) if company else False)
+        or (getattr(settings, "meli_enabled", False) if settings else False)
+    )
     horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
     horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
     company_logo = getattr(company, "logo", None) if company else None
+
+    reconciliation_profiles_enabled = []
+    if settings and not is_master_global:
+        try:
+            from app.payments.catalog import get_company_reconciliation_profiles
+            reconciliation_profiles_enabled = [
+                p["code"] for p in get_company_reconciliation_profiles(settings) if p.get("enabled")
+            ]
+        except Exception:
+            reconciliation_profiles_enabled = []
+        if reconciliation_profiles_enabled:
+            horus_sql_feature_vindi_baixa = True
 
     pdv_horus_sync_enabled = True
     if settings and getattr(settings, "b2c_showcases_config", None):
@@ -405,9 +421,11 @@ def get_dashboard_metrics(
         "module_encomendas": module_encomendas,
         "module_order_intake": module_order_intake,
         "module_b2c_storefront": module_b2c_storefront,
+        "module_mercadolivre": module_mercadolivre,
         "horus_sql_feature_vindi_baixa": horus_sql_feature_vindi_baixa,
         "horus_sql_feature_pedidos": horus_sql_feature_pedidos,
         "horus_sql_feature_dbm": horus_sql_feature_dbm,
+        "reconciliation_profiles_enabled": reconciliation_profiles_enabled,
         "company_logo": company_logo,
     }
 
@@ -522,6 +540,7 @@ def get_master_overview(
         {"key": "orders", "label": "Pedidos B2B", "field": "module_orders", "color": "indigo"},
         {"key": "order_intake", "label": "Mesa de Pedidos B2B", "field": "module_order_intake", "color": "indigo"},
         {"key": "b2c_storefront", "label": "Storefront Aberto B2C", "field": "module_b2c_storefront", "color": "fuchsia"},
+        {"key": "mercadolivre", "label": "Mercado Livre Hub", "field": "module_mercadolivre", "color": "amber"},
         {"key": "customers", "label": "Clientes / CRM", "field": "module_customers", "color": "sky"},
         {"key": "financial", "label": "Financeiro", "field": "module_financial", "color": "emerald"},
         {"key": "services", "label": "Serviços (OS)", "field": "module_services", "color": "purple"},

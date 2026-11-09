@@ -75,6 +75,7 @@ class Company(Base):
     module_order_intake = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo Mesa de Pedidos B2B (Análise, Importação & Políticas)
     module_b2c_storefront = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo Storefront Aberto B2C (Cupons Corporativos, LGPD & Tray)
     module_horus_api_bridge = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo API Horus Complementar / Bridge Desktop (.EXE)
+    module_mercadolivre = Column(Boolean, default=False, nullable=False, server_default="false")  # Módulo Mercado Livre (Hub Integrador: Anúncios, Estoque & Pedidos)
 
 
     

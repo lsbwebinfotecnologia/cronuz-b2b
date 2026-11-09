@@ -222,6 +222,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduleEncomendas, setModuleEncomendas] = useState(false);
   const [moduleOrderIntake, setModuleOrderIntake] = useState(false);
   const [moduleB2cStorefront, setModuleB2cStorefront] = useState(false);
+  const [moduleMercadolivre, setModuleMercadolivre] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const _settingsFetchedRef = useRef(false);
@@ -251,6 +252,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        if (pathname.startsWith('/cafeteria')) initialOpen['Cafeteria'] = true;
        if (pathname.startsWith('/product-search') || pathname.startsWith('/addressing')) initialOpen['Busca Preço'] = true;
        if (pathname.startsWith('/b2c-storefront') || pathname.startsWith('/products')) initialOpen['B2C'] = true;
+       if (pathname.startsWith('/mercadolivre')) initialOpen['Mercado Livre'] = true;
        if (pathname.startsWith('/pdv')) initialOpen['PDV'] = true;
        setOpenMenus(initialOpen);
        
@@ -297,6 +299,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuleEncomendas(data.module_encomendas || false);
                setModuleOrderIntake(data.module_order_intake || false);
                setModuleB2cStorefront(data.module_b2c_storefront || false);
+               setModuleMercadolivre(data.module_mercadolivre || false);
                if (data.company_logo) setCompanyLogo(data.company_logo);
             }
          } catch (e) {}
@@ -401,6 +404,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        subItems: [
          { name: 'Lançamentos', href: '/financial', icon: Wallet },
          { name: 'Boletos Emitidos', href: '/financial/bank-slips', icon: Receipt },
+         ...(horusSqlVindiBaixa ? [{ name: 'Conciliações (Horus)', href: '/horus-direct/financeiro-vindi', icon: RefreshCw }] : []),
          ...(coraEnabled ? coraSubItems : []),
          { name: 'Bancos & Cartões', href: '/financial/accounts', icon: Building2 },
          { name: 'Categorias', href: '/financial/categories', icon: FolderTree },
@@ -500,7 +504,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
       subItems.push({ name: 'Logs da Logística', href: '/horus-direct/logistica-logs', icon: Truck });
     }
     if (horusSqlVindiBaixa || subItems.length === 0) {
-      subItems.push({ name: 'Financeiro Vindi', href: '/horus-direct/financeiro-vindi', icon: CreditCard });
+      subItems.push({ name: 'Conciliações (Bancos)', href: '/horus-direct/financeiro-vindi', icon: CreditCard });
     }
     if (horusSqlDbm) {
       subItems.push({ name: 'DBM (Painel & CRM)', href: '/dbm', icon: LayoutGrid });
@@ -609,6 +613,16 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     });
   }
 
+  if (moduleMercadolivre) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Hub Marketplaces',
+      href: '/mercadolivre',
+      icon: ShoppingBag,
+    });
+  }
+
   if (modulePdv) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
@@ -651,6 +665,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const dynamicNavigation = (user?.type === 'SELLER' && Array.isArray(userAllowedModules) && userAllowedModules.length > 0)
     ? baseNavigation.filter(nav => {
         if (nav.name === 'B2C' || nav.href.startsWith('/b2c-storefront')) return userAllowedModules.includes('b2c') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
+        if (nav.name === 'Mercado Livre' || nav.href.startsWith('/mercadolivre')) return userAllowedModules.includes('mercadolivre') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
         if (nav.name === 'PDV' || nav.href.startsWith('/pdv')) return userAllowedModules.includes('pdv') || userAllowedModules.includes('pdv_horus_sync');
         if (nav.name === 'Busca Preço' || nav.href === '/product-search' || nav.name === 'Endereçamento' || nav.href === '/addressing') return userAllowedModules.includes('busca_preco') || userAllowedModules.includes('enderecamento');
         if (nav.name === 'Encomendas' || nav.href === '/encomendas') return userAllowedModules.includes('encomendas') || userAllowedModules.includes('orders');
