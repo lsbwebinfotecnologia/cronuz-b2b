@@ -8,7 +8,7 @@ import {
   RefreshCw, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight,
   Check, AlertCircle, ArrowRight, ArrowRightLeft,
   CreditCard, Building2, ShieldCheck, DollarSign,
-  Layers, Search, CheckSquare, Square, Clock, Eye, X, Link2
+  Layers, Search, CheckSquare, Square, Clock, Eye, X, Link2, Settings, Save
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -29,12 +29,16 @@ interface ReconciliationProfile {
   file_2_label?: string | null;
   enabled: boolean;
   use_custom_bank: boolean;
+  payment_date_mode?: 'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN' | string;
+  unify_installments?: boolean;
   effective_bank: {
     forma_pagto: string;
     banco: string;
     agencia: string;
     conta: string;
     carteira: string;
+    payment_date_mode?: string;
+    unify_installments?: boolean;
   };
   bank_configured: boolean;
 }
@@ -71,6 +75,9 @@ interface JobProgressState {
 interface SummaryData {
   profile_code?: string;
   is_dual_file?: boolean;
+  unify_installments?: boolean;
+  unificadas_orders_count?: number;
+  unificadas_parcelas_count?: number;
   total_planilha_qtd: number;
   total_planilha_valor: number;
   total_planilha_liq?: number;
@@ -103,6 +110,8 @@ interface BankConfig {
   agencia: string;
   conta: string;
   carteira: string;
+  payment_date_mode?: 'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN' | string;
+  unify_installments?: boolean;
   cod_empresa: string;
   cod_filial: string;
   is_configured: boolean;
@@ -142,6 +151,8 @@ interface ReleaseItem {
   total_pedidos_horus?: number;
   total_parcelas?: number;
   parcela_num?: number;
+  grouped_lancto_ids?: number[];
+  unificadas_qtd?: number;
   selected?: boolean;
   _category?: 'ready' | 'divergence' | 'already_paid' | 'not_found';
 }
@@ -253,16 +264,37 @@ export default function FinanceiroVindiPage() {
   const [activeRowIndex, setActiveRowIndex] = useState<number>(0);
   const [inspectedItem, setInspectedItem] = useState<ReleaseItem | null>(null);
 
-  // Modal de Borderô
+  // Modal de Borderô e Modo de Data de Pagamento no Horus
   const [showBorderoModal, setShowBorderoModal] = useState(false);
   const [creatingBordero, setCreatingBordero] = useState(false);
+  const [paymentDateMode, setPaymentDateMode] = useState<
+    'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN'
+  >('CHANNEL_DATE');
+  const [unifyInstallments, setUnifyInstallments] = useState<boolean>(true);
+  const [specificPaymentDate, setSpecificPaymentDate] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10)
+  );
   const [borderoSuccess, setBorderoSuccess] = useState<{
     number: number;
     total: number;
     qtd: number;
     verified_count?: number;
     completed_at?: string;
+    payment_date_mode?: string;
   } | null>(null);
+
+  // Modal de Configuração de Banco / Agência / Conta / Forma de Pagto Horus por Conciliação
+  const [showBankConfigModal, setShowBankConfigModal] = useState(false);
+  const [savingBankConfig, setSavingBankConfig] = useState(false);
+  const [bankForm, setBankForm] = useState({
+    forma_pagto: '',
+    banco: '',
+    agencia: '',
+    conta: '',
+    carteira: '',
+    payment_date_mode: 'CHANNEL_DATE',
+    unify_installments: true,
+  });
 
   const channelFileInputRef = useRef<HTMLInputElement>(null);
   const trayFileInputRef = useRef<HTMLInputElement>(null);
@@ -291,6 +323,10 @@ export default function FinanceiroVindiPage() {
               : FALLBACK_PROFILES;
           setProfiles(enabledList);
           setActiveProfileCode(enabledList[0].code);
+          const firstMode = (enabledList[0].payment_date_mode ||
+            enabledList[0].effective_bank?.payment_date_mode ||
+            'CHANNEL_DATE') as 'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN';
+          setPaymentDateMode(firstMode);
         } else {
           setProfiles(FALLBACK_PROFILES);
         }
@@ -308,9 +344,128 @@ export default function FinanceiroVindiPage() {
     [profiles, activeProfileCode]
   );
 
+  // Sincroniza o modo padrão de data de pagamento e unificação quando o perfil ativo ou bankConfig mudam
+  useEffect(() => {
+    const modeFromCfg = (bankConfig?.payment_date_mode ||
+      activeProfile?.payment_date_mode ||
+      activeProfile?.effective_bank?.payment_date_mode ||
+      'CHANNEL_DATE') as 'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN';
+    setPaymentDateMode(modeFromCfg);
+
+    const defaultUnify =
+      activeProfile?.code === 'TRAY_SHOPEE' || activeProfile?.code === 'TRAY_TIKTOK';
+    const unifyFromCfg =
+      bankConfig?.profile_code === activeProfile?.code &&
+      bankConfig?.unify_installments !== undefined
+        ? Boolean(bankConfig.unify_installments)
+        : activeProfile?.unify_installments !== undefined
+        ? Boolean(activeProfile.unify_installments)
+        : activeProfile?.effective_bank?.unify_installments !== undefined
+        ? Boolean(activeProfile.effective_bank.unify_installments)
+        : defaultUnify;
+    setUnifyInstallments(unifyFromCfg);
+  }, [activeProfile, bankConfig]);
+
   const isDualFileMode = activeProfile?.mode === 'DUAL_FILE';
   const requiresTrayFile =
     activeProfile?.code === 'TRAY_SHOPEE' || activeProfile?.code === 'TRAY_TIKTOK';
+
+  // Abre o modal de configuração bancária carregando os códigos atuais do perfil selecionado
+  const openBankConfigModal = (prof?: ReconciliationProfile) => {
+    const target = prof || activeProfile;
+    const defaultUnify = target.code === 'TRAY_SHOPEE' || target.code === 'TRAY_TIKTOK';
+    const eff =
+      bankConfig?.profile_code === target.code
+        ? bankConfig
+        : target.effective_bank || {
+            forma_pagto: '',
+            banco: '',
+            agencia: '',
+            conta: '',
+            carteira: '',
+            payment_date_mode: 'CHANNEL_DATE',
+            unify_installments: defaultUnify,
+          };
+    setBankForm({
+      forma_pagto: eff.forma_pagto || '',
+      banco: eff.banco || '',
+      agencia: eff.agencia || '',
+      conta: eff.conta || '',
+      carteira: eff.carteira || '',
+      payment_date_mode:
+        eff.payment_date_mode || target.payment_date_mode || 'CHANNEL_DATE',
+      unify_installments:
+        eff.unify_installments !== undefined
+          ? Boolean(eff.unify_installments)
+          : target.unify_installments !== undefined
+          ? Boolean(target.unify_installments)
+          : defaultUnify,
+    });
+    setShowBankConfigModal(true);
+  };
+
+  // Salva Banco, Agência, Conta, Forma de Pagamento e Modo de Data de Pagamento (códigos Horus) nas configurações do Seller para o perfil ativo
+  const handleSaveProfileBankConfig = async () => {
+    if (
+      !bankForm.forma_pagto.trim() ||
+      !bankForm.banco.trim() ||
+      !bankForm.agencia.trim() ||
+      !bankForm.conta.trim()
+    ) {
+      toast.error(
+        'Preencha Forma de Pagamento (COD_FORMA), Banco (COD_BANCO), Agência (COD_AGENCIA) e Conta Corrente (COD_CONTAC).'
+      );
+      return;
+    }
+
+    setSavingBankConfig(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${API}/companies/${companyId}/horus-sql/reconciliation/bank-config`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            profile_code: activeProfile.code,
+            forma_pagto: bankForm.forma_pagto.trim(),
+            banco: bankForm.banco.trim(),
+            agencia: bankForm.agencia.trim(),
+            conta: bankForm.conta.trim(),
+            carteira: bankForm.carteira.trim(),
+            payment_date_mode: bankForm.payment_date_mode || 'CHANNEL_DATE',
+            unify_installments: Boolean(bankForm.unify_installments),
+          }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao salvar códigos bancários do Horus.');
+      }
+
+      if (data.bank_config) {
+        setBankConfig(data.bank_config);
+      }
+      const updatedList: ReconciliationProfile[] =
+        Array.isArray(data.enabled_profiles) && data.enabled_profiles.length > 0
+          ? data.enabled_profiles
+          : Array.isArray(data.profiles) && data.profiles.length > 0
+          ? data.profiles
+          : profiles;
+      setProfiles(updatedList);
+      setShowBankConfigModal(false);
+      toast.success(
+        `Códigos Horus (Banco ${bankForm.banco}, Ag ${bankForm.agencia}, CC ${bankForm.conta}, Forma ${bankForm.forma_pagto}) salvos nas configurações de ${activeProfile.short_name}!`
+      );
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao salvar configuração bancária.');
+    } finally {
+      setSavingBankConfig(false);
+    }
+  };
 
   // Troca de perfil limpa os resultados anteriores para evitar mistura de formatos
   const handleSelectProfile = (code: string) => {
@@ -407,6 +562,7 @@ export default function FinanceiroVindiPage() {
         filial: selectedFilial.trim() || '1',
         profile_code: activeProfile.code,
         async_job: 'true',
+        unify_installments: unifyInstallments ? 'true' : 'false',
       });
 
       const res = await fetch(
@@ -754,19 +910,34 @@ export default function FinanceiroVindiPage() {
       toast.error('Selecione pelo menos um lançamento em aberto para gerar o borderô.');
       return;
     }
+    if (paymentDateMode === 'SPECIFIC_DATE' && !specificPaymentDate.trim()) {
+      toast.error('Informe a data específica de pagamento para baixar os títulos.');
+      return;
+    }
 
     setCreatingBordero(true);
     try {
       const token = getToken();
       const payload = {
         profile_code: activeProfile.code,
+        payment_date_mode: paymentDateMode,
+        unify_installments: unifyInstallments,
+        specific_payment_date:
+          paymentDateMode === 'SPECIFIC_DATE' ? specificPaymentDate : undefined,
         releases: selectedReleases.map((r) => ({
           nro_lancamento: r.nro_lancamento!,
           cod_filial: r.cod_filial || selectedFilial || '1',
           cod_ped_venda: r.cod_ped_venda,
           pedido_web: r.pedido_web,
           valor: r.valor_horus || r.valor_vindi,
+          valor_liquido: r.valor_liquido,
+          taxa:
+            r.diff_taxa !== undefined
+              ? Math.abs(r.diff_taxa)
+              : r.taxa || 0,
+          grouped_lancto_ids: r.grouped_lancto_ids,
           status: r.status_horus || 'AB',
+          data_pagamento: r.data_pagamento || '',
         })),
       };
 
@@ -790,6 +961,7 @@ export default function FinanceiroVindiPage() {
         qtd: data.itens_baixados,
         verified_count: data.security_verification?.verified_count ?? data.itens_baixados,
         completed_at: data.security_verification?.completed_at,
+        payment_date_mode: data.payment_date_mode || paymentDateMode,
       });
       setShowBorderoModal(false);
       toast.success(data.message || `Borderô #${data.bordero_number} gerado com sucesso!`);
@@ -803,7 +975,12 @@ export default function FinanceiroVindiPage() {
         selected: false,
         cod_bordero: data.bordero_number,
         situacao_horus: 'PAGO',
-        motivo: `Baixado agora no Borderô #${data.bordero_number}.`,
+        motivo:
+          paymentDateMode === 'CHANNEL_DATE'
+            ? `Baixado (PG) no Borderô #${data.bordero_number} com a data da planilha (${i.data_pagamento || 'hoje'}).`
+            : paymentDateMode === 'SPECIFIC_DATE'
+            ? `Baixado (PG) no Borderô #${data.bordero_number} com data específica (${specificPaymentDate}).`
+            : `Vinculado ao Borderô #${data.bordero_number} (Em Aberto no Horus).`,
       }));
 
       setItemsReady((prev) => prev.filter((i) => !processedLanctos.has(i.nro_lancamento)));
@@ -852,25 +1029,51 @@ export default function FinanceiroVindiPage() {
             </div>
           </div>
 
-          {/* Indicador de Conta/Carteira Ativa para o Perfil */}
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs flex items-center gap-2">
+          {/* Indicador de Conta/Carteira Ativa para o Perfil + Botão Configurar Códigos Horus */}
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <div
+              onClick={() => openBankConfigModal(activeProfile)}
+              title="Clique para configurar Banco, Agência, Conta e Forma de Pagamento no Horus para esta modalidade"
+              className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-400 bg-white dark:bg-slate-900 text-xs flex items-center gap-2.5 cursor-pointer transition-all"
+            >
               <Building2 className="h-4 w-4 text-indigo-600 shrink-0" />
               <div>
                 <span className="text-[10px] font-bold uppercase text-slate-400 block leading-none">
                   Destino Borderô ({activeProfile.short_name})
                 </span>
                 <span className="font-mono font-bold text-slate-800 dark:text-slate-200 text-xs">
-                  {bankConfig?.banco || activeProfile.effective_bank?.banco
-                    ? `Bco ${bankConfig?.banco || activeProfile.effective_bank?.banco} • Ag ${
-                        bankConfig?.agencia || activeProfile.effective_bank?.agencia
-                      } • CC ${bankConfig?.conta || activeProfile.effective_bank?.conta} • Cart ${
-                        bankConfig?.carteira || activeProfile.effective_bank?.carteira
+                  {(bankConfig?.profile_code === activeProfile.code && bankConfig?.banco) ||
+                  activeProfile.effective_bank?.banco
+                    ? `Forma ${
+                        (bankConfig?.profile_code === activeProfile.code
+                          ? bankConfig?.forma_pagto
+                          : activeProfile.effective_bank?.forma_pagto) || '-'
+                      } • Bco ${
+                        (bankConfig?.profile_code === activeProfile.code
+                          ? bankConfig?.banco
+                          : activeProfile.effective_bank?.banco) || '-'
+                      } • Ag ${
+                        (bankConfig?.profile_code === activeProfile.code
+                          ? bankConfig?.agencia
+                          : activeProfile.effective_bank?.agencia) || '-'
+                      } • CC ${
+                        (bankConfig?.profile_code === activeProfile.code
+                          ? bankConfig?.conta
+                          : activeProfile.effective_bank?.conta) || '-'
                       }`
-                    : 'Conta Padrão Horus SQL'}
+                    : 'Clique p/ Configurar Banco Horus'}
                 </span>
               </div>
             </div>
+
+            <button
+              type="button"
+              onClick={() => openBankConfigModal(activeProfile)}
+              className="px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              Códigos Horus ({activeProfile.short_name})
+            </button>
           </div>
         </div>
 
@@ -1040,19 +1243,54 @@ export default function FinanceiroVindiPage() {
               </div>
             )}
 
-            {/* FILIAL HORUS + BOTÃO EXECUTAR CONCILIAÇÃO */}
+            {/* FILIAL HORUS + OPÇÃO UNIFICAR PARCELAS + BOTÃO EXECUTAR CONCILIAÇÃO */}
             <div className={`${isDualFileMode ? 'lg:col-span-2' : 'lg:col-span-3'} flex flex-col justify-between rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 p-3.5 space-y-2.5`}>
-              <div>
-                <label className="text-[11px] font-extrabold uppercase text-slate-500 block mb-1">
-                  Filial Horus ERP
-                </label>
-                <input
-                  type="text"
-                  value={selectedFilial}
-                  onChange={(e) => setSelectedFilial(e.target.value)}
-                  placeholder="1"
-                  className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-[11px] font-extrabold uppercase text-slate-500">
+                    Filial Horus
+                  </label>
+                  <input
+                    type="text"
+                    value={selectedFilial}
+                    onChange={(e) => setSelectedFilial(e.target.value)}
+                    placeholder="1"
+                    className="w-16 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1 text-xs font-mono font-bold text-center text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div
+                  title="Quando a nota no Horus possui várias parcelas mas o canal pagou em parcela única, unifica todas as parcelas em aberto na 1ª e registra a taxa em VLR_LANCTO_ABATIMENTO"
+                  className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 flex items-center justify-between gap-1.5"
+                >
+                  <span className="text-[10px] font-extrabold text-slate-700 dark:text-slate-300 leading-tight">
+                    Unificar Parcelas + Taxa
+                  </span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setUnifyInstallments(true)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition-all cursor-pointer ${
+                        unifyInstallments
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                      }`}
+                    >
+                      SIM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUnifyInstallments(false)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition-all cursor-pointer ${
+                        !unifyInstallments
+                          ? 'bg-slate-800 text-white dark:bg-slate-700'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                      }`}
+                    >
+                      NÃO
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <button
@@ -1612,7 +1850,21 @@ export default function FinanceiroVindiPage() {
 
                           {/* Nº Lançamento Contas a Receber */}
                           <td className="py-1.5 px-2.5 font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                            {item.nro_lancamento ? `#${item.nro_lancamento}` : '—'}
+                            {item.nro_lancamento ? (
+                              <div className="flex items-center gap-1">
+                                <span>#{item.nro_lancamento}</span>
+                                {(item.unificadas_qtd || 1) > 1 && (
+                                  <span
+                                    title={`${item.unificadas_qtd} parcelas abertas unificadas neste lançamento`}
+                                    className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-violet-100 text-violet-800 dark:bg-violet-950/70 dark:text-violet-300"
+                                  >
+                                    {item.unificadas_qtd}x UNIF.
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              '—'
+                            )}
                           </td>
 
                           {/* Nota Fiscal */}
@@ -1870,6 +2122,13 @@ export default function FinanceiroVindiPage() {
                       Lançamento: #{inspectedItem.nro_lancamento || '—'} • NF:{' '}
                       {inspectedItem.nro_nota_fiscal || '—'}
                     </p>
+                    {(inspectedItem.unificadas_qtd || 1) > 1 && (
+                      <p className="text-[11px] font-extrabold text-violet-700 dark:text-violet-300 bg-violet-100/70 dark:bg-violet-950/50 px-2 py-0.5 rounded">
+                        {inspectedItem.unificadas_qtd} parcelas unificadas (
+                        #{inspectedItem.grouped_lancto_ids?.[0]} a #
+                        {inspectedItem.grouped_lancto_ids?.[inspectedItem.grouped_lancto_ids.length - 1]})
+                      </p>
+                    )}
                     <p className="font-mono font-bold text-slate-900 dark:text-white">
                       Valor Título: R$ {formatBRL(inspectedItem.valor_horus)}
                     </p>
@@ -1947,9 +2206,21 @@ export default function FinanceiroVindiPage() {
 
                 {bankConfig && (
                   <div className="space-y-2">
-                    <p className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                      Parâmetros Bancários do Borderô (Tabela BORDERO Horus)
-                    </p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                        Parâmetros Bancários do Borderô (Tabela BORDERO Horus)
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowBorderoModal(false);
+                          openBankConfigModal(activeProfile);
+                        }}
+                        className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Settings className="h-3 w-3" /> Editar Códigos Horus
+                      </button>
+                    </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
                       <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
                         <span className="text-slate-400 block">Empresa / Filial</span>
@@ -1958,38 +2229,188 @@ export default function FinanceiroVindiPage() {
                         </b>
                       </div>
                       <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Forma Pagto</span>
+                        <span className="text-slate-400 block">Forma Pagto (COD_FORMA)</span>
                         <b className="text-slate-800 dark:text-slate-200 font-mono">
                           {bankConfig.forma_pagto || 'NÃO DEFINIDO'}
                         </b>
                       </div>
                       <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Banco</span>
+                        <span className="text-slate-400 block">Banco (COD_BANCO)</span>
                         <b className="text-slate-800 dark:text-slate-200 font-mono">
                           {bankConfig.banco || 'NÃO DEFINIDO'}
                         </b>
                       </div>
                       <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Agência</span>
+                        <span className="text-slate-400 block">Agência (COD_AGENCIA)</span>
                         <b className="text-slate-800 dark:text-slate-200 font-mono">
                           {bankConfig.agencia || 'NÃO DEFINIDO'}
                         </b>
                       </div>
                       <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Conta Corrente</span>
+                        <span className="text-slate-400 block">Conta (COD_CONTAC)</span>
                         <b className="text-slate-800 dark:text-slate-200 font-mono">
                           {bankConfig.conta || 'NÃO DEFINIDO'}
                         </b>
                       </div>
                       <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Carteira</span>
+                        <span className="text-slate-400 block">Carteira (NRO_CARTEIRA)</span>
                         <b className="text-slate-800 dark:text-slate-200 font-mono">
-                          {bankConfig.carteira || 'NÃO DEFINIDO'}
+                          {bankConfig.carteira || '—'}
                         </b>
                       </div>
                     </div>
                   </div>
                 )}
+
+                {/* ─── ESCOLHA DO MODO DE DATA DE PAGAMENTO E BAIXA NO HORUS ─── */}
+                <div className="space-y-2.5 pt-1">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">
+                    Regra de Data de Pagamento & Baixa no Horus ERP
+                  </label>
+
+                  <div className="space-y-2">
+                    {/* Opção 1: Data da Planilha (Shopee / Vindi / TikTok) */}
+                    <button
+                      type="button"
+                      onClick={() => setPaymentDateMode('CHANNEL_DATE')}
+                      className={`w-full text-left rounded-xl border p-3 transition-all flex items-start gap-2.5 cursor-pointer ${
+                        paymentDateMode === 'CHANNEL_DATE'
+                          ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-600 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                          : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <div
+                        className={`mt-0.5 h-4 w-4 rounded-full border flex items-center justify-center shrink-0 ${
+                          paymentDateMode === 'CHANNEL_DATE'
+                            ? 'border-indigo-600 bg-indigo-600 text-white'
+                            : 'border-slate-400'
+                        }`}
+                      >
+                        {paymentDateMode === 'CHANNEL_DATE' && <Check className="h-2.5 w-2.5" />}
+                      </div>
+                      <div className="text-xs">
+                        <span className="font-extrabold text-slate-900 dark:text-white block">
+                          1. Usar Data de Pagamento da Planilha ({activeProfile.channel_label})
+                        </span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Gera o Borderô pago (<code>PG</code>) e grava em cada lançamento do Horus (<code>DAT_PAGTO_CRECEBER</code>) a data exata em que o valor caiu na {activeProfile.channel_label}.
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Opção 2: Usar Borderô e Pagar com Data Específica */}
+                    <div
+                      onClick={() => setPaymentDateMode('SPECIFIC_DATE')}
+                      className={`w-full text-left rounded-xl border p-3 transition-all cursor-pointer ${
+                        paymentDateMode === 'SPECIFIC_DATE'
+                          ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-600 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                          : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <div
+                          className={`mt-0.5 h-4 w-4 rounded-full border flex items-center justify-center shrink-0 ${
+                            paymentDateMode === 'SPECIFIC_DATE'
+                              ? 'border-indigo-600 bg-indigo-600 text-white'
+                              : 'border-slate-400'
+                          }`}
+                        >
+                          {paymentDateMode === 'SPECIFIC_DATE' && <Check className="h-2.5 w-2.5" />}
+                        </div>
+                        <div className="text-xs flex-1">
+                          <span className="font-extrabold text-slate-900 dark:text-white block">
+                            2. Usar Borderô e Pagar com uma Data Específica
+                          </span>
+                          <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
+                            Gera o Borderô pago (<code>PG</code>) e baixa todos os títulos selecionados com uma única data de pagamento escolhida abaixo.
+                          </span>
+
+                          {paymentDateMode === 'SPECIFIC_DATE' && (
+                            <div
+                              className="mt-2.5 flex items-center gap-2"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <label className="text-[11px] font-bold text-indigo-800 dark:text-indigo-300">
+                                Data do Pagamento:
+                              </label>
+                              <input
+                                type="date"
+                                value={specificPaymentDate}
+                                onChange={(e) => setSpecificPaymentDate(e.target.value)}
+                                className="rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-1 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Opção 3: Apenas Gerar Borderô em Aberto */}
+                    <button
+                      type="button"
+                      onClick={() => setPaymentDateMode('BORDERO_OPEN')}
+                      className={`w-full text-left rounded-xl border p-3 transition-all flex items-start gap-2.5 cursor-pointer ${
+                        paymentDateMode === 'BORDERO_OPEN'
+                          ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-600 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                          : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <div
+                        className={`mt-0.5 h-4 w-4 rounded-full border flex items-center justify-center shrink-0 ${
+                          paymentDateMode === 'BORDERO_OPEN'
+                            ? 'border-indigo-600 bg-indigo-600 text-white'
+                            : 'border-slate-400'
+                        }`}
+                      >
+                        {paymentDateMode === 'BORDERO_OPEN' && <Check className="h-2.5 w-2.5" />}
+                      </div>
+                      <div className="text-xs">
+                        <span className="font-extrabold text-slate-900 dark:text-white block">
+                          3. Apenas Gerar Borderô em Aberto (Baixar manualmente no Horus)
+                        </span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Cria o Borderô com status <code>AP</code> e vincula os títulos mantendo-os em aberto (<code>AB</code>) para liquidação manual no Horus.
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* ─── OPÇÃO SIM / NÃO: UNIFICAR PARCELAS DA NOTA + GRAVAR TAXA (VLR_LANCTO_ABATIMENTO) ─── */}
+                <div className="rounded-xl border border-violet-200 dark:border-violet-900/60 bg-violet-50/40 dark:bg-violet-950/20 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="text-xs">
+                    <span className="font-extrabold text-slate-900 dark:text-white block">
+                      Unificar Parcelas em Lançamento Único + Gravar Taxa ({activeProfile.channel_label})
+                    </span>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
+                      Consolida múltiplas parcelas da mesma nota no 1º lançamento e grava a taxa em <code>VLR_LANCTO_ABATIMENTO</code> para o Fechamento Bancário bater com o valor líquido recebido.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setUnifyInstallments(true)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                        unifyInstallments
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      SIM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUnifyInstallments(false)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                        !unifyInstallments
+                          ? 'bg-slate-800 text-white dark:bg-slate-700 shadow-2xs'
+                          : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      NÃO
+                    </button>
+                  </div>
+                </div>
 
                 <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <button
@@ -2015,6 +2436,217 @@ export default function FinanceiroVindiPage() {
                       <>
                         <CheckCircle2 className="h-4 w-4" />
                         Confirmar e Gerar Borderô
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL DE CONFIGURAÇÃO DE BANCO, AGÊNCIA, CONTA E FORMA DE PAGTO HORUS POR CONCILIAÇÃO ─── */}
+      <AnimatePresence>
+        {showBankConfigModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden"
+            >
+              <div className="bg-slate-900 px-6 py-4 flex items-center justify-between text-white">
+                <div className="flex items-center gap-2.5">
+                  <Building2 className="h-5 w-5 text-indigo-400" />
+                  <div>
+                    <h3 className="text-sm font-extrabold">
+                      Códigos Horus ERP — {activeProfile.name}
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      Salvo nas configurações da empresa para geração de Borderô desta modalidade
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowBankConfigModal(false)}
+                  className="text-slate-400 hover:text-white text-sm font-bold cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
+                      Forma de Pagamento Horus (COD_FORMA) *
+                    </label>
+                    <input
+                      type="text"
+                      value={bankForm.forma_pagto}
+                      onChange={(e) =>
+                        setBankForm((p) => ({ ...p, forma_pagto: e.target.value }))
+                      }
+                      placeholder="Ex: 01, CAR, PIX, BOL"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <span className="text-[10px] text-slate-400 block">
+                      Código na tabela FORMAS_PAGTO do Horus
+                    </span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
+                      Código do Banco Horus (COD_BANCO) *
+                    </label>
+                    <input
+                      type="text"
+                      value={bankForm.banco}
+                      onChange={(e) => setBankForm((p) => ({ ...p, banco: e.target.value }))}
+                      placeholder="Ex: 001, 237, 341, 756"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <span className="text-[10px] text-slate-400 block">
+                      Código do banco no Horus ERP
+                    </span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
+                      Código da Agência (COD_AGENCIA) *
+                    </label>
+                    <input
+                      type="text"
+                      value={bankForm.agencia}
+                      onChange={(e) => setBankForm((p) => ({ ...p, agencia: e.target.value }))}
+                      placeholder="Ex: 1234"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <span className="text-[10px] text-slate-400 block">
+                      Agência cadastrada no Horus ERP
+                    </span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
+                      Conta Corrente (COD_CONTAC) *
+                    </label>
+                    <input
+                      type="text"
+                      value={bankForm.conta}
+                      onChange={(e) => setBankForm((p) => ({ ...p, conta: e.target.value }))}
+                      placeholder="Ex: 56789-0"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <span className="text-[10px] text-slate-400 block">
+                      Conta corrente de liquidação no Horus
+                    </span>
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
+                      Carteira de Cobrança (NRO_CARTEIRA) <span className="text-slate-400 font-normal">(Opcional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={bankForm.carteira}
+                      onChange={(e) => setBankForm((p) => ({ ...p, carteira: e.target.value }))}
+                      placeholder="Ex: 17, 109, 09 (ou deixe em branco)"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-2 pt-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
+                      Regra Padrão de Data de Pagamento & Baixa no Horus
+                    </label>
+                    <select
+                      value={bankForm.payment_date_mode || 'CHANNEL_DATE'}
+                      onChange={(e) =>
+                        setBankForm((p) => ({ ...p, payment_date_mode: e.target.value }))
+                      }
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="CHANNEL_DATE">
+                        1. Usar Data de Pagamento da Planilha ({activeProfile.channel_label}) em cada título (PG)
+                      </option>
+                      <option value="SPECIFIC_DATE">
+                        2. Usar Borderô e Pagar (PG) com uma Data Específica
+                      </option>
+                      <option value="BORDERO_OPEN">
+                        3. Apenas Gerar Borderô em Aberto (AP) no Horus
+                      </option>
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-2 pt-1">
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 p-3 flex items-center justify-between gap-3">
+                      <div>
+                        <span className="font-extrabold text-slate-800 dark:text-slate-200 block">
+                          Unificar Parcelas da Nota + Gravar Taxa ({activeProfile.channel_label})
+                        </span>
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 block">
+                          Unifica parcelas em aberto da mesma nota em 1 lançamento e registra a taxa em <code>VLR_LANCTO_ABATIMENTO</code> para bater o Fechamento Bancário.
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setBankForm((p) => ({ ...p, unify_installments: true }))
+                          }
+                          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                            bankForm.unify_installments
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'
+                          }`}
+                        >
+                          SIM
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setBankForm((p) => ({ ...p, unify_installments: false }))
+                          }
+                          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                            !bankForm.unify_installments
+                              ? 'bg-slate-800 text-white dark:bg-slate-700'
+                              : 'bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'
+                          }`}
+                        >
+                          NÃO
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-200 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowBankConfigModal(false)}
+                    disabled={savingBankConfig}
+                    className="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveProfileBankConfig}
+                    disabled={savingBankConfig}
+                    className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-5 py-2.5 text-xs font-extrabold text-white shadow-sm cursor-pointer"
+                  >
+                    {savingBankConfig ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Salvando...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-4 w-4" />
+                        Salvar Códigos Horus ({activeProfile.short_name})
                       </>
                     )}
                   </button>

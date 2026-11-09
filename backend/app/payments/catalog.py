@@ -211,24 +211,51 @@ def get_company_reconciliation_profiles(settings) -> List[dict]:
         else:
             enabled = False
 
-        use_custom_bank = bool(saved.get("use_custom_bank", False))
+        raw_mode = str(saved.get("payment_date_mode") or "CHANNEL_DATE").upper().strip()
+        if raw_mode not in ("CHANNEL_DATE", "SPECIFIC_DATE", "BORDERO_OPEN"):
+            raw_mode = "CHANNEL_DATE"
+
+        default_unify = code in ("TRAY_SHOPEE", "TRAY_TIKTOK")
+        if "unify_installments" in saved and saved.get("unify_installments") is not None:
+            unify_installments = bool(saved.get("unify_installments"))
+        else:
+            unify_installments = default_unify
+
         custom_bank = {
             "forma_pagto": str(saved.get("forma_pagto") or "").strip(),
             "banco": str(saved.get("banco") or "").strip(),
             "agencia": str(saved.get("agencia") or "").strip(),
             "conta": str(saved.get("conta") or "").strip(),
             "carteira": str(saved.get("carteira") or "").strip(),
+            "payment_date_mode": raw_mode,
+            "unify_installments": unify_installments,
         }
-        effective_bank = custom_bank if use_custom_bank else default_bank
+        has_any_custom = any(
+            bool(custom_bank.get(k))
+            for k in ("forma_pagto", "banco", "agencia", "conta", "carteira")
+        )
+        use_custom_bank = bool(saved.get("use_custom_bank", False)) or has_any_custom
+
+        effective_bank = {
+            "forma_pagto": custom_bank["forma_pagto"] or default_bank["forma_pagto"],
+            "banco": custom_bank["banco"] or default_bank["banco"],
+            "agencia": custom_bank["agencia"] or default_bank["agencia"],
+            "conta": custom_bank["conta"] or default_bank["conta"],
+            "carteira": custom_bank["carteira"] or default_bank["carteira"],
+            "payment_date_mode": raw_mode,
+            "unify_installments": unify_installments,
+        }
         bank_configured = all(
             bool(effective_bank.get(k))
-            for k in ("forma_pagto", "banco", "agencia", "conta", "carteira")
+            for k in ("forma_pagto", "banco", "agencia", "conta")
         )
 
         result.append({
             **item,
             "enabled": enabled,
             "use_custom_bank": use_custom_bank,
+            "payment_date_mode": raw_mode,
+            "unify_installments": unify_installments,
             "custom_bank": custom_bank,
             "effective_bank": effective_bank,
             "bank_configured": bank_configured,

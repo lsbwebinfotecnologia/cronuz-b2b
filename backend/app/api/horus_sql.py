@@ -16,9 +16,11 @@ from app.core.utils import parse_host_port, assert_company_ownership
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Dict, Optional
+from sqlalchemy.orm.attributes import flag_modified
 from app.db.session import get_db
 from app.core.dependencies import get_current_user
+from app.payments.catalog import get_company_reconciliation_profiles
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -59,12 +61,15 @@ class HorusSQLSettingsUpdate(BaseModel):
     horus_sql_cod_empresa: Optional[str] = None
     horus_sql_cod_filial: Optional[str] = None
 
-    # Parâmetros Bancários Horus (Borderô)
+    # Parâmetros Bancários Horus (Borderô Padrão)
     horus_banco_forma_pagto: Optional[str] = None
     horus_banco_codigo: Optional[str] = None
     horus_banco_agencia: Optional[str] = None
     horus_banco_conta: Optional[str] = None
     horus_banco_carteira: Optional[str] = None
+
+    # Parâmetros Bancários Horus individuais por Tipo de Conciliação (TRAY_SHOPEE, TRAY_TIKTOK, TRAY_VINDI, VINDI_DIRECT)
+    reconciliation_banks: Optional[Dict[str, Dict[str, Any]]] = None
 
     # Parâmetros de Vendas
     horus_vendas_metodo: Optional[str] = None
@@ -93,6 +98,7 @@ def get_horus_sql_settings(
     """
     _assert_ownership(current_user, company_id)  # [SEC]
     settings = _get_settings_or_404(db, company_id)
+    all_profiles = get_company_reconciliation_profiles(settings)
     return {
         "horus_sql_enabled":       settings.horus_sql_enabled,
         "horus_sql_host":          settings.horus_sql_host,
@@ -108,6 +114,7 @@ def get_horus_sql_settings(
         "horus_banco_conta":       settings.horus_banco_conta,
         "horus_banco_carteira":    settings.horus_banco_carteira,
         "horus_vendas_metodo":     settings.horus_vendas_metodo,
+        "reconciliation_profiles": all_profiles,
     }
 
 
@@ -160,6 +167,56 @@ def update_horus_sql_settings(
     # Parâmetros de vendas
     if payload.horus_vendas_metodo is not None:
         settings.horus_vendas_metodo = payload.horus_vendas_metodo.strip() or None
+
+    # Parâmetros bancários individuais por tipo de conciliação (salvos pelo Seller)
+    if payload.reconciliation_banks and isinstance(payload.reconciliation_banks, dict):
+        raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+        bank_reconciliations = (
+            dict(raw_cfg.get("bank_reconciliations"))
+            if isinstance(raw_cfg.get("bank_reconciliations"), dict)
+            else {}
+        )
+        for prof_code, prof_bank in payload.reconciliation_banks.items():
+            if not isinstance(prof_bank, dict):
+                continue
+            code_norm = str(prof_code).upper().strip()
+            existing = (
+                dict(bank_reconciliations.get(code_norm))
+                if isinstance(bank_reconciliations.get(code_norm), dict)
+                else {}
+            )
+            forma_pagto = str(prof_bank.get("forma_pagto") or "").strip()
+            banco = str(prof_bank.get("banco") or "").strip()
+            agencia = str(prof_bank.get("agencia") or "").strip()
+            conta = str(prof_bank.get("conta") or "").strip()
+            carteira = str(prof_bank.get("carteira") or "").strip()
+            payment_date_mode = str(prof_bank.get("payment_date_mode") or existing.get("payment_date_mode") or "CHANNEL_DATE").upper().strip()
+            if payment_date_mode not in ("CHANNEL_DATE", "SPECIFIC_DATE", "BORDERO_OPEN"):
+                payment_date_mode = "CHANNEL_DATE"
+            default_unify = code_norm in ("TRAY_SHOPEE", "TRAY_TIKTOK")
+            if "unify_installments" in prof_bank and prof_bank.get("unify_installments") is not None:
+                unify_installments = bool(prof_bank.get("unify_installments"))
+            elif "unify_installments" in existing and existing.get("unify_installments") is not None:
+                unify_installments = bool(existing.get("unify_installments"))
+            else:
+                unify_installments = default_unify
+            has_any = any(bool(x) for x in (forma_pagto, banco, agencia, conta, carteira))
+
+            existing.update({
+                "use_custom_bank": has_any,
+                "forma_pagto": forma_pagto,
+                "banco": banco,
+                "agencia": agencia,
+                "conta": conta,
+                "carteira": carteira,
+                "payment_date_mode": payment_date_mode,
+                "unify_installments": unify_installments,
+            })
+            bank_reconciliations[code_norm] = existing
+
+        raw_cfg["bank_reconciliations"] = bank_reconciliations
+        settings.b2c_showcases_config = raw_cfg
+        flag_modified(settings, "b2c_showcases_config")
 
     credentials_changed = False
     if payload.horus_sql_password and payload.horus_sql_password not in ("SET", ""):

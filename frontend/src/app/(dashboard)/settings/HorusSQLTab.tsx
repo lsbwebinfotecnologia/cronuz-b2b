@@ -13,6 +13,28 @@ import { useCompany } from './context';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+interface ProfileBankFields {
+  forma_pagto: string;
+  banco: string;
+  agencia: string;
+  conta: string;
+  carteira: string;
+  payment_date_mode: string;
+  unify_installments: boolean;
+}
+
+interface ReconciliationProfileConfig {
+  code: string;
+  name: string;
+  short_name: string;
+  channel_label: string;
+  enabled: boolean;
+  payment_date_mode?: string;
+  unify_installments?: boolean;
+  custom_bank?: ProfileBankFields;
+  effective_bank?: ProfileBankFields;
+}
+
 interface HorusSQLSettings {
   horus_sql_enabled: boolean;
   horus_sql_host: string;
@@ -29,6 +51,13 @@ interface HorusSQLSettings {
   horus_banco_carteira: string;
   horus_vendas_metodo?: string;
 }
+
+const DEFAULT_RECONCILIATION_PROFILES: ReconciliationProfileConfig[] = [
+  { code: 'TRAY_SHOPEE', name: 'Shopee ↔ Tray ↔ Horus ERP', short_name: 'Shopee + Tray', channel_label: 'Shopee', enabled: true },
+  { code: 'TRAY_TIKTOK', name: 'TikTok Shop ↔ Tray ↔ Horus ERP', short_name: 'TikTok + Tray', channel_label: 'TikTok Shop', enabled: true },
+  { code: 'TRAY_VINDI', name: 'Vindi ↔ Tray ↔ Horus ERP', short_name: 'Vindi + Tray', channel_label: 'Vindi', enabled: true },
+  { code: 'VINDI_DIRECT', name: 'Vindi Direto ↔ Horus ERP', short_name: 'Vindi Direto', channel_label: 'Vindi Direto', enabled: true },
+];
 
 export function HorusSQLTab() {
   const { company } = useCompany();
@@ -58,6 +87,8 @@ export function HorusSQLTab() {
   });
 
   const [newPassword, setNewPassword] = useState('');
+  const [reconciliationProfiles, setReconciliationProfiles] = useState<ReconciliationProfileConfig[]>(DEFAULT_RECONCILIATION_PROFILES);
+  const [reconciliationBanks, setReconciliationBanks] = useState<Record<string, ProfileBankFields>>({});
 
   useEffect(() => {
     if (!company) return;
@@ -89,6 +120,41 @@ export function HorusSQLTab() {
           horus_banco_carteira:    data.horus_banco_carteira ?? '',
           horus_vendas_metodo:     data.horus_vendas_metodo ?? '',
         });
+
+        const profs: ReconciliationProfileConfig[] =
+          Array.isArray(data.reconciliation_profiles) && data.reconciliation_profiles.length > 0
+            ? data.reconciliation_profiles
+            : DEFAULT_RECONCILIATION_PROFILES;
+        setReconciliationProfiles(profs);
+
+        const bankMap: Record<string, ProfileBankFields> = {};
+        for (const p of profs) {
+          const defaultUnify = p.code === 'TRAY_SHOPEE' || p.code === 'TRAY_TIKTOK';
+          const cb = p.custom_bank || p.effective_bank || {
+            forma_pagto: '',
+            banco: '',
+            agencia: '',
+            conta: '',
+            carteira: '',
+            payment_date_mode: 'CHANNEL_DATE',
+            unify_installments: defaultUnify,
+          };
+          bankMap[p.code] = {
+            forma_pagto: cb.forma_pagto || '',
+            banco: cb.banco || '',
+            agencia: cb.agencia || '',
+            conta: cb.conta || '',
+            carteira: cb.carteira || '',
+            payment_date_mode: p.payment_date_mode || cb.payment_date_mode || 'CHANNEL_DATE',
+            unify_installments:
+              p.unify_installments !== undefined
+                ? Boolean(p.unify_installments)
+                : cb.unify_installments !== undefined
+                ? Boolean(cb.unify_installments)
+                : defaultUnify,
+          };
+        }
+        setReconciliationBanks(bankMap);
       }
     } catch (e) {
       console.error(e);
@@ -96,6 +162,25 @@ export function HorusSQLTab() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleProfileBankChange(profileCode: string, field: keyof ProfileBankFields, value: string | boolean) {
+    const defaultUnify = profileCode === 'TRAY_SHOPEE' || profileCode === 'TRAY_TIKTOK';
+    setReconciliationBanks((prev) => ({
+      ...prev,
+      [profileCode]: {
+        ...(prev[profileCode] || {
+          forma_pagto: '',
+          banco: '',
+          agencia: '',
+          conta: '',
+          carteira: '',
+          payment_date_mode: 'CHANNEL_DATE',
+          unify_installments: defaultUnify,
+        }),
+        [field]: value,
+      },
+    }));
   }
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -174,6 +259,8 @@ export function HorusSQLTab() {
         horus_banco_agencia:     settings.horus_banco_agencia,
         horus_banco_conta:       settings.horus_banco_conta,
         horus_banco_carteira:    settings.horus_banco_carteira,
+        horus_vendas_metodo:     settings.horus_vendas_metodo,
+        reconciliation_banks:    reconciliationBanks,
       };
 
       if (newPassword) {
@@ -293,92 +380,299 @@ export function HorusSQLTab() {
         </button>
       </div>
 
-      {/* ─── ABA: PARÂMETROS FINANCEIROS ──────────────────────── */}
+      {/* ─── ABA: PARÂMETROS FINANCEIROS POR TIPO DE CONCILIAÇÃO ──────────────── */}
       {activeSubTab === 'financeiro' && (
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5 shadow-sm">
-          <div className="flex items-center gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
-            <CreditCard className="h-4 w-4 text-violet-500" />
-            <h4 className="text-sm font-bold text-slate-800 dark:text-white">Códigos para Geração de Borderô (Horus ERP)</h4>
+        <div className="space-y-6">
+          {/* 1. CONFIGURAÇÃO INDIVIDUAL POR MODALIDADE DE CONCILIAÇÃO */}
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Building2 className="h-4 w-4 text-violet-600" />
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800 dark:text-white">
+                    Códigos Bancários do Horus por Tipo de Conciliação (Borderô)
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Defina o Banco, Agência, Conta Corrente e Forma de Pagamento (códigos do Horus ERP) específicos para cada operação de conciliação.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {(reconciliationProfiles.some((p) => p.enabled)
+                ? reconciliationProfiles.filter((p) => p.enabled)
+                : reconciliationProfiles
+              ).map((prof) => {
+                const b = reconciliationBanks[prof.code] || {
+                  forma_pagto: '',
+                  banco: '',
+                  agencia: '',
+                  conta: '',
+                  carteira: '',
+                  payment_date_mode: 'CHANNEL_DATE',
+                  unify_installments: prof.code === 'TRAY_SHOPEE' || prof.code === 'TRAY_TIKTOK',
+                };
+                const isComplete = Boolean(b.forma_pagto && b.banco && b.agencia && b.conta);
+                return (
+                  <div
+                    key={prof.code}
+                    className={`rounded-2xl border p-4 space-y-3.5 transition-all ${
+                      isComplete
+                        ? 'border-emerald-200 bg-emerald-50/20 dark:border-emerald-900/50 dark:bg-emerald-950/10'
+                        : 'border-slate-200 bg-slate-50/50 dark:border-slate-800 dark:bg-slate-950/40'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <span className="text-xs font-extrabold text-slate-900 dark:text-white block">
+                          {prof.name}
+                        </span>
+                        <span className="text-[11px] font-mono text-slate-400">
+                          Código: {prof.code}
+                        </span>
+                      </div>
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          isComplete
+                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300'
+                            : 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300'
+                        }`}
+                      >
+                        {isComplete ? 'Configurado' : 'Usa Padrão / Pendente'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block">
+                          Forma Pagto (COD_FORMA) *
+                        </label>
+                        <input
+                          type="text"
+                          value={b.forma_pagto}
+                          onChange={(e) =>
+                            handleProfileBankChange(prof.code, 'forma_pagto', e.target.value)
+                          }
+                          placeholder={settings.horus_banco_forma_pagto || 'Ex: 01, CAR, PIX'}
+                          className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block">
+                          Banco Horus (COD_BANCO) *
+                        </label>
+                        <input
+                          type="text"
+                          value={b.banco}
+                          onChange={(e) =>
+                            handleProfileBankChange(prof.code, 'banco', e.target.value)
+                          }
+                          placeholder={settings.horus_banco_codigo || 'Ex: 001, 237, 341'}
+                          className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block">
+                          Agência (COD_AGENCIA) *
+                        </label>
+                        <input
+                          type="text"
+                          value={b.agencia}
+                          onChange={(e) =>
+                            handleProfileBankChange(prof.code, 'agencia', e.target.value)
+                          }
+                          placeholder={settings.horus_banco_agencia || 'Ex: 1234'}
+                          className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        />
+                      </div>
+
+                      <div className="space-y-1 sm:col-span-2">
+                        <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block">
+                          Conta Corrente (COD_CONTAC) *
+                        </label>
+                        <input
+                          type="text"
+                          value={b.conta}
+                          onChange={(e) =>
+                            handleProfileBankChange(prof.code, 'conta', e.target.value)
+                          }
+                          placeholder={settings.horus_banco_conta || 'Ex: 56789-0'}
+                          className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block">
+                          Carteira (NRO_CARTEIRA)
+                        </label>
+                        <input
+                          type="text"
+                          value={b.carteira}
+                          onChange={(e) =>
+                            handleProfileBankChange(prof.code, 'carteira', e.target.value)
+                          }
+                          placeholder={settings.horus_banco_carteira || 'Ex: 17, 09'}
+                          className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        />
+                      </div>
+
+                      <div className="space-y-1 col-span-2 sm:col-span-3 pt-1">
+                        <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block">
+                          Regra Padrão de Data de Pagamento & Baixa no Horus
+                        </label>
+                        <select
+                          value={b.payment_date_mode || 'CHANNEL_DATE'}
+                          onChange={(e) =>
+                            handleProfileBankChange(prof.code, 'payment_date_mode', e.target.value)
+                          }
+                          className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        >
+                          <option value="CHANNEL_DATE">
+                            1. Usar Data da Planilha ({prof.channel_label}) — Baixa (PG) cada lançamento com sua data real de repasse
+                          </option>
+                          <option value="SPECIFIC_DATE">
+                            2. Usar Borderô e Baixar (PG) com uma Data Específica (informada na hora de gerar)
+                          </option>
+                          <option value="BORDERO_OPEN">
+                            3. Apenas Gerar Borderô em Aberto (AP) — Baixar manualmente dentro do Horus
+                          </option>
+                        </select>
+                      </div>
+
+                      <div className="col-span-2 sm:col-span-3 pt-1">
+                        <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                          <div>
+                            <span className="text-[11px] font-extrabold text-slate-800 dark:text-slate-200 block">
+                              Unificar Parcelas da Nota em Lançamento Único + Gravar Taxa ({prof.channel_label})
+                            </span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 block">
+                              Quando o pedido tiver várias parcelas no Horus mas {prof.channel_label} pagar de uma só vez, unifica na 1ª parcela e grava a taxa em <code>VLR_LANCTO_ABATIMENTO</code> para bater o fechamento bancário.
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleProfileBankChange(prof.code, 'unify_installments', true)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                                b.unify_installments
+                                  ? 'bg-emerald-600 text-white shadow-2xs'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                              }`}
+                            >
+                              SIM
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleProfileBankChange(prof.code, 'unify_installments', false)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                                !b.unify_installments
+                                  ? 'bg-slate-800 text-white dark:bg-slate-700 shadow-2xs'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                              }`}
+                            >
+                              NÃO
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-900/30 dark:bg-amber-950/20 text-xs text-amber-800 dark:text-amber-300">
-            Estes dados são gravados nas tabelas <code>BORDERO</code> e <code>LANCTOS_CRECEBER</code> durante a baixa de títulos da Vindi. Preencha conforme o cadastro bancário no seu Horus.
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-                Forma de Pagamento no Horus (COD_FORMA) *
-              </label>
-              <input
-                type="text"
-                name="horus_banco_forma_pagto"
-                value={settings.horus_banco_forma_pagto}
-                onChange={handleChange}
-                placeholder="Ex: 01 ou DIN ou CAR"
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
-              <p className="text-[11px] text-slate-400">Código na tabela FORMAS_PAGTO do Horus.</p>
+          {/* 2. CONTA BANCÁRIA PADRÃO (FALLBACK QUANDO UM PERFIL NÃO TIVER CONTA PRÓPRIA) */}
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5 shadow-sm">
+            <div className="flex items-center gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <CreditCard className="h-4 w-4 text-violet-500" />
+              <h4 className="text-sm font-bold text-slate-800 dark:text-white">
+                Conta Bancária Padrão no Horus ERP (Fallback Geral)
+              </h4>
             </div>
 
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-                Código do Banco no Horus (COD_BANCO) *
-              </label>
-              <input
-                type="text"
-                name="horus_banco_codigo"
-                value={settings.horus_banco_codigo}
-                onChange={handleChange}
-                placeholder="Ex: 001, 237, 341"
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
-              <p className="text-[11px] text-slate-400">Código do banco cadastrado no ERP.</p>
+            <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-900/30 dark:bg-amber-950/20 text-xs text-amber-800 dark:text-amber-300">
+              Caso algum tipo de conciliação acima seja deixado em branco, o sistema utilizará estes códigos padrão na gravação das tabelas <code>BORDERO</code> e <code>LANCTOS_CRECEBER</code>.
             </div>
 
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-                Código da Agência (COD_AGENCIA) *
-              </label>
-              <input
-                type="text"
-                name="horus_banco_agencia"
-                value={settings.horus_banco_agencia}
-                onChange={handleChange}
-                placeholder="Ex: 1234"
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
-              <p className="text-[11px] text-slate-400">Número da agência bancária.</p>
-            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                  Forma de Pagamento Padrão no Horus (COD_FORMA)
+                </label>
+                <input
+                  type="text"
+                  name="horus_banco_forma_pagto"
+                  value={settings.horus_banco_forma_pagto}
+                  onChange={handleChange}
+                  placeholder="Ex: 01 ou DIN ou CAR"
+                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                />
+                <p className="text-[11px] text-slate-400">Código na tabela FORMAS_PAGTO do Horus.</p>
+              </div>
 
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-                Número da Conta Corrente (COD_CONTAC) *
-              </label>
-              <input
-                type="text"
-                name="horus_banco_conta"
-                value={settings.horus_banco_conta}
-                onChange={handleChange}
-                placeholder="Ex: 56789-0"
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
-              <p className="text-[11px] text-slate-400">Conta corrente de liquidação.</p>
-            </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                  Código do Banco Padrão no Horus (COD_BANCO)
+                </label>
+                <input
+                  type="text"
+                  name="horus_banco_codigo"
+                  value={settings.horus_banco_codigo}
+                  onChange={handleChange}
+                  placeholder="Ex: 001, 237, 341"
+                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                />
+                <p className="text-[11px] text-slate-400">Código do banco cadastrado no ERP.</p>
+              </div>
 
-            <div className="space-y-1 md:col-span-2">
-              <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-                Número da Carteira de Cobrança (NRO_CARTEIRA) *
-              </label>
-              <input
-                type="text"
-                name="horus_banco_carteira"
-                value={settings.horus_banco_carteira}
-                onChange={handleChange}
-                placeholder="Ex: 17, 109, 09"
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
-              <p className="text-[11px] text-slate-400">Carteira bancária dos lançamentos a receber.</p>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                  Código da Agência Padrão (COD_AGENCIA)
+                </label>
+                <input
+                  type="text"
+                  name="horus_banco_agencia"
+                  value={settings.horus_banco_agencia}
+                  onChange={handleChange}
+                  placeholder="Ex: 1234"
+                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                />
+                <p className="text-[11px] text-slate-400">Número da agência bancária.</p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                  Número da Conta Corrente Padrão (COD_CONTAC)
+                </label>
+                <input
+                  type="text"
+                  name="horus_banco_conta"
+                  value={settings.horus_banco_conta}
+                  onChange={handleChange}
+                  placeholder="Ex: 56789-0"
+                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                />
+                <p className="text-[11px] text-slate-400">Conta corrente de liquidação.</p>
+              </div>
+
+              <div className="space-y-1 md:col-span-2">
+                <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                  Número da Carteira de Cobrança Padrão (NRO_CARTEIRA)
+                </label>
+                <input
+                  type="text"
+                  name="horus_banco_carteira"
+                  value={settings.horus_banco_carteira}
+                  onChange={handleChange}
+                  placeholder="Ex: 17, 109, 09"
+                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                />
+                <p className="text-[11px] text-slate-400">Carteira bancária dos lançamentos a receber.</p>
+              </div>
             </div>
           </div>
         </div>
