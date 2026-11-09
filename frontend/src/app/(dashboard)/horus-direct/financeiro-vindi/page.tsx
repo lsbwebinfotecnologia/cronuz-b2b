@@ -50,7 +50,14 @@ interface SecurityAuditInfo {
 
 interface JobProgressState {
   status: 'RUNNING' | 'COMPLETED' | 'ERROR';
-  phase: 'PARSING' | 'LINKING' | 'QUERYING_HORUS' | 'AUDITING' | 'COMPLETED' | 'ERROR';
+  phase:
+    | 'LENDO_PLANILHAS'
+    | 'VINCULANDO_TRAY'
+    | 'CONSULTANDO_HORUS'
+    | 'AUDITORIA_VALORES'
+    | 'CONCLUIDO'
+    | 'ERRO'
+    | string;
   percent: number;
   message: string;
   current_batch: number;
@@ -377,7 +384,7 @@ export default function FinanceiroVindiPage() {
     setBorderoSuccess(null);
     setJobProgress({
       status: 'RUNNING',
-      phase: 'PARSING',
+      phase: 'LENDO_PLANILHAS',
       percent: 5,
       message: 'Enviando e validando estrutura das planilhas...',
       current_batch: 0,
@@ -419,7 +426,7 @@ export default function FinanceiroVindiPage() {
       let finalResult = initialData;
 
       // Se o backend iniciou um job assíncrono (proteção anti-timeout para planilhas grandes), fazemos polling em tempo real
-      if (initialData.async_job && initialData.job_id) {
+      if (initialData.job_id) {
         const jobId = initialData.job_id;
         let completed = false;
         while (!completed) {
@@ -435,7 +442,7 @@ export default function FinanceiroVindiPage() {
           const jobState = await pollRes.json();
           setJobProgress({
             status: jobState.status,
-            phase: jobState.phase || 'QUERYING_HORUS',
+            phase: jobState.phase || 'CONSULTANDO_HORUS',
             percent: jobState.percent ?? 15,
             message: jobState.message || 'Processando lotes no Horus ERP...',
             current_batch: jobState.current_batch || 0,
@@ -1137,27 +1144,27 @@ export default function FinanceiroVindiPage() {
                       step: 1,
                       label: '1. Leitura e Sanitização da Planilha',
                       done: jobProgress.percent >= 20,
-                      active: jobProgress.phase === 'PARSING',
+                      active: jobProgress.phase === 'LENDO_PLANILHAS',
                     },
                     {
                       step: 2,
                       label: isDualFileMode
                         ? '2. Cruzamento de Vínculos Tray'
                         : '2. Mapeamento de Pedidos e Parcelas',
-                      done: jobProgress.percent >= 35,
-                      active: jobProgress.phase === 'LINKING',
+                      done: jobProgress.percent >= 30,
+                      active: jobProgress.phase === 'VINCULANDO_TRAY',
                     },
                     {
                       step: 3,
                       label: '3. Lotes Indexados SQL Server (NOLOCK)',
                       done: jobProgress.percent >= 88,
-                      active: jobProgress.phase === 'QUERYING_HORUS',
+                      active: jobProgress.phase === 'CONSULTANDO_HORUS',
                     },
                     {
                       step: 4,
                       label: '4. Auditoria Financeira & Integridade',
                       done: jobProgress.percent >= 100,
-                      active: jobProgress.phase === 'AUDITING',
+                      active: jobProgress.phase === 'AUDITORIA_VALORES',
                     },
                   ].map((st) => (
                     <div

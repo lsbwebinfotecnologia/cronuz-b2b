@@ -16,10 +16,14 @@ PERFORMANCE & SEGURANÇA:
   - Cursores SQL fechados via context manager.
 """
 import io
+import os
+import json
 import time
 import uuid
 import asyncio
 import logging
+import tempfile
+from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
@@ -219,6 +223,30 @@ def download_vindi_template(
 # ── Rastreador de Jobs de Conciliação em Memória (Progresso em Tempo Real) ────
 _RECONCILIATION_JOBS: Dict[str, Dict[str, Any]] = {}
 _JOB_TTL_SECONDS = 900  # 15 minutos
+_JOBS_DIR = Path(tempfile.gettempdir()) / "cronuz_reconciliation_jobs"
+
+
+def _save_job_to_disk(job_id: str, job_data: Dict[str, Any]) -> None:
+    try:
+        _JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        final_path = _JOBS_DIR / f"{job_id}.json"
+        tmp_path = _JOBS_DIR / f"{job_id}.{os.getpid()}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(job_data, f, ensure_ascii=False, default=str)
+        os.replace(tmp_path, final_path)
+    except Exception as ex:
+        logger.warning("[HorusFinancialPreview] Aviso ao gravar estado de job em disco: %s", ex)
+
+
+def _load_job_from_disk(job_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        final_path = _JOBS_DIR / f"{job_id}.json"
+        if not final_path.exists():
+            return None
+        with open(final_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def _cleanup_old_reconciliation_jobs() -> None:
@@ -229,14 +257,25 @@ def _cleanup_old_reconciliation_jobs() -> None:
     ]
     for jid in expired:
         _RECONCILIATION_JOBS.pop(jid, None)
+    try:
+        if _JOBS_DIR.exists():
+            for p in _JOBS_DIR.glob("*.json"):
+                if now - p.stat().st_mtime > _JOB_TTL_SECONDS:
+                    p.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _update_job_progress(job_id: Optional[str], **kwargs) -> None:
-    if not job_id or job_id not in _RECONCILIATION_JOBS:
+    if not job_id:
         return
-    job = _RECONCILIATION_JOBS[job_id]
+    job = _RECONCILIATION_JOBS.get(job_id) or _load_job_from_disk(job_id)
+    if not job:
+        return
     job.update(kwargs)
     job["elapsed_seconds"] = round(time.time() - float(job.get("started_at") or time.time()), 1)
+    _RECONCILIATION_JOBS[job_id] = job
+    _save_job_to_disk(job_id, job)
 
 
 @router.get("/companies/{company_id}/horus-sql/reconciliation/jobs/{job_id}")
@@ -246,7 +285,7 @@ def get_reconciliation_job_status(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Retorna o progresso em tempo real de um processamento de conciliação:
+    Retorna o progresso em tempo real de um processamento de conciliação (compatível com múltiplos workers Gunicorn):
       - `status`: 'RUNNING' | 'COMPLETED' | 'ERROR'
       - `percent`: 0..100
       - `phase`: 'LENDO_PLANILHAS' | 'VINCULANDO_TRAY' | 'CONSULTANDO_HORUS' | 'AUDITORIA_VALORES' | 'CONCLUIDO'
@@ -255,7 +294,8 @@ def get_reconciliation_job_status(
     """
     _assert_ownership(current_user, company_id)
     _cleanup_old_reconciliation_jobs()
-    job = _RECONCILIATION_JOBS.get(job_id)
+    # Prioriza leitura do arquivo compartilhado em /tmp para garantir consistência entre múltiplos workers Gunicorn
+    job = _load_job_from_disk(job_id) or _RECONCILIATION_JOBS.get(job_id)
     if not job or int(job.get("company_id") or 0) != int(company_id):
         raise HTTPException(status_code=404, detail="Processo de conciliação não encontrado ou expirado.")
     job["elapsed_seconds"] = round(time.time() - float(job.get("started_at") or time.time()), 1)
@@ -925,7 +965,7 @@ async def preview_vindi_reconciliation(
     if async_job:
         _cleanup_old_reconciliation_jobs()
         job_id = str(uuid.uuid4())
-        _RECONCILIATION_JOBS[job_id] = {
+        initial_job = {
             "job_id": job_id,
             "company_id": company_id,
             "profile_code": active_profile,
@@ -943,6 +983,8 @@ async def preview_vindi_reconciliation(
             "result": None,
             "error": None,
         }
+        _RECONCILIATION_JOBS[job_id] = initial_job
+        _save_job_to_disk(job_id, initial_job)
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
             None,
@@ -959,6 +1001,7 @@ async def preview_vindi_reconciliation(
         return {
             "success": True,
             "async": True,
+            "async_job": True,
             "job_id": job_id,
             "status": "RUNNING",
         }
