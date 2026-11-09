@@ -125,6 +125,116 @@ PRIMARY_USAGE_CHANNELS: List[dict] = [
     },
 ]
 
+RECONCILIATION_PROFILES_CATALOG: List[dict] = [
+    {
+        "code": "TRAY_SHOPEE",
+        "name": "Shopee ↔ Tray ↔ Horus ERP",
+        "short_name": "Shopee + Tray",
+        "channel_label": "Shopee",
+        "hub_label": "Tray E-commerce",
+        "mode": "DUAL_FILE",
+        "badge": "2 Planilhas (Shopee + Tray)",
+        "description": "Cruza a planilha de pedidos/repasses recebidos da Shopee com a planilha de pedidos da Tray para amarrar o nº do pedido enviado ao Horus ERP e localizar o Contas a Receber.",
+        "file_1_label": "Planilha de Repasse / Pedidos da Shopee (.xlsx ou .csv)",
+        "file_2_label": "Planilha de Pedidos da Tray com vínculo Shopee ↔ Horus (.xlsx ou .csv)",
+    },
+    {
+        "code": "TRAY_TIKTOK",
+        "name": "TikTok Shop ↔ Tray ↔ Horus ERP",
+        "short_name": "TikTok + Tray",
+        "channel_label": "TikTok Shop",
+        "hub_label": "Tray E-commerce",
+        "mode": "DUAL_FILE",
+        "badge": "2 Planilhas (TikTok + Tray)",
+        "description": "Cruza a planilha de liquidação do TikTok Shop com a planilha de pedidos da Tray para identificar o pedido integrado no Horus ERP e baixar o Contas a Receber.",
+        "file_1_label": "Planilha de Recebimentos / Liquidação do TikTok Shop (.xlsx ou .csv)",
+        "file_2_label": "Planilha de Pedidos da Tray com vínculo TikTok ↔ Horus (.xlsx ou .csv)",
+    },
+    {
+        "code": "TRAY_VINDI",
+        "name": "Vindi ↔ Tray ↔ Horus ERP",
+        "short_name": "Vindi + Tray",
+        "channel_label": "Vindi",
+        "hub_label": "Tray E-commerce",
+        "mode": "DUAL_FILE",
+        "badge": "2 Planilhas (Vindi + Tray)",
+        "description": "Cruza o extrato de transações pagas na Vindi com a planilha de pedidos da Tray para amarrar o número do pedido no Horus ERP e gerar o Borderô.",
+        "file_1_label": "Planilha Financeira / Extrato da Vindi (.xlsx ou .csv)",
+        "file_2_label": "Planilha de Pedidos da Tray com vínculo Vindi ↔ Horus (.xlsx ou .csv)",
+    },
+    {
+        "code": "VINDI_DIRECT",
+        "name": "Vindi Direto ↔ Horus ERP",
+        "short_name": "Vindi Direto",
+        "channel_label": "Vindi",
+        "hub_label": "Direto Horus",
+        "mode": "SINGLE_FILE",
+        "badge": "1 Planilha (Vindi Direto)",
+        "description": "Conciliação direta do extrato da Vindi com os lançamentos de Contas a Receber (PEDIDOS_VENDA.COD_PEDIDO_ORIGEM) no Horus ERP.",
+        "file_1_label": "Planilha Financeira / Extrato da Vindi (.xlsx ou .csv)",
+        "file_2_label": None,
+    },
+]
+
+
+def get_company_reconciliation_profiles(settings) -> List[dict]:
+    """
+    Retorna a lista completa de perfis de conciliação homologados com o status de
+    habilitação do seller e parâmetros bancários opcionais de Borderô por perfil.
+    """
+    raw_cfg = (
+        dict(settings.b2c_showcases_config)
+        if (settings and isinstance(settings.b2c_showcases_config, dict))
+        else {}
+    )
+    saved_map = (
+        raw_cfg.get("bank_reconciliations")
+        if isinstance(raw_cfg.get("bank_reconciliations"), dict)
+        else {}
+    )
+    vindi_legacy_enabled = bool(getattr(settings, "horus_sql_feature_vindi_baixa", False))
+
+    default_bank = {
+        "forma_pagto": (getattr(settings, "horus_banco_forma_pagto", "") or "").strip(),
+        "banco": (getattr(settings, "horus_banco_codigo", "") or "").strip(),
+        "agencia": (getattr(settings, "horus_banco_agencia", "") or "").strip(),
+        "conta": (getattr(settings, "horus_banco_conta", "") or "").strip(),
+        "carteira": (getattr(settings, "horus_banco_carteira", "") or "").strip(),
+    }
+
+    result = []
+    for item in RECONCILIATION_PROFILES_CATALOG:
+        code = item["code"]
+        saved = saved_map.get(code) if isinstance(saved_map.get(code), dict) else {}
+        if "enabled" in saved:
+            enabled = bool(saved.get("enabled"))
+        else:
+            enabled = vindi_legacy_enabled if code == "VINDI_DIRECT" else False
+
+        use_custom_bank = bool(saved.get("use_custom_bank", False))
+        custom_bank = {
+            "forma_pagto": str(saved.get("forma_pagto") or "").strip(),
+            "banco": str(saved.get("banco") or "").strip(),
+            "agencia": str(saved.get("agencia") or "").strip(),
+            "conta": str(saved.get("conta") or "").strip(),
+            "carteira": str(saved.get("carteira") or "").strip(),
+        }
+        effective_bank = custom_bank if use_custom_bank else default_bank
+        bank_configured = all(
+            bool(effective_bank.get(k))
+            for k in ("forma_pagto", "banco", "agencia", "conta", "carteira")
+        )
+
+        result.append({
+            **item,
+            "enabled": enabled,
+            "use_custom_bank": use_custom_bank,
+            "custom_bank": custom_bank,
+            "effective_bank": effective_bank,
+            "bank_configured": bank_configured,
+        })
+    return result
+
 
 def provider_config_status(db: Session, company_id: int, provider: str, settings=None) -> dict:
     """Retorna {configured: bool, detail: str} sem expor credenciais."""

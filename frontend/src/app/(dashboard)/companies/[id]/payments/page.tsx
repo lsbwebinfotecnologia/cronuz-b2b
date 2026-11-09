@@ -12,6 +12,8 @@ import {
   ChevronUp,
   Building2,
   Receipt,
+  FileSpreadsheet,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
@@ -40,11 +42,40 @@ interface Channel {
   name: string;
   methods: string[];
 }
+interface ReconciliationProfile {
+  code: string;
+  name: string;
+  short_name: string;
+  channel_label: string;
+  hub_label: string;
+  mode: 'DUAL_FILE' | 'SINGLE_FILE';
+  badge: string;
+  description: string;
+  enabled: boolean;
+  use_custom_bank: boolean;
+  custom_bank: {
+    forma_pagto: string;
+    banco: string;
+    agencia: string;
+    conta: string;
+    carteira: string;
+  };
+  effective_bank: {
+    forma_pagto: string;
+    banco: string;
+    agencia: string;
+    conta: string;
+    carteira: string;
+  };
+  bank_configured: boolean;
+}
+
 interface Hub {
   providers: Provider[];
   channels: Channel[];
   method_labels: Record<string, string>;
   routes: Record<string, Record<string, string>>;
+  reconciliations?: ReconciliationProfile[];
 }
 
 export default function CompanyPaymentsHubPage() {
@@ -55,6 +86,26 @@ export default function CompanyPaymentsHubPage() {
   const [openConfig, setOpenConfig] = useState<string | null>(null);
   const [settings, setSettings] = useState<any>({});
   const [savingSettings, setSavingSettings] = useState(false);
+
+  // Estado para configuração das Conciliações Bancárias & Marketplaces
+  const [togglingRec, setTogglingRec] = useState<string | null>(null);
+  const [openRecConfig, setOpenRecConfig] = useState<string | null>(null);
+  const [recBankDraft, setRecBankDraft] = useState<{
+    use_custom_bank: boolean;
+    forma_pagto: string;
+    banco: string;
+    agencia: string;
+    conta: string;
+    carteira: string;
+  }>({
+    use_custom_bank: false,
+    forma_pagto: '',
+    banco: '',
+    agencia: '',
+    conta: '',
+    carteira: '',
+  });
+  const [savingRecBank, setSavingRecBank] = useState(false);
 
   const headers = () => ({
     Authorization: `Bearer ${getToken()}`,
@@ -175,6 +226,64 @@ export default function CompanyPaymentsHubPage() {
       toast.error(e.message || 'Erro ao salvar credenciais.');
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const toggleReconciliationProfile = async (rec: ReconciliationProfile) => {
+    if (!company) return;
+    setTogglingRec(rec.code);
+    try {
+      const res = await fetch(`${API}/companies/${company.id}/payments/reconciliations/${rec.code}`, {
+        method: 'PATCH',
+        headers: headers(),
+        body: JSON.stringify({ enabled: !rec.enabled }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.detail || 'Erro ao atualizar conciliação.');
+      setHub(body);
+      toast.success(
+        `Conciliação "${rec.name}" ${!rec.enabled ? 'liberada ✓' : 'desativada'} para este Seller!`
+      );
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setTogglingRec(null);
+    }
+  };
+
+  const handleOpenRecBankDrawer = (rec: ReconciliationProfile) => {
+    if (openRecConfig === rec.code) {
+      setOpenRecConfig(null);
+      return;
+    }
+    setOpenRecConfig(rec.code);
+    setRecBankDraft({
+      use_custom_bank: Boolean(rec.use_custom_bank),
+      forma_pagto: rec.custom_bank?.forma_pagto || rec.effective_bank?.forma_pagto || '',
+      banco: rec.custom_bank?.banco || rec.effective_bank?.banco || '',
+      agencia: rec.custom_bank?.agencia || rec.effective_bank?.agencia || '',
+      conta: rec.custom_bank?.conta || rec.effective_bank?.conta || '',
+      carteira: rec.custom_bank?.carteira || rec.effective_bank?.carteira || '',
+    });
+  };
+
+  const handleSaveRecBankConfig = async (profileCode: string) => {
+    if (!company) return;
+    setSavingRecBank(true);
+    try {
+      const res = await fetch(`${API}/companies/${company.id}/payments/reconciliations/${profileCode}`, {
+        method: 'PATCH',
+        headers: headers(),
+        body: JSON.stringify(recBankDraft),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.detail || 'Falha ao salvar parâmetros de Borderô.');
+      setHub(body);
+      toast.success('Parâmetros bancários do Borderô salvos para esta conciliação!');
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao salvar parâmetros.');
+    } finally {
+      setSavingRecBank(false);
     }
   };
 
@@ -557,6 +666,225 @@ export default function CompanyPaymentsHubPage() {
             </div>
           </div>
         )}
+      </section>
+
+      {/* PASSO 3: CONCILIAÇÕES BANCÁRIAS & MARKETPLACES (TRAY / SHOPEE / TIKTOK / VINDI -> HORUS ERP) */}
+      <section
+        id="master-reconciliations-section"
+        className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-4 shadow-sm"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div>
+            <span className="text-[11px] font-extrabold uppercase tracking-wider text-violet-600 dark:text-violet-400 block">
+              Passo 3 • Conciliações Bancárias &amp; Marketplaces (Horus ERP)
+            </span>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <ArrowRightLeft className="h-4 w-4 text-violet-600" />
+              Opções de Conciliação Liberadas na Tela Única do Seller
+            </h2>
+            <p className="text-xs text-slate-500">
+              Habilite quais formatos de conciliação este Seller terá disponível na tela operacional (estilo Access Atualizado). Nos perfis com <strong>Tray</strong>, o sistema lê os 2 arquivos (Canal + Tray), amarra os vínculos e busca o Contas a Receber no Horus ERP.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          {(hub.reconciliations || []).map((rec) => {
+            const isDrawerOpen = openRecConfig === rec.code;
+            return (
+              <div
+                key={rec.code}
+                className={`rounded-xl border p-4 flex flex-col justify-between space-y-3 transition-all ${
+                  isDrawerOpen
+                    ? 'border-violet-600 bg-violet-50/50 dark:bg-violet-950/30 ring-2 ring-violet-500/20 shadow-sm'
+                    : rec.enabled
+                    ? 'border-emerald-200 bg-emerald-50/20 dark:border-emerald-900/50 dark:bg-slate-900/60'
+                    : 'border-slate-200 opacity-80 dark:border-slate-800'
+                }`}
+              >
+                <div className="space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-bold text-slate-900 dark:text-white">{rec.name}</p>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            rec.mode === 'DUAL_FILE'
+                              ? 'bg-violet-100 text-violet-700 dark:bg-violet-950/70 dark:text-violet-300'
+                              : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300'
+                          }`}
+                        >
+                          {rec.badge}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                        {rec.description}
+                      </p>
+                    </div>
+
+                    {togglingRec === rec.code ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-slate-400 shrink-0" />
+                    ) : (
+                      <label
+                        className="relative inline-flex cursor-pointer items-center shrink-0"
+                        title={rec.enabled ? 'Liberado para o seller' : 'Desativado'}
+                      >
+                        <input
+                          type="checkbox"
+                          className="sr-only peer"
+                          checked={rec.enabled}
+                          onChange={() => toggleReconciliationProfile(rec)}
+                        />
+                        <div className="peer h-6 w-11 rounded-full bg-slate-200 peer-checked:bg-emerald-600 transition-colors dark:bg-slate-700 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition-all peer-checked:after:translate-x-5" />
+                      </label>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-100 dark:border-slate-800">
+                    <span
+                      className={`font-semibold flex items-center gap-1 ${
+                        rec.bank_configured
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : 'text-amber-600 dark:text-amber-400'
+                      }`}
+                    >
+                      {rec.bank_configured ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      )}
+                      {rec.use_custom_bank
+                        ? `Conta própria: Banco ${rec.effective_bank.banco || '-'} / Cart. ${rec.effective_bank.carteira || '-'}`
+                        : rec.bank_configured
+                        ? `Padrão Horus SQL (Banco ${rec.effective_bank.banco} / Cart. ${rec.effective_bank.carteira})`
+                        : 'Configurar Conta/Carteira p/ Borderô'}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => handleOpenRecBankDrawer(rec)}
+                      className="text-xs font-bold text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      {isDrawerOpen ? 'Fechar Conta Borderô' : 'Conta/Carteira Borderô'}
+                    </button>
+                  </div>
+                </div>
+
+                {isDrawerOpen && (
+                  <div className="pt-3 border-t border-violet-200 dark:border-violet-800/60 space-y-3 animate-in fade-in">
+                    <label className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={recBankDraft.use_custom_bank}
+                        onChange={(e) =>
+                          setRecBankDraft({ ...recBankDraft, use_custom_bank: e.target.checked })
+                        }
+                        className="rounded text-violet-600"
+                      />
+                      Usar Banco / Carteira exclusiva no Horus ERP para o Borderô de {rec.short_name}
+                    </label>
+
+                    {recBankDraft.use_custom_bank ? (
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                        <div>
+                          <label className="text-[10px] font-bold uppercase text-slate-500 block">
+                            Forma (COD_FORMA)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ex: CAR"
+                            value={recBankDraft.forma_pagto}
+                            onChange={(e) =>
+                              setRecBankDraft({ ...recBankDraft, forma_pagto: e.target.value })
+                            }
+                            className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase text-slate-500 block">
+                            Banco (COD_BANCO)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ex: 341"
+                            value={recBankDraft.banco}
+                            onChange={(e) =>
+                              setRecBankDraft({ ...recBankDraft, banco: e.target.value })
+                            }
+                            className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase text-slate-500 block">
+                            Agência
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ex: 1234"
+                            value={recBankDraft.agencia}
+                            onChange={(e) =>
+                              setRecBankDraft({ ...recBankDraft, agencia: e.target.value })
+                            }
+                            className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase text-slate-500 block">
+                            Conta (COD_CONTAC)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ex: 56789-0"
+                            value={recBankDraft.conta}
+                            onChange={(e) =>
+                              setRecBankDraft({ ...recBankDraft, conta: e.target.value })
+                            }
+                            className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase text-slate-500 block">
+                            Carteira
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ex: 109"
+                            value={recBankDraft.carteira}
+                            onChange={(e) =>
+                              setRecBankDraft({ ...recBankDraft, carteira: e.target.value })
+                            }
+                            className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-mono"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-500">
+                        Utilizando os parâmetros bancários padrão configurados na aba <strong>Horus SQL Direct → Parâmetros Financeiros &amp; Borderô</strong>.
+                      </p>
+                    )}
+
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        disabled={savingRecBank}
+                        onClick={() => handleSaveRecBankConfig(rec.code)}
+                        className="px-4 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {savingRecBank ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Save className="w-3.5 h-3.5" />
+                        )}
+                        Salvar Parâmetros ({rec.short_name})
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </section>
     </div>
   );

@@ -32,6 +32,12 @@ from app.core.utils import assert_company_ownership
 from app.core.upload_security import validate_file_size_and_extension, read_file_safely
 from app.integrators.horus_sql_client import HorusSQLClient, HorusSQLConfigError
 from app.integrators.vindi_financial_parser import parse_vindi_file
+from app.integrators.reconciliation_parser import (
+    parse_channel_file,
+    parse_tray_bridge_file,
+    _normalize_order_key,
+)
+from app.payments.catalog import get_company_reconciliation_profiles
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -65,9 +71,124 @@ class ReleaseItemPayload(BaseModel):
 
 class CreateBorderoPayload(BaseModel):
     releases: List[ReleaseItemPayload]
+    profile_code: Optional[str] = None
+
+
+def _resolve_bank_config_for_profile(settings, sql_client_or_none, profile_code: Optional[str] = None) -> dict:
+    """Resolve os parâmetros bancários de Borderô (específicos do perfil ou padrão do Horus SQL)."""
+    profiles = get_company_reconciliation_profiles(settings)
+    code_norm = (profile_code or "VINDI_DIRECT").upper().strip()
+    matched = next((p for p in profiles if p["code"] == code_norm), None)
+
+    eff = (matched or {}).get("effective_bank") or {
+        "forma_pagto": settings.horus_banco_forma_pagto or "",
+        "banco": settings.horus_banco_codigo or "",
+        "agencia": settings.horus_banco_agencia or "",
+        "conta": settings.horus_banco_conta or "",
+        "carteira": settings.horus_banco_carteira or "",
+    }
+    cod_emp = sql_client_or_none.cod_empresa if sql_client_or_none else (settings.horus_sql_cod_empresa or settings.horus_company or "1")
+    cod_fil = sql_client_or_none.cod_filial if sql_client_or_none else (settings.horus_sql_cod_filial or settings.horus_branch or "1")
+
+    return {
+        "profile_code": code_norm,
+        "use_custom_bank": bool((matched or {}).get("use_custom_bank", False)),
+        "forma_pagto": eff.get("forma_pagto") or "",
+        "banco": eff.get("banco") or "",
+        "agencia": eff.get("agencia") or "",
+        "conta": eff.get("conta") or "",
+        "carteira": eff.get("carteira") or "",
+        "cod_empresa": str(cod_emp),
+        "cod_filial": str(cod_fil),
+        "is_configured": bool(
+            eff.get("forma_pagto")
+            and eff.get("banco")
+            and eff.get("agencia")
+            and eff.get("conta")
+            and eff.get("carteira")
+        ),
+    }
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/companies/{company_id}/horus-sql/reconciliation/profiles")
+def get_reconciliation_profiles_for_seller(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Retorna os perfis de conciliação habilitados para a empresa (ex: TRAY_SHOPEE, TRAY_TIKTOK, TRAY_VINDI, VINDI_DIRECT)
+    e a filial padrão do Horus SQL.
+    """
+    _assert_ownership(current_user, company_id)
+    settings = _get_settings_or_404(db, company_id)
+    all_profiles = get_company_reconciliation_profiles(settings)
+    enabled_profiles = [p for p in all_profiles if p.get("enabled")]
+    return {
+        "company_id": company_id,
+        "default_filial": str(settings.horus_sql_cod_filial or settings.horus_branch or "1").strip(),
+        "horus_sql_enabled": bool(settings.horus_sql_enabled),
+        "profiles": all_profiles,
+        "enabled_profiles": enabled_profiles,
+    }
+
+
+@router.get("/companies/{company_id}/horus-sql/reconciliation/template")
+def download_reconciliation_template(
+    company_id: int,
+    template_type: str = "shopee",
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Retorna modelos CSV para facilitar a operação:
+      - template_type='shopee' : Modelo de planilha de repasse da Shopee
+      - template_type='tiktok' : Modelo de planilha de liquidação do TikTok Shop
+      - template_type='vindi'  : Modelo de planilha financeira da Vindi
+      - template_type='tray'   : Modelo de planilha de Pedidos da Tray (Ponte Marketplace ↔ Horus)
+    """
+    _assert_ownership(current_user, company_id)
+    t = (template_type or "shopee").lower().strip()
+
+    if t == "shopee":
+        filename = "modelo_recebimentos_shopee.csv"
+        csv_content = (
+            "ID do pedido;Nome de usuario (comprador);CPF do Comprador;Valor total do pedido;Taxa de comissao;Valor total lancado;Data de conclusao do pagamento;Status do pedido;Metodo de pagamento\n"
+            "240915SHP001;Maria Leitora;123.456.789-00;120.00;16.80;103.20;05/11/2026;Concluido;Pix Shopee\n"
+            "240915SHP002;Joao Silva;987.654.321-11;89.90;12.59;77.31;05/11/2026;Concluido;Cartao de Credito\n"
+            "240915SHP003;Ana Costa;111.222.333-44;210.50;29.47;181.03;06/11/2026;Concluido;Pix Shopee\n"
+        )
+    elif t == "tiktok":
+        filename = "modelo_recebimentos_tiktok_shop.csv"
+        csv_content = (
+            "Order ID;Buyer Username;Documento;Order Amount;Commission Fee;Settlement Amount;Settled Time;Status;Payment Method\n"
+            "576890001;carlos_books;123.456.789-00;150.00;18.00;132.00;05/11/2026;Settled;Pix\n"
+            "576890002;leitura_viva;987.654.321-11;95.00;11.40;83.60;05/11/2026;Settled;Credit Card\n"
+        )
+    elif t == "tray":
+        filename = "modelo_pedidos_tray_vinculo.csv"
+        csv_content = (
+            "Pedido Tray;Pedido Marketplace;Pedido ERP Horus;Ponto de Venda;Cliente;CPF/CNPJ;Valor Total;Status\n"
+            "1001;240915SHP001;1001;Shopee;Maria Leitora;123.456.789-00;120.00;Enviado\n"
+            "1002;240915SHP002;1002;Shopee;Joao Silva;987.654.321-11;89.90;Enviado\n"
+            "1003;240915SHP003;1003;Shopee;Ana Costa;111.222.333-44;210.50;Entregue\n"
+        )
+    else:
+        filename = "modelo_planilha_vindi.csv"
+        csv_content = (
+            "Pedido;Cliente;Documento;Valor Bruto;Taxa;Valor Liquido;Data Pagamento;Status;Forma Pagamento\n"
+            "1001;Livraria Exemplo LTDA;12.345.678/0001-90;250.00;7.50;242.50;01/09/2026;Paga;Cartao de Credito\n"
+            "1002;Distribuidora Cultural;98.765.432/0001-10;480.50;3.50;477.00;01/09/2026;Paga;Boleto Bancario\n"
+            "1003;Livraria Saber Mais;11.222.333/0001-44;120.00;1.20;118.80;01/09/2026;Paga;Pix\n"
+        )
+
+    return StreamingResponse(
+        io.BytesIO(csv_content.encode("utf-8-sig")),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 @router.get("/companies/{company_id}/horus-sql/vindi/template")
 def download_vindi_template(
@@ -95,41 +216,125 @@ def download_vindi_template(
 
 
 @router.post("/companies/{company_id}/horus-sql/vindi/preview")
+@router.post("/companies/{company_id}/horus-sql/reconciliation/preview")
 async def preview_vindi_reconciliation(
     company_id: int,
     file: UploadFile = File(...),
+    tray_file: Optional[UploadFile] = File(None),
+    profile_code: Optional[str] = "VINDI_DIRECT",
     filial: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Recebe arquivo CSV/XLSX da Vindi, parseia em memória e consulta os lançamentos
-    no SQL Server do Horus ERP correspondentes a cada pedido web.
-
-    Retorna status de match, divergências de valores e lançamentos não encontrados.
+    Motor Unificado de Conciliação (1 ou 2 Planilhas -> Horus ERP SQL Server):
+      - VINDI_DIRECT: 1 planilha (Vindi) -> Horus SQL
+      - TRAY_SHOPEE / TRAY_TIKTOK / TRAY_VINDI: 2 planilhas (Arquivo 1: Canal Shopee/TikTok/Vindi + Arquivo 2: Tray) -> Horus SQL
     """
     _assert_ownership(current_user, company_id)
     settings = _get_settings_or_404(db, company_id)
 
-    validate_file_size_and_extension(file, category="sheet")
+    active_profile = (profile_code or "VINDI_DIRECT").upper().strip()
+    is_dual_file = active_profile in ("TRAY_SHOPEE", "TRAY_TIKTOK", "TRAY_VINDI")
 
-    # 1. Lê os bytes do arquivo em memória de forma segura
+    validate_file_size_and_extension(file, category="sheet")
+    if is_dual_file:
+        if not tray_file:
+            raise HTTPException(
+                status_code=400,
+                detail="Este perfil de conciliação requer os 2 arquivos: o arquivo do Canal (Shopee/TikTok/Vindi) e a planilha de Pedidos da Tray.",
+            )
+        validate_file_size_and_extension(tray_file, category="sheet")
+
+    # 1. Lê os bytes do Arquivo 1 em memória de forma segura
     contents = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
     if not contents:
-        raise HTTPException(status_code=400, detail="O arquivo enviado está vazio.")
+        raise HTTPException(status_code=400, detail="O arquivo do canal enviado está vazio.")
 
-    # 2. Parseia os dados da Vindi
-    vindi_rows, parse_warnings = parse_vindi_file(contents, file.filename or "planilha.csv")
+    # 2. Parseia os dados do Arquivo 1 (Canal) e, se aplicável, do Arquivo 2 (Tray)
+    parse_warnings: List[str] = []
+    tray_map: Dict[str, Any] = {"rows": [], "by_channel_order": {}, "by_tray_order": {}, "token_index": {}}
+
+    if is_dual_file:
+        vindi_rows, w1 = parse_channel_file(contents, file.filename or "canal.csv", active_profile)
+        parse_warnings.extend(w1)
+
+        tray_bytes = await read_file_safely(tray_file, max_size_bytes=10 * 1024 * 1024)
+        if not tray_bytes:
+            raise HTTPException(status_code=400, detail="A planilha de pedidos da Tray enviada está vazia.")
+        tray_map, w2 = parse_tray_bridge_file(tray_bytes, tray_file.filename or "tray.csv")
+        parse_warnings.extend(w2)
+    else:
+        vindi_rows, w1 = parse_vindi_file(contents, file.filename or "planilha.csv")
+        parse_warnings.extend(w1)
+
     if not vindi_rows:
         raise HTTPException(
             status_code=400,
-            detail=f"Não foi possível extrair lançamentos da planilha. {'; '.join(parse_warnings)}"
+            detail=f"Não foi possível extrair lançamentos da planilha principal. {'; '.join(parse_warnings)}",
         )
 
-    # 3. Extrai lista de pedidos web para consulta no Horus
-    pedidos_set = {str(r["pedido_web"]).strip() for r in vindi_rows if r.get("pedido_web")}
+    # 3. Se for DUAL_FILE (Shopee/TikTok/Vindi + Tray), amarra cada linha do Canal com a planilha da Tray
+    by_channel = tray_map.get("by_channel_order") or {}
+    by_tray = tray_map.get("by_tray_order") or {}
+    token_idx = tray_map.get("token_index") or {}
+
+    pedidos_set = set()
+    linked_tray_count = 0
+    unlinked_tray_count = 0
+
+    for v_row in vindi_rows:
+        ped_canal = _normalize_order_key(v_row.get("pedido_canal") or v_row.get("pedido_web") or "")
+        v_row["pedido_canal"] = ped_canal
+
+        if is_dual_file:
+            stripped_canal = ped_canal.lstrip("0") or ped_canal
+            t_match = (
+                by_channel.get(ped_canal)
+                or by_channel.get(stripped_canal)
+                or by_tray.get(ped_canal)
+                or token_idx.get(ped_canal)
+            )
+            if t_match:
+                linked_tray_count += 1
+                ped_tray = str(t_match.get("pedido_tray") or "").strip()
+                ped_horus_ref = str(t_match.get("pedido_horus_ref") or ped_tray or ped_canal).strip()
+                v_row["vinculo_tray_ok"] = True
+                v_row["pedido_tray"] = ped_tray
+                v_row["pedido_horus_ref"] = ped_horus_ref
+                v_row["pedido_web"] = ped_horus_ref
+                v_row["valor_tray"] = float(t_match.get("valor_tray") or 0.0)
+                v_row["status_tray"] = t_match.get("status_tray") or ""
+                v_row["nf_tray"] = t_match.get("nf_tray") or ""
+                if (not v_row.get("cliente_nome") or v_row["cliente_nome"] == "-") and t_match.get("cliente_tray"):
+                    v_row["cliente_nome"] = t_match["cliente_tray"]
+                if (not v_row.get("documento") or v_row["documento"] == "-") and t_match.get("documento_tray"):
+                    v_row["documento"] = t_match["documento_tray"]
+                if float(v_row.get("valor") or 0.0) <= 0 and float(t_match.get("valor_tray") or 0.0) > 0:
+                    v_row["valor"] = float(t_match["valor_tray"])
+                    v_row["valor_bruto"] = float(t_match["valor_tray"])
+
+                for cand in (ped_horus_ref, ped_tray, ped_canal):
+                    if cand:
+                        pedidos_set.add(cand)
+            else:
+                unlinked_tray_count += 1
+                v_row["vinculo_tray_ok"] = False
+                v_row["pedido_tray"] = "-"
+                v_row["pedido_horus_ref"] = ped_canal
+                v_row["pedido_web"] = ped_canal
+                v_row["valor_tray"] = 0.0
+                if ped_canal:
+                    pedidos_set.add(ped_canal)
+        else:
+            v_row["vinculo_tray_ok"] = True
+            v_row["pedido_tray"] = "-"
+            v_row["pedido_horus_ref"] = ped_canal
+            if ped_canal:
+                pedidos_set.add(ped_canal)
+
     if not pedidos_set:
-        raise HTTPException(status_code=400, detail="Nenhum número de pedido identificado na planilha.")
+        raise HTTPException(status_code=400, detail="Nenhum número de pedido identificado nas planilhas.")
 
     # 4. Conecta ao SQL Server do Horus via HorusSQLClient
     try:
@@ -140,16 +345,24 @@ async def preview_vindi_reconciliation(
     cod_filial = str(filial or settings.horus_sql_cod_filial or settings.horus_branch or "1").strip()
 
     # 5. Executa a query no SQL Server em thread pool separada (não bloqueia event loop)
-    # Consulta LANCTOS_CRECEBER + PEDIDOS_VENDA + NF_MESTRE
+    # Consulta LANCTOS_CRECEBER + PEDIDOS_VENDA + NF_MESTRE por COD_PEDIDO_ORIGEM ou COD_PED_VENDA
     def _fetch_horus_data():
         pedidos_list = list(pedidos_set)
-        # Quebra em batches se houver muitos pedidos (máximo 1000 por batch)
-        batch_size = 500
+        batch_size = 400
         all_horus_releases = []
 
         for i in range(0, len(pedidos_list), batch_size):
             batch = pedidos_list[i:i + batch_size]
             placeholders = ", ".join(["%s"] * len(batch))
+            numeric_batch = [int(x) for x in batch if str(x).isdigit() and len(str(x)) <= 9]
+            if numeric_batch:
+                num_placeholders = ", ".join(["%s"] * len(numeric_batch))
+                where_ped_clause = f"(PV.COD_PEDIDO_ORIGEM IN ({placeholders}) OR PV.COD_PED_VENDA IN ({num_placeholders}))"
+                params = tuple([cod_filial, cod_filial] + batch + numeric_batch)
+            else:
+                where_ped_clause = f"PV.COD_PEDIDO_ORIGEM IN ({placeholders})"
+                params = tuple([cod_filial, cod_filial] + batch)
+
             query_sql = f"""
                 SELECT 
                     LR.NRO_LANCTO_CRECEBER,
@@ -173,10 +386,9 @@ async def preview_vindi_reconciliation(
                 ) NF
                 WHERE LR.COD_FILIAL = %s
                   AND PV.COD_FILIAL = %s
-                  AND PV.COD_PEDIDO_ORIGEM IN ({placeholders})
+                  AND {where_ped_clause}
                 ORDER BY PV.COD_PED_VENDA DESC, LR.NRO_LANCTO_CRECEBER DESC
             """
-            params = tuple([cod_filial, cod_filial] + batch)
             rows = sql_client.query(query_sql, params, max_rows=5000)
             all_horus_releases.extend(rows)
 
@@ -192,14 +404,18 @@ async def preview_vindi_reconciliation(
             detail=f"Erro ao consultar lançamentos no SQL Server do Horus: {str(e)}"
         )
 
-    # 6. Indexa os resultados do Horus por PEDIDO_WEB
-    # Ordena os lançamentos priorizando títulos em aberto ('AB') e pedidos mais recentes
+    # 6. Indexa os resultados do Horus por PEDIDO_WEB (COD_PEDIDO_ORIGEM) e por COD_PED_VENDA
     horus_by_pedido: Dict[str, List[Dict[str, Any]]] = {}
     for hr in horus_rows:
-        ped_key = str(hr.get("PEDIDO_WEB", "")).strip()
-        if ped_key not in horus_by_pedido:
-            horus_by_pedido[ped_key] = []
-        horus_by_pedido[ped_key].append(hr)
+        ped_key = _normalize_order_key(hr.get("PEDIDO_WEB") or "")
+        cod_ped_key = _normalize_order_key(hr.get("COD_PED_VENDA") or "")
+        for k in {ped_key, cod_ped_key}:
+            if not k:
+                continue
+            if k not in horus_by_pedido:
+                horus_by_pedido[k] = []
+            if hr not in horus_by_pedido[k]:
+                horus_by_pedido[k].append(hr)
 
     for ped_key, m_list in horus_by_pedido.items():
         m_list.sort(
@@ -211,48 +427,72 @@ async def preview_vindi_reconciliation(
             reverse=True
         )
 
-    # 7. Faz a conciliação linha a linha da planilha Vindi
+    # 7. Faz a conciliação linha a linha
     items_ready = []          # ✅ Encontrados, em aberto ('AB'), valor bate -> selecionáveis
     items_divergence = []     # ⚠️ Encontrados, em aberto, mas com diferença de valor
     items_already_paid = []   # ℹ️ Encontrados, mas já baixados ou já com borderô
-    items_not_found = []      # ❌ Não encontrados no Horus
+    items_not_found = []      # ❌ Não encontrados no Horus (ou sem vínculo na Tray)
 
     total_vindi_amount = 0.0
     total_ready_amount = 0.0
     total_divergence_amount = 0.0
     total_not_found_amount = 0.0
 
-    # Rastreamento de lançamentos já pareados para evitar produto cartesiano (duplicação)
     used_lanctos = set()
 
     for v_row in vindi_rows:
-        ped = str(v_row["pedido_web"]).strip()
+        ped_canal = str(v_row.get("pedido_canal") or v_row.get("pedido_web") or "").strip()
+        ped_tray = str(v_row.get("pedido_tray") or "-").strip()
+        ped_horus_ref = str(v_row.get("pedido_horus_ref") or ped_canal).strip()
+        vinculo_tray_ok = bool(v_row.get("vinculo_tray_ok", True))
+        valor_tray = float(v_row.get("valor_tray") or 0.0)
+
+        ped = ped_horus_ref
         v_valor = float(v_row["valor"])
         v_valor_liq = float(v_row.get("valor_liquido") or v_valor)
         v_taxa = float(v_row.get("taxa") or 0.0)
         total_vindi_amount += v_valor
 
-        matches = horus_by_pedido.get(ped, [])
+        matches = (
+            horus_by_pedido.get(ped_horus_ref)
+            or (horus_by_pedido.get(ped_tray) if ped_tray and ped_tray != "-" else None)
+            or horus_by_pedido.get(ped_canal)
+            or []
+        )
 
         if not matches:
-            # ❌ Não encontrado no Horus
+            if is_dual_file and not vinculo_tray_ok:
+                motivo_msg = (
+                    f"Pedido do canal '{ped_canal}' não encontrado na planilha da Tray nem diretamente no Horus (Filial {cod_filial})."
+                )
+            elif is_dual_file:
+                motivo_msg = (
+                    f"Vínculo Tray #{ped_tray} localizado para '{ped_canal}', mas pedido '{ped_horus_ref}' não foi encontrado no Horus (Filial {cod_filial})."
+                )
+            else:
+                motivo_msg = f"Pedido '{ped}' não localizado no Horus para a filial {cod_filial}."
+
             items_not_found.append({
                 "linha": v_row["linha"],
+                "pedido_canal": ped_canal,
+                "pedido_tray": ped_tray,
+                "vinculo_tray_ok": vinculo_tray_ok,
+                "valor_tray": valor_tray,
                 "pedido_web": ped,
                 "cliente_nome": v_row["cliente_nome"],
                 "documento": v_row["documento"],
                 "valor_vindi": v_valor,
+                "valor_bruto": v_valor,
                 "valor_liquido": v_valor_liq,
                 "taxa": v_taxa,
                 "data_pagamento": v_row["data_pagamento"],
                 "status_vindi": v_row["status_vindi"],
                 "forma_pagamento": v_row["forma_pagamento"],
-                "motivo": f"Pedido '{ped}' não localizado no Horus para a filial {cod_filial}.",
+                "motivo": motivo_msg,
             })
             total_not_found_amount += v_valor
             continue
 
-        # Identifica o pedido do Horus mais recente para este pedido web
         pedidos_horus_ids = sorted(
             list({int(m.get("COD_PED_VENDA") or 0) for m in matches if m.get("COD_PED_VENDA")}),
             reverse=True
@@ -260,11 +500,6 @@ async def preview_vindi_reconciliation(
         mais_recente_ped_horus = pedidos_horus_ids[0] if pedidos_horus_ids else None
         has_multiplos_pedidos = len(pedidos_horus_ids) > 1
 
-        # Encontra o melhor lançamento ainda não pareado para esta linha da planilha:
-        # Prioridade 1: Lançamento do pedido mais recente com valor idêntico (ou diferença <= 0.05) e não pareado
-        # Prioridade 2: Qualquer lançamento do pedido mais recente em aberto ('AB') e não pareado
-        # Prioridade 3: Primeiro lançamento não pareado
-        # Fallback: Se todos já foram pareados, pega o mais recente
         selected_match = None
         for m in matches:
             lancto_id = m.get("NRO_LANCTO_CRECEBER")
@@ -303,7 +538,6 @@ async def preview_vindi_reconciliation(
         h_ped_venda = int(h_match.get("COD_PED_VENDA") or 0)
         is_pedido_mais_recente = (h_ped_venda == mais_recente_ped_horus)
 
-        # Conta quantas parcelas/lançamentos este mesmo COD_PED_VENDA possui
         parcelas_deste_pedido = [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == h_ped_venda]
         total_parcelas = len(parcelas_deste_pedido)
         parcela_num = parcelas_deste_pedido.index(h_match) + 1 if h_match in parcelas_deste_pedido else 1
@@ -312,30 +546,18 @@ async def preview_vindi_reconciliation(
         h_valor = float(h_match.get("VLR_LANCTO_CRECEBER") or 0.0)
         h_bordero = h_match.get("COD_BORDERO")
         h_lancto = h_match.get("NRO_LANCTO_CRECEBER")
-        h_nf = h_match.get("NRO_NOTA_FISCAL")
+        h_nf = h_match.get("NRO_NOTA_FISCAL") or v_row.get("nf_tray")
 
-        # ──────────────────────────────────────────────────────────────
-        # ANÁLISE 1 — Divergência real do título: Vindi Bruto vs Horus
-        #   diff_bruto > 0  → Vindi recebeu a mais (Horus a menos)
-        #   diff_bruto < 0  → Vindi recebeu a menos (Horus a mais)
-        #   Tolerância de 5 centavos para arredondamentos.
-        # ──────────────────────────────────────────────────────────────
         diff_bruto = round(v_valor - h_valor, 2)
         diff_bruto_abs = abs(diff_bruto)
         has_value_divergence = diff_bruto_abs > 0.05
 
-        # ──────────────────────────────────────────────────────────────
-        # ANÁLISE 2 — Taxa retida pela Vindi: Vindi Líq - Vindi Bruto
-        #   Resultado sempre ≤ 0 (a Vindi retém uma parte do bruto).
-        #   Se a planilha já informar a taxa, usa ela diretamente.
-        # ──────────────────────────────────────────────────────────────
         if v_taxa > 0:
-            diff_taxa = -round(v_taxa, 2)           # taxa explícita já é positiva na planilha
+            diff_taxa = -round(v_taxa, 2)
         else:
-            diff_taxa = round(v_valor_liq - v_valor, 2)  # calculada via diferença bruto-líq
+            diff_taxa = round(v_valor_liq - v_valor, 2)
         diff_taxa_abs = abs(diff_taxa)
 
-        # Determina a situação simplificada no ERP
         is_bordero_set = bool(h_bordero and int(h_bordero) > 0)
         if h_status == "AB" and not is_bordero_set:
             situacao_horus = "ABERTO"
@@ -346,11 +568,14 @@ async def preview_vindi_reconciliation(
         else:
             situacao_horus = h_status or "DESCONHECIDO"
 
-        # Auto-seleção: marca por padrão os lançamentos em aberto
         should_select = bool(situacao_horus == "ABERTO")
 
         base_item = {
             "linha": v_row["linha"],
+            "pedido_canal": ped_canal,
+            "pedido_tray": ped_tray,
+            "vinculo_tray_ok": vinculo_tray_ok,
+            "valor_tray": valor_tray,
             "pedido_web": ped,
             "nro_lancamento": h_lancto,
             "cod_ped_venda": h_ped_venda,
@@ -361,12 +586,10 @@ async def preview_vindi_reconciliation(
             "valor_vindi": v_valor,
             "valor_bruto": v_valor,
             "valor_liquido": v_valor_liq,
-            "taxa": round(diff_taxa_abs, 2),          # sempre positivo: quanto a Vindi reteve
+            "taxa": round(diff_taxa_abs, 2),
             "valor_horus": h_valor,
-            # Análise 1: divergência real do título (Bruto Vindi vs Horus)
             "diferenca_valor": diff_bruto if has_value_divergence else 0.0,
             "diferenca_valor_abs": diff_bruto_abs if has_value_divergence else 0.0,
-            # Análise 2: taxa descontada pela Vindi (sempre informativa)
             "diff_taxa": diff_taxa,
             "diff_taxa_abs": diff_taxa_abs,
             "data_pagamento": v_row["data_pagamento"],
@@ -391,11 +614,13 @@ async def preview_vindi_reconciliation(
             items_already_paid.append(base_item)
         elif has_value_divergence:
             sinal_str = f"+R$ {diff_bruto:.2f}" if diff_bruto > 0 else f"-R$ {abs(diff_bruto):.2f}"
-            base_item["motivo"] = f"Divergência: Vindi Bruto R$ {v_valor:.2f} ≠ Horus R$ {h_valor:.2f} ({sinal_str})."
+            base_item["motivo"] = f"Divergência: Bruto Canal R$ {v_valor:.2f} ≠ Horus R$ {h_valor:.2f} ({sinal_str})."
             items_divergence.append(base_item)
             if should_select:
                 total_divergence_amount += h_valor
         else:
+            if is_dual_file and ped_tray != "-":
+                base_item["motivo"] = f"Vínculo OK: Canal #{ped_canal} ➔ Tray #{ped_tray} ➔ Horus #{h_ped_venda}"
             items_ready.append(base_item)
             if should_select:
                 total_ready_amount += h_valor
@@ -406,18 +631,20 @@ async def preview_vindi_reconciliation(
     pagos_qtd = len(items_already_paid)
     pagos_valor = sum(it.get("valor_horus", it.get("valor_vindi", 0)) for it in items_already_paid)
 
-    # Somatório das divergências de título (Bruto Vindi - Horus), apenas itens divergentes
     total_diff_divergencias = sum(float(it.get("diferenca_valor") or 0.0) for it in items_divergence)
-    # Somatório de TODAS as taxas retidas pela Vindi (ready + divergence — positivo, representa o desconto)
     all_conciliated = items_ready + items_divergence
     total_taxa_vindi = sum(abs(float(it.get("diff_taxa") or 0.0)) for it in all_conciliated)
-    # Total líquido da planilha (coluna Valor Líq. do xlsx)
     total_planilha_liq = sum(float(it.get("valor_liquido") or 0.0) for it in vindi_rows)
 
     summary = {
+        "profile_code": active_profile,
+        "is_dual_file": is_dual_file,
         "total_planilha_qtd": len(vindi_rows),
         "total_planilha_valor": round(total_vindi_amount, 2),
         "total_planilha_liq": round(total_planilha_liq, 2),
+        "tray_total_rows": len(tray_map.get("rows") or []),
+        "tray_linked_qtd": linked_tray_count,
+        "tray_unlinked_qtd": unlinked_tray_count,
         "ready_qtd": len(items_ready),
         "ready_valor": round(total_ready_amount, 2),
         "divergence_qtd": len(items_divergence),
@@ -435,24 +662,12 @@ async def preview_vindi_reconciliation(
         "filial_consultada": cod_filial,
     }
 
-    # 9. Configurações bancárias ativas (para visualização no modal de borderô)
-    bank_config = {
-        "forma_pagto": settings.horus_banco_forma_pagto or "",
-        "banco": settings.horus_banco_codigo or "",
-        "agencia": settings.horus_banco_agencia or "",
-        "conta": settings.horus_banco_conta or "",
-        "carteira": settings.horus_banco_carteira or "",
-        "cod_empresa": sql_client.cod_empresa,
-        "cod_filial": sql_client.cod_filial,
-        "is_configured": bool(
-            settings.horus_banco_forma_pagto and settings.horus_banco_codigo
-            and settings.horus_banco_agencia and settings.horus_banco_conta
-            and settings.horus_banco_carteira
-        )
-    }
+    # 9. Configurações bancárias ativas (específicas do perfil ou herdadas do Horus SQL)
+    bank_config = _resolve_bank_config_for_profile(settings, sql_client, active_profile)
 
     return {
         "success": True,
+        "profile_code": active_profile,
         "summary": summary,
         "bank_config": bank_config,
         "items_ready": items_ready,
@@ -464,6 +679,7 @@ async def preview_vindi_reconciliation(
 
 
 @router.post("/companies/{company_id}/horus-sql/vindi/bordero")
+@router.post("/companies/{company_id}/horus-sql/reconciliation/bordero")
 async def create_vindi_bordero(
     company_id: int,
     payload: CreateBorderoPayload,
@@ -472,7 +688,7 @@ async def create_vindi_bordero(
 ):
     """
     Gera Borderô de liquidação no SQL Server do Horus ERP:
-      1. Valida configurações bancárias em cmp_settings.
+      1. Resolve configurações bancárias do perfil selecionado (ou padrão em cmp_settings).
       2. Calcula valor total dos títulos selecionados (status 'AB').
       3. Obtém o próximo COD_BORDERO no SQL Server.
       4. Executa INSERT na tabela BORDERO.
@@ -481,19 +697,21 @@ async def create_vindi_bordero(
     _assert_ownership(current_user, company_id)
     settings = _get_settings_or_404(db, company_id)
 
+    bank_cfg = _resolve_bank_config_for_profile(settings, None, payload.profile_code)
+
     # 1. Validação dos parâmetros bancários obrigatórios
     required_bank_fields = {
-        "Forma de Pagamento": settings.horus_banco_forma_pagto,
-        "Código do Banco": settings.horus_banco_codigo,
-        "Agência": settings.horus_banco_agencia,
-        "Conta Corrente": settings.horus_banco_conta,
-        "Carteira": settings.horus_banco_carteira,
+        "Forma de Pagamento": bank_cfg.get("forma_pagto"),
+        "Código do Banco": bank_cfg.get("banco"),
+        "Agência": bank_cfg.get("agencia"),
+        "Conta Corrente": bank_cfg.get("conta"),
+        "Carteira": bank_cfg.get("carteira"),
     }
     missing_fields = [name for name, val in required_bank_fields.items() if not val or not str(val).strip()]
     if missing_fields:
         raise HTTPException(
             status_code=400,
-            detail=f"Parâmetros bancários incompletos em Configurações Horus SQL: {', '.join(missing_fields)}. Preencha antes de gerar o borderô."
+            detail=f"Parâmetros bancários incompletos para o Borderô ({bank_cfg.get('profile_code')}): {', '.join(missing_fields)}. Configure em Pagamentos & Bancos ou Horus SQL."
         )
 
     # 2. Validação dos lançamentos selecionados
@@ -523,7 +741,8 @@ async def create_vindi_bordero(
     def _execute_bordero_transaction():
         conn = sql_client._get_connection()
         today_str = datetime.now().strftime("%d-%m-%y")
-        nom_arquivo = f"cronuz{today_str}"
+        prof_tag = (payload.profile_code or "vindi").lower().replace("tray_", "")[:4]
+        nom_arquivo = f"cz_{prof_tag}_{today_str}"[:20]
 
         with conn.cursor() as cur:
             # 4.1. Busca próximo COD_BORDERO
@@ -532,8 +751,8 @@ async def create_vindi_bordero(
             id_bordero = int(row_id["next_id"] if isinstance(row_id, dict) else row_id[0])
 
             logger.info(
-                "[HorusBordero] Criando Bordero #%s company=%s total=R$ %.2f itens=%s",
-                id_bordero, company_id, total_bordero, len(releases_validos)
+                "[HorusBordero] Criando Bordero #%s profile=%s company=%s total=R$ %.2f itens=%s",
+                id_bordero, payload.profile_code, company_id, total_bordero, len(releases_validos)
             )
 
             # 4.2. INSERT na tabela BORDERO
@@ -555,14 +774,14 @@ async def create_vindi_bordero(
             insert_params = (
                 cod_empresa,
                 cod_filial,
-                settings.horus_banco_forma_pagto.strip(),
+                str(bank_cfg["forma_pagto"]).strip(),
                 id_bordero,
                 total_bordero,
                 nom_arquivo,
-                settings.horus_banco_codigo.strip(),
-                settings.horus_banco_agencia.strip(),
-                settings.horus_banco_conta.strip(),
-                settings.horus_banco_carteira.strip(),
+                str(bank_cfg["banco"]).strip(),
+                str(bank_cfg["agencia"]).strip(),
+                str(bank_cfg["conta"]).strip(),
+                str(bank_cfg["carteira"]).strip(),
             )
             cur.execute(insert_sql, insert_params)
 

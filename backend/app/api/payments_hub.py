@@ -22,7 +22,14 @@ from app.models.company import Company
 from app.models.company_settings import CompanySettings
 from app.models.payments import PAY_PROVIDERS, PayChannelRoute, PayProviderEnablement
 from app.payments.base import PaymentProviderError
-from app.payments.catalog import CHANNEL_CATALOG, METHOD_LABELS, PROVIDER_CATALOG, provider_config_status
+from app.payments.catalog import (
+    CHANNEL_CATALOG,
+    METHOD_LABELS,
+    PROVIDER_CATALOG,
+    RECONCILIATION_PROFILES_CATALOG,
+    get_company_reconciliation_profiles,
+    provider_config_status,
+)
 from app.payments.registry import default_channel_modes, enabled_providers, routes_map, validate_route
 
 router = APIRouter()
@@ -58,6 +65,7 @@ def _hub(db: Session, company_id: int) -> dict:
         "method_labels": METHOD_LABELS,
         "routes": current_routes,
         "channel_modes": default_channel_modes(settings, current_routes),
+        "reconciliations": get_company_reconciliation_profiles(settings),
     }
 
 
@@ -241,4 +249,75 @@ def update_payment_routes(
         _b2c_cache_clear(company_id)
     except Exception:
         pass
+    return _hub(db, company_id)
+
+
+class ReconciliationProfileUpdatePayload(BaseModel):
+    enabled: Optional[bool] = None
+    use_custom_bank: Optional[bool] = None
+    forma_pagto: Optional[str] = None
+    banco: Optional[str] = None
+    agencia: Optional[str] = None
+    conta: Optional[str] = None
+    carteira: Optional[str] = None
+
+
+@router.patch("/companies/{company_id}/payments/reconciliations/{profile_code}")
+def update_reconciliation_profile(
+    company_id: int,
+    profile_code: str,
+    payload: ReconciliationProfileUpdatePayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Habilita/desabilita um perfil de conciliação bancária/marketplace (ex: TRAY_SHOPEE, TRAY_TIKTOK, TRAY_VINDI, VINDI_DIRECT)
+    e opcionalmente define parâmetros bancários específicos de Borderô Horus para este perfil.
+    """
+    assert_company_ownership(current_user, company_id)
+    _company_or_404(db, company_id)
+
+    valid_codes = {p["code"] for p in RECONCILIATION_PROFILES_CATALOG}
+    code = profile_code.upper().strip()
+    if code not in valid_codes:
+        raise HTTPException(status_code=400, detail=f"Perfil de conciliação inválido: {code}")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+    if not settings:
+        settings = CompanySettings(company_id=company_id)
+        db.add(settings)
+        db.flush()
+
+    raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+    rec_map = dict(raw_cfg.get("bank_reconciliations")) if isinstance(raw_cfg.get("bank_reconciliations"), dict) else {}
+    current_entry = dict(rec_map.get(code)) if isinstance(rec_map.get(code), dict) else {}
+
+    if payload.enabled is not None:
+        current_entry["enabled"] = bool(payload.enabled)
+        if code == "VINDI_DIRECT":
+            settings.horus_sql_feature_vindi_baixa = bool(payload.enabled)
+        elif payload.enabled:
+            # Garante que o menu de conciliação Horus fique acessível quando qualquer conciliação estiver ativa
+            settings.horus_sql_feature_vindi_baixa = True
+
+    if payload.use_custom_bank is not None:
+        current_entry["use_custom_bank"] = bool(payload.use_custom_bank)
+    if payload.forma_pagto is not None:
+        current_entry["forma_pagto"] = payload.forma_pagto.strip().upper()
+    if payload.banco is not None:
+        current_entry["banco"] = payload.banco.strip().upper()
+    if payload.agencia is not None:
+        current_entry["agencia"] = payload.agencia.strip().upper()
+    if payload.conta is not None:
+        current_entry["conta"] = payload.conta.strip().upper()
+    if payload.carteira is not None:
+        current_entry["carteira"] = payload.carteira.strip().upper()
+
+    rec_map[code] = current_entry
+    raw_cfg["bank_reconciliations"] = rec_map
+    settings.b2c_showcases_config = raw_cfg
+    flag_modified(settings, "b2c_showcases_config")
+
+    db.commit()
+    db.refresh(settings)
     return _hub(db, company_id)
