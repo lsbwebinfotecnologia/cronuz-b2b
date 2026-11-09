@@ -276,6 +276,8 @@ export default function FinanceiroVindiPage() {
   );
 
   const isDualFileMode = activeProfile?.mode === 'DUAL_FILE';
+  const requiresTrayFile =
+    activeProfile?.code === 'TRAY_SHOPEE' || activeProfile?.code === 'TRAY_TIKTOK';
 
   // Troca de perfil limpa os resultados anteriores para evitar mistura de formatos
   const handleSelectProfile = (code: string) => {
@@ -338,7 +340,7 @@ export default function FinanceiroVindiPage() {
       );
       return;
     }
-    if (isDualFileMode && !trayFile) {
+    if (requiresTrayFile && !trayFile) {
       toast.error(
         `Selecione o 2º arquivo (Planilha Excel/CSV da Tray) para amarrar os vínculos de ${activeProfile.channel_label} com o Horus.`
       );
@@ -965,7 +967,7 @@ export default function FinanceiroVindiPage() {
               <button
                 type="button"
                 onClick={handleProcessFiles}
-                disabled={reading || !channelFile || (isDualFileMode && !trayFile)}
+                disabled={reading || !channelFile || (requiresTrayFile && !trayFile)}
                 className="w-full flex items-center justify-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-4 py-2.5 text-xs font-extrabold text-white shadow-xs transition-all cursor-pointer"
               >
                 {reading ? (

@@ -155,10 +155,10 @@ def download_reconciliation_template(
     if t == "shopee":
         filename = "modelo_recebimentos_shopee.csv"
         csv_content = (
-            "ID do pedido;Nome de usuario (comprador);CPF do Comprador;Valor total do pedido;Taxa de comissao;Valor total lancado;Data de conclusao do pagamento;Status do pedido;Metodo de pagamento\n"
-            "240915SHP001;Maria Leitora;123.456.789-00;120.00;16.80;103.20;05/11/2026;Concluido;Pix Shopee\n"
-            "240915SHP002;Joao Silva;987.654.321-11;89.90;12.59;77.31;05/11/2026;Concluido;Cartao de Credito\n"
-            "240915SHP003;Ana Costa;111.222.333-44;210.50;29.47;181.03;06/11/2026;Concluido;Pix Shopee\n"
+            "Data;Tipo de transação;Descrição;ID do pedido;Direção do dinheiro;Valor;Status;Balança após as transações;Valor a Ser Ajustado\n"
+            "2026-10-21 15:21:46;Renda do pedido;Renda do pedido #261015P4DJU18X;261015P4DJU18X;Entrada;41.57;Transação completa;1061.76;0\n"
+            "2026-10-21 14:48:40;Renda do pedido;Renda do pedido #261016RMMGPAX3;261016RMMGPAX3;Entrada;20.11;Transação completa;1020.19;0\n"
+            "2026-10-21 12:29:22;Renda do pedido;Renda do pedido #2610193DKW9JD0;2610193DKW9JD0;Entrada;20.11;Transação completa;897.49;0\n"
         )
     elif t == "tiktok":
         filename = "modelo_recebimentos_tiktok_shop.csv"
@@ -170,18 +170,18 @@ def download_reconciliation_template(
     elif t == "tray":
         filename = "modelo_pedidos_tray_vinculo.csv"
         csv_content = (
-            "Pedido Tray;Pedido Marketplace;Pedido ERP Horus;Ponto de Venda;Cliente;CPF/CNPJ;Valor Total;Status\n"
-            "1001;240915SHP001;1001;Shopee;Maria Leitora;123.456.789-00;120.00;Enviado\n"
-            "1002;240915SHP002;1002;Shopee;Joao Silva;987.654.321-11;89.90;Enviado\n"
-            "1003;240915SHP003;1003;Shopee;Ana Costa;111.222.333-44;210.50;Entregue\n"
+            "Pedido;Data;Hora;Nome do Cliente;CPF;Subtotal produtos;Canal de venda;Frete valor;Pagamento tipo;Obs. loja;Status pedido;Desconto;Total;Valor pagamento;Forma pagamento paga;Pedido marketplace\n"
+            "49809;15/10/2026;14:10:00;Gerson Eliton Pereira;3644527229;69,45;SHOPEE;21,44;Marketplace-Shopee;Pedido(s) no Shopee: 261015P4DJU18X;FINALIZADO;30,00;60,89;60,89;Pix;261015P4DJU18X\n"
+            "49983;16/10/2026;11:20:00;Giselle Crescente;28092764808;31,37;SHOPEE;7,18;Marketplace-Shopee;Pedido(s) no Shopee: 261016RMMGPAX3;FINALIZADO;7,18;31,37;31,37;Cartão de Crédito - VISA;261016RMMGPAX3\n"
+            "50435;19/10/2026;11:04:16;Caroline Victoria De Souza Gois;34617282840;31,37;SHOPEE;9,62;Marketplace-Shopee;Pedido(s) no Shopee: 2610193DKW9JD0;FINALIZADO;9,62;31,37;31,37;Pix;2610193DKW9JD0\n"
         )
     else:
-        filename = "modelo_planilha_vindi.csv"
+        filename = "modelo_recebiveis_pagos_vindi.csv"
         csv_content = (
-            "Pedido;Cliente;Documento;Valor Bruto;Taxa;Valor Liquido;Data Pagamento;Status;Forma Pagamento\n"
-            "1001;Livraria Exemplo LTDA;12.345.678/0001-90;250.00;7.50;242.50;01/09/2026;Paga;Cartao de Credito\n"
-            "1002;Distribuidora Cultural;98.765.432/0001-10;480.50;3.50;477.00;01/09/2026;Paga;Boleto Bancario\n"
-            "1003;Livraria Saber Mais;11.222.333/0001-44;120.00;1.20;118.80;01/09/2026;Paga;Pix\n"
+            "Data;ID Transação;N. Pedido;Descrição;Forma de Pagamento;Parcelas;Origem;Valor Liq.;Valor Bruto;Taxa Retenção;Taxa Antecipação\n"
+            "07/08/2026 12:04;278669753;40591;Crédito referente ao recebimento da transação 278669753;Pix;1 de 1;Intermediador;R$ 78,73;R$ 80,68;R$ 1,95;R$ 0,00\n"
+            "08/08/2026 00:26;274064340;38763;Crédito referente ao recebimento da transação 274064340;Mastercard;1 de 1;Intermediador;R$ 44,14;R$ 46,95;R$ 2,81;R$ 0,00\n"
+            "13/08/2026 00:38;274892628;39127;Crédito referente ao recebimento da transação 274892628;Visa;1 de 2;Intermediador;R$ 111,82;R$ 119,66;R$ 7,84;R$ 0,00\n"
         )
 
     return StreamingResponse(
@@ -236,14 +236,15 @@ async def preview_vindi_reconciliation(
 
     active_profile = (profile_code or "VINDI_DIRECT").upper().strip()
     is_dual_file = active_profile in ("TRAY_SHOPEE", "TRAY_TIKTOK", "TRAY_VINDI")
+    requires_tray_file = active_profile in ("TRAY_SHOPEE", "TRAY_TIKTOK")
 
     validate_file_size_and_extension(file, category="sheet")
-    if is_dual_file:
-        if not tray_file:
-            raise HTTPException(
-                status_code=400,
-                detail="Este perfil de conciliação requer os 2 arquivos: o arquivo do Canal (Shopee/TikTok/Vindi) e a planilha de Pedidos da Tray.",
-            )
+    if requires_tray_file and not tray_file:
+        raise HTTPException(
+            status_code=400,
+            detail="Este perfil de conciliação requer os 2 arquivos: o arquivo do Canal (Shopee/TikTok) e a planilha de Pedidos da Tray.",
+        )
+    if tray_file:
         validate_file_size_and_extension(tray_file, category="sheet")
 
     # 1. Lê os bytes do Arquivo 1 em memória de forma segura
@@ -251,22 +252,21 @@ async def preview_vindi_reconciliation(
     if not contents:
         raise HTTPException(status_code=400, detail="O arquivo do canal enviado está vazio.")
 
-    # 2. Parseia os dados do Arquivo 1 (Canal) e, se aplicável, do Arquivo 2 (Tray)
+    # 2. Parseia os dados do Arquivo 1 (Canal) e, se enviado, do Arquivo 2 (Tray)
     parse_warnings: List[str] = []
     tray_map: Dict[str, Any] = {"rows": [], "by_channel_order": {}, "by_tray_order": {}, "token_index": {}}
 
-    if is_dual_file:
-        vindi_rows, w1 = parse_channel_file(contents, file.filename or "canal.csv", active_profile)
-        parse_warnings.extend(w1)
+    vindi_rows, w1 = parse_channel_file(contents, file.filename or "canal.csv", active_profile)
+    parse_warnings.extend(w1)
+    if not vindi_rows and active_profile == "VINDI_DIRECT":
+        vindi_rows, w_fallback = parse_vindi_file(contents, file.filename or "planilha.csv")
+        parse_warnings.extend(w_fallback)
 
+    if tray_file:
         tray_bytes = await read_file_safely(tray_file, max_size_bytes=10 * 1024 * 1024)
-        if not tray_bytes:
-            raise HTTPException(status_code=400, detail="A planilha de pedidos da Tray enviada está vazia.")
-        tray_map, w2 = parse_tray_bridge_file(tray_bytes, tray_file.filename or "tray.csv")
-        parse_warnings.extend(w2)
-    else:
-        vindi_rows, w1 = parse_vindi_file(contents, file.filename or "planilha.csv")
-        parse_warnings.extend(w1)
+        if tray_bytes:
+            tray_map, w2 = parse_tray_bridge_file(tray_bytes, tray_file.filename or "tray.csv")
+            parse_warnings.extend(w2)
 
     if not vindi_rows:
         raise HTTPException(
@@ -304,19 +304,40 @@ async def preview_vindi_reconciliation(
                 v_row["pedido_horus_ref"] = ped_horus_ref
                 v_row["pedido_web"] = ped_horus_ref
                 v_row["valor_tray"] = float(t_match.get("valor_tray") or 0.0)
+                v_row["subtotal_tray"] = float(t_match.get("subtotal_tray") or 0.0)
                 v_row["status_tray"] = t_match.get("status_tray") or ""
                 v_row["nf_tray"] = t_match.get("nf_tray") or ""
                 if (not v_row.get("cliente_nome") or v_row["cliente_nome"] == "-") and t_match.get("cliente_tray"):
                     v_row["cliente_nome"] = t_match["cliente_tray"]
                 if (not v_row.get("documento") or v_row["documento"] == "-") and t_match.get("documento_tray"):
                     v_row["documento"] = t_match["documento_tray"]
-                if float(v_row.get("valor") or 0.0) <= 0 and float(t_match.get("valor_tray") or 0.0) > 0:
+                if t_match.get("forma_pagamento_tray") and v_row.get("forma_pagamento") in ("Shopee", "TikTok Shop", "SHOPEE", "TIKTOK"):
+                    v_row["forma_pagamento"] = f"{v_row['forma_pagamento']} • {t_match['forma_pagamento_tray']}"
+
+                # No relatório oficial da Shopee (`my_balance_transaction_report`), o Valor Bruto do pedido vem da Tray (`Total`)
+                # e o Valor da Shopee é o Valor Líquido de repasse!
+                if not v_row.get("bruto_from_channel", True) and float(t_match.get("valor_tray") or 0.0) > 0:
+                    bruto_tray = float(t_match["valor_tray"])
+                    liq_canal = float(v_row.get("valor_liquido") or v_row.get("valor") or 0.0)
+                    v_row["valor"] = round(bruto_tray, 2)
+                    v_row["valor_bruto"] = round(bruto_tray, 2)
+                    v_row["taxa"] = round(max(0.0, bruto_tray - liq_canal), 2)
+                elif float(v_row.get("valor") or 0.0) <= 0 and float(t_match.get("valor_tray") or 0.0) > 0:
                     v_row["valor"] = float(t_match["valor_tray"])
                     v_row["valor_bruto"] = float(t_match["valor_tray"])
 
                 for cand in (ped_horus_ref, ped_tray, ped_canal):
                     if cand:
                         pedidos_set.add(cand)
+            elif active_profile == "TRAY_VINDI" and ped_canal:
+                # No Recebíveis Pagos da Vindi (`Recebiveis-pagos.csv`), a coluna `N. Pedido` já é o código do Pedido na Tray!
+                linked_tray_count += 1
+                v_row["vinculo_tray_ok"] = True
+                v_row["pedido_tray"] = ped_canal
+                v_row["pedido_horus_ref"] = ped_canal
+                v_row["pedido_web"] = ped_canal
+                v_row["valor_tray"] = float(v_row.get("valor_bruto") or v_row.get("valor") or 0.0)
+                pedidos_set.add(ped_canal)
             else:
                 unlinked_tray_count += 1
                 v_row["vinculo_tray_ok"] = False
@@ -501,15 +522,34 @@ async def preview_vindi_reconciliation(
         has_multiplos_pedidos = len(pedidos_horus_ids) > 1
 
         selected_match = None
-        for m in matches:
-            lancto_id = m.get("NRO_LANCTO_CRECEBER")
-            if lancto_id in used_lanctos:
-                continue
-            h_ped = int(m.get("COD_PED_VENDA") or 0)
-            h_val = float(m.get("VLR_LANCTO_CRECEBER") or 0.0)
-            if h_ped == mais_recente_ped_horus and abs(v_valor - h_val) <= 0.05:
-                selected_match = m
-                break
+        parc_canal_num = v_row.get("parcela_canal_num")
+        subtotal_tray = float(v_row.get("subtotal_tray") or 0.0)
+
+        # Se a planilha da Vindi informar número da parcela (ex: '2 de 3') e houver múltiplas parcelas no Horus para o pedido
+        if parc_canal_num and int(parc_canal_num) >= 1:
+            parcelas_asc = sorted(
+                [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == mais_recente_ped_horus],
+                key=lambda x: int(x.get("NRO_LANCTO_CRECEBER") or 0),
+            )
+            idx_parc = int(parc_canal_num) - 1
+            if 0 <= idx_parc < len(parcelas_asc):
+                cand_m = parcelas_asc[idx_parc]
+                if cand_m.get("NRO_LANCTO_CRECEBER") not in used_lanctos:
+                    selected_match = cand_m
+
+        if not selected_match:
+            for m in matches:
+                lancto_id = m.get("NRO_LANCTO_CRECEBER")
+                if lancto_id in used_lanctos:
+                    continue
+                h_ped = int(m.get("COD_PED_VENDA") or 0)
+                h_val = float(m.get("VLR_LANCTO_CRECEBER") or 0.0)
+                if h_ped == mais_recente_ped_horus and (
+                    abs(v_valor - h_val) <= 0.05
+                    or (subtotal_tray > 0 and abs(subtotal_tray - h_val) <= 0.05)
+                ):
+                    selected_match = m
+                    break
 
         if not selected_match:
             for m in matches:
@@ -538,15 +578,25 @@ async def preview_vindi_reconciliation(
         h_ped_venda = int(h_match.get("COD_PED_VENDA") or 0)
         is_pedido_mais_recente = (h_ped_venda == mais_recente_ped_horus)
 
-        parcelas_deste_pedido = [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == h_ped_venda]
+        parcelas_deste_pedido = sorted(
+            [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == h_ped_venda],
+            key=lambda x: int(x.get("NRO_LANCTO_CRECEBER") or 0),
+        )
         total_parcelas = len(parcelas_deste_pedido)
-        parcela_num = parcelas_deste_pedido.index(h_match) + 1 if h_match in parcelas_deste_pedido else 1
+        parcela_num = parcelas_deste_pedido.index(h_match) + 1 if h_match in parcelas_deste_pedido else (int(parc_canal_num) if parc_canal_num else 1)
 
         h_status = str(h_match.get("STA_LANCTO_CRECEBER", "")).strip().upper()
         h_valor = float(h_match.get("VLR_LANCTO_CRECEBER") or 0.0)
         h_bordero = h_match.get("COD_BORDERO")
         h_lancto = h_match.get("NRO_LANCTO_CRECEBER")
         h_nf = h_match.get("NRO_NOTA_FISCAL") or v_row.get("nf_tray")
+
+        # Se no relatório Shopee o valor bruto veio da Tray e o Horus faturou pelo Subtotal produtos (sem frete Shopee Xpress)
+        if not v_row.get("bruto_from_channel", True) and subtotal_tray > 0 and abs(subtotal_tray - h_valor) <= 0.05 and abs(v_valor - h_valor) > 0.05:
+            total_vindi_amount -= v_valor
+            v_valor = round(subtotal_tray, 2)
+            total_vindi_amount += v_valor
+            v_taxa = round(max(0.0, v_valor - v_valor_liq), 2)
 
         diff_bruto = round(v_valor - h_valor, 2)
         diff_bruto_abs = abs(diff_bruto)
