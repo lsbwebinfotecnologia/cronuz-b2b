@@ -129,21 +129,30 @@ export default function MasterB2CSettingsPage() {
     if (companyId) loadData();
   }, [companyId, loadData]);
 
+  const slugifyCompany = (val: string) =>
+    (val || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
   const rawDom = (company?.domain || '')
     .toLowerCase()
     .replace(/^https?:\/\//, '')
     .replace(/^www\./, '');
-  const slug = (rawDom.split(/[.@]/)[0] || `empresa-${companyId}`).toLowerCase();
+  const domPrefix = rawDom.split(/[.@]/)[0] || '';
+  const slug =
+    domPrefix && !/^\d+$/.test(domPrefix)
+      ? domPrefix
+      : slugifyCompany(company?.name || '') || `loja-oficial`;
   const autoSubdomain = `b2c-${slug}.horusb2b.com.br`;
   const publicStorePath = `/loja/${slug}`;
-  const isLocalHost =
-    typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-  const openStoreHref = isLocalHost
-    ? publicStorePath
-    : b2cDomain
-    ? `https://${b2cDomain}`
-    : `https://${autoSubdomain}`;
+  const cleanB2cDomain = b2cDomain
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '');
+  const openStoreHref = cleanB2cDomain ? `https://${cleanB2cDomain}` : publicStorePath;
 
   const handleToggleB2CModule = async () => {
     if (!company) return;
@@ -428,7 +437,7 @@ export default function MasterB2CSettingsPage() {
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 transition-colors"
           >
             <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
-            Abrir Loja B2C ({isLocalHost ? publicStorePath : b2cDomain || autoSubdomain})
+            Abrir Loja B2C ({cleanB2cDomain || publicStorePath})
           </a>
         </div>
       </div>

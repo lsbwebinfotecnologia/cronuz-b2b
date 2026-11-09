@@ -104,12 +104,15 @@ class SingleCouponCreateRequest(BaseModel):
 
 class B2CSettingsUpdateRequest(BaseModel):
     b2c_custom_domain: Optional[str] = None
+    store_slug: Optional[str] = None
     b2c_storefront_open: Optional[bool] = None
     b2c_checkout_mode: Optional[str] = None
     b2c_lgpd_terms_text: Optional[str] = None
     b2c_default_freight_value: Optional[float] = None
     b2c_free_shipping_min_value: Optional[float] = None
     b2c_showcases_config: Optional[Dict[str, Any]] = None
+    footer_info: Optional[Dict[str, Any]] = None
+    seo_config: Optional[Dict[str, Any]] = None
     payment_gateway_active: Optional[str] = None  # EFI or VINDI
     vindi_api_key: Optional[str] = None
     vindi_sandbox: Optional[bool] = None
@@ -1306,6 +1309,12 @@ def get_b2c_coupons_summary(
         "last_synced_count": int(raw_sync_cfg.get("last_synced_count") or 0),
     }
 
+    appearance_cfg = _build_b2c_appearance_config(company, settings, db) if company else {}
+    resolved_store_slug = (
+        (appearance_cfg.get("branding") or {}).get("store_slug")
+        or _slugify_store_name(company.name if company else f"loja-{cid}", cid)
+    )
+
     return {
         "total_batches": total_batches,
         "total_coupons": total_coupons,
@@ -1320,9 +1329,14 @@ def get_b2c_coupons_summary(
         "total_b2c_orders": total_b2c_orders,
         "total_lgpd_consents": total_lgpd_consents,
         "settings": {
+            "company_id": cid,
+            "company_name": company.name if company else "",
+            "store_slug": resolved_store_slug,
             "b2c_custom_domain": getattr(company, "b2c_custom_domain", None) if company else None,
             "domain": company.domain if company else None,
             "custom_domain": company.custom_domain if company else None,
+            "footer_info": appearance_cfg.get("footer_info") or {},
+            "seo_config": appearance_cfg.get("seo_config") or {},
             "module_b2c_storefront": bool(getattr(company, "module_b2c_storefront", False)) if company else False,
             "b2c_storefront_open": bool(getattr(settings, "b2c_storefront_open", False)) if settings else False,
             "b2c_checkout_mode": getattr(settings, "b2c_checkout_mode", "NATIVE_GATEWAY") if settings else "NATIVE_GATEWAY",
@@ -1504,7 +1518,7 @@ def update_b2c_seller_settings(
     if data.email_notifications_config is not None and isinstance(data.email_notifications_config, dict):
         raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
         merged_email_cfg = {**_default_b2c_email_config(), **data.email_notifications_config}
-        for prefix in ("waiting_payment", "paid", "canceled"):
+        for prefix in ("waiting_payment", "paid", "separation", "finalized", "delivered", "canceled"):
             msg_val = (
                 data.email_notifications_config.get(f"{prefix}_message")
                 or data.email_notifications_config.get(f"{prefix}_body")
@@ -1516,8 +1530,46 @@ def update_b2c_seller_settings(
         settings.b2c_showcases_config = raw_cfg
         flag_modified(settings, "b2c_showcases_config")
 
+    if data.store_slug is not None:
+        raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+        prev_branding = dict(raw_cfg.get("branding")) if isinstance(raw_cfg.get("branding"), dict) else {}
+        cleaned_slug = _slugify_store_name(data.store_slug.strip() or (company.name if company else f"loja-{cid}"), cid)
+        if cleaned_slug.isdigit() and company and company.name:
+            cleaned_slug = _slugify_store_name(company.name, cid)
+        prev_branding["store_slug"] = cleaned_slug
+        raw_cfg["branding"] = prev_branding
+        settings.b2c_showcases_config = raw_cfg
+        flag_modified(settings, "b2c_showcases_config")
+
+    if data.footer_info is not None and isinstance(data.footer_info, dict):
+        raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+        prev_footer = dict(raw_cfg.get("footer_info")) if isinstance(raw_cfg.get("footer_info"), dict) else {}
+        raw_cfg["footer_info"] = {**prev_footer, **data.footer_info}
+        settings.b2c_showcases_config = raw_cfg
+        flag_modified(settings, "b2c_showcases_config")
+
+    if data.seo_config is not None and isinstance(data.seo_config, dict):
+        raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+        prev_seo = dict(raw_cfg.get("seo_config")) if isinstance(raw_cfg.get("seo_config"), dict) else {}
+        raw_cfg["seo_config"] = {**prev_seo, **data.seo_config}
+        settings.b2c_showcases_config = raw_cfg
+        flag_modified(settings, "b2c_showcases_config")
+
     db.commit()
     _b2c_cache_clear(cid)
+
+    try:
+        import threading
+        from app.core.ssl_authors import ensure_author_portal_ssl, ensure_custom_b2c_domain_ssl
+        final_cfg = getattr(settings, "b2c_showcases_config", None) or {}
+        saved_slug = (final_cfg.get("branding") or {}).get("store_slug") or (company.domain if company else None)
+        if saved_slug:
+            threading.Thread(target=ensure_author_portal_ssl, args=(saved_slug,), daemon=True).start()
+        if company and getattr(company, "b2c_custom_domain", None):
+            threading.Thread(target=ensure_custom_b2c_domain_ssl, args=(company.b2c_custom_domain,), daemon=True).start()
+    except Exception:
+        pass
+
     return {"message": "Configurações B2C atualizadas com sucesso!"}
 
 
@@ -3562,7 +3614,9 @@ def _slugify_store_name(name: Optional[str], company_id: int) -> str:
     raw = str(name or f"loja-{company_id}").strip().lower()
     norm = unicodedata.normalize("NFKD", raw).encode("ASCII", "ignore").decode("ASCII")
     slug = re.sub(r"[^a-z0-9]+", "-", norm).strip("-")
-    return slug or f"loja-{company_id}"
+    if not slug or slug.isdigit():
+        return f"loja-{company_id}"
+    return slug
 
 
 import time as _time
@@ -3769,13 +3823,17 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
     dom_prefix = raw_dom_no_www.split("@")[0].split(".")[0] if raw_dom_no_www else ""
     default_slug = (
         dom_prefix
-        if dom_prefix and dom_prefix not in ("www", "http", "https", "loja")
+        if dom_prefix and dom_prefix not in ("www", "http", "https", "loja") and not dom_prefix.isdigit()
         else _slugify_store_name(company.name, company.id)
     )
 
     raw_branding = raw_cfg.get("branding") if isinstance(raw_cfg.get("branding"), dict) else {}
+    saved_store_slug = str(raw_branding.get("store_slug") or "").strip().lower()
+    if not saved_store_slug or saved_store_slug.isdigit():
+        saved_store_slug = default_slug
+
     branding = {
-        "store_slug": raw_branding.get("store_slug") or default_slug,
+        "store_slug": saved_store_slug,
         "theme_template": raw_branding.get("theme_template") or "editorial_modern",
         "primary_color": raw_branding.get("primary_color") or "#4f46e5",
         "secondary_color": raw_branding.get("secondary_color") or "#0f172a",

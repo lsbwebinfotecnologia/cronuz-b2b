@@ -469,17 +469,32 @@ export default function B2CAppearanceManager({
   const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
   const isHorusTenant = currentHost.includes('horus');
   const baseTenantDomain = isHorusTenant ? 'horusb2b.com.br' : 'cronuzb2b.com.br';
-  const effectiveSlug = (branding.store_slug || String(companyId || 'loja'))
-    .toLowerCase()
-    .replace(/^www\./, '');
+  const slugifyCompanyName = (val: string) =>
+    (val || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+  const rawSlugCandidate = (branding.store_slug || '').trim().toLowerCase().replace(/^www\./, '');
+  const fallbackSlugFromName = slugifyCompanyName(companyName || footerInfo.legal_name || '') || `loja-oficial`;
+  const effectiveSlug =
+    rawSlugCandidate && !/^\d+$/.test(rawSlugCandidate) ? rawSlugCandidate : fallbackSlugFromName;
   const officialB2cSubdomain = `b2c-${effectiveSlug}.${baseTenantDomain}`;
   const officialB2cSubdomainUrl = `https://${officialB2cSubdomain}`;
   const friendlyStoreUrl = `${originUrl}/loja/${effectiveSlug}`;
+  const cleanCustomDomain = (b2cCustomDomain || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '');
+  const storePublicUrl = cleanCustomDomain ? `https://${cleanCustomDomain}` : friendlyStoreUrl;
+  const storeDisplayPath = cleanCustomDomain ? cleanCustomDomain : `/loja/${effectiveSlug}`;
 
   const handleCopyStoreLink = () => {
-    navigator.clipboard.writeText(friendlyStoreUrl);
+    navigator.clipboard.writeText(storePublicUrl);
     setCopiedLink(true);
-    toast.success('Link amigável da Loja B2C copiado!');
+    toast.success('Link da Loja B2C copiado!');
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
@@ -723,7 +738,7 @@ export default function B2CAppearanceManager({
           </div>
           <h1 className="text-xl md:text-2xl font-bold text-slate-900 dark:text-white">
             {activeSection === 'banners'
-              ? 'Banners, Identidade Visual, Rodapé & URL da Loja'
+              ? 'Banners, Logo & Identidade Visual da Loja'
               : activeSection === 'showcases'
               ? 'Vitrines & Destaques da Home'
               : activeSection === 'promotions'
@@ -732,7 +747,7 @@ export default function B2CAppearanceManager({
           </h1>
           <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400 mt-1">
             {activeSection === 'banners'
-              ? 'Defina a URL amigável, logo, cores da sua marca, banners e dados obrigatórios do rodapé (CNPJ, Endereço e Contato).'
+              ? 'Personalize a logo, paleta de cores, modelo visual do tema e banners rotativos da página inicial da loja.'
               : activeSection === 'showcases'
               ? 'Monte as seções de produtos em destaque exibidas na página inicial da sua loja.'
               : activeSection === 'promotions'
@@ -744,8 +759,8 @@ export default function B2CAppearanceManager({
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-xl px-3 py-2 border border-slate-200 dark:border-slate-700 text-xs">
             <Globe className="w-3.5 h-3.5 text-indigo-500 mr-2 shrink-0" />
-            <span className="font-mono font-bold text-slate-800 dark:text-slate-200 truncate max-w-[220px]">
-              /loja/{branding.store_slug || companyId}
+            <span className="font-mono font-bold text-slate-800 dark:text-slate-200 truncate max-w-[260px]">
+              {storeDisplayPath}
             </span>
             <button
               type="button"
@@ -758,7 +773,7 @@ export default function B2CAppearanceManager({
           </div>
 
           <a
-            href={friendlyStoreUrl}
+            href={storePublicUrl}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-colors cursor-pointer"
@@ -792,77 +807,13 @@ export default function B2CAppearanceManager({
       </div>
 
       {/* =====================================================================
-          SECTION 1: BANNERS, CORES, LOGO & URL AMIGÁVEL
+          SECTION 1: BANNERS, CORES & LOGO
          ===================================================================== */}
       {activeSection === 'banners' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left Column: Controls */}
           <div className="lg:col-span-7 space-y-6">
-            {/* Card 1: Friendly URL & Custom Domain */}
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
-              <div className="flex items-center gap-2">
-                <Globe className="w-5 h-5 text-indigo-600" />
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  URL Amigável & Domínio da Loja B2C
-                </h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Slug Amigável da Loja (Acesso imediato)
-                  </label>
-                  <div className="flex items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 overflow-hidden">
-                    <span className="px-3 py-2 text-xs text-slate-400 bg-slate-100 dark:bg-slate-900 border-r border-slate-200 dark:border-slate-700 font-mono">
-                      /loja/
-                    </span>
-                    <input
-                      type="text"
-                      value={branding.store_slug}
-                      onChange={(e) =>
-                        setBranding({
-                          ...branding,
-                          store_slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
-                        })
-                      }
-                      placeholder="ex: movimentoliterario"
-                      className="w-full px-3 py-2 text-sm bg-transparent text-slate-900 dark:text-white focus:outline-none font-mono font-bold"
-                    />
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Link imediato: <strong className="text-indigo-600">{friendlyStoreUrl}</strong>
-                  </p>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    Subdomínio padrão B2C:{' '}
-                    <strong className="font-mono text-emerald-600 dark:text-emerald-400">
-                      {officialB2cSubdomainUrl}
-                    </strong>
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Domínio ou Subdomínio Próprio (Opcional)
-                  </label>
-                  <input
-                    type="text"
-                    value={b2cCustomDomain}
-                    onChange={(e) => setB2cCustomDomain(e.target.value)}
-                    placeholder={`ex: loja.suaeditora.com.br ou ${officialB2cSubdomain}`}
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm text-slate-900 dark:text-white"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Para usar domínio próprio, aponte um registro <strong>CNAME</strong> para{' '}
-                    <code className="font-mono text-indigo-600 dark:text-indigo-400">
-                      {officialB2cSubdomain}
-                    </code>{' '}
-                    (ou registro <strong>A</strong> para <code className="font-mono">64.23.182.183</code>).
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Card 2: Logo & Brand Colors */}
+            {/* Card 1: Logo & Brand Colors */}
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-5">
               <div className="flex items-center gap-2">
                 <Palette className="w-5 h-5 text-indigo-600" />
@@ -1262,297 +1213,6 @@ export default function B2CAppearanceManager({
                 </div>
               )}
             </div>
-
-            {/* Card 5: Rodapé Obrigatório (CNPJ, Endereço) & Canais de Contato (SAC) */}
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
-              <div className="flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-indigo-600" />
-                <div>
-                  <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                    Rodapé Obrigatório (CNPJ, Endereço) & Página de Contato (SAC)
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    Informações legais obrigatórias no e-commerce brasileiro (Decreto nº 7.962/2013) exibidas no rodapé e na página Fale Conosco.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Razão Social da Empresa
-                  </label>
-                  <input
-                    type="text"
-                    value={footerInfo.legal_name}
-                    onChange={(e) => setFooterInfo({ ...footerInfo, legal_name: e.target.value })}
-                    placeholder="Ex: Editora Exemplo Ltda"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    CNPJ Obrigatório
-                  </label>
-                  <input
-                    type="text"
-                    value={footerInfo.cnpj}
-                    onChange={(e) => setFooterInfo({ ...footerInfo, cnpj: e.target.value })}
-                    placeholder="00.000.000/0001-00"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                  Endereço Físico Completo (Exibido no Rodapé e Contato)
-                </label>
-                <input
-                  type="text"
-                  value={footerInfo.address_line}
-                  onChange={(e) => setFooterInfo({ ...footerInfo, address_line: e.target.value })}
-                  placeholder="Ex: Rua das Letras, 100 - Centro • São Paulo/SP • CEP 01000-000"
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    WhatsApp de Atendimento
-                  </label>
-                  <input
-                    type="text"
-                    value={footerInfo.whatsapp}
-                    onChange={(e) => setFooterInfo({ ...footerInfo, whatsapp: e.target.value })}
-                    placeholder="Ex: (11) 99999-9999"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Telefone Fixo / SAC
-                  </label>
-                  <input
-                    type="text"
-                    value={footerInfo.contact_phone}
-                    onChange={(e) => setFooterInfo({ ...footerInfo, contact_phone: e.target.value })}
-                    placeholder="Ex: (11) 3000-0000"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    E-mail de Atendimento
-                  </label>
-                  <input
-                    type="email"
-                    value={footerInfo.contact_email}
-                    onChange={(e) => setFooterInfo({ ...footerInfo, contact_email: e.target.value })}
-                    placeholder="sac@sualoja.com.br"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Horário de Atendimento
-                  </label>
-                  <input
-                    type="text"
-                    value={footerInfo.business_hours}
-                    onChange={(e) => setFooterInfo({ ...footerInfo, business_hours: e.target.value })}
-                    placeholder="Segunda a Sexta, das 09h às 18h"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Texto Institucional do Rodapé (Sobre a Loja)
-                  </label>
-                  <input
-                    type="text"
-                    value={footerInfo.about_text}
-                    onChange={(e) => setFooterInfo({ ...footerInfo, about_text: e.target.value })}
-                    placeholder="Breve descrição da sua livraria/editora..."
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* 5. SEO Dinâmico para o Google (Home, Produtos com ISBN, Categorias, Vitrines & Sitemap) */}
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <Globe className="w-4 h-4 text-emerald-600" />
-                    5. SEO para Buscas do Google (ISBN Automático, Categorias, Vitrines e Home)
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    O sistema já preenche automaticamente o Nome do Livro, ISBN (GTIN-13), Autor, Editora e Preço para o Google. Personalize os padrões abaixo se desejar.
-                  </p>
-                </div>
-                {companyId && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const smUrl = `${API_URL}/b2c/public/sitemap.xml?company_id=${companyId}`;
-                      navigator.clipboard.writeText(smUrl);
-                      toast.success('URL do Sitemap XML copiada para o Google Search Console!');
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold cursor-pointer"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    Copiar Sitemap XML (Google)
-                  </button>
-                )}
-              </div>
-
-              {/* Variables helper bar */}
-              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-300 space-y-1">
-                <span className="font-bold text-slate-800 dark:text-white block">
-                  Variáveis automáticas disponíveis nos modelos:
-                </span>
-                <div className="flex flex-wrap gap-1.5 pt-0.5">
-                  {['{nome}', '{isbn}', '{autor}', '{editora}', '{categoria}', '{vitrine}', '{preco}', '{loja}'].map((v) => (
-                    <code
-                      key={v}
-                      className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-indigo-600 dark:text-indigo-400 font-bold"
-                    >
-                      {v}
-                    </code>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Título SEO da Página Inicial (Home)
-                  </label>
-                  <input
-                    type="text"
-                    value={seoConfig.home_title}
-                    onChange={(e) => setSeoConfig({ ...seoConfig, home_title: e.target.value })}
-                    placeholder="{loja} | Livraria e Loja Oficial"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Descrição SEO da Página Inicial (Meta Description)
-                  </label>
-                  <input
-                    type="text"
-                    value={seoConfig.home_description}
-                    onChange={(e) => setSeoConfig({ ...seoConfig, home_description: e.target.value })}
-                    placeholder="Compre livros na loja oficial {loja}..."
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Padrão de Título das Páginas de Livro (com ISBN automático)
-                  </label>
-                  <input
-                    type="text"
-                    value={seoConfig.product_title_template}
-                    onChange={(e) =>
-                      setSeoConfig({ ...seoConfig, product_title_template: e.target.value })
-                    }
-                    placeholder="{nome} - ISBN {isbn} | {autor} | {loja}"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Padrão de Descrição das Páginas de Livro
-                  </label>
-                  <input
-                    type="text"
-                    value={seoConfig.product_description_template}
-                    onChange={(e) =>
-                      setSeoConfig({ ...seoConfig, product_description_template: e.target.value })
-                    }
-                    placeholder="Compre o livro {nome} (ISBN {isbn}) de {autor}, editora {editora} na {loja}."
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Padrão de Título das Categorias
-                  </label>
-                  <input
-                    type="text"
-                    value={seoConfig.category_title_template}
-                    onChange={(e) =>
-                      setSeoConfig({ ...seoConfig, category_title_template: e.target.value })
-                    }
-                    placeholder="{categoria} - Livros em Oferta | {loja}"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Padrão de Título das Vitrines
-                  </label>
-                  <input
-                    type="text"
-                    value={seoConfig.showcase_title_template}
-                    onChange={(e) =>
-                      setSeoConfig({ ...seoConfig, showcase_title_template: e.target.value })
-                    }
-                    placeholder="{vitrine} | Seleção Especial {loja}"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center pt-1">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                    Código de Verificação Google Search Console (opcional)
-                  </label>
-                  <input
-                    type="text"
-                    value={seoConfig.google_site_verification}
-                    onChange={(e) =>
-                      setSeoConfig({ ...seoConfig, google_site_verification: e.target.value })
-                    }
-                    placeholder="Ex: google-site-verification=..."
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-                <label className="flex items-start gap-2.5 p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-900 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={seoConfig.auto_json_ld !== false}
-                    onChange={(e) =>
-                      setSeoConfig({ ...seoConfig, auto_json_ld: e.target.checked })
-                    }
-                    className="mt-0.5 rounded text-emerald-600"
-                  />
-                  <div className="text-xs">
-                    <span className="font-bold text-emerald-950 dark:text-emerald-200 block">
-                      Dados Estruturados Google (Schema.org Book + ISBN)
-                    </span>
-                    <span className="text-[11px] text-emerald-800 dark:text-emerald-300">
-                      Envia automaticamente ISBN/GTIN-13, Preço, Autor, Editora e Disponibilidade de Estoque para os resultados ricos do Google.
-                    </span>
-                  </div>
-                </label>
-              </div>
-            </div>
           </div>
 
           {/* Right Column: Live Interactive Storefront Preview */}
@@ -1566,7 +1226,7 @@ export default function B2CAppearanceManager({
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
                   </div>
                   <span className="text-[11px] font-mono text-slate-500 truncate max-w-[200px]">
-                    /loja/{branding.store_slug || companyId}
+                    {storeDisplayPath}
                   </span>
                 </div>
                 <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
@@ -1886,14 +1546,14 @@ export default function B2CAppearanceManager({
                             <Globe className="w-3.5 h-3.5 text-indigo-500" />
                             Página Exclusiva da Vitrine:{' '}
                             <code className="font-mono text-indigo-600 dark:text-indigo-400">
-                              /loja/{effectiveSlug}/vitrine/{sc.slug || sc.id}
+                              {storeDisplayPath}/vitrine/{sc.slug || sc.id}
                             </code>
                           </span>
                           <div className="flex items-center gap-1.5">
                             <button
                               type="button"
                               onClick={() => {
-                                const scUrl = `${friendlyStoreUrl}/vitrine/${sc.slug || sc.id}`;
+                                const scUrl = `${storePublicUrl}/vitrine/${sc.slug || sc.id}`;
                                 navigator.clipboard.writeText(scUrl);
                                 toast.success('Link direto da vitrine copiado!');
                               }}
@@ -1903,7 +1563,7 @@ export default function B2CAppearanceManager({
                               Copiar Link
                             </button>
                             <a
-                              href={`${friendlyStoreUrl}/vitrine/${sc.slug || sc.id}`}
+                              href={`${storePublicUrl}/vitrine/${sc.slug || sc.id}`}
                               target="_blank"
                               rel="noreferrer"
                               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-[11px] font-bold text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100"
@@ -2265,7 +1925,7 @@ export default function B2CAppearanceManager({
                         .replace(/[^a-z0-9]+/g, '-')
                         .replace(/^-|-$/g, '') ||
                       cat.id;
-                    const catPageUrl = `${friendlyStoreUrl}/categoria/${catSlug}`;
+                    const catPageUrl = `${storePublicUrl}/categoria/${catSlug}`;
 
                     return (
                       <div
