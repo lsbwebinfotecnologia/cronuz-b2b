@@ -186,6 +186,11 @@ def update_horus_sql_settings(
                 else {}
             )
             forma_pagto = str(prof_bank.get("forma_pagto") or "").strip()
+            forma_pagto_credito_maior = str(
+                prof_bank.get("forma_pagto_credito_maior")
+                if "forma_pagto_credito_maior" in prof_bank
+                else existing.get("forma_pagto_credito_maior") or ""
+            ).strip()
             banco = str(prof_bank.get("banco") or "").strip()
             agencia = str(prof_bank.get("agencia") or "").strip()
             conta = str(prof_bank.get("conta") or "").strip()
@@ -200,17 +205,27 @@ def update_horus_sql_settings(
                 unify_installments = bool(existing.get("unify_installments"))
             else:
                 unify_installments = default_unify
-            has_any = any(bool(x) for x in (forma_pagto, banco, agencia, conta, carteira))
+
+            if "split_excess_launch" in prof_bank and prof_bank.get("split_excess_launch") is not None:
+                split_excess_launch = bool(prof_bank.get("split_excess_launch"))
+            elif "split_excess_launch" in existing and existing.get("split_excess_launch") is not None:
+                split_excess_launch = bool(existing.get("split_excess_launch"))
+            else:
+                split_excess_launch = True
+
+            has_any = any(bool(x) for x in (forma_pagto, forma_pagto_credito_maior, banco, agencia, conta, carteira))
 
             existing.update({
                 "use_custom_bank": has_any,
                 "forma_pagto": forma_pagto,
+                "forma_pagto_credito_maior": forma_pagto_credito_maior,
                 "banco": banco,
                 "agencia": agencia,
                 "conta": conta,
                 "carteira": carteira,
                 "payment_date_mode": payment_date_mode,
                 "unify_installments": unify_installments,
+                "split_excess_launch": split_excess_launch,
             })
             bank_reconciliations[code_norm] = existing
 

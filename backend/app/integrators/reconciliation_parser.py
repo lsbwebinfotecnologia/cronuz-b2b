@@ -498,6 +498,7 @@ def parse_tray_bridge_file(
         "subtotal_produtos": -1,
         "frete_valor": -1,
         "desconto": -1,
+        "acrescimo_forma": -1,
         "valor_tray": -1,
         "valor_pagamento": -1,
         "forma_pagamento_paga": -1,
@@ -568,6 +569,9 @@ def parse_tray_bridge_file(
         if col_map["desconto"] == -1 and h == "desconto":
             col_map["desconto"] = idx
             continue
+        if col_map["acrescimo_forma"] == -1 and h in ("acrescimo_forma", "acrescimo", "juros", "valor_acrescimo"):
+            col_map["acrescimo_forma"] = idx
+            continue
         if col_map["valor_tray"] == -1 and h in ("total", "valor_total", "total_do_pedido", "valor_do_pedido", "valor"):
             col_map["valor_tray"] = idx
             continue
@@ -637,6 +641,12 @@ def parse_tray_bridge_file(
         v_sub = _parse_currency(get_cell(col_map["subtotal_produtos"])) if col_map["subtotal_produtos"] >= 0 else 0.0
         v_frete = _parse_currency(get_cell(col_map["frete_valor"])) if col_map["frete_valor"] >= 0 else 0.0
         v_desc = _parse_currency(get_cell(col_map["desconto"])) if col_map["desconto"] >= 0 else 0.0
+        v_acr = _parse_currency(get_cell(col_map["acrescimo_forma"])) if col_map["acrescimo_forma"] >= 0 else 0.0
+
+        base_tray_val = v_total or v_pag or v_sub
+        # `valor_tray_sem_acrescimo` desconta o juros de parcelamento do comprador (`Acréscimo forma` na Tray)
+        # pois a NF-e e o título no Horus ERP são gerados sobre `Subtotal + Frete - Desconto` (= `Total - Acréscimo forma`).
+        val_sem_acr = round(base_tray_val - v_acr, 2) if v_acr > 0 and base_tray_val > v_acr else base_tray_val
 
         forma_paga = get_cell(col_map["forma_pagamento_paga"]) or get_cell(col_map["pagamento_tipo"]) or ""
 
@@ -648,7 +658,9 @@ def parse_tray_bridge_file(
             "ponto_venda": get_cell(col_map["ponto_venda"]) or "-",
             "cliente_tray": cliente_val,
             "documento_tray": doc_val,
-            "valor_tray": v_total or v_pag or v_sub,
+            "valor_tray": base_tray_val,
+            "valor_tray_sem_acrescimo": val_sem_acr,
+            "acrescimo_tray": v_acr,
             "subtotal_tray": v_sub,
             "frete_tray": v_frete,
             "desconto_tray": v_desc,

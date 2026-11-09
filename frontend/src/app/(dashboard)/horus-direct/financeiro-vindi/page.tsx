@@ -31,14 +31,18 @@ interface ReconciliationProfile {
   use_custom_bank: boolean;
   payment_date_mode?: 'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN' | string;
   unify_installments?: boolean;
+  split_excess_launch?: boolean;
+  forma_pagto_credito_maior?: string;
   effective_bank: {
     forma_pagto: string;
+    forma_pagto_credito_maior?: string;
     banco: string;
     agencia: string;
     conta: string;
     carteira: string;
     payment_date_mode?: string;
     unify_installments?: boolean;
+    split_excess_launch?: boolean;
   };
   bank_configured: boolean;
 }
@@ -76,6 +80,10 @@ interface SummaryData {
   profile_code?: string;
   is_dual_file?: boolean;
   unify_installments?: boolean;
+  split_excess_launch?: boolean;
+  forma_pagto_credito_maior?: string;
+  credito_maior_count?: number;
+  credito_maior_total?: number;
   unificadas_orders_count?: number;
   unificadas_parcelas_count?: number;
   total_planilha_qtd: number;
@@ -106,12 +114,14 @@ interface BankConfig {
   profile_code?: string;
   use_custom_bank?: boolean;
   forma_pagto: string;
+  forma_pagto_credito_maior?: string;
   banco: string;
   agencia: string;
   conta: string;
   carteira: string;
   payment_date_mode?: 'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN' | string;
   unify_installments?: boolean;
+  split_excess_launch?: boolean;
   cod_empresa: string;
   cod_filial: string;
   is_configured: boolean;
@@ -132,6 +142,12 @@ interface ReleaseItem {
   documento: string;
   valor_vindi: number;
   valor_horus?: number;
+  valor_horus_original?: number;
+  valor_credito_maior?: number;
+  has_credito_maior_split?: boolean;
+  forma_pagto_credito_maior?: string;
+  acrescimo_tray?: number;
+  desconto_tray?: number;
   valor_liquido?: number;
   valor_bruto?: number;
   taxa?: number;
@@ -256,7 +272,7 @@ export default function FinanceiroVindiPage() {
 
   // Filtros e busca na grade Access
   const [activeFilterTab, setActiveFilterTab] = useState<
-    'all' | 'abertos' | 'pagos' | 'divergence' | 'not_found'
+    'all' | 'abertos' | 'credito_maior' | 'pagos' | 'divergence' | 'not_found'
   >('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -271,6 +287,8 @@ export default function FinanceiroVindiPage() {
     'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN'
   >('CHANNEL_DATE');
   const [unifyInstallments, setUnifyInstallments] = useState<boolean>(true);
+  const [splitExcessLaunch, setSplitExcessLaunch] = useState<boolean>(true);
+  const [formaPagtoCreditoMaior, setFormaPagtoCreditoMaior] = useState<string>('');
   const [specificPaymentDate, setSpecificPaymentDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10)
   );
@@ -288,12 +306,14 @@ export default function FinanceiroVindiPage() {
   const [savingBankConfig, setSavingBankConfig] = useState(false);
   const [bankForm, setBankForm] = useState({
     forma_pagto: '',
+    forma_pagto_credito_maior: '',
     banco: '',
     agencia: '',
     conta: '',
     carteira: '',
     payment_date_mode: 'CHANNEL_DATE',
     unify_installments: true,
+    split_excess_launch: true,
   });
 
   const channelFileInputRef = useRef<HTMLInputElement>(null);
@@ -364,6 +384,25 @@ export default function FinanceiroVindiPage() {
         ? Boolean(activeProfile.effective_bank.unify_installments)
         : defaultUnify;
     setUnifyInstallments(unifyFromCfg);
+
+    const splitFromCfg =
+      bankConfig?.profile_code === activeProfile?.code &&
+      bankConfig?.split_excess_launch !== undefined
+        ? Boolean(bankConfig.split_excess_launch)
+        : activeProfile?.split_excess_launch !== undefined
+        ? Boolean(activeProfile.split_excess_launch)
+        : activeProfile?.effective_bank?.split_excess_launch !== undefined
+        ? Boolean(activeProfile.effective_bank.split_excess_launch)
+        : true;
+    setSplitExcessLaunch(splitFromCfg);
+
+    const formaCredFromCfg =
+      bankConfig?.profile_code === activeProfile?.code && bankConfig?.forma_pagto_credito_maior
+        ? bankConfig.forma_pagto_credito_maior
+        : activeProfile?.forma_pagto_credito_maior ||
+          activeProfile?.effective_bank?.forma_pagto_credito_maior ||
+          '';
+    setFormaPagtoCreditoMaior(formaCredFromCfg);
   }, [activeProfile, bankConfig]);
 
   const isDualFileMode = activeProfile?.mode === 'DUAL_FILE';
@@ -379,15 +418,19 @@ export default function FinanceiroVindiPage() {
         ? bankConfig
         : target.effective_bank || {
             forma_pagto: '',
+            forma_pagto_credito_maior: '',
             banco: '',
             agencia: '',
             conta: '',
             carteira: '',
             payment_date_mode: 'CHANNEL_DATE',
             unify_installments: defaultUnify,
+            split_excess_launch: true,
           };
     setBankForm({
       forma_pagto: eff.forma_pagto || '',
+      forma_pagto_credito_maior:
+        eff.forma_pagto_credito_maior || target.forma_pagto_credito_maior || '',
       banco: eff.banco || '',
       agencia: eff.agencia || '',
       conta: eff.conta || '',
@@ -400,6 +443,12 @@ export default function FinanceiroVindiPage() {
           : target.unify_installments !== undefined
           ? Boolean(target.unify_installments)
           : defaultUnify,
+      split_excess_launch:
+        eff.split_excess_launch !== undefined
+          ? Boolean(eff.split_excess_launch)
+          : target.split_excess_launch !== undefined
+          ? Boolean(target.split_excess_launch)
+          : true,
     });
     setShowBankConfigModal(true);
   };
@@ -432,12 +481,14 @@ export default function FinanceiroVindiPage() {
           body: JSON.stringify({
             profile_code: activeProfile.code,
             forma_pagto: bankForm.forma_pagto.trim(),
+            forma_pagto_credito_maior: bankForm.forma_pagto_credito_maior.trim(),
             banco: bankForm.banco.trim(),
             agencia: bankForm.agencia.trim(),
             conta: bankForm.conta.trim(),
             carteira: bankForm.carteira.trim(),
             payment_date_mode: bankForm.payment_date_mode || 'CHANNEL_DATE',
             unify_installments: Boolean(bankForm.unify_installments),
+            split_excess_launch: Boolean(bankForm.split_excess_launch),
           }),
         }
       );
@@ -563,6 +614,7 @@ export default function FinanceiroVindiPage() {
         profile_code: activeProfile.code,
         async_job: 'true',
         unify_installments: unifyInstallments ? 'true' : 'false',
+        split_excess_launch: splitExcessLaunch ? 'true' : 'false',
       });
 
       const res = await fetch(
@@ -706,6 +758,15 @@ export default function FinanceiroVindiPage() {
           .map((i) => ({ ...i, _category: 'ready' as const })),
         ...itemsDivergence
           .filter((i) => i.situacao_horus === 'ABERTO')
+          .map((i) => ({ ...i, _category: 'divergence' as const })),
+      ];
+    } else if (activeFilterTab === 'credito_maior') {
+      base = [
+        ...itemsReady
+          .filter((i) => (i.valor_credito_maior || 0) > 0.05)
+          .map((i) => ({ ...i, _category: 'ready' as const })),
+        ...itemsDivergence
+          .filter((i) => (i.valor_credito_maior || 0) > 0.05)
           .map((i) => ({ ...i, _category: 'divergence' as const })),
       ];
     } else if (activeFilterTab === 'pagos') {
@@ -922,6 +983,8 @@ export default function FinanceiroVindiPage() {
         profile_code: activeProfile.code,
         payment_date_mode: paymentDateMode,
         unify_installments: unifyInstallments,
+        split_excess_launch: splitExcessLaunch,
+        forma_pagto_credito_maior: formaPagtoCreditoMaior || undefined,
         specific_payment_date:
           paymentDateMode === 'SPECIFIC_DATE' ? specificPaymentDate : undefined,
         releases: selectedReleases.map((r) => ({
@@ -935,6 +998,7 @@ export default function FinanceiroVindiPage() {
             r.diff_taxa !== undefined
               ? Math.abs(r.diff_taxa)
               : r.taxa || 0,
+          valor_credito_maior: r.valor_credito_maior || 0,
           grouped_lancto_ids: r.grouped_lancto_ids,
           status: r.status_horus || 'AB',
           data_pagamento: r.data_pagamento || '',
@@ -1645,6 +1709,14 @@ export default function FinanceiroVindiPage() {
                     })`,
                   },
                   {
+                    id: 'credito_maior',
+                    label: `Crédito Maior Separado (${
+                      itemsReady.filter((i) => (i.valor_credito_maior || 0) > 0.01).length +
+                      itemsDivergence.filter((i) => (i.valor_credito_maior || 0) > 0.01).length +
+                      itemsAlreadyPaid.filter((i) => (i.valor_credito_maior || 0) > 0.01).length
+                    })`,
+                  },
+                  {
                     id: 'divergence',
                     label: `Divergências (${itemsDivergence.length})`,
                   },
@@ -1896,15 +1968,42 @@ export default function FinanceiroVindiPage() {
 
                           {/* Valor Título Horus */}
                           <td className="py-1.5 px-3 text-right font-mono font-bold text-slate-900 dark:text-white whitespace-nowrap">
-                            {item.valor_horus !== undefined
-                              ? `R$ ${formatBRL(item.valor_horus)}`
-                              : '—'}
+                            {item.valor_horus !== undefined ? (
+                              <div className="flex flex-col items-end">
+                                <span>R$ {formatBRL(item.valor_horus)}</span>
+                                {(item.valor_credito_maior || 0) > 0.01 && (
+                                  <span
+                                    title={`Título original no Horus: R$ ${formatBRL(
+                                      item.valor_horus_original
+                                    )}. Excedente de R$ ${formatBRL(
+                                      item.valor_credito_maior
+                                    )} separado em novo lançamento (Forma ${
+                                      item.forma_pagto_credito_maior ||
+                                      formaPagtoCreditoMaior ||
+                                      'Configurável'
+                                    }).`}
+                                    className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100/80 dark:bg-amber-950/60 px-1.5 py-0.5 rounded mt-0.5"
+                                  >
+                                    +R$ {formatBRL(item.valor_credito_maior)} Créd. Maior
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              '—'
+                            )}
                           </td>
 
                           {/* Diferença Bruto vs Horus */}
                           <td className="py-1.5 px-3 text-right font-mono whitespace-nowrap">
                             {item.valor_horus === undefined ? (
                               '—'
+                            ) : (item.valor_credito_maior || 0) > 0.01 && !hasDiffBruto ? (
+                              <div className="flex flex-col items-end">
+                                <span className="text-emerald-600 font-bold">R$ 0,00</span>
+                                <span className="text-[9px] font-bold text-indigo-600 dark:text-indigo-400">
+                                  Forma {item.forma_pagto_credito_maior || formaPagtoCreditoMaior || 'Créd.'}
+                                </span>
+                              </div>
                             ) : hasDiffBruto ? (
                               <span className="font-bold text-amber-700 dark:text-amber-400">
                                 {diffBruto > 0 ? '+' : '-'}R$ {formatBRL(Math.abs(diffBruto))}
@@ -2132,6 +2231,20 @@ export default function FinanceiroVindiPage() {
                     <p className="font-mono font-bold text-slate-900 dark:text-white">
                       Valor Título: R$ {formatBRL(inspectedItem.valor_horus)}
                     </p>
+                    {(inspectedItem.valor_credito_maior || 0) > 0.01 && (
+                      <div className="p-2 rounded-lg bg-amber-100/80 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 space-y-0.5">
+                        <p className="text-[10px] font-extrabold text-amber-800 dark:text-amber-300">
+                          Título Orig. Horus: R$ {formatBRL(inspectedItem.valor_horus_original)}
+                        </p>
+                        <p className="text-[11px] font-bold text-amber-900 dark:text-amber-200 font-mono">
+                          + Novo Lanç. Créd. Maior: R$ {formatBRL(inspectedItem.valor_credito_maior)} (Forma:{' '}
+                          {inspectedItem.forma_pagto_credito_maior ||
+                            formaPagtoCreditoMaior ||
+                            'Configurável'}
+                          )
+                        </p>
+                      </div>
+                    )}
                     <p className="font-bold">
                       Situação: {inspectedItem.situacao_horus || 'NÃO LOCALIZADO'}{' '}
                       {inspectedItem.cod_bordero ? `(Borderô #${inspectedItem.cod_bordero})` : ''}
@@ -2412,6 +2525,58 @@ export default function FinanceiroVindiPage() {
                   </div>
                 </div>
 
+                {/* ─── OPÇÃO SIM / NÃO + FORMA DE PAGTO P/ CRÉDITO MAIOR (QUANDO NOTA/VENDA < TÍTULO HORUS) ─── */}
+                <div className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/20 p-3.5 space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="text-xs">
+                      <span className="font-extrabold text-slate-900 dark:text-white block">
+                        Ajustar Venda Menor e Separar Crédito Maior em Novo Lançamento
+                      </span>
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
+                        Quando a venda/nota for menor que o título do Horus, ajusta o lançamento principal e cria um lançamento separado (em aberto <code>AB</code>) com a diferença na Forma de Pagamento de Crédito Maior.
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setSplitExcessLaunch(true)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                          splitExcessLaunch
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        SIM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSplitExcessLaunch(false)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                          !splitExcessLaunch
+                            ? 'bg-slate-800 text-white dark:bg-slate-700 shadow-2xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        NÃO
+                      </button>
+                    </div>
+                  </div>
+                  {splitExcessLaunch && (
+                    <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-amber-200/70 dark:border-amber-800/50">
+                      <label className="text-[11px] font-bold text-amber-900 dark:text-amber-300">
+                        Forma de Pagto p/ Crédito Maior (COD_FORMA no Horus):
+                      </label>
+                      <input
+                        type="text"
+                        value={formaPagtoCreditoMaior}
+                        onChange={(e) => setFormaPagtoCreditoMaior(e.target.value)}
+                        placeholder="Ex: 135 (CREDITO SHOPEE)"
+                        className="w-40 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 px-2.5 py-1 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <button
                     type="button"
@@ -2545,7 +2710,7 @@ export default function FinanceiroVindiPage() {
                     </span>
                   </div>
 
-                  <div className="space-y-1 sm:col-span-2">
+                  <div className="space-y-1">
                     <label className="font-bold text-slate-700 dark:text-slate-300 block">
                       Carteira de Cobrança (NRO_CARTEIRA) <span className="text-slate-400 font-normal">(Opcional)</span>
                     </label>
@@ -2556,6 +2721,27 @@ export default function FinanceiroVindiPage() {
                       placeholder="Ex: 17, 109, 09 (ou deixe em branco)"
                       className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-amber-700 dark:text-amber-400 block">
+                      Forma Pagto p/ Crédito Maior (COD_FORMA Excedente)
+                    </label>
+                    <input
+                      type="text"
+                      value={bankForm.forma_pagto_credito_maior}
+                      onChange={(e) =>
+                        setBankForm((p) => ({
+                          ...p,
+                          forma_pagto_credito_maior: e.target.value,
+                        }))
+                      }
+                      placeholder="Ex: 135 (CREDITO SHOPEE)"
+                      className="w-full rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    <span className="text-[10px] text-slate-400 block">
+                      Usado no lançamento separado quando o título Horus for maior que a nota
+                    </span>
                   </div>
 
                   <div className="space-y-1 sm:col-span-2 pt-1">

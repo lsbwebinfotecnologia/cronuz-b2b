@@ -73,6 +73,7 @@ class ReleaseItemPayload(BaseModel):
     valor: float
     valor_liquido: Optional[float] = None
     taxa: Optional[float] = None
+    valor_credito_maior: Optional[float] = None
     grouped_lancto_ids: Optional[List[int]] = None
     status: str = "AB"
     data_pagamento: Optional[str] = None
@@ -84,17 +85,21 @@ class CreateBorderoPayload(BaseModel):
     payment_date_mode: Optional[str] = None  # "CHANNEL_DATE" | "SPECIFIC_DATE" | "BORDERO_OPEN"
     specific_payment_date: Optional[str] = None  # YYYY-MM-DD ou DD/MM/YYYY
     unify_installments: Optional[bool] = None
+    split_excess_launch: Optional[bool] = None
+    forma_pagto_credito_maior: Optional[str] = None
 
 
 class SaveProfileBankConfigPayload(BaseModel):
     profile_code: str
     forma_pagto: str = ""
+    forma_pagto_credito_maior: Optional[str] = ""
     banco: str = ""
     agencia: str = ""
     conta: str = ""
     carteira: Optional[str] = ""
     payment_date_mode: Optional[str] = "CHANNEL_DATE"
     unify_installments: Optional[bool] = None
+    split_excess_launch: Optional[bool] = None
 
 
 def _parse_payment_date_to_sql(raw_str: Optional[str], fallback_dt: Optional[datetime] = None) -> datetime:
@@ -128,12 +133,14 @@ def _resolve_bank_config_for_profile(settings, sql_client_or_none, profile_code:
     default_unify = code_norm in ("TRAY_SHOPEE", "TRAY_TIKTOK")
     eff = (matched or {}).get("effective_bank") or {
         "forma_pagto": settings.horus_banco_forma_pagto or "",
+        "forma_pagto_credito_maior": "",
         "banco": settings.horus_banco_codigo or "",
         "agencia": settings.horus_banco_agencia or "",
         "conta": settings.horus_banco_conta or "",
         "carteira": settings.horus_banco_carteira or "",
         "payment_date_mode": "CHANNEL_DATE",
         "unify_installments": default_unify,
+        "split_excess_launch": True,
     }
     cod_emp = sql_client_or_none.cod_empresa if sql_client_or_none else (settings.horus_sql_cod_empresa or settings.horus_company or "1")
     cod_fil = sql_client_or_none.cod_filial if sql_client_or_none else (settings.horus_sql_cod_filial or settings.horus_branch or "1")
@@ -148,17 +155,27 @@ def _resolve_bank_config_for_profile(settings, sql_client_or_none, profile_code:
     unify_installments = bool(
         (matched or {}).get("unify_installments", eff.get("unify_installments", default_unify))
     )
+    split_excess_launch = bool(
+        (matched or {}).get("split_excess_launch", eff.get("split_excess_launch", True))
+    )
+    forma_pagto_credito_maior = str(
+        (matched or {}).get("forma_pagto_credito_maior")
+        or eff.get("forma_pagto_credito_maior")
+        or ""
+    ).strip()
 
     return {
         "profile_code": code_norm,
         "use_custom_bank": bool((matched or {}).get("use_custom_bank", False)),
         "forma_pagto": eff.get("forma_pagto") or "",
+        "forma_pagto_credito_maior": forma_pagto_credito_maior,
         "banco": eff.get("banco") or "",
         "agencia": eff.get("agencia") or "",
         "conta": eff.get("conta") or "",
         "carteira": eff.get("carteira") or "",
         "payment_date_mode": payment_date_mode,
         "unify_installments": unify_installments,
+        "split_excess_launch": split_excess_launch,
         "cod_empresa": str(cod_emp),
         "cod_filial": str(cod_fil),
         "is_configured": bool(
@@ -227,6 +244,11 @@ def save_reconciliation_profile_bank_config(
     )
 
     forma_pagto = str(payload.forma_pagto or "").strip()
+    forma_pagto_credito_maior = str(
+        payload.forma_pagto_credito_maior
+        if payload.forma_pagto_credito_maior is not None
+        else existing.get("forma_pagto_credito_maior") or ""
+    ).strip()
     banco = str(payload.banco or "").strip()
     agencia = str(payload.agencia or "").strip()
     conta = str(payload.conta or "").strip()
@@ -240,17 +262,24 @@ def save_reconciliation_profile_bank_config(
         if payload.unify_installments is not None
         else bool(existing.get("unify_installments", default_unify))
     )
-    has_any = any(bool(x) for x in (forma_pagto, banco, agencia, conta, carteira))
+    split_excess_launch = (
+        bool(payload.split_excess_launch)
+        if payload.split_excess_launch is not None
+        else bool(existing.get("split_excess_launch", True))
+    )
+    has_any = any(bool(x) for x in (forma_pagto, forma_pagto_credito_maior, banco, agencia, conta, carteira))
 
     existing.update({
         "use_custom_bank": has_any,
         "forma_pagto": forma_pagto,
+        "forma_pagto_credito_maior": forma_pagto_credito_maior,
         "banco": banco,
         "agencia": agencia,
         "conta": conta,
         "carteira": carteira,
         "payment_date_mode": payment_date_mode,
         "unify_installments": unify_installments,
+        "split_excess_launch": split_excess_launch,
     })
     bank_reconciliations[code_norm] = existing
     raw_cfg["bank_reconciliations"] = bank_reconciliations
@@ -445,6 +474,7 @@ def _run_reconciliation_core(
     filial: Optional[str],
     job_id: Optional[str] = None,
     unify_installments: Optional[bool] = None,
+    split_excess_launch: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Executa todo o pipeline de conciliação em thread separada com telemetria de progresso,
@@ -461,6 +491,12 @@ def _run_reconciliation_core(
             if unify_installments is not None
             else bool(profile_bank_cfg.get("unify_installments", active_profile in ("TRAY_SHOPEE", "TRAY_TIKTOK")))
         )
+        eff_split_excess = (
+            bool(split_excess_launch)
+            if split_excess_launch is not None
+            else bool(profile_bank_cfg.get("split_excess_launch", True))
+        )
+        forma_pagto_credito_maior = str(profile_bank_cfg.get("forma_pagto_credito_maior") or "").strip()
 
         # ETAPA 1: Leitura da Planilha do Canal
         _update_job_progress(
@@ -532,7 +568,11 @@ def _run_reconciliation_core(
                     v_row["pedido_horus_ref"] = ped_horus_ref
                     v_row["pedido_web"] = ped_horus_ref
                     v_row["valor_tray"] = float(t_match.get("valor_tray") or 0.0)
+                    v_row["valor_tray_sem_acrescimo"] = float(t_match.get("valor_tray_sem_acrescimo") or t_match.get("valor_tray") or 0.0)
+                    v_row["acrescimo_tray"] = float(t_match.get("acrescimo_tray") or 0.0)
                     v_row["subtotal_tray"] = float(t_match.get("subtotal_tray") or 0.0)
+                    v_row["frete_tray"] = float(t_match.get("frete_tray") or 0.0)
+                    v_row["desconto_tray"] = float(t_match.get("desconto_tray") or 0.0)
                     v_row["status_tray"] = t_match.get("status_tray") or ""
                     v_row["nf_tray"] = t_match.get("nf_tray") or ""
                     if (not v_row.get("cliente_nome") or v_row["cliente_nome"] == "-") and t_match.get("cliente_tray"):
@@ -542,15 +582,15 @@ def _run_reconciliation_core(
                     if t_match.get("forma_pagamento_tray") and v_row.get("forma_pagamento") in ("Shopee", "TikTok Shop", "SHOPEE", "TIKTOK"):
                         v_row["forma_pagamento"] = f"{v_row['forma_pagamento']} • {t_match['forma_pagamento_tray']}"
 
-                    if not v_row.get("bruto_from_channel", True) and float(t_match.get("valor_tray") or 0.0) > 0:
-                        bruto_tray = float(t_match["valor_tray"])
+                    bruto_tray_ref = float(t_match.get("valor_tray_sem_acrescimo") or t_match.get("valor_tray") or 0.0)
+                    if not v_row.get("bruto_from_channel", True) and bruto_tray_ref > 0:
                         liq_canal = float(v_row.get("valor_liquido") or v_row.get("valor") or 0.0)
-                        v_row["valor"] = round(bruto_tray, 2)
-                        v_row["valor_bruto"] = round(bruto_tray, 2)
-                        v_row["taxa"] = round(max(0.0, bruto_tray - liq_canal), 2)
-                    elif float(v_row.get("valor") or 0.0) <= 0 and float(t_match.get("valor_tray") or 0.0) > 0:
-                        v_row["valor"] = float(t_match["valor_tray"])
-                        v_row["valor_bruto"] = float(t_match["valor_tray"])
+                        v_row["valor"] = round(bruto_tray_ref, 2)
+                        v_row["valor_bruto"] = round(bruto_tray_ref, 2)
+                        v_row["taxa"] = round(max(0.0, bruto_tray_ref - liq_canal), 2)
+                    elif float(v_row.get("valor") or 0.0) <= 0 and bruto_tray_ref > 0:
+                        v_row["valor"] = round(bruto_tray_ref, 2)
+                        v_row["valor_bruto"] = round(bruto_tray_ref, 2)
 
                     for cand in (ped_horus_ref, ped_tray, ped_canal):
                         if cand:
@@ -760,6 +800,8 @@ def _run_reconciliation_core(
         total_not_found_amount = 0.0
         unificadas_orders_count = 0
         unificadas_parcelas_count = 0
+        credito_maior_count = 0
+        credito_maior_total = 0.0
 
         used_lanctos = set()
 
@@ -921,16 +963,76 @@ def _run_reconciliation_core(
             )
 
             h_status = str(h_match.get("STA_LANCTO_CRECEBER", "")).strip().upper()
-            h_valor = unified_horus_val if unified_horus_val is not None else float(h_match.get("VLR_LANCTO_CRECEBER") or 0.0)
+            h_valor_original = unified_horus_val if unified_horus_val is not None else float(h_match.get("VLR_LANCTO_CRECEBER") or 0.0)
+            h_valor_bruto_nf = float(h_match.get("VLR_BRUTO_ORIGINAL") or h_valor_original)
             h_bordero = h_match.get("COD_BORDERO")
             h_lancto = h_match.get("NRO_LANCTO_CRECEBER")
             h_nf = h_match.get("NRO_NOTA_FISCAL") or v_row.get("nf_tray")
+            acrescimo_tray = float(v_row.get("acrescimo_tray") or 0.0)
+            desconto_tray = float(v_row.get("desconto_tray") or 0.0)
+            frete_tray = float(v_row.get("frete_tray") or 0.0)
 
-            if not v_row.get("bruto_from_channel", True) and subtotal_tray > 0 and abs(subtotal_tray - h_valor) <= 0.05 and abs(v_valor - h_valor) > 0.05:
+            # 7.1. Alinhamento automático quando `subtotal_tray` bate com `h_valor_original`
+            if not v_row.get("bruto_from_channel", True) and subtotal_tray > 0 and abs(subtotal_tray - h_valor_original) <= 0.05 and abs(v_valor - h_valor_original) > 0.05:
                 total_vindi_amount -= v_valor
                 v_valor = round(subtotal_tray, 2)
                 total_vindi_amount += v_valor
                 v_taxa = round(max(0.0, v_valor - v_valor_liq), 2)
+
+            # 7.2. Quando o título em aberto no Horus já está pelo Valor Líquido do repasse (ou próximo do líquido após abatimento de voucher CONTA_CLIENTE_VINCULACAO):
+            # Alinhamos o valor bruto da conciliação ao título do Horus para bater 100% sem divergência artificial.
+            elif (
+                not v_row.get("bruto_from_channel", True)
+                and h_valor_original > 0
+                and abs(v_valor - h_valor_original) > 0.05
+                and (
+                    abs(h_valor_original - v_valor_liq) <= 0.05
+                    or h_valor_original <= v_valor
+                )
+            ):
+                total_vindi_amount -= v_valor
+                v_valor = round(h_valor_original, 2)
+                total_vindi_amount += v_valor
+                v_taxa = round(max(0.0, v_valor - v_valor_liq), 2)
+
+            # 7.3. Quando a venda/nota na Tray saiu menor que o título do Horus (ex: desconto/cupom da Shopee não vinculado no Horus, `h_valor_original > v_valor`):
+            # Ajustamos o lançamento principal para bater com `v_valor` (ou `v_valor_liq` se `v_valor < v_valor_liq`)
+            # e separamos o valor a mais (`valor_credito_maior`) em um novo lançamento com a forma de pagamento configurada (ex: COD_FORMA 135 - CREDITO SHOPEE)!
+            h_valor = h_valor_original
+            valor_credito_maior = 0.0
+            has_credito_maior_split = False
+
+            if (
+                eff_split_excess
+                and h_status == "AB"
+                and not (h_bordero and int(h_bordero) > 0)
+                and h_valor_original > v_valor + 0.05
+            ):
+                # Se a nota na Tray saiu menor que o líquido repassado pela Shopee (ex: subsídio Shopee onde Total Tray = 8.71, Líq Shopee = 24.18 e Horus = 48.50),
+                # o lançamento principal da venda deve cobrir pelo menos o valor efetivo da venda/repasse, e o excedente até 48.50 vai para o lançamento separado de Crédito Maior!
+                target_main_val = round(max(v_valor, v_valor_liq), 2)
+                if h_valor_original > target_main_val + 0.05:
+                    valor_credito_maior = round(h_valor_original - target_main_val, 2)
+                    has_credito_maior_split = True
+                    if target_main_val != v_valor:
+                        total_vindi_amount -= v_valor
+                        v_valor = target_main_val
+                        total_vindi_amount += v_valor
+                    h_valor = target_main_val
+                    v_taxa = round(max(0.0, v_valor - v_valor_liq), 2)
+                    credito_maior_count += 1
+                    credito_maior_total += valor_credito_maior
+            elif (
+                not v_row.get("bruto_from_channel", True)
+                and h_valor_original < 0
+                and v_valor_liq > 0
+            ):
+                # Caso de título com abatimento excessivo na vinculação (ex: VLR_LANCTO_TOTAL negativo no Horus): ajusta para bater com o líquido recebido
+                total_vindi_amount -= v_valor
+                v_valor = round(v_valor_liq, 2)
+                total_vindi_amount += v_valor
+                h_valor = round(v_valor_liq, 2)
+                v_taxa = 0.0
 
             diff_bruto = round(v_valor - h_valor, 2)
             diff_bruto_abs = abs(diff_bruto)
@@ -972,6 +1074,12 @@ def _run_reconciliation_core(
                 "valor_liquido": v_valor_liq,
                 "taxa": round(diff_taxa_abs, 2),
                 "valor_horus": h_valor,
+                "valor_horus_original": h_valor_original,
+                "valor_credito_maior": valor_credito_maior,
+                "has_credito_maior_split": has_credito_maior_split,
+                "forma_pagto_credito_maior": forma_pagto_credito_maior,
+                "acrescimo_tray": acrescimo_tray,
+                "desconto_tray": desconto_tray,
                 "diferenca_valor": diff_bruto if has_value_divergence else 0.0,
                 "diferenca_valor_abs": diff_bruto_abs if has_value_divergence else 0.0,
                 "diff_taxa": diff_taxa,
@@ -1007,10 +1115,15 @@ def _run_reconciliation_core(
                     total_divergence_amount += h_valor
             else:
                 unif_tag = f" ({unificadas_qtd} parcelas unificadas no Lançamento #{h_lancto})" if unificadas_qtd > 1 else ""
+                split_tag = (
+                    f" • Crédito Maior separado: +R$ {valor_credito_maior:.2f} (Forma {forma_pagto_credito_maior or 'Configurável'})"
+                    if has_credito_maior_split and valor_credito_maior > 0
+                    else ""
+                )
                 if is_dual_file and ped_tray != "-":
-                    base_item["motivo"] = f"Vínculo OK: Canal #{ped_canal} ➔ Tray #{ped_tray} ➔ Horus #{h_ped_venda}{unif_tag}"
-                elif unificadas_qtd > 1:
-                    base_item["motivo"] = f"Vínculo OK: Horus #{h_ped_venda}{unif_tag}"
+                    base_item["motivo"] = f"Vínculo OK: Canal #{ped_canal} ➔ Tray #{ped_tray} ➔ Horus #{h_ped_venda}{unif_tag}{split_tag}"
+                elif unificadas_qtd > 1 or split_tag:
+                    base_item["motivo"] = f"Vínculo OK: Horus #{h_ped_venda}{unif_tag}{split_tag}"
                 items_ready.append(base_item)
                 if should_select:
                     total_ready_amount += h_valor
@@ -1031,6 +1144,10 @@ def _run_reconciliation_core(
             "profile_code": active_profile,
             "is_dual_file": is_dual_file,
             "unify_installments": eff_unify_installments,
+            "split_excess_launch": eff_split_excess,
+            "forma_pagto_credito_maior": forma_pagto_credito_maior,
+            "credito_maior_count": credito_maior_count,
+            "credito_maior_total": round(credito_maior_total, 2),
             "unificadas_orders_count": unificadas_orders_count,
             "unificadas_parcelas_count": unificadas_parcelas_count,
             "total_planilha_qtd": len(vindi_rows),
@@ -1066,6 +1183,7 @@ def _run_reconciliation_core(
 
         bank_config = _resolve_bank_config_for_profile(settings, sql_client, active_profile)
         bank_config["unify_installments"] = eff_unify_installments
+        bank_config["split_excess_launch"] = eff_split_excess
 
         result_payload = {
             "success": True,
@@ -1118,6 +1236,8 @@ async def preview_vindi_reconciliation(
     async_job: Optional[bool] = False,
     unify_installments: Optional[bool] = None,
     unify_installments_form: Optional[str] = Form(None),
+    split_excess_launch: Optional[bool] = None,
+    split_excess_launch_form: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -1139,6 +1259,14 @@ async def preview_vindi_reconciliation(
             eff_unify = True
         elif s_form in ("false", "0", "nao", "não", "no"):
             eff_unify = False
+
+    eff_split_excess: Optional[bool] = split_excess_launch
+    if eff_split_excess is None and split_excess_launch_form is not None:
+        s_split = str(split_excess_launch_form).strip().lower()
+        if s_split in ("true", "1", "sim", "yes"):
+            eff_split_excess = True
+        elif s_split in ("false", "0", "nao", "não", "no"):
+            eff_split_excess = False
 
     validate_file_size_and_extension(file, category="sheet")
     if requires_tray_file and not tray_file:
@@ -1196,6 +1324,7 @@ async def preview_vindi_reconciliation(
             filial,
             job_id,
             eff_unify,
+            eff_split_excess,
         )
         return {
             "success": True,
@@ -1219,6 +1348,7 @@ async def preview_vindi_reconciliation(
             filial,
             None,
             eff_unify,
+            eff_split_excess,
         )
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
@@ -1313,6 +1443,16 @@ async def create_vindi_bordero(
         if payload.unify_installments is not None
         else bool(bank_cfg.get("unify_installments", (payload.profile_code or "").upper() in ("TRAY_SHOPEE", "TRAY_TIKTOK")))
     )
+    eff_split_excess = (
+        bool(payload.split_excess_launch)
+        if payload.split_excess_launch is not None
+        else bool(bank_cfg.get("split_excess_launch", True))
+    )
+    raw_forma_credito = str(
+        payload.forma_pagto_credito_maior
+        if payload.forma_pagto_credito_maior is not None
+        else bank_cfg.get("forma_pagto_credito_maior") or ""
+    ).strip()
 
     if eff_mode == "SPECIFIC_DATE" and not (payload.specific_payment_date and str(payload.specific_payment_date).strip()):
         raise HTTPException(
@@ -1325,6 +1465,7 @@ async def create_vindi_bordero(
         return int(s) if s.isdigit() else s
 
     cod_forma_val = _to_int_or_str(bank_cfg["forma_pagto"])
+    cod_forma_credito_val = _to_int_or_str(raw_forma_credito) if raw_forma_credito else cod_forma_val
     cod_banco_val = _to_int_or_str(bank_cfg["banco"])
     cod_agencia_val = _to_int_or_str(bank_cfg["agencia"])
     cod_contac_val = _to_int_or_str(bank_cfg["conta"])
@@ -1338,6 +1479,8 @@ async def create_vindi_bordero(
         nom_arquivo = f"cz_{prof_tag}_{today_str}"[:20]
         unificadas_orders_tx = 0
         unificadas_parcelas_removidas_tx = 0
+        credito_maior_lancamentos_criados_tx = 0
+        credito_maior_valor_total_tx = 0.0
 
         with conn.cursor() as cur:
             # 4.0. Unificação Segura de Parcelas (se habilitada e se o lançamento possuir mais de 1 parcela aberta agrupada)
@@ -1480,6 +1623,139 @@ async def create_vindi_bordero(
 
                     unificadas_orders_tx += 1
                     unificadas_parcelas_removidas_tx += len(valid_extra_ids)
+
+            # 4.0.5. Desmembramento de Crédito Maior (quando o título do Horus veio maior que a venda/nota e há valor a mais para separar em novo lançamento)
+            if eff_split_excess:
+                for r_item in releases_validos:
+                    v_cred_maior = round(float(r_item.valor_credito_maior or 0.0), 2)
+                    if v_cred_maior <= 0.05:
+                        continue
+                    main_id = int(r_item.nro_lancamento)
+                    v_main_target = round(float(r_item.valor), 2)
+
+                    cur.execute(
+                        """
+                        SELECT COD_EMPRESA, COD_FILIAL, COD_CLI, DAT_VENC_CRECEBER,
+                               ISNULL(VLR_LANCTO_CRECEBER, 0) AS VLR_LANCTO_CRECEBER,
+                               ISNULL(VLR_LANCTO_TOTAL, 0) AS VLR_LANCTO_TOTAL,
+                               COD_NF, COD_PED_VENDA, USU_APROVACAO, NOM_USUARIO
+                        FROM LANCTOS_CRECEBER
+                        WHERE COD_FILIAL = %s
+                          AND NRO_LANCTO_CRECEBER = %s
+                          AND STA_LANCTO_CRECEBER = 'AB'
+                        """,
+                        (cod_filial, main_id),
+                    )
+                    orig_lr = cur.fetchone()
+                    if not orig_lr:
+                        continue
+
+                    o_emp = orig_lr["COD_EMPRESA"] if isinstance(orig_lr, dict) else orig_lr[0]
+                    o_fil = orig_lr["COD_FILIAL"] if isinstance(orig_lr, dict) else orig_lr[1]
+                    o_cli = orig_lr["COD_CLI"] if isinstance(orig_lr, dict) else orig_lr[2]
+                    o_venc = orig_lr["DAT_VENC_CRECEBER"] if isinstance(orig_lr, dict) else orig_lr[3]
+                    o_vlr_tot = float(orig_lr["VLR_LANCTO_TOTAL"] if isinstance(orig_lr, dict) else orig_lr[5])
+                    o_nf = orig_lr["COD_NF"] if isinstance(orig_lr, dict) else orig_lr[6]
+                    o_ped = orig_lr["COD_PED_VENDA"] if isinstance(orig_lr, dict) else orig_lr[7]
+                    o_usu_ap = (orig_lr["USU_APROVACAO"] if isinstance(orig_lr, dict) else orig_lr[8]) or "dbo"
+                    o_nom_usu = (orig_lr["NOM_USUARIO"] if isinstance(orig_lr, dict) else orig_lr[9]) or "dbo"
+
+                    # Proteção de idempotência: só desmembra se o título ainda estiver com o valor cheio (> v_main_target)
+                    if o_vlr_tot <= v_main_target + 0.05:
+                        continue
+
+                    # Ajusta o lançamento principal para o valor da venda (`v_main_target`)
+                    cur.execute(
+                        """
+                        UPDATE LANCTOS_CRECEBER
+                        SET VLR_LANCTO_CRECEBER = %s,
+                            VLR_LANCTO_TOTAL = %s,
+                            DAT_ULT_ATL = GETDATE()
+                        WHERE COD_FILIAL = %s
+                          AND NRO_LANCTO_CRECEBER = %s
+                        """,
+                        (v_main_target, v_main_target, cod_filial, main_id),
+                    )
+                    try:
+                        cur.execute(
+                            """
+                            UPDATE LANCTOS_CRECEBERA
+                            SET VLR_LANCTO_CRECEBER = %s,
+                                VLR_LANCTO_TOTAL = %s,
+                                DAT_ULT_ATL = GETDATE()
+                            WHERE COD_FILIAL = %s
+                              AND NRO_LANCTO_CRECEBER = %s
+                            """,
+                            (v_main_target, v_main_target, cod_filial, main_id),
+                        )
+                    except Exception as ex_adj_a:
+                        logger.warning("[HorusBordero] Aviso ao ajustar LANCTOS_CRECEBERA principal #%s: %s", main_id, ex_adj_a)
+
+                    # Cria o novo lançamento separado (`STA_LANCTO_CRECEBER = 'AB'`, `COD_BORDERO = NULL`) com a forma de pagamento de Crédito Maior (`cod_forma_credito_val`, ex: 135 - CREDITO SHOPEE)
+                    cur.execute(
+                        "SELECT ISNULL(MAX(NRO_LANCTO_CRECEBER), 0) + 1 AS next_lancto FROM LANCTOS_CRECEBER WHERE COD_FILIAL = %s",
+                        (cod_filial,),
+                    )
+                    r_next = cur.fetchone()
+                    new_lancto_id = int(r_next["next_lancto"] if isinstance(r_next, dict) else r_next[0])
+                    obs_split = f"GERAÇÃO AUTOMÁTICA! CRÉDITO MAIOR SEPARADO DO LANÇ. #{main_id}: R$ {v_cred_maior:.2f}"[:100].upper()
+
+                    cur.execute(
+                        """
+                        INSERT INTO LANCTOS_CRECEBER (
+                            NRO_LANCTO_CRECEBER, COD_EMPRESA, COD_FILIAL, COD_CLI,
+                            DAT_VENC_CRECEBER, VLR_LANCTO_CRECEBER, VLR_LANCTO_CORRECAO, VLR_LANCTO_TOTAL,
+                            VLR_LANCTO_PAGO, COD_NF, STA_LANCTO_CRECEBER, STA_APROVACAO,
+                            USU_APROVACAO, OBS_CRECEBER, DAT_ULT_ATL, NOM_USUARIO,
+                            VLR_LANCTO_ABATIMENTO, COD_PED_VENDA
+                        ) VALUES (
+                            %s, %s, %s, %s,
+                            %s, %s, 0, %s,
+                            0, %s, 'AB', 'S',
+                            %s, %s, GETDATE(), %s,
+                            0, %s
+                        )
+                        """,
+                        (
+                            new_lancto_id, o_emp, o_fil, o_cli,
+                            o_venc, v_cred_maior, v_cred_maior,
+                            o_nf,
+                            o_usu_ap, obs_split, o_nom_usu,
+                            o_ped,
+                        ),
+                    )
+                    try:
+                        cur.execute(
+                            """
+                            INSERT INTO LANCTOS_CRECEBERA (
+                                COD_PARCELA, NRO_LANCTO_CRECEBER, COD_EMPRESA, COD_FILIAL, COD_CLI,
+                                COD_FORMA, COD_SITUACAO, DAT_VENC_CRECEBER,
+                                VLR_LANCTO_CRECEBER, VLR_LANCTO_CORRECAO, VLR_LANCTO_TOTAL, VLR_LANCTO_PAGO,
+                                STA_LANCTO_CRECEBER, STA_APROVACAO, USU_APROVACAO, OBS_CRECEBER,
+                                DAT_ULT_ATL, NOM_USUARIO, COD_BANCO, COD_AGENCIA, COD_CONTAC,
+                                VLR_LANCTO_ABATIMENTO, DATA_LANCTO_CRECEBER
+                            ) VALUES (
+                                1, %s, %s, %s, %s,
+                                %s, 2, %s,
+                                %s, 0, %s, 0,
+                                'AB', 'S', %s, %s,
+                                GETDATE(), %s, %s, %s, %s,
+                                0, GETDATE()
+                            )
+                            """,
+                            (
+                                new_lancto_id, o_emp, o_fil, o_cli,
+                                cod_forma_credito_val, o_venc,
+                                v_cred_maior, v_cred_maior,
+                                o_usu_ap, obs_split,
+                                o_nom_usu, cod_banco_val, cod_agencia_val, cod_contac_val,
+                            ),
+                        )
+                    except Exception as ex_ins_a:
+                        logger.warning("[HorusBordero] Aviso ao inserir LANCTOS_CRECEBERA de Crédito Maior #%s: %s", new_lancto_id, ex_ins_a)
+
+                    credito_maior_lancamentos_criados_tx += 1
+                    credito_maior_valor_total_tx = round(credito_maior_valor_total_tx + v_cred_maior, 2)
 
             # 4.1. Busca próximo COD_BORDERO
             cur.execute("SELECT ISNULL(MAX(COD_BORDERO), 0) + 1 AS next_id FROM BORDERO")
@@ -1783,6 +2059,8 @@ async def create_vindi_bordero(
             "unify_installments": eff_unify,
             "unificadas_orders_tx": unificadas_orders_tx,
             "unificadas_parcelas_removidas_tx": unificadas_parcelas_removidas_tx,
+            "credito_maior_lancamentos_criados_tx": credito_maior_lancamentos_criados_tx,
+            "credito_maior_valor_total_tx": credito_maior_valor_total_tx,
             "verified_count": verified_count,
             "verified_sum": verified_sum,
             "completed_at": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
@@ -1810,6 +2088,11 @@ async def create_vindi_bordero(
         if tx_res.get("unificadas_orders_tx", 0) > 0
         else ""
     )
+    cred_desc = (
+        f" • {tx_res['credito_maior_lancamentos_criados_tx']} lançamento(s) separado(s) de Crédito Maior criado(s) (R$ {tx_res['credito_maior_valor_total_tx']:.2f} na Forma {cod_forma_credito_val})"
+        if tx_res.get("credito_maior_lancamentos_criados_tx", 0) > 0
+        else ""
+    )
 
     return {
         "success": True,
@@ -1827,7 +2110,9 @@ async def create_vindi_bordero(
             "verified_sum": tx_res["verified_sum"],
             "unificadas_orders_tx": tx_res["unificadas_orders_tx"],
             "unificadas_parcelas_removidas_tx": tx_res["unificadas_parcelas_removidas_tx"],
+            "credito_maior_lancamentos_criados_tx": tx_res.get("credito_maior_lancamentos_criados_tx", 0),
+            "credito_maior_valor_total_tx": tx_res.get("credito_maior_valor_total_tx", 0.0),
             "completed_at": tx_res["completed_at"],
         },
-        "message": f"Borderô #{bordero_id} gravado com sucesso no Horus ERP! {mode_desc}{unif_desc} ({tx_res['verified_count']} títulos confirmados • Bruto: R$ {total_bordero:.2f} • Líquido Banco: R$ {total_liquido_bordero:.2f}).",
+        "message": f"Borderô #{bordero_id} gravado com sucesso no Horus ERP! {mode_desc}{unif_desc}{cred_desc} ({tx_res['verified_count']} títulos confirmados • Bruto: R$ {total_bordero:.2f} • Líquido Banco: R$ {total_liquido_bordero:.2f}).",
     }

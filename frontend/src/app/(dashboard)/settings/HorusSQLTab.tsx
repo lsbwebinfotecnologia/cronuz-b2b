@@ -15,12 +15,14 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 interface ProfileBankFields {
   forma_pagto: string;
+  forma_pagto_credito_maior: string;
   banco: string;
   agencia: string;
   conta: string;
   carteira: string;
   payment_date_mode: string;
   unify_installments: boolean;
+  split_excess_launch: boolean;
 }
 
 interface ReconciliationProfileConfig {
@@ -31,6 +33,8 @@ interface ReconciliationProfileConfig {
   enabled: boolean;
   payment_date_mode?: string;
   unify_installments?: boolean;
+  split_excess_launch?: boolean;
+  forma_pagto_credito_maior?: string;
   custom_bank?: ProfileBankFields;
   effective_bank?: ProfileBankFields;
 }
@@ -132,15 +136,18 @@ export function HorusSQLTab() {
           const defaultUnify = p.code === 'TRAY_SHOPEE' || p.code === 'TRAY_TIKTOK';
           const cb = p.custom_bank || p.effective_bank || {
             forma_pagto: '',
+            forma_pagto_credito_maior: '',
             banco: '',
             agencia: '',
             conta: '',
             carteira: '',
             payment_date_mode: 'CHANNEL_DATE',
             unify_installments: defaultUnify,
+            split_excess_launch: true,
           };
           bankMap[p.code] = {
             forma_pagto: cb.forma_pagto || '',
+            forma_pagto_credito_maior: p.forma_pagto_credito_maior || cb.forma_pagto_credito_maior || '',
             banco: cb.banco || '',
             agencia: cb.agencia || '',
             conta: cb.conta || '',
@@ -152,6 +159,12 @@ export function HorusSQLTab() {
                 : cb.unify_installments !== undefined
                 ? Boolean(cb.unify_installments)
                 : defaultUnify,
+            split_excess_launch:
+              p.split_excess_launch !== undefined
+                ? Boolean(p.split_excess_launch)
+                : cb.split_excess_launch !== undefined
+                ? Boolean(cb.split_excess_launch)
+                : true,
           };
         }
         setReconciliationBanks(bankMap);
@@ -171,12 +184,14 @@ export function HorusSQLTab() {
       [profileCode]: {
         ...(prev[profileCode] || {
           forma_pagto: '',
+          forma_pagto_credito_maior: '',
           banco: '',
           agencia: '',
           conta: '',
           carteira: '',
           payment_date_mode: 'CHANNEL_DATE',
           unify_installments: defaultUnify,
+          split_excess_launch: true,
         }),
         [field]: value,
       },
@@ -517,6 +532,28 @@ export function HorusSQLTab() {
                           placeholder={settings.horus_banco_carteira || 'Ex: 17, 09'}
                           className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                         />
+                      </div>
+
+                      <div className="space-y-1 col-span-2 sm:col-span-3 pt-1">
+                        <label className="text-[11px] font-bold text-amber-700 dark:text-amber-400 block">
+                          Forma Pagto Horus p/ Crédito Maior Separado (COD_FORMA Excedente)
+                        </label>
+                        <input
+                          type="text"
+                          value={b.forma_pagto_credito_maior || ''}
+                          onChange={(e) =>
+                            handleProfileBankChange(
+                              prof.code,
+                              'forma_pagto_credito_maior',
+                              e.target.value
+                            )
+                          }
+                          placeholder="Ex: 135 (CREDITO SHOPEE)"
+                          className="w-full rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-950/20 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                        <span className="text-[10px] text-slate-500 block">
+                          Quando o título no Horus for maior que a venda/nota na Tray, o valor da venda é baixado e o valor a mais é desmembrado em um novo lançamento separado com esta Forma de Pagamento (ex: <code>135</code> - CREDITO SHOPEE).
+                        </span>
                       </div>
 
                       <div className="space-y-1 col-span-2 sm:col-span-3 pt-1">

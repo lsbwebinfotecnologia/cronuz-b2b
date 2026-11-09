@@ -221,29 +221,40 @@ def get_company_reconciliation_profiles(settings) -> List[dict]:
         else:
             unify_installments = default_unify
 
+        if "split_excess_launch" in saved and saved.get("split_excess_launch") is not None:
+            split_excess_launch = bool(saved.get("split_excess_launch"))
+        else:
+            split_excess_launch = True
+
+        forma_pagto_credito_maior = str(saved.get("forma_pagto_credito_maior") or "").strip()
+
         custom_bank = {
             "forma_pagto": str(saved.get("forma_pagto") or "").strip(),
+            "forma_pagto_credito_maior": forma_pagto_credito_maior,
             "banco": str(saved.get("banco") or "").strip(),
             "agencia": str(saved.get("agencia") or "").strip(),
             "conta": str(saved.get("conta") or "").strip(),
             "carteira": str(saved.get("carteira") or "").strip(),
             "payment_date_mode": raw_mode,
             "unify_installments": unify_installments,
+            "split_excess_launch": split_excess_launch,
         }
         has_any_custom = any(
             bool(custom_bank.get(k))
-            for k in ("forma_pagto", "banco", "agencia", "conta", "carteira")
+            for k in ("forma_pagto", "forma_pagto_credito_maior", "banco", "agencia", "conta", "carteira")
         )
         use_custom_bank = bool(saved.get("use_custom_bank", False)) or has_any_custom
 
         effective_bank = {
             "forma_pagto": custom_bank["forma_pagto"] or default_bank["forma_pagto"],
+            "forma_pagto_credito_maior": forma_pagto_credito_maior,
             "banco": custom_bank["banco"] or default_bank["banco"],
             "agencia": custom_bank["agencia"] or default_bank["agencia"],
             "conta": custom_bank["conta"] or default_bank["conta"],
             "carteira": custom_bank["carteira"] or default_bank["carteira"],
             "payment_date_mode": raw_mode,
             "unify_installments": unify_installments,
+            "split_excess_launch": split_excess_launch,
         }
         bank_configured = all(
             bool(effective_bank.get(k))
@@ -256,6 +267,8 @@ def get_company_reconciliation_profiles(settings) -> List[dict]:
             "use_custom_bank": use_custom_bank,
             "payment_date_mode": raw_mode,
             "unify_installments": unify_installments,
+            "split_excess_launch": split_excess_launch,
+            "forma_pagto_credito_maior": forma_pagto_credito_maior,
             "custom_bank": custom_bank,
             "effective_bank": effective_bank,
             "bank_configured": bank_configured,
