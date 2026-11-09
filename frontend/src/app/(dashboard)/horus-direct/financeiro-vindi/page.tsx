@@ -74,6 +74,7 @@ interface JobProgressState {
   total_orders: number;
   horus_found_count: number;
   elapsed_seconds: number;
+  bordero_number?: number;
 }
 
 interface SummaryData {
@@ -87,8 +88,12 @@ interface SummaryData {
   unificadas_orders_count?: number;
   unificadas_parcelas_count?: number;
   total_planilha_qtd: number;
+  total_planilha_linhas?: number;
   total_planilha_valor: number;
   total_planilha_liq?: number;
+  total_planilha_entradas_liq?: number;
+  total_planilha_saidas_qtd?: number;
+  total_planilha_saidas_valor?: number;
   tray_total_rows?: number;
   tray_linked_qtd?: number;
   tray_unlinked_qtd?: number;
@@ -284,6 +289,7 @@ export default function FinanceiroVindiPage() {
   // Modal de Borderô e Modo de Data de Pagamento no Horus
   const [showBorderoModal, setShowBorderoModal] = useState(false);
   const [creatingBordero, setCreatingBordero] = useState(false);
+  const [borderoProgress, setBorderoProgress] = useState<JobProgressState | null>(null);
   const [paymentDateMode, setPaymentDateMode] = useState<
     'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN'
   >('CHANNEL_DATE');
@@ -1006,6 +1012,18 @@ export default function FinanceiroVindiPage() {
     }
 
     setCreatingBordero(true);
+    setBorderoProgress({
+      status: 'RUNNING',
+      phase: 'VALIDANDO_SEGURANCA',
+      percent: 5,
+      message: 'Validando integridade e bloqueio concorrente dos títulos no Horus ERP...',
+      current_batch: 0,
+      total_batches: Math.max(1, Math.ceil(selectedReleases.length / 200)),
+      processed_orders: 0,
+      total_orders: selectedReleases.length,
+      horus_found_count: 0,
+      elapsed_seconds: 0,
+    });
     try {
       const token = getToken();
       const payload = {
@@ -1042,18 +1060,60 @@ export default function FinanceiroVindiPage() {
         })),
       };
 
-      const res = await fetch(`${API}/companies/${companyId}/horus-sql/reconciliation/bordero`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetch(
+        `${API}/companies/${companyId}/horus-sql/reconciliation/bordero?async_job=true`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
 
-      const data = await res.json();
+      const initialData = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || 'Erro ao gerar borderô no Horus.');
+        throw new Error(initialData.detail || 'Erro ao gerar borderô no Horus.');
+      }
+
+      let data = initialData;
+      if (initialData.job_id && initialData.status === 'RUNNING') {
+        const jobId = initialData.job_id;
+        while (true) {
+          await new Promise((resolve) => setTimeout(resolve, 450));
+          const pollRes = await fetch(
+            `${API}/companies/${companyId}/horus-sql/reconciliation/jobs/${jobId}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (!pollRes.ok) {
+            const errJson = await pollRes.json().catch(() => ({}));
+            throw new Error(errJson.detail || 'Falha ao consultar andamento da geração do Borderô.');
+          }
+          const jobState = await pollRes.json();
+          setBorderoProgress({
+            status: jobState.status,
+            phase: jobState.phase || 'PROCESSANDO',
+            percent: jobState.percent ?? jobState.progress ?? 50,
+            message: jobState.message || 'Processando lotes SQL...',
+            current_batch: jobState.current_batch ?? 0,
+            total_batches: jobState.total_batches ?? 1,
+            processed_orders: jobState.processed_orders ?? 0,
+            total_orders: jobState.total_orders ?? selectedReleases.length,
+            horus_found_count: jobState.horus_found_count ?? 0,
+            elapsed_seconds: jobState.elapsed_seconds ?? 0,
+            bordero_number: jobState.bordero_number,
+          });
+
+          if (jobState.status === 'FAILED' || jobState.status === 'ERROR') {
+            throw new Error(jobState.error || jobState.message || 'Erro na transação SQL do Borderô.');
+          }
+          if (jobState.status === 'COMPLETED' && jobState.result) {
+            data = jobState.result;
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            break;
+          }
+        }
       }
 
       setBorderoSuccess({
@@ -1091,6 +1151,7 @@ export default function FinanceiroVindiPage() {
       toast.error(e.message || 'Erro ao gravar borderô.');
     } finally {
       setCreatingBordero(false);
+      setBorderoProgress(null);
     }
   };
 
@@ -1744,10 +1805,22 @@ export default function FinanceiroVindiPage() {
               </span>
               <p className="text-lg font-black text-slate-900 dark:text-white font-mono mt-0.5">
                 {summary.total_planilha_qtd}
+                {summary.total_planilha_linhas &&
+                  summary.total_planilha_linhas > summary.total_planilha_qtd && (
+                    <span className="text-[10px] font-normal text-slate-400 ml-1">
+                      ({summary.total_planilha_linhas} linhas)
+                    </span>
+                  )}
               </p>
               <p className="text-[11px] font-mono text-slate-600 dark:text-slate-300">
                 Bruto: R$ {formatBRL(summary.total_planilha_valor)}
               </p>
+              {(summary.total_planilha_saidas_valor ?? 0) > 0 && (
+                <p className="text-[10px] font-mono text-rose-600 dark:text-rose-400">
+                  {summary.total_planilha_saidas_qtd} saídas: -R${' '}
+                  {formatBRL(summary.total_planilha_saidas_valor)}
+                </p>
+              )}
               <p className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
                 Líq: R$ {formatBRL(summary.total_planilha_liq ?? summary.total_planilha_valor)}
               </p>
@@ -2436,322 +2509,490 @@ export default function FinanceiroVindiPage() {
         )}
       </AnimatePresence>
 
-      {/* ─── MODAL DE CONFIRMAÇÃO DE GERAÇÃO DE BORDERÔ NO HORUS ──────────────── */}
+      {/* ─── MODAL DE CONFIRMAÇÃO E ACOMPANHAMENTO DE GERAÇÃO DE BORDERÔ NO HORUS ──────────────── */}
       <AnimatePresence>
         {showBorderoModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/65 backdrop-blur-xs p-3 sm:p-4">
             <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
+              initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden"
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="w-full max-w-4xl max-h-[92vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden"
             >
-              <div className="bg-indigo-600 px-6 py-4 flex items-center justify-between text-white">
-                <div className="flex items-center gap-3">
+              {/* Cabeçalho Fixo */}
+              <div className="bg-indigo-600 px-5 py-3.5 flex items-center justify-between text-white shrink-0">
+                <div className="flex items-center gap-2.5">
                   <Building2 className="h-5 w-5" />
-                  <h3 className="text-base font-bold">
-                    Confirmar Borderô no Horus ({activeProfile.short_name})
-                  </h3>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-bold leading-tight">
+                      {creatingBordero
+                        ? `Gerando e Auditando Borderô no Horus ERP (${activeProfile.short_name})`
+                        : `Confirmar Borderô no Horus (${activeProfile.short_name})`}
+                    </h3>
+                    <p className="text-[11px] text-indigo-100">
+                      {creatingBordero
+                        ? 'Transação SQL atômica em andamento — não feche esta janela'
+                        : 'Revise os parâmetros bancários, regras de baixa e valor líquido do Borderô'}
+                    </p>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowBorderoModal(false)}
-                  className="text-white/80 hover:text-white text-sm font-bold cursor-pointer"
-                >
-                  ✕
-                </button>
+                {!creatingBordero && (
+                  <button
+                    type="button"
+                    onClick={() => setShowBorderoModal(false)}
+                    className="text-white/80 hover:text-white text-sm font-bold px-2 py-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
 
-              <div className="p-6 space-y-5">
-                <div className="rounded-xl bg-slate-50 dark:bg-slate-800/60 p-4 border border-slate-200 dark:border-slate-700 flex items-center justify-between">
-                  <div>
-                    <p className="text-xs text-slate-500 uppercase font-semibold">
-                      Títulos Selecionados
-                    </p>
-                    <p className="text-lg font-extrabold text-slate-900 dark:text-white">
-                      {selectedReleases.length} lançamentos em aberto
-                    </p>
-                    <p className="text-[11px] font-mono text-slate-500 mt-0.5">
-                      Bruto: R$ {formatBRL(totalSelectedBrutoAmount)} • Taxas: -R${' '}
-                      {formatBRL(totalSelectedTaxaAmount)}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xs text-slate-500 uppercase font-semibold">
-                      Valor a Baixar no Borderô
-                    </p>
-                    <p className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
-                      R$ {formatBRL(totalSelectedAmount)}
-                    </p>
-                  </div>
-                </div>
-
-                {bankConfig && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                        Parâmetros Bancários do Borderô (Tabela BORDERO Horus)
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowBorderoModal(false);
-                          openBankConfigModal(activeProfile);
-                        }}
-                        className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"
-                      >
-                        <Settings className="h-3 w-3" /> Editar Códigos Horus
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
-                      <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Empresa / Filial</span>
-                        <b className="text-slate-800 dark:text-slate-200 font-mono">
-                          {bankConfig.cod_empresa} / {selectedFilial || bankConfig.cod_filial}
-                        </b>
+              {/* Corpo da Modal: Alterna entre Acompanhamento em Tempo Real e Configuração Compacta em 2 Colunas */}
+              {creatingBordero && borderoProgress ? (
+                <div className="p-6 space-y-5 overflow-y-auto">
+                  {/* Faixa de Segurança Ativa */}
+                  <div className="rounded-xl border border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/70 dark:bg-indigo-950/30 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="h-11 w-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                        <Loader2 className="h-6 w-6 animate-spin" />
                       </div>
-                      <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Forma Pagto (COD_FORMA)</span>
-                        <b className="text-slate-800 dark:text-slate-200 font-mono">
-                          {bankConfig.forma_pagto || 'NÃO DEFINIDO'}
-                        </b>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Banco (COD_BANCO)</span>
-                        <b className="text-slate-800 dark:text-slate-200 font-mono">
-                          {bankConfig.banco || 'NÃO DEFINIDO'}
-                        </b>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Agência (COD_AGENCIA)</span>
-                        <b className="text-slate-800 dark:text-slate-200 font-mono">
-                          {bankConfig.agencia || 'NÃO DEFINIDO'}
-                        </b>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Conta (COD_CONTAC)</span>
-                        <b className="text-slate-800 dark:text-slate-200 font-mono">
-                          {bankConfig.conta || 'NÃO DEFINIDO'}
-                        </b>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-2.5">
-                        <span className="text-slate-400 block">Carteira (NRO_CARTEIRA)</span>
-                        <b className="text-slate-800 dark:text-slate-200 font-mono">
-                          {bankConfig.carteira || '—'}
-                        </b>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* ─── ESCOLHA DO MODO DE DATA DE PAGAMENTO E BAIXA NO HORUS ─── */}
-                <div className="space-y-2.5 pt-1">
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">
-                    Regra de Data de Pagamento & Baixa no Horus ERP
-                  </label>
-
-                  <div className="space-y-2">
-                    {/* Opção 1: Data da Planilha (Shopee / Vindi / TikTok) */}
-                    <button
-                      type="button"
-                      onClick={() => setPaymentDateMode('CHANNEL_DATE')}
-                      className={`w-full text-left rounded-xl border p-3 transition-all flex items-start gap-2.5 cursor-pointer ${
-                        paymentDateMode === 'CHANNEL_DATE'
-                          ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-600 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
-                          : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                      }`}
-                    >
-                      <div
-                        className={`mt-0.5 h-4 w-4 rounded-full border flex items-center justify-center shrink-0 ${
-                          paymentDateMode === 'CHANNEL_DATE'
-                            ? 'border-indigo-600 bg-indigo-600 text-white'
-                            : 'border-slate-400'
-                        }`}
-                      >
-                        {paymentDateMode === 'CHANNEL_DATE' && <Check className="h-2.5 w-2.5" />}
-                      </div>
-                      <div className="text-xs">
-                        <span className="font-extrabold text-slate-900 dark:text-white block">
-                          1. Usar Data de Pagamento da Planilha ({activeProfile.channel_label})
-                        </span>
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                          Gera o Borderô pago (<code>PG</code>) e grava em cada lançamento do Horus (<code>DAT_PAGTO_CRECEBER</code>) a data exata em que o valor caiu na {activeProfile.channel_label}.
-                        </span>
-                      </div>
-                    </button>
-
-                    {/* Opção 2: Usar Borderô e Pagar com Data Específica */}
-                    <div
-                      onClick={() => setPaymentDateMode('SPECIFIC_DATE')}
-                      className={`w-full text-left rounded-xl border p-3 transition-all cursor-pointer ${
-                        paymentDateMode === 'SPECIFIC_DATE'
-                          ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-600 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
-                          : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                      }`}
-                    >
-                      <div className="flex items-start gap-2.5">
-                        <div
-                          className={`mt-0.5 h-4 w-4 rounded-full border flex items-center justify-center shrink-0 ${
-                            paymentDateMode === 'SPECIFIC_DATE'
-                              ? 'border-indigo-600 bg-indigo-600 text-white'
-                              : 'border-slate-400'
-                          }`}
-                        >
-                          {paymentDateMode === 'SPECIFIC_DATE' && <Check className="h-2.5 w-2.5" />}
-                        </div>
-                        <div className="text-xs flex-1">
-                          <span className="font-extrabold text-slate-900 dark:text-white block">
-                            2. Usar Borderô e Pagar com uma Data Específica
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
+                            {borderoProgress.phase}
                           </span>
-                          <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
-                            Gera o Borderô pago (<code>PG</code>) e baixa todos os títulos selecionados com uma única data de pagamento escolhida abaixo.
-                          </span>
-
-                          {paymentDateMode === 'SPECIFIC_DATE' && (
-                            <div
-                              className="mt-2.5 flex items-center gap-2"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <label className="text-[11px] font-bold text-indigo-800 dark:text-indigo-300">
-                                Data do Pagamento:
-                              </label>
-                              <input
-                                type="date"
-                                value={specificPaymentDate}
-                                onChange={(e) => setSpecificPaymentDate(e.target.value)}
-                                className="rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-1 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                              />
-                            </div>
+                          {borderoProgress.bordero_number && (
+                            <span className="rounded-md bg-emerald-600 text-white px-2 py-0.5 text-[11px] font-mono font-black">
+                              BORDERÔ #{borderoProgress.bordero_number}
+                            </span>
                           )}
                         </div>
+                        <p className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
+                          {borderoProgress.message}
+                        </p>
                       </div>
                     </div>
+                    <div className="text-right font-mono shrink-0">
+                      <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400">
+                        {borderoProgress.percent}%
+                      </span>
+                      <span className="block text-[11px] text-slate-500">
+                        Tempo: {borderoProgress.elapsed_seconds.toFixed(1)}s
+                      </span>
+                    </div>
+                  </div>
 
-                    {/* Opção 3: Apenas Gerar Borderô em Aberto */}
-                    <button
-                      type="button"
-                      onClick={() => setPaymentDateMode('BORDERO_OPEN')}
-                      className={`w-full text-left rounded-xl border p-3 transition-all flex items-start gap-2.5 cursor-pointer ${
-                        paymentDateMode === 'BORDERO_OPEN'
-                          ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-600 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
-                          : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                      }`}
-                    >
+                  {/* Barra de Progresso */}
+                  <div className="space-y-1.5">
+                    <div className="h-3 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden border border-slate-200/70 dark:border-slate-700">
                       <div
-                        className={`mt-0.5 h-4 w-4 rounded-full border flex items-center justify-center shrink-0 ${
-                          paymentDateMode === 'BORDERO_OPEN'
-                            ? 'border-indigo-600 bg-indigo-600 text-white'
-                            : 'border-slate-400'
-                        }`}
-                      >
-                        {paymentDateMode === 'BORDERO_OPEN' && <Check className="h-2.5 w-2.5" />}
-                      </div>
-                      <div className="text-xs">
-                        <span className="font-extrabold text-slate-900 dark:text-white block">
-                          3. Apenas Gerar Borderô em Aberto (Baixar manualmente no Horus)
-                        </span>
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                          Cria o Borderô com status <code>AP</code> e vincula os títulos mantendo-os em aberto (<code>AB</code>) para liquidação manual no Horus.
-                        </span>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-
-                {/* ─── OPÇÃO SIM / NÃO: UNIFICAR PARCELAS DA NOTA + GRAVAR TAXA (VLR_LANCTO_ABATIMENTO) ─── */}
-                <div className="rounded-xl border border-violet-200 dark:border-violet-900/60 bg-violet-50/40 dark:bg-violet-950/20 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="text-xs">
-                    <span className="font-extrabold text-slate-900 dark:text-white block">
-                      Unificar Parcelas em Lançamento Único + Gravar Taxa ({activeProfile.channel_label})
-                    </span>
-                    <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
-                      Consolida múltiplas parcelas da mesma nota no 1º lançamento e grava a taxa em <code>VLR_LANCTO_ABATIMENTO</code> para o Fechamento Bancário bater com o valor líquido recebido.
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setUnifyInstallments(true)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
-                        unifyInstallments
-                          ? 'bg-emerald-600 text-white shadow-2xs'
-                          : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
-                      }`}
-                    >
-                      SIM
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setUnifyInstallments(false)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
-                        !unifyInstallments
-                          ? 'bg-slate-800 text-white dark:bg-slate-700 shadow-2xs'
-                          : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
-                      }`}
-                    >
-                      NÃO
-                    </button>
-                  </div>
-                </div>
-
-                {/* ─── OPÇÃO SIM / NÃO + FORMA DE PAGTO P/ CRÉDITO MAIOR (QUANDO NOTA/VENDA < TÍTULO HORUS) ─── */}
-                <div className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/20 p-3.5 space-y-2.5">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="text-xs">
-                      <span className="font-extrabold text-slate-900 dark:text-white block">
-                        Ajustar Venda Menor e Separar Crédito Maior em Novo Lançamento
-                      </span>
-                      <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
-                        Quando a venda/nota for menor que o título do Horus, ajusta o lançamento principal e cria um lançamento separado (em aberto <code>AB</code>) com a diferença na Forma de Pagamento de Crédito Maior.
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => setSplitExcessLaunch(true)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
-                          splitExcessLaunch
-                            ? 'bg-emerald-600 text-white shadow-2xs'
-                            : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
-                        }`}
-                      >
-                        SIM
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSplitExcessLaunch(false)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
-                          !splitExcessLaunch
-                            ? 'bg-slate-800 text-white dark:bg-slate-700 shadow-2xs'
-                            : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
-                        }`}
-                      >
-                        NÃO
-                      </button>
-                    </div>
-                  </div>
-                  {splitExcessLaunch && (
-                    <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-amber-200/70 dark:border-amber-800/50">
-                      <label className="text-[11px] font-bold text-amber-900 dark:text-amber-300">
-                        Forma de Pagto p/ Crédito Maior (COD_FORMA no Horus):
-                      </label>
-                      <input
-                        type="text"
-                        value={formaPagtoCreditoMaior}
-                        onChange={(e) => setFormaPagtoCreditoMaior(e.target.value)}
-                        placeholder="Ex: 135 (CREDITO SHOPEE)"
-                        className="w-40 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 px-2.5 py-1 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        className="h-full bg-gradient-to-r from-indigo-600 via-violet-600 to-emerald-500 transition-all duration-300"
+                        style={{ width: `${Math.max(5, Math.min(100, borderoProgress.percent))}%` }}
                       />
                     </div>
-                  )}
-                </div>
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-500">
+                      <span>
+                        Títulos processados: <b>{borderoProgress.processed_orders}</b> /{' '}
+                        <b>{borderoProgress.total_orders}</b>
+                      </span>
+                      <span>
+                        Lote SQL: <b>{borderoProgress.current_batch}</b> /{' '}
+                        <b>{borderoProgress.total_batches}</b>
+                      </span>
+                    </div>
+                  </div>
 
-                <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  {/* Etapas de Segurança da Transação SQL */}
+                  <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5 text-xs">
+                    {[
+                      {
+                        key: 'VALIDANDO_SEGURANCA',
+                        title: '1. Trava & Segurança',
+                        desc: 'Valida títulos em aberto (AB)',
+                        minPct: 5,
+                      },
+                      {
+                        key: 'UNIFICANDO_PARCELAS',
+                        title: '2. Unificação & Taxas',
+                        desc: 'Consolida parcelas e abatimentos',
+                        minPct: 18,
+                      },
+                      {
+                        key: 'CRIANDO_BORDERO',
+                        title: '3. Cabeçalho Borderô',
+                        desc: 'Reserva COD_BORDERO no Horus',
+                        minPct: 35,
+                      },
+                      {
+                        key: 'BAIXANDO_TITULOS',
+                        title: '4. Baixa em Lote SQL',
+                        desc: 'Grava borderô nos lançamentos',
+                        minPct: 45,
+                      },
+                      {
+                        key: 'AUDITORIA_FINAL',
+                        title: '5. Auditoria & Salvar',
+                        desc: 'Confere no Horus e salva histórico',
+                        minPct: 90,
+                      },
+                    ].map((step) => {
+                      const isDone = borderoProgress.percent > step.minPct + 12 || borderoProgress.percent === 100;
+                      const isCurrent = borderoProgress.phase === step.key;
+                      return (
+                        <div
+                          key={step.key}
+                          className={`rounded-xl border p-3 transition-all ${
+                            isCurrent
+                              ? 'border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/40 ring-1 ring-indigo-500'
+                              : isDone
+                              ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/50 dark:bg-emerald-950/20'
+                              : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 opacity-60'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-extrabold text-slate-900 dark:text-white text-[11px]">
+                              {step.title}
+                            </span>
+                            {isDone ? (
+                              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                            ) : isCurrent ? (
+                              <Loader2 className="h-4 w-4 text-indigo-600 animate-spin shrink-0" />
+                            ) : (
+                              <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-snug">
+                            {step.desc}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Resumo Financeiro Auditado durante a geração */}
+                  <div className="rounded-xl bg-slate-50 dark:bg-slate-800/60 p-3.5 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+                      <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0" />
+                      <span>
+                        Proteção Transacional Ativa: em caso de qualquer falha de rede ou SQL, nenhum título fica baixado pela metade (Rollback 100%).
+                      </span>
+                    </div>
+                    <div className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-sm">
+                      Valor do Borderô: R$ {formatBRL(totalSelectedAmount)}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
+                  {/* Barra Superior de Totais (Compacta e Completa) */}
+                  <div className="rounded-xl bg-slate-50 dark:bg-slate-800/60 px-4 py-3 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
+                        Títulos Selecionados para o Borderô
+                      </p>
+                      <div className="flex flex-wrap items-baseline gap-2 mt-0.5">
+                        <span className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white">
+                          {selectedReleases.length} lançamentos em aberto
+                        </span>
+                        <span className="text-[11px] font-mono text-slate-500">
+                          (Bruto: R$ {formatBRL(totalSelectedBrutoAmount)} • Taxas/Saídas: -R${' '}
+                          {formatBRL(totalSelectedTaxaAmount)})
+                        </span>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
+                        Valor Líquido a Baixar no Borderô
+                      </p>
+                      <p className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
+                        R$ {formatBRL(totalSelectedAmount)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Grade Principal em 2 Colunas (Cabe 100% na tela sem cortar) */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+                    {/* COLUNA ESQUERDA (5 cols): Parâmetros Bancários + Opções de Unificação e Crédito Maior */}
+                    <div className="lg:col-span-5 space-y-3">
+                      {bankConfig && (
+                        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 space-y-2 bg-white dark:bg-slate-900">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                              Parâmetros Bancários (Horus)
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowBorderoModal(false);
+                                openBankConfigModal(activeProfile);
+                              }}
+                              className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <Settings className="h-3 w-3" /> Editar Códigos
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+                            <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 bg-slate-50/50 dark:bg-slate-800/40">
+                              <span className="text-slate-400 block text-[10px]">Emp / Filial</span>
+                              <b className="text-slate-800 dark:text-slate-200 font-mono">
+                                {bankConfig.cod_empresa} / {selectedFilial || bankConfig.cod_filial}
+                              </b>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 bg-slate-50/50 dark:bg-slate-800/40">
+                              <span className="text-slate-400 block text-[10px]">COD_FORMA</span>
+                              <b className="text-slate-800 dark:text-slate-200 font-mono">
+                                {bankConfig.forma_pagto || 'NÃO DEF.'}
+                              </b>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 bg-slate-50/50 dark:bg-slate-800/40">
+                              <span className="text-slate-400 block text-[10px]">COD_BANCO</span>
+                              <b className="text-slate-800 dark:text-slate-200 font-mono">
+                                {bankConfig.banco || 'NÃO DEF.'}
+                              </b>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 bg-slate-50/50 dark:bg-slate-800/40">
+                              <span className="text-slate-400 block text-[10px]">COD_AGENCIA</span>
+                              <b className="text-slate-800 dark:text-slate-200 font-mono">
+                                {bankConfig.agencia || 'NÃO DEF.'}
+                              </b>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 bg-slate-50/50 dark:bg-slate-800/40">
+                              <span className="text-slate-400 block text-[10px]">COD_CONTAC</span>
+                              <b className="text-slate-800 dark:text-slate-200 font-mono">
+                                {bankConfig.conta || 'NÃO DEF.'}
+                              </b>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 bg-slate-50/50 dark:bg-slate-800/40">
+                              <span className="text-slate-400 block text-[10px]">CARTEIRA</span>
+                              <b className="text-slate-800 dark:text-slate-200 font-mono">
+                                {bankConfig.carteira || '—'}
+                              </b>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Unificar Parcelas + Gravar Taxa */}
+                      <div className="rounded-xl border border-violet-200 dark:border-violet-900/60 bg-violet-50/40 dark:bg-violet-950/20 p-3 flex items-center justify-between gap-2.5">
+                        <div className="text-xs">
+                          <span className="font-extrabold text-slate-900 dark:text-white block text-[11px]">
+                            Unificar Parcelas + Gravar Taxa ({activeProfile.channel_label})
+                          </span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5 leading-snug">
+                            Consolida parcelas no 1º lançamento e grava a taxa/saídas em{' '}
+                            <code>VLR_LANCTO_ABATIMENTO</code>.
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setUnifyInstallments(true)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                              unifyInstallments
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                            }`}
+                          >
+                            SIM
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setUnifyInstallments(false)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                              !unifyInstallments
+                                ? 'bg-slate-800 text-white dark:bg-slate-700 shadow-2xs'
+                                : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                            }`}
+                          >
+                            NÃO
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Ajustar Venda Menor e Separar Crédito Maior */}
+                      <div className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/20 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2.5">
+                          <div className="text-xs">
+                            <span className="font-extrabold text-slate-900 dark:text-white block text-[11px]">
+                              Ajustar Venda Menor e Separar Crédito Maior
+                            </span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5 leading-snug">
+                              Cria lançamento separado (<code>AB</code>) com a diferença quando a venda for menor que o Horus.
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setSplitExcessLaunch(true)}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                                splitExcessLaunch
+                                  ? 'bg-emerald-600 text-white shadow-2xs'
+                                  : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              SIM
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSplitExcessLaunch(false)}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                                !splitExcessLaunch
+                                  ? 'bg-slate-800 text-white dark:bg-slate-700 shadow-2xs'
+                                  : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              NÃO
+                            </button>
+                          </div>
+                        </div>
+                        {splitExcessLaunch && (
+                          <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-amber-200/70 dark:border-amber-800/50">
+                            <label className="text-[10px] font-bold text-amber-900 dark:text-amber-300">
+                              COD_FORMA Crédito Maior:
+                            </label>
+                            <input
+                              type="text"
+                              value={formaPagtoCreditoMaior}
+                              onChange={(e) => setFormaPagtoCreditoMaior(e.target.value)}
+                              placeholder="Ex: 135"
+                              className="w-28 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 px-2 py-1 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* COLUNA DIREITA (7 cols): Regra de Data de Pagamento & Baixa no Horus ERP */}
+                    <div className="lg:col-span-7 space-y-2">
+                      <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">
+                        Regra de Data de Pagamento & Baixa no Horus ERP
+                      </label>
+
+                      <div className="space-y-2">
+                        {/* Opção 1: Data da Planilha (Shopee / Vindi / TikTok) */}
+                        <button
+                          type="button"
+                          onClick={() => setPaymentDateMode('CHANNEL_DATE')}
+                          className={`w-full text-left rounded-xl border p-3 transition-all flex items-start gap-2.5 cursor-pointer ${
+                            paymentDateMode === 'CHANNEL_DATE'
+                              ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-600 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                              : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <div
+                            className={`mt-0.5 h-4 w-4 rounded-full border flex items-center justify-center shrink-0 ${
+                              paymentDateMode === 'CHANNEL_DATE'
+                                ? 'border-indigo-600 bg-indigo-600 text-white'
+                                : 'border-slate-400'
+                            }`}
+                          >
+                            {paymentDateMode === 'CHANNEL_DATE' && <Check className="h-2.5 w-2.5" />}
+                          </div>
+                          <div className="text-xs">
+                            <span className="font-extrabold text-slate-900 dark:text-white block">
+                              1. Usar Data de Pagamento da Planilha ({activeProfile.channel_label})
+                            </span>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug block mt-0.5">
+                              Gera o Borderô pago (<code>PG</code>) e grava em cada lançamento do Horus (<code>DAT_PAGTO_CRECEBER</code>) a data exata em que o valor caiu na {activeProfile.channel_label}.
+                            </span>
+                          </div>
+                        </button>
+
+                        {/* Opção 2: Usar Borderô e Pagar com Data Específica */}
+                        <div
+                          onClick={() => setPaymentDateMode('SPECIFIC_DATE')}
+                          className={`w-full text-left rounded-xl border p-3 transition-all cursor-pointer ${
+                            paymentDateMode === 'SPECIFIC_DATE'
+                              ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-600 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                              : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2.5">
+                            <div
+                              className={`mt-0.5 h-4 w-4 rounded-full border flex items-center justify-center shrink-0 ${
+                                paymentDateMode === 'SPECIFIC_DATE'
+                                  ? 'border-indigo-600 bg-indigo-600 text-white'
+                                  : 'border-slate-400'
+                              }`}
+                            >
+                              {paymentDateMode === 'SPECIFIC_DATE' && <Check className="h-2.5 w-2.5" />}
+                            </div>
+                            <div className="text-xs flex-1">
+                              <span className="font-extrabold text-slate-900 dark:text-white block">
+                                2. Usar Borderô e Pagar com uma Data Específica
+                              </span>
+                              <span className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug block mt-0.5">
+                                Gera o Borderô pago (<code>PG</code>) e baixa todos os títulos selecionados com uma única data de pagamento escolhida abaixo.
+                              </span>
+
+                              {paymentDateMode === 'SPECIFIC_DATE' && (
+                                <div
+                                  className="mt-2 flex items-center gap-2"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <label className="text-[11px] font-bold text-indigo-800 dark:text-indigo-300">
+                                    Data do Pagamento:
+                                  </label>
+                                  <input
+                                    type="date"
+                                    value={specificPaymentDate}
+                                    onChange={(e) => setSpecificPaymentDate(e.target.value)}
+                                    className="rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-2.5 py-1 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Opção 3: Apenas Gerar Borderô em Aberto */}
+                        <button
+                          type="button"
+                          onClick={() => setPaymentDateMode('BORDERO_OPEN')}
+                          className={`w-full text-left rounded-xl border p-3 transition-all flex items-start gap-2.5 cursor-pointer ${
+                            paymentDateMode === 'BORDERO_OPEN'
+                              ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-600 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                              : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <div
+                            className={`mt-0.5 h-4 w-4 rounded-full border flex items-center justify-center shrink-0 ${
+                              paymentDateMode === 'BORDERO_OPEN'
+                                ? 'border-indigo-600 bg-indigo-600 text-white'
+                                : 'border-slate-400'
+                            }`}
+                          >
+                            {paymentDateMode === 'BORDERO_OPEN' && <Check className="h-2.5 w-2.5" />}
+                          </div>
+                          <div className="text-xs">
+                            <span className="font-extrabold text-slate-900 dark:text-white block">
+                              3. Apenas Gerar Borderô em Aberto (Baixar manualmente no Horus)
+                            </span>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug block mt-0.5">
+                              Cria o Borderô com status <code>AP</code> e vincula os títulos mantendo-os em aberto (<code>AB</code>) para liquidação manual no Horus.
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Rodapé Fixo Sempre Visível */}
+              <div className="px-5 py-3 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                  <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>
+                    Segurança Horus: Verifica status <code>AB</code> antes de gravar e salva cópia do fechamento no Cronuz.
+                  </span>
+                </div>
+                <div className="flex items-center gap-2.5">
                   <button
                     type="button"
                     onClick={() => setShowBorderoModal(false)}
                     disabled={creatingBordero}
-                    className="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                    className="rounded-xl px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 dark:hover:bg-slate-700 disabled:opacity-40 cursor-pointer"
                   >
                     Cancelar
                   </button>
@@ -2759,17 +3000,17 @@ export default function FinanceiroVindiPage() {
                     type="button"
                     onClick={handleConfirmBordero}
                     disabled={creatingBordero || Boolean(bankConfig && !bankConfig.is_configured)}
-                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-5 py-2.5 text-xs font-bold text-white shadow-md cursor-pointer"
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-5 py-2 text-xs font-bold text-white shadow-md cursor-pointer"
                   >
                     {creatingBordero ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        Gravando no SQL Server...
+                        Gerando Borderô ({borderoProgress?.percent ?? 0}%)...
                       </>
                     ) : (
                       <>
                         <CheckCircle2 className="h-4 w-4" />
-                        Confirmar e Gerar Borderô
+                        Confirmar e Gerar Borderô (R$ {formatBRL(totalSelectedAmount)})
                       </>
                     )}
                   </button>

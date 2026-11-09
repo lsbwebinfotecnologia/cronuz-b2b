@@ -356,6 +356,7 @@ def parse_channel_file(
         errors.append(f"Coluna do Nº do Pedido não identificada explicitamente em '{filename}'. Usando a 1ª coluna.")
 
     records: List[Dict[str, Any]] = []
+    debit_rows: List[Dict[str, Any]] = []
     skipped_withdrawals = 0
     skipped_refunds = 0
 
@@ -372,6 +373,7 @@ def parse_channel_file(
         desc_str = get_cell(col_map["descricao"]) if col_map["descricao"] >= 0 else ""
         tipo_tx = get_cell(col_map["tipo_transacao"]) if col_map["tipo_transacao"] >= 0 else ""
         direcao = get_cell(col_map["direcao_dinheiro"]) if col_map["direcao_dinheiro"] >= 0 else ""
+        origem_str = get_cell(col_map["origem"]) if col_map["origem"] >= 0 else ""
 
         # Se for Shopee e ID do pedido vier vazio, tenta extrair de `Descrição` (ex: "Renda do pedido #261015P4DJU18X")
         if not raw_ped and desc_str and "#" in desc_str:
@@ -380,12 +382,6 @@ def parse_channel_file(
                 raw_ped = m_shp.group(1)
 
         ped_clean = _normalize_order_key(raw_ped)
-
-        # Ignora linhas sem pedido que são Saques / Transferências / Liquidações UR (ex: Vindi Pagamentos / Saque Shopee)
-        if not ped_clean or ped_clean in ("TOTAL", "SUBTOTAL", "RESUMO", "-", "NONE"):
-            if desc_str or tipo_tx:
-                skipped_withdrawals += 1
-            continue
 
         v_bruto = _parse_currency(get_cell(col_map["valor_bruto"])) if col_map["valor_bruto"] >= 0 else 0.0
         v_liq = _parse_currency(get_cell(col_map["valor_liquido"])) if col_map["valor_liquido"] >= 0 else 0.0
@@ -408,8 +404,53 @@ def parse_channel_file(
                 v_taxa = round(final_bruto - final_liq, 2)
             bruto_from_channel = v_bruto > 0
 
-        # Ignora linhas de estorno/débito negativo (ex: "Débito referente a cobrança de estorno" na Vindi ou Saída na Shopee)
-        if final_bruto < 0 or final_liq < 0 or "estorno" in desc_str.lower() or direcao.lower() in ("saída", "saida"):
+        is_no_order_id = not ped_clean or ped_clean in ("TOTAL", "SUBTOTAL", "RESUMO", "-", "NONE")
+        is_withdrawal_row = (
+            "saque" in tipo_tx.lower()
+            or "saque" in desc_str.lower()
+            or "withdrawal" in tipo_tx.lower()
+            or "transferencia" in tipo_tx.lower()
+            or "transferência" in tipo_tx.lower()
+            or "vindi pagamentos" in origem_str.lower()
+        )
+        is_debit_or_salida = (
+            final_bruto < 0
+            or final_liq < 0
+            or v_gen < 0
+            or "estorno" in desc_str.lower()
+            or direcao.lower() in ("saída", "saida")
+        )
+
+        # Ignora linhas sem pedido que são Saques / Transferências / Resumos
+        if is_no_order_id:
+            if is_debit_or_salida and not is_withdrawal_row and (final_liq != 0.0 or v_gen != 0.0):
+                # Ex: Penalização / Multa operacional na planilha da Shopee com ID do pedido = '-'
+                debit_val = round(abs(final_liq if final_liq != 0.0 else v_gen), 2)
+                debit_rows.append({
+                    "linha": offset,
+                    "pedido_canal": "",
+                    "tipo_transacao": tipo_tx or "Ajuste",
+                    "descricao": desc_str,
+                    "valor_debito": debit_val,
+                    "data_pagamento": get_cell(col_map["data_pagamento"]) or "-",
+                })
+                skipped_refunds += 1
+            elif desc_str or tipo_tx:
+                skipped_withdrawals += 1
+            continue
+
+        # Registra linhas de Saída / Débito / Reembolso / DIFAL com pedido na planilha para abater no fechamento líquido
+        if is_debit_or_salida:
+            if not is_withdrawal_row and (final_liq != 0.0 or v_gen != 0.0):
+                debit_val = round(abs(final_liq if final_liq != 0.0 else v_gen), 2)
+                debit_rows.append({
+                    "linha": offset,
+                    "pedido_canal": ped_clean,
+                    "tipo_transacao": tipo_tx or "Saída",
+                    "descricao": desc_str,
+                    "valor_debito": debit_val,
+                    "data_pagamento": get_cell(col_map["data_pagamento"]) or "-",
+                })
             skipped_refunds += 1
             continue
 
@@ -431,7 +472,8 @@ def parse_channel_file(
             status_val = "Recebido" if is_vindi_recebiveis else "Pago"
 
         records.append({
-            "linha": offset,
+            "linha": len(records) + 1,
+            "linha_planilha": offset,
             "pedido_canal": ped_clean,
             "pedido_web": ped_clean,
             "id_transacao": id_tx,
@@ -443,6 +485,8 @@ def parse_channel_file(
             "valor": round(final_bruto, 2),
             "valor_bruto": round(final_bruto, 2),
             "valor_liquido": round(final_liq, 2),
+            "valor_liquido_entrada_original": round(final_liq, 2),
+            "debito_canal_abatido": 0.0,
             "taxa": round(v_taxa, 2),
             "bruto_from_channel": bruto_from_channel,
             "data_pagamento": get_cell(col_map["data_pagamento"]) or "-",
@@ -453,6 +497,53 @@ def parse_channel_file(
 
     if not records:
         errors.append(f"Nenhum pedido de recebimento válido extraído do arquivo '{filename}'.")
+        return records, errors
+
+    # Consolida as linhas de Saída / Débito da planilha para que o líquido final bata 100% com a Soma do Excel (ex: R$ 45.485,04 na Shopee)
+    entradas_liquido_total = round(sum(float(r.get("valor_liquido") or 0.0) for r in records), 2)
+    saidas_total = round(sum(float(d.get("valor_debito") or 0.0) for d in debit_rows), 2)
+    assigned_debits_total = 0.0
+    unassigned_debits_total = 0.0
+
+    if debit_rows:
+        rec_by_ped: Dict[str, Dict[str, Any]] = {}
+        for r in records:
+            pk = r.get("pedido_canal") or ""
+            if pk and pk not in rec_by_ped:
+                rec_by_ped[pk] = r
+
+        for deb in debit_rows:
+            pk = deb.get("pedido_canal") or ""
+            v_deb = round(float(deb.get("valor_debito") or 0.0), 2)
+            if v_deb <= 0:
+                continue
+            target_rec = rec_by_ped.get(pk) if pk else None
+            # Se o mesmo pedido está nas entradas da planilha e comporta o abatimento mantendo saldo líquido positivo >= R$ 1,00
+            if target_rec and float(target_rec.get("valor_liquido") or 0.0) - v_deb >= 1.00:
+                target_rec["valor_liquido"] = round(float(target_rec["valor_liquido"]) - v_deb, 2)
+                target_rec["debito_canal_abatido"] = round(float(target_rec.get("debito_canal_abatido") or 0.0) + v_deb, 2)
+                if not target_rec.get("bruto_from_channel", True):
+                    target_rec["valor"] = target_rec["valor_liquido"]
+                    target_rec["valor_bruto"] = target_rec["valor_liquido"]
+                else:
+                    target_rec["taxa"] = round(float(target_rec.get("taxa") or 0.0) + v_deb, 2)
+                assigned_debits_total = round(assigned_debits_total + v_deb, 2)
+                deb["assigned_to_order"] = pk
+            else:
+                unassigned_debits_total = round(unassigned_debits_total + v_deb, 2)
+                deb["assigned_to_order"] = None
+
+    records[0]["_channel_statement_meta"] = {
+        "raw_rows_count": len(records) + len(debit_rows),
+        "entradas_count": len(records),
+        "entradas_liquido_total": entradas_liquido_total,
+        "saidas_count": len(debit_rows),
+        "saidas_total": saidas_total,
+        "assigned_debits_total": assigned_debits_total,
+        "unassigned_debits_total": unassigned_debits_total,
+        "net_statement_total": round(entradas_liquido_total - saidas_total, 2),
+        "debit_rows": debit_rows,
+    }
 
     return records, errors
 

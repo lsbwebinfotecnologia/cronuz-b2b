@@ -1068,6 +1068,7 @@ def _run_reconciliation_core(
 
             base_item = {
                 "linha": v_row["linha"],
+                "linha_planilha": v_row.get("linha_planilha", v_row["linha"]),
                 "pedido_canal": ped_canal,
                 "pedido_tray": ped_tray,
                 "vinculo_tray_ok": vinculo_tray_ok,
@@ -1082,6 +1083,7 @@ def _run_reconciliation_core(
                 "valor_vindi": v_valor,
                 "valor_bruto": v_valor,
                 "valor_liquido": v_valor_liq,
+                "debito_canal_abatido": round(float(v_row.get("debito_canal_abatido") or 0.0), 2),
                 "taxa": round(diff_taxa_abs, 2),
                 "valor_horus": h_valor,
                 "valor_horus_original": h_valor_original,
@@ -1130,13 +1132,47 @@ def _run_reconciliation_core(
                     if has_credito_maior_split and valor_credito_maior > 0
                     else ""
                 )
+                deb_tag = (
+                    f" • Débito Planilha abatido: -R$ {base_item['debito_canal_abatido']:.2f}"
+                    if base_item["debito_canal_abatido"] > 0
+                    else ""
+                )
                 if is_dual_file and ped_tray != "-":
-                    base_item["motivo"] = f"Vínculo OK: Canal #{ped_canal} ➔ Tray #{ped_tray} ➔ Horus #{h_ped_venda}{unif_tag}{split_tag}"
-                elif unificadas_qtd > 1 or split_tag:
-                    base_item["motivo"] = f"Vínculo OK: Horus #{h_ped_venda}{unif_tag}{split_tag}"
+                    base_item["motivo"] = f"Vínculo OK: Canal #{ped_canal} ➔ Tray #{ped_tray} ➔ Horus #{h_ped_venda}{unif_tag}{split_tag}{deb_tag}"
+                elif unificadas_qtd > 1 or split_tag or deb_tag:
+                    base_item["motivo"] = f"Vínculo OK: Horus #{h_ped_venda}{unif_tag}{split_tag}{deb_tag}"
                 items_ready.append(base_item)
                 if should_select:
                     total_ready_amount += h_valor
+
+        # 7.9. Rateio/Absorção de Saídas / Multas / Reembolsos sem pedido positivo na planilha (ex: 12 Saídas de -R$ 476,20 na Shopee)
+        # Garante que `SUM(valor_liquido)` dos títulos em aberto bata centavo a centavo com a `Soma` da planilha no Excel (ex: R$ 45.485,04).
+        stmt_meta = (vindi_rows[0].get("_channel_statement_meta") if vindi_rows else None) or {}
+        unassigned_debits = round(float(stmt_meta.get("unassigned_debits_total") or 0.0), 2)
+        if eff_unify_installments and unassigned_debits > 0.005:
+            open_candidates = [
+                it for it in (items_ready + items_divergence)
+                if it.get("situacao_horus") == "ABERTO" and float(it.get("valor_liquido") or 0.0) >= 20.0
+            ]
+            open_candidates.sort(key=lambda x: float(x.get("valor_liquido") or 0.0), reverse=True)
+            rem_debit = unassigned_debits
+            for cand in open_candidates:
+                if rem_debit <= 0.001:
+                    break
+                cur_liq = round(float(cand.get("valor_liquido") or 0.0), 2)
+                max_absorb = round(min(10.00, max(0.0, cur_liq - 12.00)), 2)
+                if max_absorb <= 0:
+                    continue
+                absorb = round(min(rem_debit, max_absorb), 2)
+                if absorb <= 0:
+                    continue
+                cand["valor_liquido"] = round(cur_liq - absorb, 2)
+                cand["taxa"] = round(float(cand.get("taxa") or 0.0) + absorb, 2)
+                cand["diff_taxa"] = -cand["taxa"]
+                cand["diff_taxa_abs"] = cand["taxa"]
+                cand["debito_canal_abatido"] = round(float(cand.get("debito_canal_abatido") or 0.0) + absorb, 2)
+                cand["motivo"] = f"{cand.get('motivo') or ''} • Retenção/Saída Planilha: -R$ {absorb:.2f}".strip(" •")
+                rem_debit = round(rem_debit - absorb, 2)
 
         # 8. Estatísticas consolidadas + Selo de Segurança da Conciliação
         abertos_qtd = sum(1 for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
@@ -1152,7 +1188,17 @@ def _run_reconciliation_core(
         total_diff_divergencias = sum(float(it.get("diferenca_valor") or 0.0) for it in items_divergence)
         all_conciliated = items_ready + items_divergence
         total_taxa_vindi = sum(abs(float(it.get("diff_taxa") or 0.0)) for it in all_conciliated)
-        total_planilha_liq = sum(float(it.get("valor_liquido") or 0.0) for it in vindi_rows)
+        total_planilha_entradas_liq = round(
+            float(stmt_meta.get("entradas_liquido_total") or sum(float(it.get("valor_liquido") or 0.0) for it in vindi_rows)),
+            2,
+        )
+        total_planilha_saidas_qtd = int(stmt_meta.get("saidas_count") or 0)
+        total_planilha_saidas_valor = round(float(stmt_meta.get("saidas_total") or 0.0), 2)
+        total_planilha_linhas = int(stmt_meta.get("raw_rows_count") or len(vindi_rows))
+        total_planilha_liq = round(
+            float(stmt_meta.get("net_statement_total") or (total_planilha_entradas_liq - total_planilha_saidas_valor)),
+            2,
+        )
         elapsed_total = round(time.time() - t0, 2)
 
         summary = {
@@ -1165,8 +1211,12 @@ def _run_reconciliation_core(
             "credito_maior_total": round(credito_maior_total, 2),
             "unificadas_orders_count": unificadas_orders_count,
             "unificadas_parcelas_count": unificadas_parcelas_count,
+            "total_planilha_linhas": total_planilha_linhas,
             "total_planilha_qtd": len(vindi_rows),
             "total_planilha_valor": round(total_vindi_amount, 2),
+            "total_planilha_entradas_liq": total_planilha_entradas_liq,
+            "total_planilha_saidas_qtd": total_planilha_saidas_qtd,
+            "total_planilha_saidas_valor": total_planilha_saidas_valor,
             "total_planilha_liq": round(total_planilha_liq, 2),
             "tray_total_rows": len(tray_map.get("rows") or []),
             "tray_linked_qtd": linked_tray_count,
@@ -1382,6 +1432,7 @@ async def preview_vindi_reconciliation(
 async def create_vindi_bordero(
     company_id: int,
     payload: CreateBorderoPayload,
+    async_job: Optional[bool] = False,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -1488,7 +1539,15 @@ async def create_vindi_bordero(
     carteira_val = str(bank_cfg.get("carteira") or "").strip()
 
     # 4. Executa a geração do borderô, unificação segura de parcelas e baixa de datas/taxas no SQL Server
-    def _execute_bordero_transaction():
+    def _execute_bordero_transaction(b_job_id: Optional[str] = None):
+        _update_job_progress(
+            b_job_id,
+            phase="VALIDANDO_SEGURANCA",
+            percent=8,
+            processed_orders=0,
+            total_orders=len(releases_validos),
+            message=f"Conectando ao Horus ERP e validando integridade dos {len(releases_validos)} títulos selecionados...",
+        )
         conn = sql_client._get_connection()
         today_str = datetime.now().strftime("%d-%m-%y")
         prof_tag = (payload.profile_code or "vindi").lower().replace("tray_", "")[:4]
@@ -1500,12 +1559,58 @@ async def create_vindi_bordero(
         new_credito_lancto_map: Dict[int, int] = {}
 
         with conn.cursor() as cur:
+            # 4.0.0. Trava de Segurança: Confere se os lançamentos principais continuam em aberto ('AB') antes de criar o Borderô
+            sample_check_ids = lancto_ids[:200]
+            if sample_check_ids:
+                ph_chk = ", ".join(["%s"] * len(sample_check_ids))
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*) AS ab_cnt
+                    FROM LANCTOS_CRECEBER WITH (NOLOCK)
+                    WHERE COD_FILIAL = %s
+                      AND NRO_LANCTO_CRECEBER IN ({ph_chk})
+                      AND STA_LANCTO_CRECEBER = 'AB'
+                      AND (COD_BORDERO IS NULL OR COD_BORDERO = 0)
+                    """,
+                    tuple([cod_filial] + sample_check_ids),
+                )
+                chk_row = cur.fetchone()
+                ab_cnt = int(chk_row["ab_cnt"] if isinstance(chk_row, dict) else chk_row[0]) if chk_row else 0
+                if ab_cnt == 0:
+                    raise ValueError(
+                        "Os lançamentos selecionados já foram baixados ou vinculados a outro Borderô no Horus ERP. Atualize a conciliação antes de gerar um novo Borderô."
+                    )
+
+            _update_job_progress(
+                b_job_id,
+                phase="UNIFICANDO_PARCELAS",
+                percent=15,
+                processed_orders=0,
+                total_orders=len(releases_validos),
+                message="Iniciando consolidação de parcelas e ajustes de títulos no Horus...",
+            )
+
             # 4.0. Unificação Segura de Parcelas (se habilitada e se o lançamento possuir mais de 1 parcela aberta agrupada)
             if eff_unify:
-                for r_item in releases_validos:
+                multi_items = [
+                    r_it for r_it in releases_validos
+                    if len([int(x) for x in (r_it.grouped_lancto_ids or []) if x]) > 1
+                ]
+                total_multi = max(1, len(multi_items))
+                for m_idx, r_item in enumerate(multi_items, start=1):
                     g_ids = [int(x) for x in (r_item.grouped_lancto_ids or []) if x]
                     if len(g_ids) <= 1:
                         continue
+                    if m_idx == 1 or m_idx % 25 == 0 or m_idx == len(multi_items):
+                        pct_u = 15 + int((m_idx / total_multi) * 18)
+                        _update_job_progress(
+                            b_job_id,
+                            phase="UNIFICANDO_PARCELAS",
+                            percent=min(33, pct_u),
+                            processed_orders=m_idx,
+                            total_orders=len(multi_items),
+                            message=f"Unificando parcelas da mesma nota no Horus: {m_idx}/{len(multi_items)} notas consolidadas...",
+                        )
                     g_ids_sorted = sorted(list(set(g_ids)))
                     main_id = int(r_item.nro_lancamento)
                     if main_id not in g_ids_sorted:
@@ -1787,8 +1892,21 @@ async def create_vindi_bordero(
             )
 
             # 4.2. INSERT na tabela BORDERO e UPDATE nos Lançamentos conforme o modo de data de pagamento
-            batch_size = 250
+            batch_size = 50
+            total_title_batches = max(1, (len(releases_validos) + batch_size - 1) // batch_size)
             vlr_bordero_efetivo = total_liquido_bordero if eff_unify and total_liquido_bordero > 0 else total_bordero
+
+            _update_job_progress(
+                b_job_id,
+                phase="CRIANDO_BORDERO",
+                percent=38,
+                current_batch=0,
+                total_batches=total_title_batches,
+                processed_orders=0,
+                total_orders=len(releases_validos),
+                horus_found_count=id_bordero,
+                message=f"Criando cabeçalho do Borderô #{id_bordero} no Horus ERP (R$ {vlr_bordero_efetivo:.2f})...",
+            )
 
             if eff_mode == "BORDERO_OPEN":
                 # Modo 3: Apenas gera o Borderô em aberto ('AP') sem liquidar os lançamentos
@@ -1821,7 +1939,7 @@ async def create_vindi_bordero(
                 )
                 cur.execute(insert_sql, insert_params)
 
-                for r_item in releases_validos:
+                for t_idx, r_item in enumerate(releases_validos, start=1):
                     lid = int(r_item.nro_lancamento)
                     taxa_val = round(max(0.0, float(r_item.taxa or 0.0)), 2) if eff_unify else 0.0
                     if eff_unify:
@@ -1870,6 +1988,21 @@ async def create_vindi_bordero(
                             )
                         except Exception as ex_a:
                             logger.warning("[HorusBordero] Aviso ao atualizar LANCTOS_CRECEBERA: %s", ex_a)
+
+                    if t_idx == 1 or t_idx % batch_size == 0 or t_idx == len(releases_validos):
+                        cur_b = (t_idx + batch_size - 1) // batch_size
+                        pct_t = 42 + int((t_idx / max(1, len(releases_validos))) * 48)
+                        _update_job_progress(
+                            b_job_id,
+                            phase="BAIXANDO_TITULOS",
+                            percent=min(90, pct_t),
+                            current_batch=cur_b,
+                            total_batches=total_title_batches,
+                            processed_orders=t_idx,
+                            total_orders=len(releases_validos),
+                            horus_found_count=id_bordero,
+                            message=f"Vinculando títulos ao Borderô #{id_bordero}: {t_idx}/{len(releases_validos)} lançamentos (lote {cur_b}/{total_title_batches})...",
+                        )
 
             else:
                 # Modo 1 (CHANNEL_DATE) ou Modo 2 (SPECIFIC_DATE):
@@ -1920,7 +2053,7 @@ async def create_vindi_bordero(
                 cur.execute(insert_sql, insert_params)
 
                 # Atualiza cada lançamento em LANCTOS_CRECEBER e LANCTOS_CRECEBERA (acionando TRG_IMP_LANCTO_CRECEBER para BLANCTOS)
-                for r_item in releases_validos:
+                for t_idx, r_item in enumerate(releases_validos, start=1):
                     lid = int(r_item.nro_lancamento)
                     pay_dt = item_pay_dates.get(lid, bordero_pay_dt)
                     taxa_val = round(max(0.0, float(r_item.taxa or 0.0)), 2) if eff_unify else 0.0
@@ -2050,6 +2183,31 @@ async def create_vindi_bordero(
                         except Exception as ex_a:
                             logger.warning("[HorusBordero] Aviso ao atualizar LANCTOS_CRECEBERA (PG) #%s: %s", lid, ex_a)
 
+                    if t_idx == 1 or t_idx % batch_size == 0 or t_idx == len(releases_validos):
+                        cur_b = (t_idx + batch_size - 1) // batch_size
+                        pct_t = 42 + int((t_idx / max(1, len(releases_validos))) * 48)
+                        _update_job_progress(
+                            b_job_id,
+                            phase="BAIXANDO_TITULOS",
+                            percent=min(90, pct_t),
+                            current_batch=cur_b,
+                            total_batches=total_title_batches,
+                            processed_orders=t_idx,
+                            total_orders=len(releases_validos),
+                            horus_found_count=id_bordero,
+                            message=f"Baixando títulos no Borderô #{id_bordero}: {t_idx}/{len(releases_validos)} lançamentos liquidados (lote {cur_b}/{total_title_batches})...",
+                        )
+
+        _update_job_progress(
+            b_job_id,
+            phase="AUDITORIA_FINAL",
+            percent=94,
+            processed_orders=len(releases_validos),
+            total_orders=len(releases_validos),
+            horus_found_count=id_bordero,
+            message=f"Confirmando transação no SQL Server e auditando Borderô #{id_bordero}...",
+        )
+
         # Commit da transação no SQL Server
         conn.commit()
 
@@ -2093,143 +2251,215 @@ async def create_vindi_bordero(
             "completed_at": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
         }
 
+    all_profiles_Pre = get_company_reconciliation_profiles(settings)
+    prof_code_norm_pre = (payload.profile_code or "TRAY_SHOPEE").upper().strip()
+    prof_match_pre = next((p for p in all_profiles_Pre if p["code"] == prof_code_norm_pre), None)
+    prof_name_pre = (prof_match_pre or {}).get("name") or prof_code_norm_pre
+    user_id_pre = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+    user_name_pre = (
+        (current_user.get("name") or current_user.get("email"))
+        if isinstance(current_user, dict)
+        else (getattr(current_user, "name", None) or getattr(current_user, "email", None))
+    )
+
+    def _run_full_bordero_pipeline(b_job_id: Optional[str] = None) -> Dict[str, Any]:
+        try:
+            tx_res = _execute_bordero_transaction(b_job_id)
+            bordero_id = tx_res["id_bordero"]
+
+            _update_job_progress(
+                b_job_id,
+                phase="AUDITORIA_FINAL",
+                percent=98,
+                processed_orders=len(releases_validos),
+                total_orders=len(releases_validos),
+                horus_found_count=bordero_id,
+                message=f"Salvando histórico do Fechamento (Borderô #{bordero_id}) no banco do Cronuz...",
+            )
+
+            # 5. Salva o registro de Fechamento no banco de dados PostgreSQL do Cronuz B2B para futuras consultas/auditorias
+            closing_id = None
+            db_closing = SessionLocal()
+            try:
+                cred_map = tx_res.get("new_credito_lancto_map") or {}
+                snapshot_items = []
+                for r_it in releases_validos:
+                    lid_int = int(r_it.nro_lancamento)
+                    snapshot_items.append({
+                        "nro_lancamento": lid_int,
+                        "cod_filial": str(r_it.cod_filial or cod_filial),
+                        "cod_ped_venda": r_it.cod_ped_venda,
+                        "pedido_web": r_it.pedido_web,
+                        "pedido_canal": r_it.pedido_canal or r_it.pedido_web,
+                        "pedido_tray": r_it.pedido_tray,
+                        "nro_nota_fiscal": r_it.nro_nota_fiscal,
+                        "cliente_nome": r_it.cliente_nome,
+                        "valor_bruto": round(float(r_it.valor or 0.0), 2),
+                        "taxa": round(float(r_it.taxa or 0.0), 2),
+                        "valor_liquido": round(
+                            float(r_it.valor_liquido)
+                            if r_it.valor_liquido is not None and float(r_it.valor_liquido) > 0
+                            else max(0.0, float(r_it.valor or 0.0) - float(r_it.taxa or 0.0)),
+                            2,
+                        ),
+                        "valor_horus_original": round(float(r_it.valor_horus_original or r_it.valor or 0.0), 2),
+                        "valor_credito_maior": round(float(r_it.valor_credito_maior or 0.0), 2),
+                        "novo_lancamento_credito_maior": cred_map.get(lid_int),
+                        "unificadas_qtd": int(r_it.unificadas_qtd or len(r_it.grouped_lancto_ids or [1])),
+                        "grouped_lancto_ids": r_it.grouped_lancto_ids or [lid_int],
+                        "data_pagamento": r_it.data_pagamento,
+                    })
+
+                closing_rec = HorusReconciliationClosing(
+                    company_id=company_id,
+                    created_by_user_id=int(user_id_pre) if user_id_pre else None,
+                    created_by_name=str(user_name_pre or "")[:150] or None,
+                    profile_code=prof_code_norm_pre,
+                    profile_name=str(prof_name_pre)[:150],
+                    channel_filename=(payload.channel_filename or "")[:255] or None,
+                    tray_filename=(payload.tray_filename or "")[:255] or None,
+                    cod_empresa=int(cod_empresa) if str(cod_empresa).isdigit() else 1,
+                    cod_filial=int(cod_filial) if str(cod_filial).isdigit() else 1,
+                    cod_bordero=int(bordero_id),
+                    sta_bordero="AP" if eff_mode == "BORDERO_OPEN" else "PG",
+                    nom_arquivo_horus=tx_res.get("nom_arquivo"),
+                    payment_date_mode=eff_mode,
+                    specific_payment_date=payload.specific_payment_date,
+                    unify_installments=bool(eff_unify),
+                    split_excess_launch=bool(eff_split_excess),
+                    forma_pagto=str(cod_forma_val),
+                    forma_pagto_credito_maior=str(cod_forma_credito_val) if raw_forma_credito else None,
+                    banco=str(cod_banco_val),
+                    agencia=str(cod_agencia_val),
+                    conta=str(cod_contac_val),
+                    carteira=str(carteira_val or "") or None,
+                    total_titles=len(releases_validos),
+                    unificadas_parcelas_removidas=int(tx_res.get("unificadas_parcelas_removidas_tx") or 0),
+                    credito_maior_lancamentos_criados=int(tx_res.get("credito_maior_lancamentos_criados_tx") or 0),
+                    valor_bruto_total=round(total_bordero, 2),
+                    valor_taxa_total=round(total_taxa_bordero, 2),
+                    valor_liquido_bordero=round(total_liquido_bordero, 2),
+                    valor_credito_maior_total=round(float(tx_res.get("credito_maior_valor_total_tx") or 0.0), 2),
+                    items_json=snapshot_items,
+                    notes=(payload.notes or "")[:500] or None,
+                )
+                db_closing.add(closing_rec)
+                db_closing.commit()
+                db_closing.refresh(closing_rec)
+                closing_id = closing_rec.id
+            except Exception as ex_save_closing:
+                db_closing.rollback()
+                logger.warning("[HorusBordero] Aviso ao salvar historico de fechamento no PostgreSQL: %s", ex_save_closing)
+            finally:
+                db_closing.close()
+
+            mode_desc = {
+                "CHANNEL_DATE": "Baixado (PG) com a data de pagamento individual de cada lançamento da planilha",
+                "SPECIFIC_DATE": f"Baixado (PG) com data específica ({payload.specific_payment_date})",
+                "BORDERO_OPEN": "Borderô gerado em aberto (AP) para baixa manual no Horus",
+            }.get(eff_mode, "")
+
+            unif_desc = (
+                f" • {tx_res['unificadas_orders_tx']} nota(s) tiveram parcelas unificadas e taxa gravada em VLR_LANCTO_ABATIMENTO"
+                if tx_res.get("unificadas_orders_tx", 0) > 0
+                else ""
+            )
+            cred_desc = (
+                f" • {tx_res['credito_maior_lancamentos_criados_tx']} lançamento(s) separado(s) de Crédito Maior criado(s) (R$ {tx_res['credito_maior_valor_total_tx']:.2f} na Forma {cod_forma_credito_val})"
+                if tx_res.get("credito_maior_lancamentos_criados_tx", 0) > 0
+                else ""
+            )
+
+            final_res = {
+                "success": True,
+                "closing_id": closing_id,
+                "bordero_number": bordero_id,
+                "payment_date_mode": eff_mode,
+                "unify_installments": eff_unify,
+                "total_valor": total_liquido_bordero,
+                "total_bruto": total_bordero,
+                "total_liquido": total_liquido_bordero,
+                "total_taxa": total_taxa_bordero,
+                "itens_baixados": len(releases_validos),
+                "security_verification": {
+                    "verified_in_horus": True,
+                    "expected_count": len(releases_validos),
+                    "verified_count": tx_res["verified_count"],
+                    "verified_sum": tx_res["verified_sum"],
+                    "unificadas_orders_tx": tx_res["unificadas_orders_tx"],
+                    "unificadas_parcelas_removidas_tx": tx_res["unificadas_parcelas_removidas_tx"],
+                    "credito_maior_lancamentos_criados_tx": tx_res.get("credito_maior_lancamentos_criados_tx", 0),
+                    "credito_maior_valor_total_tx": tx_res.get("credito_maior_valor_total_tx", 0.0),
+                    "completed_at": tx_res["completed_at"],
+                },
+                "message": f"Borderô #{bordero_id} gravado com sucesso no Horus ERP e salvo no histórico do Cronuz! {mode_desc}{unif_desc}{cred_desc} ({tx_res['verified_count']} títulos confirmados • Valor Baixado no Borderô: R$ {total_liquido_bordero:.2f} • Bruto: R$ {total_bordero:.2f}).",
+            }
+
+            _update_job_progress(
+                b_job_id,
+                status="COMPLETED",
+                phase="CONCLUIDO",
+                percent=100,
+                processed_orders=len(releases_validos),
+                total_orders=len(releases_validos),
+                horus_found_count=bordero_id,
+                message=f"Borderô #{bordero_id} finalizado e auditado com 100% de segurança!",
+                result=final_res,
+            )
+            return final_res
+        except Exception as exc_b:
+            logger.error("[HorusBordero] Erro ao gravar bordero company=%s: %s", company_id, exc_b)
+            _update_job_progress(
+                b_job_id,
+                status="ERROR",
+                phase="ERRO",
+                message=str(exc_b),
+                error=str(exc_b),
+            )
+            raise
+
+    if async_job:
+        _cleanup_old_reconciliation_jobs()
+        b_job_id = f"brd_{uuid.uuid4().hex[:12]}"
+        total_b = max(1, (len(releases_validos) + 49) // 50)
+        initial_b_job = {
+            "job_id": b_job_id,
+            "company_id": company_id,
+            "profile_code": prof_code_norm_pre,
+            "status": "RUNNING",
+            "phase": "VALIDANDO_SEGURANCA",
+            "percent": 4,
+            "message": f"Iniciando protocolo de geração segura do Borderô ({len(releases_validos)} títulos)...",
+            "processed_orders": 0,
+            "total_orders": len(releases_validos),
+            "current_batch": 0,
+            "total_batches": total_b,
+            "horus_found_count": 0,
+            "started_at": time.time(),
+            "elapsed_seconds": 0.0,
+            "result": None,
+            "error": None,
+        }
+        _RECONCILIATION_JOBS[b_job_id] = initial_b_job
+        _save_job_to_disk(b_job_id, initial_b_job)
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, _run_full_bordero_pipeline, b_job_id)
+        return {
+            "success": True,
+            "async": True,
+            "async_job": True,
+            "job_id": b_job_id,
+            "status": "RUNNING",
+        }
+
     try:
         loop = asyncio.get_event_loop()
-        tx_res = await loop.run_in_executor(None, _execute_bordero_transaction)
-        bordero_id = tx_res["id_bordero"]
+        return await loop.run_in_executor(None, _run_full_bordero_pipeline, None)
     except Exception as e:
-        logger.error("[HorusBordero] Erro ao gravar bordero company=%s: %s", company_id, e)
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao gravar borderô no SQL Server do Horus: {str(e)}"
         )
-
-    # 5. Salva o registro de Fechamento no banco de dados PostgreSQL do Cronuz B2B para futuras consultas/auditorias
-    closing_id = None
-    try:
-        all_profiles = get_company_reconciliation_profiles(settings)
-        prof_code_norm = (payload.profile_code or "TRAY_SHOPEE").upper().strip()
-        prof_match = next((p for p in all_profiles if p["code"] == prof_code_norm), None)
-        prof_name = (prof_match or {}).get("name") or prof_code_norm
-
-        cred_map = tx_res.get("new_credito_lancto_map") or {}
-        snapshot_items = []
-        for r_it in releases_validos:
-            lid_int = int(r_it.nro_lancamento)
-            snapshot_items.append({
-                "nro_lancamento": lid_int,
-                "cod_filial": str(r_it.cod_filial or cod_filial),
-                "cod_ped_venda": r_it.cod_ped_venda,
-                "pedido_web": r_it.pedido_web,
-                "pedido_canal": r_it.pedido_canal or r_it.pedido_web,
-                "pedido_tray": r_it.pedido_tray,
-                "nro_nota_fiscal": r_it.nro_nota_fiscal,
-                "cliente_nome": r_it.cliente_nome,
-                "valor_bruto": round(float(r_it.valor or 0.0), 2),
-                "taxa": round(float(r_it.taxa or 0.0), 2),
-                "valor_liquido": round(
-                    float(r_it.valor_liquido)
-                    if r_it.valor_liquido is not None and float(r_it.valor_liquido) > 0
-                    else max(0.0, float(r_it.valor or 0.0) - float(r_it.taxa or 0.0)),
-                    2,
-                ),
-                "valor_horus_original": round(float(r_it.valor_horus_original or r_it.valor or 0.0), 2),
-                "valor_credito_maior": round(float(r_it.valor_credito_maior or 0.0), 2),
-                "novo_lancamento_credito_maior": cred_map.get(lid_int),
-                "unificadas_qtd": int(r_it.unificadas_qtd or len(r_it.grouped_lancto_ids or [1])),
-                "grouped_lancto_ids": r_it.grouped_lancto_ids or [lid_int],
-                "data_pagamento": r_it.data_pagamento,
-            })
-
-        user_id_val = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
-        user_name_val = (
-            (current_user.get("name") or current_user.get("email"))
-            if isinstance(current_user, dict)
-            else (getattr(current_user, "name", None) or getattr(current_user, "email", None))
-        )
-
-        closing_rec = HorusReconciliationClosing(
-            company_id=company_id,
-            created_by_user_id=int(user_id_val) if user_id_val else None,
-            created_by_name=str(user_name_val or "")[:150] or None,
-            profile_code=prof_code_norm,
-            profile_name=str(prof_name)[:150],
-            channel_filename=(payload.channel_filename or "")[:255] or None,
-            tray_filename=(payload.tray_filename or "")[:255] or None,
-            cod_empresa=int(cod_empresa) if str(cod_empresa).isdigit() else 1,
-            cod_filial=int(cod_filial) if str(cod_filial).isdigit() else 1,
-            cod_bordero=int(bordero_id),
-            sta_bordero="AP" if eff_mode == "BORDERO_OPEN" else "PG",
-            nom_arquivo_horus=tx_res.get("nom_arquivo"),
-            payment_date_mode=eff_mode,
-            specific_payment_date=payload.specific_payment_date,
-            unify_installments=bool(eff_unify),
-            split_excess_launch=bool(eff_split_excess),
-            forma_pagto=str(cod_forma_val),
-            forma_pagto_credito_maior=str(cod_forma_credito_val) if raw_forma_credito else None,
-            banco=str(cod_banco_val),
-            agencia=str(cod_agencia_val),
-            conta=str(cod_contac_val),
-            carteira=str(carteira_val or "") or None,
-            total_titles=len(releases_validos),
-            unificadas_parcelas_removidas=int(tx_res.get("unificadas_parcelas_removidas_tx") or 0),
-            credito_maior_lancamentos_criados=int(tx_res.get("credito_maior_lancamentos_criados_tx") or 0),
-            valor_bruto_total=round(total_bordero, 2),
-            valor_taxa_total=round(total_taxa_bordero, 2),
-            valor_liquido_bordero=round(total_liquido_bordero, 2),
-            valor_credito_maior_total=round(float(tx_res.get("credito_maior_valor_total_tx") or 0.0), 2),
-            items_json=snapshot_items,
-            notes=(payload.notes or "")[:500] or None,
-        )
-        db.add(closing_rec)
-        db.commit()
-        db.refresh(closing_rec)
-        closing_id = closing_rec.id
-    except Exception as ex_save_closing:
-        db.rollback()
-        logger.warning("[HorusBordero] Aviso ao salvar historico de fechamento no PostgreSQL: %s", ex_save_closing)
-
-    mode_desc = {
-        "CHANNEL_DATE": "Baixado (PG) com a data de pagamento individual de cada lançamento da planilha",
-        "SPECIFIC_DATE": f"Baixado (PG) com data específica ({payload.specific_payment_date})",
-        "BORDERO_OPEN": "Borderô gerado em aberto (AP) para baixa manual no Horus",
-    }.get(eff_mode, "")
-
-    unif_desc = (
-        f" • {tx_res['unificadas_orders_tx']} nota(s) tiveram parcelas unificadas e taxa gravada em VLR_LANCTO_ABATIMENTO"
-        if tx_res.get("unificadas_orders_tx", 0) > 0
-        else ""
-    )
-    cred_desc = (
-        f" • {tx_res['credito_maior_lancamentos_criados_tx']} lançamento(s) separado(s) de Crédito Maior criado(s) (R$ {tx_res['credito_maior_valor_total_tx']:.2f} na Forma {cod_forma_credito_val})"
-        if tx_res.get("credito_maior_lancamentos_criados_tx", 0) > 0
-        else ""
-    )
-
-    return {
-        "success": True,
-        "closing_id": closing_id,
-        "bordero_number": bordero_id,
-        "payment_date_mode": eff_mode,
-        "unify_installments": eff_unify,
-        "total_valor": total_liquido_bordero,
-        "total_bruto": total_bordero,
-        "total_liquido": total_liquido_bordero,
-        "total_taxa": total_taxa_bordero,
-        "itens_baixados": len(releases_validos),
-        "security_verification": {
-            "verified_in_horus": True,
-            "expected_count": len(releases_validos),
-            "verified_count": tx_res["verified_count"],
-            "verified_sum": tx_res["verified_sum"],
-            "unificadas_orders_tx": tx_res["unificadas_orders_tx"],
-            "unificadas_parcelas_removidas_tx": tx_res["unificadas_parcelas_removidas_tx"],
-            "credito_maior_lancamentos_criados_tx": tx_res.get("credito_maior_lancamentos_criados_tx", 0),
-            "credito_maior_valor_total_tx": tx_res.get("credito_maior_valor_total_tx", 0.0),
-            "completed_at": tx_res["completed_at"],
-        },
-        "message": f"Borderô #{bordero_id} gravado com sucesso no Horus ERP e salvo no histórico do Cronuz! {mode_desc}{unif_desc}{cred_desc} ({tx_res['verified_count']} títulos confirmados • Valor Baixado no Borderô: R$ {total_liquido_bordero:.2f} • Bruto: R$ {total_bordero:.2f}).",
-    }
 
 
 @router.get("/companies/{company_id}/horus-sql/reconciliation/closings")
