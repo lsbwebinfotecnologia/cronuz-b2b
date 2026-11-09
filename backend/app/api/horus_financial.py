@@ -43,6 +43,7 @@ from app.integrators.reconciliation_parser import (
     _normalize_order_key,
 )
 from app.payments.catalog import get_company_reconciliation_profiles
+from app.models.horus_reconciliation_closing import HorusReconciliationClosing
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -70,10 +71,16 @@ class ReleaseItemPayload(BaseModel):
     cod_filial: str
     cod_ped_venda: Optional[int] = None
     pedido_web: Optional[str] = None
+    pedido_canal: Optional[str] = None
+    pedido_tray: Optional[str] = None
+    nro_nota_fiscal: Optional[str] = None
+    cliente_nome: Optional[str] = None
     valor: float
     valor_liquido: Optional[float] = None
     taxa: Optional[float] = None
+    valor_horus_original: Optional[float] = None
     valor_credito_maior: Optional[float] = None
+    unificadas_qtd: Optional[int] = 1
     grouped_lancto_ids: Optional[List[int]] = None
     status: str = "AB"
     data_pagamento: Optional[str] = None
@@ -87,6 +94,9 @@ class CreateBorderoPayload(BaseModel):
     unify_installments: Optional[bool] = None
     split_excess_launch: Optional[bool] = None
     forma_pagto_credito_maior: Optional[str] = None
+    channel_filename: Optional[str] = None
+    tray_filename: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class SaveProfileBankConfigPayload(BaseModel):
@@ -979,16 +989,14 @@ def _run_reconciliation_core(
                 total_vindi_amount += v_valor
                 v_taxa = round(max(0.0, v_valor - v_valor_liq), 2)
 
-            # 7.2. Quando o título em aberto no Horus já está pelo Valor Líquido do repasse (ou próximo do líquido após abatimento de voucher CONTA_CLIENTE_VINCULACAO):
+            # 7.2. Quando o título em aberto no Horus já está menor que o Bruto Tray (por abatimento de voucher CONTA_CLIENTE_VINCULACAO) mas >= Líquido Repasse:
             # Alinhamos o valor bruto da conciliação ao título do Horus para bater 100% sem divergência artificial.
             elif (
                 not v_row.get("bruto_from_channel", True)
                 and h_valor_original > 0
                 and abs(v_valor - h_valor_original) > 0.05
-                and (
-                    abs(h_valor_original - v_valor_liq) <= 0.05
-                    or h_valor_original <= v_valor
-                )
+                and h_valor_original >= v_valor_liq - 0.05
+                and h_valor_original <= v_valor
             ):
                 total_vindi_amount -= v_valor
                 v_valor = round(h_valor_original, 2)
@@ -1022,12 +1030,14 @@ def _run_reconciliation_core(
                     v_taxa = round(max(0.0, v_valor - v_valor_liq), 2)
                     credito_maior_count += 1
                     credito_maior_total += valor_credito_maior
-            elif (
+
+            # 7.4. Caso de título com abatimento excessivo na vinculação ou subsídio do canal em que `h_valor < v_valor_liq` ou `v_valor < v_valor_liq`:
+            # Ajusta para bater com o valor líquido efetivamente repassado pelo canal (`v_valor_liq`), garantindo `Bruto - Taxa == Líquido a Baixar`.
+            if (
                 not v_row.get("bruto_from_channel", True)
-                and h_valor_original < 0
                 and v_valor_liq > 0
+                and (h_valor < v_valor_liq - 0.01 or v_valor < v_valor_liq - 0.01)
             ):
-                # Caso de título com abatimento excessivo na vinculação (ex: VLR_LANCTO_TOTAL negativo no Horus): ajusta para bater com o líquido recebido
                 total_vindi_amount -= v_valor
                 v_valor = round(v_valor_liq, 2)
                 total_vindi_amount += v_valor
@@ -1131,6 +1141,11 @@ def _run_reconciliation_core(
         # 8. Estatísticas consolidadas + Selo de Segurança da Conciliação
         abertos_qtd = sum(1 for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
         abertos_valor = sum(it.get("valor_horus", it.get("valor_vindi", 0)) for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
+        abertos_valor_liquido = sum(
+            float(it.get("valor_liquido") or it.get("valor_horus") or it.get("valor_vindi") or 0)
+            for it in (items_ready + items_divergence)
+            if it.get("situacao_horus") == "ABERTO"
+        )
         pagos_qtd = len(items_already_paid)
         pagos_valor = sum(it.get("valor_horus", it.get("valor_vindi", 0)) for it in items_already_paid)
 
@@ -1166,6 +1181,7 @@ def _run_reconciliation_core(
             "already_paid_valor": round(pagos_valor, 2),
             "abertos_qtd": abertos_qtd,
             "abertos_valor": round(abertos_valor, 2),
+            "abertos_valor_liquido": round(abertos_valor_liquido, 2),
             "pagos_qtd": pagos_qtd,
             "pagos_valor": round(pagos_valor, 2),
             "not_found_qtd": len(items_not_found),
@@ -1481,6 +1497,7 @@ async def create_vindi_bordero(
         unificadas_parcelas_removidas_tx = 0
         credito_maior_lancamentos_criados_tx = 0
         credito_maior_valor_total_tx = 0.0
+        new_credito_lancto_map: Dict[int, int] = {}
 
         with conn.cursor() as cur:
             # 4.0. Unificação Segura de Parcelas (se habilitada e se o lançamento possuir mais de 1 parcela aberta agrupada)
@@ -1756,6 +1773,7 @@ async def create_vindi_bordero(
 
                     credito_maior_lancamentos_criados_tx += 1
                     credito_maior_valor_total_tx = round(credito_maior_valor_total_tx + v_cred_maior, 2)
+                    new_credito_lancto_map[main_id] = new_lancto_id
 
             # 4.1. Busca próximo COD_BORDERO
             cur.execute("SELECT ISNULL(MAX(COD_BORDERO), 0) + 1 AS next_id FROM BORDERO")
@@ -1770,6 +1788,7 @@ async def create_vindi_bordero(
 
             # 4.2. INSERT na tabela BORDERO e UPDATE nos Lançamentos conforme o modo de data de pagamento
             batch_size = 250
+            vlr_bordero_efetivo = total_liquido_bordero if eff_unify and total_liquido_bordero > 0 else total_bordero
 
             if eff_mode == "BORDERO_OPEN":
                 # Modo 3: Apenas gera o Borderô em aberto ('AP') sem liquidar os lançamentos
@@ -1793,7 +1812,7 @@ async def create_vindi_bordero(
                     cod_filial,
                     cod_forma_val,
                     id_bordero,
-                    total_bordero,
+                    vlr_bordero_efetivo,
                     nom_arquivo,
                     cod_banco_val,
                     cod_agencia_val,
@@ -1805,7 +1824,7 @@ async def create_vindi_bordero(
                 for r_item in releases_validos:
                     lid = int(r_item.nro_lancamento)
                     taxa_val = round(max(0.0, float(r_item.taxa or 0.0)), 2) if eff_unify else 0.0
-                    if taxa_val > 0:
+                    if eff_unify:
                         liq_val = round(
                             float(r_item.valor_liquido)
                             if r_item.valor_liquido is not None and float(r_item.valor_liquido) > 0
@@ -1816,24 +1835,26 @@ async def create_vindi_bordero(
                             """
                             UPDATE LANCTOS_CRECEBER
                             SET COD_BORDERO = %s,
+                                VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
                                 VLR_LANCTO_ABATIMENTO = %s,
                                 VLR_LANCTO_TOTAL = %s,
                                 DAT_ULT_ATL = GETDATE()
                             WHERE COD_FILIAL = %s AND NRO_LANCTO_CRECEBER = %s
                             """,
-                            (id_bordero, taxa_val, liq_val, cod_filial, lid),
+                            (id_bordero, liq_val, liq_val, taxa_val, liq_val, cod_filial, lid),
                         )
                         try:
                             cur.execute(
                                 """
                                 UPDATE LANCTOS_CRECEBERA
                                 SET COD_BORDERO = %s,
+                                    VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
                                     VLR_LANCTO_ABATIMENTO = %s,
                                     VLR_LANCTO_TOTAL = %s,
                                     DAT_ULT_ATL = GETDATE()
                                 WHERE COD_FILIAL = %s AND NRO_LANCTO_CRECEBER = %s
                                 """,
-                                (id_bordero, taxa_val, liq_val, cod_filial, lid),
+                                (id_bordero, liq_val, liq_val, taxa_val, liq_val, cod_filial, lid),
                             )
                         except Exception as ex_a:
                             logger.warning("[HorusBordero] Aviso ao atualizar LANCTOS_CRECEBERA (AP/taxa): %s", ex_a)
@@ -1865,7 +1886,7 @@ async def create_vindi_bordero(
                         item_pay_dates[int(r_item.nro_lancamento)] = dt_item
                     bordero_pay_dt = max(item_pay_dates.values()) if item_pay_dates else today_midnight
 
-                vlr_pago_bordero = total_liquido_bordero if eff_unify and total_taxa_bordero > 0 else total_bordero
+                vlr_pago_bordero = total_liquido_bordero if eff_unify and total_liquido_bordero > 0 else total_bordero
 
                 insert_sql = """
                     INSERT INTO BORDERO (
@@ -1887,7 +1908,7 @@ async def create_vindi_bordero(
                     cod_filial,
                     cod_forma_val,
                     id_bordero,
-                    total_bordero,
+                    vlr_pago_bordero,
                     vlr_pago_bordero,
                     nom_arquivo,
                     cod_banco_val,
@@ -1904,7 +1925,7 @@ async def create_vindi_bordero(
                     pay_dt = item_pay_dates.get(lid, bordero_pay_dt)
                     taxa_val = round(max(0.0, float(r_item.taxa or 0.0)), 2) if eff_unify else 0.0
 
-                    if taxa_val > 0:
+                    if eff_unify:
                         liq_val = round(
                             float(r_item.valor_liquido)
                             if r_item.valor_liquido is not None and float(r_item.valor_liquido) > 0
@@ -1920,6 +1941,7 @@ async def create_vindi_bordero(
                                 DAT_PAGTO_CONTA = %s,
                                 DAT_PAGTO_CRECEBER_REAL = GETDATE(),
                                 DAT_ULT_ATL = GETDATE(),
+                                VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
                                 VLR_LANCTO_ABATIMENTO = %s,
                                 VLR_LANCTO_TOTAL = %s,
                                 VLR_LANCTO_PAGO = %s,
@@ -1927,48 +1949,51 @@ async def create_vindi_bordero(
                             WHERE COD_FILIAL = %s
                               AND NRO_LANCTO_CRECEBER = %s
                             """,
-                            (id_bordero, pay_dt, pay_dt, taxa_val, liq_val, liq_val, liq_val, cod_filial, lid),
+                            (id_bordero, pay_dt, pay_dt, liq_val, liq_val, taxa_val, liq_val, liq_val, liq_val, cod_filial, lid),
                         )
                         try:
                             cur.execute(
                                 """
                                 UPDATE LANCTOS_CRECEBERA
                                 SET COD_BORDERO = %s,
-                                    STA_LANCTO_CRECEBER = 'PG',
-                                    COD_SITUACAO = 8,
-                                    DAT_PAGTO_CRECEBER = %s,
-                                    DAT_PAGTO_CONTA = %s,
-                                    DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                                    DAT_ULT_ATL = GETDATE(),
-                                    VLR_LANCTO_ABATIMENTO = %s,
-                                    VLR_LANCTO_TOTAL = %s,
-                                    VLR_LANCTO_PAGO = %s,
-                                    VLR_LANCTO_RECEBIDO = %s,
-                                    COD_BANCO = %s,
-                                    COD_AGENCIA = %s,
-                                    COD_CONTAC = %s,
-                                    COD_FORMA = %s,
-                                    NRO_CARTEIRA = %s
-                                WHERE COD_FILIAL = %s
-                                  AND NRO_LANCTO_CRECEBER = %s
-                                """,
-                                (
-                                    id_bordero,
-                                    pay_dt,
-                                    pay_dt,
-                                    taxa_val,
-                                    liq_val,
-                                    liq_val,
-                                    liq_val,
-                                    cod_banco_val,
-                                    cod_agencia_val,
-                                    cod_contac_val,
-                                    cod_forma_val,
-                                    carteira_val or None,
-                                    cod_filial,
-                                    lid,
-                                ),
-                            )
+                                     STA_LANCTO_CRECEBER = 'PG',
+                                     COD_SITUACAO = 8,
+                                     DAT_PAGTO_CRECEBER = %s,
+                                     DAT_PAGTO_CONTA = %s,
+                                     DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                                     DAT_ULT_ATL = GETDATE(),
+                                     VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
+                                     VLR_LANCTO_ABATIMENTO = %s,
+                                     VLR_LANCTO_TOTAL = %s,
+                                     VLR_LANCTO_PAGO = %s,
+                                     VLR_LANCTO_RECEBIDO = %s,
+                                     COD_BANCO = %s,
+                                     COD_AGENCIA = %s,
+                                     COD_CONTAC = %s,
+                                     COD_FORMA = %s,
+                                     NRO_CARTEIRA = %s
+                                 WHERE COD_FILIAL = %s
+                                   AND NRO_LANCTO_CRECEBER = %s
+                                 """,
+                                 (
+                                     id_bordero,
+                                     pay_dt,
+                                     pay_dt,
+                                     liq_val,
+                                     liq_val,
+                                     taxa_val,
+                                     liq_val,
+                                     liq_val,
+                                     liq_val,
+                                     cod_banco_val,
+                                     cod_agencia_val,
+                                     cod_contac_val,
+                                     cod_forma_val,
+                                     carteira_val or None,
+                                     cod_filial,
+                                     lid,
+                                 ),
+                             )
                         except Exception as ex_a:
                             logger.warning("[HorusBordero] Aviso ao atualizar LANCTOS_CRECEBERA (PG+taxa) #%s: %s", lid, ex_a)
                     else:
@@ -2030,7 +2055,7 @@ async def create_vindi_bordero(
 
         # 4.4. Auditoria Pós-Gravação: Confere no SQL Server quantos títulos ficaram amarrados ao Borderô
         verified_count = len(lancto_ids)
-        verified_sum = total_bordero
+        verified_sum = vlr_bordero_efetivo
         try:
             with conn.cursor() as cur_verify:
                 cur_verify.execute(
@@ -2055,12 +2080,14 @@ async def create_vindi_bordero(
 
         return {
             "id_bordero": id_bordero,
+            "nom_arquivo": nom_arquivo,
             "payment_date_mode": eff_mode,
             "unify_installments": eff_unify,
             "unificadas_orders_tx": unificadas_orders_tx,
             "unificadas_parcelas_removidas_tx": unificadas_parcelas_removidas_tx,
             "credito_maior_lancamentos_criados_tx": credito_maior_lancamentos_criados_tx,
             "credito_maior_valor_total_tx": credito_maior_valor_total_tx,
+            "new_credito_lancto_map": new_credito_lancto_map,
             "verified_count": verified_count,
             "verified_sum": verified_sum,
             "completed_at": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
@@ -2076,6 +2103,91 @@ async def create_vindi_bordero(
             status_code=500,
             detail=f"Erro ao gravar borderô no SQL Server do Horus: {str(e)}"
         )
+
+    # 5. Salva o registro de Fechamento no banco de dados PostgreSQL do Cronuz B2B para futuras consultas/auditorias
+    closing_id = None
+    try:
+        all_profiles = get_company_reconciliation_profiles(settings)
+        prof_code_norm = (payload.profile_code or "TRAY_SHOPEE").upper().strip()
+        prof_match = next((p for p in all_profiles if p["code"] == prof_code_norm), None)
+        prof_name = (prof_match or {}).get("name") or prof_code_norm
+
+        cred_map = tx_res.get("new_credito_lancto_map") or {}
+        snapshot_items = []
+        for r_it in releases_validos:
+            lid_int = int(r_it.nro_lancamento)
+            snapshot_items.append({
+                "nro_lancamento": lid_int,
+                "cod_filial": str(r_it.cod_filial or cod_filial),
+                "cod_ped_venda": r_it.cod_ped_venda,
+                "pedido_web": r_it.pedido_web,
+                "pedido_canal": r_it.pedido_canal or r_it.pedido_web,
+                "pedido_tray": r_it.pedido_tray,
+                "nro_nota_fiscal": r_it.nro_nota_fiscal,
+                "cliente_nome": r_it.cliente_nome,
+                "valor_bruto": round(float(r_it.valor or 0.0), 2),
+                "taxa": round(float(r_it.taxa or 0.0), 2),
+                "valor_liquido": round(
+                    float(r_it.valor_liquido)
+                    if r_it.valor_liquido is not None and float(r_it.valor_liquido) > 0
+                    else max(0.0, float(r_it.valor or 0.0) - float(r_it.taxa or 0.0)),
+                    2,
+                ),
+                "valor_horus_original": round(float(r_it.valor_horus_original or r_it.valor or 0.0), 2),
+                "valor_credito_maior": round(float(r_it.valor_credito_maior or 0.0), 2),
+                "novo_lancamento_credito_maior": cred_map.get(lid_int),
+                "unificadas_qtd": int(r_it.unificadas_qtd or len(r_it.grouped_lancto_ids or [1])),
+                "grouped_lancto_ids": r_it.grouped_lancto_ids or [lid_int],
+                "data_pagamento": r_it.data_pagamento,
+            })
+
+        user_id_val = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+        user_name_val = (
+            (current_user.get("name") or current_user.get("email"))
+            if isinstance(current_user, dict)
+            else (getattr(current_user, "name", None) or getattr(current_user, "email", None))
+        )
+
+        closing_rec = HorusReconciliationClosing(
+            company_id=company_id,
+            created_by_user_id=int(user_id_val) if user_id_val else None,
+            created_by_name=str(user_name_val or "")[:150] or None,
+            profile_code=prof_code_norm,
+            profile_name=str(prof_name)[:150],
+            channel_filename=(payload.channel_filename or "")[:255] or None,
+            tray_filename=(payload.tray_filename or "")[:255] or None,
+            cod_empresa=int(cod_empresa) if str(cod_empresa).isdigit() else 1,
+            cod_filial=int(cod_filial) if str(cod_filial).isdigit() else 1,
+            cod_bordero=int(bordero_id),
+            sta_bordero="AP" if eff_mode == "BORDERO_OPEN" else "PG",
+            nom_arquivo_horus=tx_res.get("nom_arquivo"),
+            payment_date_mode=eff_mode,
+            specific_payment_date=payload.specific_payment_date,
+            unify_installments=bool(eff_unify),
+            split_excess_launch=bool(eff_split_excess),
+            forma_pagto=str(cod_forma_val),
+            forma_pagto_credito_maior=str(cod_forma_credito_val) if raw_forma_credito else None,
+            banco=str(cod_banco_val),
+            agencia=str(cod_agencia_val),
+            conta=str(cod_contac_val),
+            carteira=str(carteira_val or "") or None,
+            total_titles=len(releases_validos),
+            unificadas_parcelas_removidas=int(tx_res.get("unificadas_parcelas_removidas_tx") or 0),
+            credito_maior_lancamentos_criados=int(tx_res.get("credito_maior_lancamentos_criados_tx") or 0),
+            valor_bruto_total=round(total_bordero, 2),
+            valor_taxa_total=round(total_taxa_bordero, 2),
+            valor_liquido_bordero=round(total_liquido_bordero, 2),
+            valor_credito_maior_total=round(float(tx_res.get("credito_maior_valor_total_tx") or 0.0), 2),
+            items_json=snapshot_items,
+            notes=(payload.notes or "")[:500] or None,
+        )
+        db.add(closing_rec)
+        db.commit()
+        db.refresh(closing_rec)
+        closing_id = closing_rec.id
+    except Exception as ex_save_closing:
+        db.rollback()
+        logger.warning("[HorusBordero] Aviso ao salvar historico de fechamento no PostgreSQL: %s", ex_save_closing)
 
     mode_desc = {
         "CHANNEL_DATE": "Baixado (PG) com a data de pagamento individual de cada lançamento da planilha",
@@ -2096,10 +2208,12 @@ async def create_vindi_bordero(
 
     return {
         "success": True,
+        "closing_id": closing_id,
         "bordero_number": bordero_id,
         "payment_date_mode": eff_mode,
         "unify_installments": eff_unify,
-        "total_valor": total_bordero,
+        "total_valor": total_liquido_bordero,
+        "total_bruto": total_bordero,
         "total_liquido": total_liquido_bordero,
         "total_taxa": total_taxa_bordero,
         "itens_baixados": len(releases_validos),
@@ -2114,5 +2228,134 @@ async def create_vindi_bordero(
             "credito_maior_valor_total_tx": tx_res.get("credito_maior_valor_total_tx", 0.0),
             "completed_at": tx_res["completed_at"],
         },
-        "message": f"Borderô #{bordero_id} gravado com sucesso no Horus ERP! {mode_desc}{unif_desc}{cred_desc} ({tx_res['verified_count']} títulos confirmados • Bruto: R$ {total_bordero:.2f} • Líquido Banco: R$ {total_liquido_bordero:.2f}).",
+        "message": f"Borderô #{bordero_id} gravado com sucesso no Horus ERP e salvo no histórico do Cronuz! {mode_desc}{unif_desc}{cred_desc} ({tx_res['verified_count']} títulos confirmados • Valor Baixado no Borderô: R$ {total_liquido_bordero:.2f} • Bruto: R$ {total_bordero:.2f}).",
+    }
+
+
+@router.get("/companies/{company_id}/horus-sql/reconciliation/closings")
+def list_reconciliation_closings(
+    company_id: int,
+    profile_code: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Lista o histórico de Fechamentos / Borderôs de Conciliação salvos no banco de dados do Cronuz B2B
+    para futuras consultas e auditoria de divergências.
+    """
+    _assert_ownership(current_user, company_id)
+    q = db.query(HorusReconciliationClosing).filter(
+        HorusReconciliationClosing.company_id == company_id
+    )
+    if profile_code and profile_code.strip():
+        q = q.filter(HorusReconciliationClosing.profile_code == profile_code.strip().upper())
+
+    rows = (
+        q.order_by(HorusReconciliationClosing.created_at.desc())
+        .limit(min(max(1, limit), 200))
+        .all()
+    )
+    return {
+        "success": True,
+        "closings": [
+            {
+                "id": r.id,
+                "company_id": r.company_id,
+                "created_by_user_id": r.created_by_user_id,
+                "created_by_name": r.created_by_name or "Sistema",
+                "profile_code": r.profile_code,
+                "profile_name": r.profile_name or r.profile_code,
+                "channel_filename": r.channel_filename,
+                "tray_filename": r.tray_filename,
+                "cod_empresa": r.cod_empresa,
+                "cod_filial": r.cod_filial,
+                "cod_bordero": r.cod_bordero,
+                "sta_bordero": r.sta_bordero,
+                "nom_arquivo_horus": r.nom_arquivo_horus,
+                "payment_date_mode": r.payment_date_mode,
+                "specific_payment_date": r.specific_payment_date,
+                "unify_installments": bool(r.unify_installments),
+                "split_excess_launch": bool(r.split_excess_launch),
+                "forma_pagto": r.forma_pagto,
+                "forma_pagto_credito_maior": r.forma_pagto_credito_maior,
+                "banco": r.banco,
+                "agencia": r.agencia,
+                "conta": r.conta,
+                "carteira": r.carteira,
+                "total_titles": r.total_titles,
+                "unificadas_parcelas_removidas": r.unificadas_parcelas_removidas,
+                "credito_maior_lancamentos_criados": r.credito_maior_lancamentos_criados,
+                "valor_bruto_total": round(float(r.valor_bruto_total or 0.0), 2),
+                "valor_taxa_total": round(float(r.valor_taxa_total or 0.0), 2),
+                "valor_liquido_bordero": round(float(r.valor_liquido_bordero or 0.0), 2),
+                "valor_credito_maior_total": round(float(r.valor_credito_maior_total or 0.0), 2),
+                "notes": r.notes,
+                "created_at": r.created_at.strftime("%d/%m/%Y %H:%M:%S") if r.created_at else "",
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/companies/{company_id}/horus-sql/reconciliation/closings/{closing_id}")
+def get_reconciliation_closing_detail(
+    company_id: int,
+    closing_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Retorna os detalhes completos de um Fechamento / Borderô salvo no Cronuz B2B,
+    incluindo o snapshot completo de todos os títulos conciliados (`items_json`).
+    """
+    _assert_ownership(current_user, company_id)
+    r = (
+        db.query(HorusReconciliationClosing)
+        .filter(
+            HorusReconciliationClosing.company_id == company_id,
+            HorusReconciliationClosing.id == closing_id,
+        )
+        .first()
+    )
+    if not r:
+        raise HTTPException(status_code=404, detail="Registro de fechamento não encontrado.")
+
+    return {
+        "success": True,
+        "closing": {
+            "id": r.id,
+            "company_id": r.company_id,
+            "created_by_user_id": r.created_by_user_id,
+            "created_by_name": r.created_by_name or "Sistema",
+            "profile_code": r.profile_code,
+            "profile_name": r.profile_name or r.profile_code,
+            "channel_filename": r.channel_filename,
+            "tray_filename": r.tray_filename,
+            "cod_empresa": r.cod_empresa,
+            "cod_filial": r.cod_filial,
+            "cod_bordero": r.cod_bordero,
+            "sta_bordero": r.sta_bordero,
+            "nom_arquivo_horus": r.nom_arquivo_horus,
+            "payment_date_mode": r.payment_date_mode,
+            "specific_payment_date": r.specific_payment_date,
+            "unify_installments": bool(r.unify_installments),
+            "split_excess_launch": bool(r.split_excess_launch),
+            "forma_pagto": r.forma_pagto,
+            "forma_pagto_credito_maior": r.forma_pagto_credito_maior,
+            "banco": r.banco,
+            "agencia": r.agencia,
+            "conta": r.conta,
+            "carteira": r.carteira,
+            "total_titles": r.total_titles,
+            "unificadas_parcelas_removidas": r.unificadas_parcelas_removidas,
+            "credito_maior_lancamentos_criados": r.credito_maior_lancamentos_criados,
+            "valor_bruto_total": round(float(r.valor_bruto_total or 0.0), 2),
+            "valor_taxa_total": round(float(r.valor_taxa_total or 0.0), 2),
+            "valor_liquido_bordero": round(float(r.valor_liquido_bordero or 0.0), 2),
+            "valor_credito_maior_total": round(float(r.valor_credito_maior_total or 0.0), 2),
+            "notes": r.notes,
+            "created_at": r.created_at.strftime("%d/%m/%Y %H:%M:%S") if r.created_at else "",
+            "items": r.items_json or [],
+        },
     }

@@ -102,6 +102,7 @@ interface SummaryData {
   already_paid_valor?: number;
   abertos_qtd?: number;
   abertos_valor?: number;
+  abertos_valor_liquido?: number;
   pagos_qtd?: number;
   pagos_valor?: number;
   not_found_qtd: number;
@@ -304,6 +305,13 @@ export default function FinanceiroVindiPage() {
   // Modal de Configuração de Banco / Agência / Conta / Forma de Pagto Horus por Conciliação
   const [showBankConfigModal, setShowBankConfigModal] = useState(false);
   const [savingBankConfig, setSavingBankConfig] = useState(false);
+
+  // Histórico de Fechamentos / Borderôs Salvos no Banco de Dados do Cronuz B2B
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [closingsList, setClosingsList] = useState<any[]>([]);
+  const [loadingClosings, setLoadingClosings] = useState(false);
+  const [selectedClosingDetail, setSelectedClosingDetail] = useState<any | null>(null);
+  const [loadingClosingDetail, setLoadingClosingDetail] = useState(false);
   const [bankForm, setBankForm] = useState({
     forma_pagto: '',
     forma_pagto_credito_maior: '',
@@ -738,7 +746,28 @@ export default function FinanceiroVindiPage() {
   }, [itemsReady, itemsDivergence]);
 
   const totalSelectedAmount = useMemo(() => {
-    return selectedReleases.reduce((acc, cur) => acc + (cur.valor_horus || cur.valor_vindi || 0), 0);
+    return selectedReleases.reduce(
+      (acc, cur) => acc + (cur.valor_liquido ?? cur.valor_horus ?? cur.valor_vindi ?? 0),
+      0
+    );
+  }, [selectedReleases]);
+
+  const totalSelectedBrutoAmount = useMemo(() => {
+    return selectedReleases.reduce(
+      (acc, cur) => acc + (cur.valor_horus ?? cur.valor_vindi ?? 0),
+      0
+    );
+  }, [selectedReleases]);
+
+  const totalSelectedTaxaAmount = useMemo(() => {
+    return selectedReleases.reduce(
+      (acc, cur) =>
+        acc +
+        (cur.diff_taxa !== undefined
+          ? Math.abs(cur.diff_taxa)
+          : cur.taxa || 0),
+      0
+    );
   }, [selectedReleases]);
 
   // Lista filtrada para exibição na grade estilo Access
@@ -985,6 +1014,8 @@ export default function FinanceiroVindiPage() {
         unify_installments: unifyInstallments,
         split_excess_launch: splitExcessLaunch,
         forma_pagto_credito_maior: formaPagtoCreditoMaior || undefined,
+        channel_filename: channelFile?.name || undefined,
+        tray_filename: trayFile?.name || undefined,
         specific_payment_date:
           paymentDateMode === 'SPECIFIC_DATE' ? specificPaymentDate : undefined,
         releases: selectedReleases.map((r) => ({
@@ -992,13 +1023,19 @@ export default function FinanceiroVindiPage() {
           cod_filial: r.cod_filial || selectedFilial || '1',
           cod_ped_venda: r.cod_ped_venda,
           pedido_web: r.pedido_web,
+          pedido_canal: r.pedido_canal || r.pedido_web,
+          pedido_tray: r.pedido_tray || undefined,
+          nro_nota_fiscal: r.nro_nota_fiscal || undefined,
+          cliente_nome: r.cliente_nome || undefined,
           valor: r.valor_horus || r.valor_vindi,
           valor_liquido: r.valor_liquido,
           taxa:
             r.diff_taxa !== undefined
               ? Math.abs(r.diff_taxa)
               : r.taxa || 0,
+          valor_horus_original: r.valor_horus_original ?? r.valor_horus,
           valor_credito_maior: r.valor_credito_maior || 0,
+          unificadas_qtd: r.unificadas_qtd || 1,
           grouped_lancto_ids: r.grouped_lancto_ids,
           status: r.status_horus || 'AB',
           data_pagamento: r.data_pagamento || '',
@@ -1055,6 +1092,116 @@ export default function FinanceiroVindiPage() {
     } finally {
       setCreatingBordero(false);
     }
+  };
+
+  // Carrega o Histórico de Fechamentos / Borderôs salvos no banco do Cronuz B2B
+  const openHistoryModal = async () => {
+    setShowHistoryModal(true);
+    setSelectedClosingDetail(null);
+    setLoadingClosings(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${API}/companies/${companyId}/horus-sql/reconciliation/closings?limit=100`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setClosingsList(data.closings || []);
+      } else {
+        toast.error('Não foi possível carregar o histórico de fechamentos.');
+      }
+    } catch {
+      toast.error('Erro de conexão ao consultar histórico de fechamentos.');
+    } finally {
+      setLoadingClosings(false);
+    }
+  };
+
+  const loadClosingDetail = async (closingId: number) => {
+    setLoadingClosingDetail(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${API}/companies/${companyId}/horus-sql/reconciliation/closings/${closingId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedClosingDetail(data.closing || null);
+      } else {
+        toast.error('Erro ao carregar detalhes do fechamento.');
+      }
+    } catch {
+      toast.error('Erro de conexão ao abrir fechamento.');
+    } finally {
+      setLoadingClosingDetail(false);
+    }
+  };
+
+  const exportClosingDetailToCsv = (closing: any) => {
+    const items = closing?.items || [];
+    if (!items.length) {
+      toast.error('Nenhum item registrado neste fechamento.');
+      return;
+    }
+    const headers = [
+      'Borderô Horus',
+      'Modalidade',
+      'Pedido Canal',
+      'Pedido Tray',
+      'Pedido Horus',
+      'Lançamento Principal',
+      'NF',
+      'Cliente',
+      'Valor Bruto',
+      'Taxa Abatida',
+      'Valor Líquido Baixado',
+      'Valor Orig. Horus',
+      'Crédito Maior Separado',
+      'Novo Lanç. Crédito Maior',
+      'Parcelas Unificadas',
+      'Data Pagamento',
+    ];
+    const escape = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const fmtNum = (v: number | undefined) =>
+      v !== undefined && v !== null ? Number(v).toFixed(2).replace('.', ',') : '0,00';
+
+    const rows = items.map((it: any) =>
+      [
+        closing.cod_bordero,
+        closing.profile_name || closing.profile_code,
+        it.pedido_canal || it.pedido_web || '',
+        it.pedido_tray || '-',
+        it.cod_ped_venda || '',
+        it.nro_lancamento || '',
+        it.nro_nota_fiscal || '',
+        it.cliente_nome || '',
+        fmtNum(it.valor_bruto),
+        fmtNum(it.taxa),
+        fmtNum(it.valor_liquido),
+        fmtNum(it.valor_horus_original),
+        fmtNum(it.valor_credito_maior),
+        it.novo_lancamento_credito_maior || '-',
+        it.unificadas_qtd || 1,
+        it.data_pagamento || '',
+      ]
+        .map(escape)
+        .join(';')
+    );
+
+    const bom = '\uFEFF';
+    const csv = bom + [headers.map(escape).join(';'), ...rows].join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fechamento_bordero_${closing.cod_bordero}_${closing.profile_code.toLowerCase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast.success(`Fechamento do Borderô #${closing.cod_bordero} exportado com sucesso!`);
   };
 
   const formatBRL = (val?: number) =>
@@ -1129,6 +1276,15 @@ export default function FinanceiroVindiPage() {
                 </span>
               </div>
             </div>
+
+            <button
+              type="button"
+              onClick={openHistoryModal}
+              className="px-3 py-2 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer"
+            >
+              <Clock className="h-3.5 w-3.5" />
+              Histórico de Fechamentos
+            </button>
 
             <button
               type="button"
@@ -1641,7 +1797,16 @@ export default function FinanceiroVindiPage() {
                 {summary.abertos_qtd ?? summary.ready_qtd}
               </p>
               <p className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                R$ {formatBRL(summary.abertos_valor ?? summary.ready_valor)}
+                Baixar: R${' '}
+                {formatBRL(
+                  summary.abertos_valor_liquido ??
+                    summary.total_planilha_liq ??
+                    summary.abertos_valor ??
+                    summary.ready_valor
+                )}
+              </p>
+              <p className="text-[10px] font-mono text-slate-500">
+                Bruto Títulos: R$ {formatBRL(summary.abertos_valor ?? summary.ready_valor)}
               </p>
             </div>
 
@@ -2306,10 +2471,14 @@ export default function FinanceiroVindiPage() {
                     <p className="text-lg font-extrabold text-slate-900 dark:text-white">
                       {selectedReleases.length} lançamentos em aberto
                     </p>
+                    <p className="text-[11px] font-mono text-slate-500 mt-0.5">
+                      Bruto: R$ {formatBRL(totalSelectedBrutoAmount)} • Taxas: -R${' '}
+                      {formatBRL(totalSelectedTaxaAmount)}
+                    </p>
                   </div>
                   <div className="text-right">
                     <p className="text-xs text-slate-500 uppercase font-semibold">
-                      Valor Total do Borderô
+                      Valor a Baixar no Borderô
                     </p>
                     <p className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
                       R$ {formatBRL(totalSelectedAmount)}
@@ -2837,6 +3006,254 @@ export default function FinanceiroVindiPage() {
                     )}
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL DE HISTÓRICO DE FECHAMENTOS / BORDERÔS SALVOS NO BANCO DO CRONUZ B2B ─── */}
+      <AnimatePresence>
+        {showHistoryModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="w-full max-w-5xl max-h-[88vh] rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden flex flex-col"
+            >
+              <div className="bg-slate-900 px-6 py-4 flex items-center justify-between text-white shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <Clock className="h-5 w-5 text-emerald-400" />
+                  <div>
+                    <h3 className="text-sm font-extrabold">
+                      Histórico de Fechamentos &amp; Borderôs Conciliados (Banco de Dados Cronuz)
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      Registro permanente de todos os borderôs gerados no Horus para auditoria e consulta futura de divergências
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowHistoryModal(false);
+                    setSelectedClosingDetail(null);
+                  }}
+                  className="text-slate-400 hover:text-white text-sm font-bold cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto flex-1 space-y-4 text-xs">
+                {selectedClosingDetail ? (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200 dark:border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedClosingDetail(null)}
+                          className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 font-bold text-slate-700 dark:text-slate-300 cursor-pointer"
+                        >
+                          ← Voltar para Lista
+                        </button>
+                        <div>
+                          <span className="font-extrabold text-sm text-slate-900 dark:text-white">
+                            Borderô Horus #{selectedClosingDetail.cod_bordero} •{' '}
+                            {selectedClosingDetail.profile_name}
+                          </span>
+                          <span className="block text-[11px] text-slate-500">
+                            Gerado em {selectedClosingDetail.created_at} por{' '}
+                            {selectedClosingDetail.created_by_name} • Banco{' '}
+                            {selectedClosingDetail.banco} / Ag {selectedClosingDetail.agencia} / CC{' '}
+                            {selectedClosingDetail.conta} (Forma {selectedClosingDetail.forma_pagto}
+                            )
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => exportClosingDetailToCsv(selectedClosingDetail)}
+                        className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Exportar Fechamento (Excel/CSV)
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                        <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                          Títulos Conciliados
+                        </span>
+                        <b className="text-base font-mono text-slate-900 dark:text-white">
+                          {selectedClosingDetail.total_titles}
+                        </b>
+                      </div>
+                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                        <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                          Valor Bruto Títulos
+                        </span>
+                        <b className="text-base font-mono text-slate-900 dark:text-white">
+                          R$ {formatBRL(selectedClosingDetail.valor_bruto_total)}
+                        </b>
+                      </div>
+                      <div className="p-3 rounded-xl border border-purple-200 dark:border-purple-900/50 bg-purple-50/40 dark:bg-purple-950/20">
+                        <span className="text-[10px] font-bold uppercase text-purple-600 block">
+                          Taxas Abatidas
+                        </span>
+                        <b className="text-base font-mono text-purple-700 dark:text-purple-300">
+                          -R$ {formatBRL(selectedClosingDetail.valor_taxa_total)}
+                        </b>
+                      </div>
+                      <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20">
+                        <span className="text-[10px] font-bold uppercase text-emerald-700 block">
+                          Valor Baixado no Borderô
+                        </span>
+                        <b className="text-base font-mono text-emerald-700 dark:text-emerald-300">
+                          R$ {formatBRL(selectedClosingDetail.valor_liquido_bordero)}
+                        </b>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto max-h-[420px] rounded-xl border border-slate-200 dark:border-slate-800">
+                      <table className="w-full text-left border-collapse">
+                        <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-[10px] font-extrabold uppercase text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">
+                          <tr>
+                            <th className="py-2 px-3">Pedido Canal</th>
+                            <th className="py-2 px-3">Pedido Tray</th>
+                            <th className="py-2 px-3">Ped. Horus</th>
+                            <th className="py-2 px-3">Lanç.</th>
+                            <th className="py-2 px-3">NF</th>
+                            <th className="py-2 px-3">Cliente</th>
+                            <th className="py-2 px-3 text-right">Bruto</th>
+                            <th className="py-2 px-3 text-right">Taxa</th>
+                            <th className="py-2 px-3 text-right">Líq. Baixado</th>
+                            <th className="py-2 px-3 text-right">Créd. Maior</th>
+                            <th className="py-2 px-3">Data Pagto</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono text-[11px]">
+                          {(selectedClosingDetail.items || []).map((it: any, i: number) => (
+                            <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                              <td className="py-1.5 px-3 font-bold">
+                                {it.pedido_canal || it.pedido_web}
+                              </td>
+                              <td className="py-1.5 px-3 text-violet-700 dark:text-violet-300">
+                                {it.pedido_tray ? `#${it.pedido_tray}` : '—'}
+                              </td>
+                              <td className="py-1.5 px-3 text-indigo-700 dark:text-indigo-300">
+                                {it.cod_ped_venda ? `#${it.cod_ped_venda}` : '—'}
+                              </td>
+                              <td className="py-1.5 px-3">#{it.nro_lancamento}</td>
+                              <td className="py-1.5 px-3">{it.nro_nota_fiscal || '—'}</td>
+                              <td className="py-1.5 px-3 font-sans max-w-[180px] truncate">
+                                {it.cliente_nome || '—'}
+                              </td>
+                              <td className="py-1.5 px-3 text-right">
+                                R$ {formatBRL(it.valor_bruto)}
+                              </td>
+                              <td className="py-1.5 px-3 text-right text-purple-600">
+                                {(it.taxa || 0) > 0 ? `-R$ ${formatBRL(it.taxa)}` : '—'}
+                              </td>
+                              <td className="py-1.5 px-3 text-right font-bold text-emerald-700 dark:text-emerald-400">
+                                R$ {formatBRL(it.valor_liquido)}
+                              </td>
+                              <td className="py-1.5 px-3 text-right text-amber-700 dark:text-amber-400">
+                                {(it.valor_credito_maior || 0) > 0
+                                  ? `+R$ ${formatBRL(it.valor_credito_maior)} (#${
+                                      it.novo_lancamento_credito_maior || 'AB'
+                                    })`
+                                  : '—'}
+                              </td>
+                              <td className="py-1.5 px-3">{it.data_pagamento || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : loadingClosings || loadingClosingDetail ? (
+                  <div className="py-12 flex items-center justify-center gap-2 text-slate-500">
+                    <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+                    <span>Consultando histórico de fechamentos no banco do Cronuz...</span>
+                  </div>
+                ) : closingsList.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400">
+                    Nenhum fechamento de conciliação salvo até o momento. Assim que você gerar um Borderô, ele ficará salvo aqui para auditoria futura.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-left border-collapse">
+                      <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-extrabold uppercase text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">
+                        <tr>
+                          <th className="py-2.5 px-3">Borderô Horus</th>
+                          <th className="py-2.5 px-3">Data / Hora</th>
+                          <th className="py-2.5 px-3">Modalidade</th>
+                          <th className="py-2.5 px-3">Arquivos Utilizados</th>
+                          <th className="py-2.5 px-3 text-center">Títulos</th>
+                          <th className="py-2.5 px-3 text-right">Bruto</th>
+                          <th className="py-2.5 px-3 text-right">Taxas</th>
+                          <th className="py-2.5 px-3 text-right">Líq. Baixado</th>
+                          <th className="py-2.5 px-3 text-right">Créd. Maior</th>
+                          <th className="py-2.5 px-3 text-right">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                        {closingsList.map((c) => (
+                          <tr
+                            key={c.id}
+                            className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
+                          >
+                            <td className="py-2.5 px-3 font-mono font-extrabold text-indigo-700 dark:text-indigo-300">
+                              #{c.cod_bordero}{' '}
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 ml-1">
+                                {c.sta_bordero}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                              {c.created_at}
+                            </td>
+                            <td className="py-2.5 px-3 font-bold text-slate-800 dark:text-slate-200">
+                              {c.profile_name}
+                            </td>
+                            <td className="py-2.5 px-3 text-[11px] text-slate-500 max-w-[200px] truncate">
+                              {c.channel_filename || '—'}
+                              {c.tray_filename ? ` + ${c.tray_filename}` : ''}
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono font-bold">
+                              {c.total_titles}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono">
+                              R$ {formatBRL(c.valor_bruto_total)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono text-purple-600">
+                              -R$ {formatBRL(c.valor_taxa_total)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-extrabold text-emerald-700 dark:text-emerald-400">
+                              R$ {formatBRL(c.valor_liquido_bordero)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono text-amber-700 dark:text-amber-400">
+                              {(c.valor_credito_maior_total || 0) > 0
+                                ? `+R$ ${formatBRL(c.valor_credito_maior_total)} (${c.credito_maior_lancamentos_criados})`
+                                : '—'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => loadClosingDetail(c.id)}
+                                className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-bold text-[11px] cursor-pointer"
+                              >
+                                Consultar Itens
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </motion.div>
           </div>
