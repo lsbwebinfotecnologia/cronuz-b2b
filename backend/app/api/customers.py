@@ -26,8 +26,15 @@ class InteractionUpdate(BaseModel):
     due_date: Optional[datetime] = None
 
 class CustomerUserCreate(BaseModel):
+    name: Optional[str] = None
     email: str
     password: str
+
+class CustomerUserUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None
+    active: Optional[bool] = None
 
 router = APIRouter()
 
@@ -342,7 +349,9 @@ def update_customer(
     # Validação de unicidade no UPDATE
     if "document" in update_data and update_data["document"]:
         import re
-        from sqlalchemy import func
+        from sqlalchemy import func, or_
+        old_doc = customer.document
+        old_clean_doc = re.sub(r'\D', '', old_doc or '')
         clean_new_doc = re.sub(r'\D', '', update_data["document"])
         
         existing = db.query(Customer).filter(
@@ -355,6 +364,17 @@ def update_customer(
             raise HTTPException(status_code=400, detail="Outro cliente já possui este CPF/CNPJ cadastrado.")
             
         update_data["document"] = clean_new_doc
+        if old_clean_doc and old_clean_doc != clean_new_doc:
+            linked_users = db.query(User).filter(
+                User.company_id == customer.company_id,
+                User.type == UserRole.CUSTOMER,
+                or_(
+                    User.document == old_doc,
+                    func.regexp_replace(User.document, r'\D', '', 'g') == old_clean_doc
+                )
+            ).all()
+            for u in linked_users:
+                u.document = clean_new_doc
     for field, value in update_data.items():
         setattr(customer, field, value)
         
@@ -567,8 +587,21 @@ def delete_address(
     db.commit()
     return {"message": "Endereço removido com sucesso"}
 
+def _query_customer_users(db: Session, customer: Customer):
+    import re
+    from sqlalchemy import func, or_
+    clean_doc = re.sub(r'\D', '', customer.document or '')
+    doc_filters = [User.document == customer.document]
+    if clean_doc:
+        doc_filters.append(func.regexp_replace(User.document, r'\D', '', 'g') == clean_doc)
+    return db.query(User).filter(
+        User.company_id == customer.company_id,
+        User.type == UserRole.CUSTOMER,
+        or_(*doc_filters)
+    )
+
 @router.get("/customers/{customer_id}/users")
-def get_customer_user(
+def get_customer_users(
     customer_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -584,19 +617,14 @@ def get_customer_user(
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
 
-    user = db.query(User).filter(
-        User.document == customer.document,
-        User.company_id == customer.company_id,
-        User.type == UserRole.CUSTOMER
-    ).first()
-
-    if not user:
-        return None
-        
+    users = _query_customer_users(db, customer).order_by(User.id.asc()).all()
     from app.schemas.user import User as UserPydanticSchema
-    if user.email:
-        user.email = user.email.strip().rstrip(';,').strip()
-    return UserPydanticSchema.from_orm(user)
+    result = []
+    for u in users:
+        if u.email:
+            u.email = u.email.strip().rstrip(';,').strip()
+        result.append(UserPydanticSchema.from_orm(u))
+    return result
 
 @router.post("/customers/{customer_id}/users")
 def create_customer_user(
@@ -605,6 +633,7 @@ def create_customer_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    from sqlalchemy import func
     from sqlalchemy.exc import IntegrityError
     from app.schemas.user import User as UserPydanticSchema
     
@@ -619,33 +648,28 @@ def create_customer_user(
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente não encontrado.")
 
-    clean_email = user_in.email.strip().rstrip(';,').strip()
+    clean_email = (user_in.email or "").strip().rstrip(';,').strip().lower()
+    if not clean_email or "@" not in clean_email:
+        raise HTTPException(status_code=400, detail="Informe um e-mail de acesso válido.")
 
-    existing_user = db.query(User).filter(
-        User.document == customer.document,
+    email_conflict = db.query(User).filter(
+        func.lower(User.email) == clean_email,
         User.company_id == customer.company_id,
         User.type == UserRole.CUSTOMER
     ).first()
-    
-    if existing_user:
-        existing_user.name = customer.name
-        existing_user.email = clean_email
-        existing_user.password_hash = get_password_hash(user_in.password)
-        try:
-            db.commit()
-            db.refresh(existing_user)
-            return UserPydanticSchema.from_orm(existing_user)
-        except IntegrityError:
-            db.rollback()
-            raise HTTPException(status_code=400, detail="E-mail já cadastrado por outro usuário.")
+    if email_conflict:
+        raise HTTPException(status_code=400, detail="Este e-mail já está cadastrado em um acesso B2B desta empresa.")
+
+    display_name = (user_in.name or "").strip() or customer.name
 
     db_user = User(
-        name=customer.name,
+        name=display_name,
         email=clean_email,
         document=customer.document,
         password_hash=get_password_hash(user_in.password),
         type=UserRole.CUSTOMER,
-        company_id=customer.company_id
+        company_id=customer.company_id,
+        active=True
     )
     
     try:
@@ -655,7 +679,102 @@ def create_customer_user(
         return UserPydanticSchema.from_orm(db_user)
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=400, detail="E-mail já cadastrado por outro usuário.")
+        raise HTTPException(status_code=400, detail="E-mail já cadastrado por outro usuário nesta empresa.")
+
+@router.patch("/customers/{customer_id}/users/{user_id}")
+def update_customer_user(
+    customer_id: int,
+    user_id: int,
+    user_in: CustomerUserUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from sqlalchemy import func
+    from sqlalchemy.exc import IntegrityError
+    from app.schemas.user import User as UserPydanticSchema
+
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
+        raise HTTPException(status_code=403, detail="Não autorizado.")
+
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+
+    target_user = _query_customer_users(db, customer).filter(User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Acesso de usuário não encontrado para este cliente.")
+
+    if user_in.name is not None:
+        clean_name = user_in.name.strip()
+        target_user.name = clean_name if clean_name else customer.name
+
+    if user_in.email is not None:
+        clean_email = user_in.email.strip().rstrip(';,').strip().lower()
+        if not clean_email or "@" not in clean_email:
+            raise HTTPException(status_code=400, detail="Informe um e-mail válido.")
+        conflict = db.query(User).filter(
+            User.id != target_user.id,
+            func.lower(User.email) == clean_email,
+            User.company_id == customer.company_id,
+            User.type == UserRole.CUSTOMER
+        ).first()
+        if conflict:
+            raise HTTPException(status_code=400, detail="Este e-mail já está em uso por outro acesso nesta empresa.")
+        target_user.email = clean_email
+
+    if user_in.password:
+        target_user.password_hash = get_password_hash(user_in.password)
+        target_user.failed_login_attempts = 0
+        target_user.locked_until = None
+
+    if user_in.active is not None:
+        target_user.active = user_in.active
+
+    try:
+        db.commit()
+        db.refresh(target_user)
+        return UserPydanticSchema.from_orm(target_user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Conflito ao atualizar o e-mail de acesso.")
+
+@router.delete("/customers/{customer_id}/users/{user_id}")
+def delete_customer_user(
+    customer_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from sqlalchemy.exc import IntegrityError
+    from app.models.user_session import UserSession
+
+    if current_user.type not in [UserRole.MASTER, UserRole.SELLER, UserRole.AGENT]:
+        raise HTTPException(status_code=403, detail="Não autorizado.")
+
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id,
+        Customer.company_id == current_user.company_id
+    ).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+
+    target_user = _query_customer_users(db, customer).filter(User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Acesso de usuário não encontrado para este cliente.")
+
+    try:
+        db.query(UserSession).filter(UserSession.user_id == target_user.id).delete()
+        db.delete(target_user)
+        db.commit()
+        return {"message": "Acesso removido com sucesso."}
+    except IntegrityError:
+        db.rollback()
+        target_user.active = False
+        db.commit()
+        return {"message": "Acesso desativado (possui histórico vinculado)."}
 
 @router.get("/customers/{customer_id}/financials")
 async def get_customer_financials_api(

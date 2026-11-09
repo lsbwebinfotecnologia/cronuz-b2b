@@ -82,11 +82,12 @@ export default function CustomerDetailsPage() {
   const [newContact, setNewContact] = useState({ name: '', email: '', phone: '', role: '' });
   const [savingContact, setSavingContact] = useState(false);
 
-  // B2B Auth States
-  const [customerUser, setCustomerUser] = useState<any>(null);
+  // B2B Auth States (Multiple logins per customer)
+  const [customerUsers, setCustomerUsers] = useState<any[]>([]);
+  const [editingAuthUser, setEditingAuthUser] = useState<any>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'create' | 'edit'>('create');
-  const [authForm, setAuthForm] = useState({ email: '', password: '' });
+  const [authForm, setAuthForm] = useState({ name: '', email: '', password: '', active: true });
   const [savingAuth, setSavingAuth] = useState(false);
 
   // CRM Timeline states
@@ -327,7 +328,7 @@ export default function CustomerDetailsPage() {
           });
           if (ures.ok) {
             const udata = await ures.json();
-            setCustomerUser(udata);
+            setCustomerUsers(Array.isArray(udata) ? udata : (udata ? [udata] : []));
           }
         } catch (e) {
           // Ignore silently
@@ -569,13 +570,25 @@ export default function CustomerDetailsPage() {
     } catch(e) { toast.error("Erro de sistema."); }
   }
 
-  function openAuthModal() {
-    if (customerUser) {
+  function openAuthModal(targetUser?: any) {
+    if (targetUser) {
       setAuthMode('edit');
-      setAuthForm({ email: customerUser.email, password: '' });
+      setEditingAuthUser(targetUser);
+      setAuthForm({
+        name: targetUser.name || customer?.name || '',
+        email: targetUser.email || '',
+        password: '',
+        active: targetUser.active !== false
+      });
     } else {
       setAuthMode('create');
-      setAuthForm({ email: customer.email || '', password: '' });
+      setEditingAuthUser(null);
+      setAuthForm({
+        name: customer?.name || '',
+        email: customerUsers.length === 0 ? (customer?.email || '') : '',
+        password: '',
+        active: true
+      });
     }
     setIsAuthModalOpen(true);
   }
@@ -584,46 +597,69 @@ export default function CustomerDetailsPage() {
     e.preventDefault();
     setSavingAuth(true);
     try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       if (authMode === 'create') {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers/${customerId}/users`, {
+        const res = await fetch(`${apiUrl}/customers/${customerId}/users`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(authForm)
+          body: JSON.stringify({
+            name: authForm.name,
+            email: authForm.email,
+            password: authForm.password
+          })
         });
         if (res.ok) {
-          toast.success("Acesso B2B criado com sucesso!");
-          setCustomerUser(await res.json());
+          const created = await res.json();
+          toast.success("Novo acesso B2B criado com sucesso!");
+          setCustomerUsers(prev => [...prev, created]);
           setIsAuthModalOpen(false);
         } else {
-          const err = await res.json();
+          const err = await res.json().catch(() => ({}));
           toast.error(err.detail || "Erro ao criar credencial.");
         }
-      } else {
-        // Edit mode
-        let hasError = false;
-        if (authForm.email !== customerUser.email) {
-           const eRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/${customerUser.id}/email`, {
-              method: 'PATCH',
-              headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: authForm.email })
-           });
-           if (!eRes.ok) hasError = true;
-           else setCustomerUser({ ...customerUser, email: authForm.email });
+      } else if (editingAuthUser) {
+        const res = await fetch(`${apiUrl}/customers/${customerId}/users/${editingAuthUser.id}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: authForm.name,
+            email: authForm.email,
+            password: authForm.password || undefined,
+            active: authForm.active
+          })
+        });
+        if (res.ok) {
+          const updated = await res.json();
+          toast.success("Acesso B2B atualizado com sucesso!");
+          setCustomerUsers(prev => prev.map(u => u.id === updated.id ? updated : u));
+          setIsAuthModalOpen(false);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          toast.error(err.detail || "Ocorreu um erro ao atualizar o acesso.");
         }
-        if (authForm.password) {
-           const pRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/${customerUser.id}/password`, {
-              method: 'PATCH',
-              headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ password: authForm.password })
-           });
-           if (!pRes.ok) hasError = true;
-        }
-        
-        if (hasError) toast.error("Ocorreu um erro ao atualizar email ou senha.");
-        else { toast.success("Acesso atualizado!"); setIsAuthModalOpen(false); }
       }
     } catch(e) { toast.error("Erro interno."); }
     finally { setSavingAuth(false); }
+  }
+
+  async function handleDeleteAuthUser(targetUser: any) {
+    if (!confirm(`Tem certeza que deseja remover o acesso de "${targetUser.email}"?`)) return;
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${apiUrl}/customers/${customerId}/users/${targetUser.id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+      if (res.ok) {
+        toast.success("Acesso removido com sucesso!");
+        setCustomerUsers(prev => prev.filter(u => u.id !== targetUser.id));
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.detail || "Erro ao remover acesso.");
+      }
+    } catch (e) {
+      toast.error("Erro de conexão ao remover acesso.");
+    }
   }
 
   function openGroupModal() {
@@ -1388,40 +1424,101 @@ export default function CustomerDetailsPage() {
         {/* Sidebar Panel for B2B Portal Login Context */}
         <div className="lg:w-1/3">
           <div className="sticky top-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/40 dark:shadow-none">
-            <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2 mb-2 dark:text-white">
-              <ExternalLink className="h-5 w-5 text-[var(--color-primary-base)] dark:text-[var(--color-primary-base)]" />
-              Acesso ao Portal
-            </h3>
-            <p className="text-sm text-slate-500 mb-6 dark:text-slate-400">
-              O cliente acessa o B2B para auto-atendimento usando o E-mail de acesso.
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
+                <ExternalLink className="h-5 w-5 text-[var(--color-primary-base)] dark:text-[var(--color-primary-base)]" />
+                Acesso ao Portal
+              </h3>
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
+                customerUsers.length > 0
+                  ? 'bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
+                  : 'bg-amber-50 text-amber-600 border-amber-200 dark:bg-amber-500/10 dark:text-amber-500 dark:border-amber-500/20'
+              }`}>
+                {customerUsers.length > 0
+                  ? `${customerUsers.length} ${customerUsers.length === 1 ? 'Login Ativo' : 'Logins'}`
+                  : 'Sem Login'}
+              </span>
+            </div>
+            <p className="text-sm text-slate-500 mb-4 dark:text-slate-400">
+              Cadastre um ou mais logins de acesso B2B para os compradores e setores deste cliente.
             </p>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center dark:bg-slate-950/50 dark:border-slate-800">
-              {customerUser ? (
-                 <>
-                   <span className="inline-block px-3 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full text-xs font-medium mb-3 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
-                     Login Ativo
-                   </span>
-                   <p className="text-sm font-medium text-slate-900 mb-1 dark:text-white">{customerUser.email}</p>
-                   <p className="text-xs text-slate-500 mb-4 dark:text-slate-400">Senha criptografada no banco</p>
-                   <button onClick={openAuthModal} className="w-full bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-medium py-2 px-4 rounded-lg transition-colors text-sm dark:bg-slate-800 dark:hover:bg-slate-700 dark:border-transparent dark:text-white">
-                     Editar Acesso / Senha
-                   </button>
-                 </>
-              ) : (
-                 <>
-                   <span className="inline-block px-3 py-1 bg-amber-50 text-amber-600 border border-amber-200 rounded-full text-xs font-medium mb-3 dark:bg-amber-500/10 dark:text-amber-500 dark:border-amber-500/20">
-                     Login Inativo
-                   </span>
-                   <p className="text-sm text-slate-600 mb-4 dark:text-slate-300">
-                     Gere uma credencial de senha para o cliente explorar o catálogo online.
-                   </p>
-                   <button onClick={openAuthModal} className="w-full bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm">
-                     Criar Acesso B2B
-                   </button>
-                 </>
-              )}
-            </div>
+            {customerUsers.length > 0 ? (
+              <div className="space-y-3">
+                <div className="space-y-2.5 max-h-80 overflow-y-auto pr-0.5">
+                  {customerUsers.map((u: any) => (
+                    <div
+                      key={u.id}
+                      className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-left dark:bg-slate-950/50 dark:border-slate-800 transition-colors hover:border-slate-300 dark:hover:border-slate-700"
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
+                              {u.name || customer?.name || 'Acesso B2B'}
+                            </span>
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                              u.active !== false
+                                ? 'bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
+                                : 'bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
+                            }`}>
+                              {u.active !== false ? 'Ativo' : 'Inativo'}
+                            </span>
+                          </div>
+                          <p className="text-sm font-medium text-slate-900 dark:text-white break-all mt-0.5">
+                            {u.email}
+                          </p>
+                          <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">
+                            Senha criptografada • ID #{u.id}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAuthUser(u)}
+                          className="text-slate-400 hover:text-rose-500 p-1 rounded-md hover:bg-rose-50 dark:hover:bg-rose-500/10 transition-colors shrink-0"
+                          title="Remover este login"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="mt-2.5 pt-2.5 border-t border-slate-200/70 dark:border-slate-800 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => openAuthModal(u)}
+                          className="w-full bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 font-medium py-1.5 px-3 rounded-lg transition-colors text-xs flex items-center justify-center gap-1.5 dark:bg-slate-800 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-white"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" /> Editar Acesso / Senha
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => openAuthModal()}
+                  className="w-full bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2.5 px-4 rounded-xl transition-colors text-sm flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  <Plus className="w-4 h-4" /> Adicionar Novo Login B2B
+                </button>
+              </div>
+            ) : (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center dark:bg-slate-950/50 dark:border-slate-800">
+                <span className="inline-block px-3 py-1 bg-amber-50 text-amber-600 border border-amber-200 rounded-full text-xs font-medium mb-3 dark:bg-amber-500/10 dark:text-amber-500 dark:border-amber-500/20">
+                  Login Inativo
+                </span>
+                <p className="text-sm text-slate-600 mb-4 dark:text-slate-300">
+                  Gere credenciais de acesso e senha para o cliente explorar o catálogo online.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => openAuthModal()}
+                  className="w-full bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm flex items-center justify-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" /> Criar Acesso B2B
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1514,29 +1611,75 @@ export default function CustomerDetailsPage() {
             className="bg-white border border-slate-200 rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl dark:bg-slate-900 dark:border-slate-800"
           >
             <div className="flex justify-between items-center p-6 border-b border-slate-200 dark:border-slate-800">
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white">{authMode === 'create' ? 'Criar Acesso B2B' : 'Editar Acesso'}</h3>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                {authMode === 'create' ? 'Novo Login B2B' : 'Editar Login B2B'}
+              </h3>
               <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors dark:text-slate-500 dark:hover:text-white">
                 <X className="h-5 w-5" />
               </button>
             </div>
             <form onSubmit={handleSaveAuth} className="p-6 space-y-4">
-              {authMode === 'edit' && <p className="text-xs text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-200 mb-4 dark:text-amber-400/80 dark:bg-amber-500/10 dark:border-amber-500/20">Atenção: Apenas altere a senha se o cliente solicitou. A senha original não pode ser recuperada, apenas substituída.</p>}
-               <div>
-                  <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">E-mail de Login</label>
-                  <input type="email" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500" />
-               </div>
-               <div>
-                  <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">
-                    {authMode === 'create' ? 'Senha Provisória' : 'Nova Senha (Opcional)'}
-                  </label>
-                  <input type="password" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} required={authMode === 'create'} minLength={6} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500" />
-               </div>
-               <div className="flex justify-end gap-3 pt-6 border-t border-slate-200 mt-6 dark:border-slate-800">
-                 <button type="button" onClick={() => setIsAuthModalOpen(false)} className="px-4 py-2 text-slate-500 hover:text-slate-700 transition-colors text-sm dark:text-slate-400 dark:hover:text-white">Cancelar</button>
-                 <button type="submit" disabled={savingAuth} className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white px-6 py-2 rounded-xl transition-colors disabled:opacity-50 text-sm font-medium">
-                    {savingAuth ? 'Salvando...' : 'Salvar Credenciais'}
-                 </button>
-               </div>
+              {authMode === 'edit' && (
+                <p className="text-xs text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-200 mb-2 dark:text-amber-400/80 dark:bg-amber-500/10 dark:border-amber-500/20">
+                  Atenção: Preencha o campo de senha apenas se desejar redefinir a senha deste acesso.
+                </p>
+              )}
+              <div>
+                <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">
+                  Identificação / Nome do Usuário
+                </label>
+                <input
+                  type="text"
+                  value={authForm.name}
+                  onChange={e => setAuthForm({ ...authForm, name: e.target.value })}
+                  placeholder={customer?.name || 'Ex: Compras, Financeiro, Filial BH'}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">E-mail de Login</label>
+                <input
+                  type="email"
+                  value={authForm.email}
+                  onChange={e => setAuthForm({ ...authForm, email: e.target.value })}
+                  required
+                  placeholder="usuario@empresa.com.br"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-500 uppercase mb-1 block dark:text-slate-400">
+                  {authMode === 'create' ? 'Senha de Acesso' : 'Nova Senha (Opcional)'}
+                </label>
+                <input
+                  type="password"
+                  value={authForm.password}
+                  onChange={e => setAuthForm({ ...authForm, password: e.target.value })}
+                  required={authMode === 'create'}
+                  minLength={6}
+                  placeholder={authMode === 'create' ? 'Mínimo 6 caracteres' : 'Deixe em branco para manter a atual'}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-slate-900 outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:border-slate-800 dark:text-white dark:focus:border-indigo-500 text-sm"
+                />
+              </div>
+              {authMode === 'edit' && (
+                <label className="flex items-center gap-2.5 pt-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={authForm.active}
+                    onChange={e => setAuthForm({ ...authForm, active: e.target.checked })}
+                    className="rounded border-slate-300 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)]"
+                  />
+                  <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    Login ativo para acesso ao portal B2B
+                  </span>
+                </label>
+              )}
+              <div className="flex justify-end gap-3 pt-6 border-t border-slate-200 mt-6 dark:border-slate-800">
+                <button type="button" onClick={() => setIsAuthModalOpen(false)} className="px-4 py-2 text-slate-500 hover:text-slate-700 transition-colors text-sm dark:text-slate-400 dark:hover:text-white">Cancelar</button>
+                <button type="submit" disabled={savingAuth} className="bg-[var(--color-primary-base)] hover:bg-[var(--color-primary-hover)] text-white px-6 py-2 rounded-xl transition-colors disabled:opacity-50 text-sm font-medium">
+                  {savingAuth ? 'Salvando...' : authMode === 'create' ? 'Criar Login' : 'Salvar Alterações'}
+                </button>
+              </div>
             </form>
           </motion.div>
         </div>

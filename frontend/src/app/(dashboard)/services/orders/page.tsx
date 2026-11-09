@@ -31,6 +31,23 @@ export default function ServiceOrdersPage() {
     const [totalExpected, setTotalExpected] = useState(0);
     const [totalCompleted, setTotalCompleted] = useState(0);
     const [totalCancelled, setTotalCancelled] = useState(0);
+    const [activeRowIdx, setActiveRowIdx] = useState<number>(0);
+    const [showProjectionChart, setShowProjectionChart] = useState<boolean>(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('cronuz_os_hide_chart') !== 'true';
+        }
+        return true;
+    });
+
+    const toggleProjectionChart = () => {
+        setShowProjectionChart(prev => {
+            const next = !prev;
+            if (typeof window !== 'undefined') {
+                localStorage.setItem('cronuz_os_hide_chart', next ? 'false' : 'true');
+            }
+            return next;
+        });
+    };
     
     // Create new Order Modal
     const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -151,8 +168,8 @@ export default function ServiceOrdersPage() {
     const fetchOrders = async () => {
         setLoading(true);
         try {
-            let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders?skip=${(page-1)*50}&limit=50`;
-            if (search) url += `&search=${search}`;
+            let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/service-orders?skip=${(page-1)*100}&limit=100`;
+            if (search && /^\d+$/.test(search.trim())) url += `&search=${search.trim()}`;
             if (customerFilter) url += `&customer_id=${customerFilter}`;
             if (startDate && endDate) {
                 url += `&start_date=${startDate}&end_date=${endDate}`;
@@ -1006,175 +1023,427 @@ export default function ServiceOrdersPage() {
 
     const getStatusColor = (status: string) => {
         switch(status) {
-            case 'Pendente': return 'bg-amber-100 text-amber-700 border-amber-200';
-            case 'Em Execucao': return 'bg-indigo-100 text-indigo-700 border-indigo-200';
-            case 'Concluido': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-            case 'Cancelado': return 'bg-rose-100 text-rose-700 border-rose-200';
-            default: return 'bg-slate-100 text-slate-700 border-slate-200';
+            case 'Pendente': return 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800';
+            case 'Em Execucao': return 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800';
+            case 'Concluido': return 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800';
+            case 'Cancelado': return 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800';
+            default: return 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700';
         }
     };
 
+    const isOrderPendingBilling = (o: any) =>
+        o.status !== 'Cancelado' && (o.status_nfse === 'Nao Emitida' || o.status_nfse === 'Erro' || !o.status_nfse);
+
+    const filteredOrders = orders.filter(o => {
+        // Filtro rápido textual local (além de ID numérico no backend)
+        if (search && !/^\d+$/.test(search.trim())) {
+            const q = search.trim().toLowerCase();
+            const matchCust = (o.customer_name || '').toLowerCase().includes(q);
+            const matchSvc = (o.service_name || '').toLowerCase().includes(q);
+            const matchDesc = (o.custom_description || '').toLowerCase().includes(q);
+            const matchId = String(o.local_id || o.id).includes(q);
+            if (!matchCust && !matchSvc && !matchDesc && !matchId) return false;
+        } else if (search && /^\d+$/.test(search.trim())) {
+            const q = search.trim();
+            if (String(o.id) !== q && String(o.local_id || '') !== q) return false;
+        }
+
+        if (statusFilter === 'Todas') return true;
+        if (statusFilter === 'Ativas') return o.status !== 'Cancelado';
+        if (statusFilter === 'Pendente Faturamento') return isOrderPendingBilling(o);
+        if (statusFilter === 'Concluido_Pendente_Faturamento') return o.status === 'Concluido' && isOrderPendingBilling(o);
+        if (statusFilter === 'Faturadas') return o.status !== 'Cancelado' && (o.status_nfse === 'Emitida' || o.status_nfse === 'EMITIDA' || o.status_nfse === 'Processando');
+        return o.status === statusFilter;
+    }).sort((a, b) => {
+        if (sortField === 'execution_date') {
+            const da = new Date(a.execution_date).getTime();
+            const db = new Date(b.execution_date).getTime();
+            return sortDir === 'asc' ? da - db : db - da;
+        }
+        if (sortField === 'negotiated_value') {
+            return sortDir === 'asc' ? (a.negotiated_value || 0) - (b.negotiated_value || 0) : (b.negotiated_value || 0) - (a.negotiated_value || 0);
+        }
+        if (sortField === 'customer_name') {
+            return sortDir === 'asc'
+                ? (a.customer_name || '').localeCompare(b.customer_name || '')
+                : (b.customer_name || '').localeCompare(a.customer_name || '');
+        }
+        return sortDir === 'asc' ? a.id - b.id : b.id - a.id;
+    });
+
+    const pendingBillingOrders = orders.filter(isOrderPendingBilling);
+    const totalPendingBillingValue = pendingBillingOrders.reduce((acc, o) => acc + (Number(o.negotiated_value) || 0), 0);
+    const visibleTotalValue = filteredOrders.reduce((acc, o) => acc + (Number(o.negotiated_value) || 0), 0);
+    const selectedTotalValue = orders
+        .filter(o => selectedOrders.includes(o.id))
+        .reduce((acc, o) => acc + (Number(o.negotiated_value) || 0), 0);
+
+    // Mantém o cursor de linha dentro dos limites ao mudar filtros
+    useEffect(() => {
+        if (activeRowIdx >= filteredOrders.length) {
+            setActiveRowIdx(Math.max(0, filteredOrders.length - 1));
+        }
+    }, [filteredOrders.length, activeRowIdx]);
+
+    // Navegação por teclado estilo Access / Planilha
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+            if (isCreateOpen || isBillOpen || isSplitOpen || isGroupModalOpen || isCustomerReportOpen || isCancelNfseOpen || isConsultModalOpen || isPrintPointModalOpen || isBulkDateModalOpen) return;
+            if (filteredOrders.length === 0) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActiveRowIdx(prev => Math.min(filteredOrders.length - 1, prev + 1));
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActiveRowIdx(prev => Math.max(0, prev - 1));
+            } else if (e.key === 'Home') {
+                e.preventDefault();
+                setActiveRowIdx(0);
+            } else if (e.key === 'End') {
+                e.preventDefault();
+                setActiveRowIdx(filteredOrders.length - 1);
+            } else if (e.key === ' ') {
+                e.preventDefault();
+                const target = filteredOrders[activeRowIdx];
+                if (target) {
+                    setSelectedOrders(prev => prev.includes(target.id) ? prev.filter(x => x !== target.id) : [...prev, target.id]);
+                }
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const target = filteredOrders[activeRowIdx];
+                if (target) {
+                    window.location.href = `/services/orders/${target.id}`;
+                }
+            } else if (e.key === 'F2') {
+                e.preventDefault();
+                const target = filteredOrders[activeRowIdx];
+                if (target && target.status === 'Concluido' && target.status_nfse === 'Nao Emitida') {
+                    setBillData({
+                        order_id: target.id,
+                        installments_count: '1',
+                        first_due_date: target.execution_date,
+                        account_id: '',
+                        print_point_id: target.is_nfse ? '' : (companyDefaultPrintPointId ? companyDefaultPrintPointId.toString() : '')
+                    });
+                    setIsBillOpen(true);
+                }
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [filteredOrders, activeRowIdx, isCreateOpen, isBillOpen, isSplitOpen, isGroupModalOpen, isCustomerReportOpen, isCancelNfseOpen, isConsultModalOpen, isPrintPointModalOpen, isBulkDateModalOpen, companyDefaultPrintPointId]);
+
     return (
-        <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
-                <div>
-                    <h1 className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
-                        <FileText className="w-8 h-8 text-indigo-500" />
-                        Ordens de Serviço (O.S.)
-                    </h1>
-                    <p className="text-sm text-slate-500 mt-2 dark:text-slate-400">
-                        Venda de serviços, faturamento integrado e status de NFS-e.
-                    </p>
+        <div className="p-3 md:p-6 max-w-[1600px] mx-auto space-y-4">
+            {/* Cabeçalho Compacto com Ergonomia Access/Excel */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 bg-white dark:bg-slate-900 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                <div className="flex items-center gap-3 flex-wrap">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                        <FileText className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                            <h1 className="text-lg md:text-xl font-black text-slate-900 dark:text-white tracking-tight">
+                                Ordens de Serviço (O.S.)
+                            </h1>
+                            <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700">
+                                Datasheet View
+                            </span>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 flex-wrap mt-0.5">
+                            <span>Controle operacional, faturamento integrado e NFS-e</span>
+                            <span className="hidden lg:inline-flex items-center gap-1.5 text-[10px] font-mono text-slate-400 dark:text-slate-500 border-l border-slate-200 dark:border-slate-700 pl-2">
+                                <kbd className="px-1 py-0.5 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700">↑↓</kbd> Navegar
+                                <kbd className="px-1 py-0.5 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700">Espaço</kbd> Marcar
+                                <kbd className="px-1 py-0.5 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700">Enter</kbd> Abrir O.S.
+                                <kbd className="px-1 py-0.5 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700">F2</kbd> Faturar
+                            </span>
+                        </p>
+                    </div>
                 </div>
                 
-                <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center gap-2 w-full md:w-auto justify-end flex-wrap">
+                    <button
+                        type="button"
+                        onClick={toggleProjectionChart}
+                        className={`px-3 py-2 rounded-xl font-bold transition flex items-center gap-1.5 text-xs border ${
+                            showProjectionChart
+                                ? 'bg-indigo-50/80 hover:bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800'
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+                        }`}
+                        title={showProjectionChart ? 'Ocultar painel gráfico de projeção anual' : 'Exibir painel gráfico de projeção anual'}
+                    >
+                        {showProjectionChart ? (
+                            <>
+                                <ChevronUp className="w-4 h-4" /> Ocultar Gráfico
+                            </>
+                        ) : (
+                            <>
+                                <ChevronDown className="w-4 h-4" /> Exibir Gráfico
+                            </>
+                        )}
+                    </button>
                     <button 
                         onClick={() => {
                             setIsCustomerReportOpen(true);
                             fetchCustomerReport();
                         }}
-                        className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl font-semibold transition flex items-center gap-2 text-sm shadow-sm"
+                        className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl font-bold transition flex items-center gap-2 text-xs border border-slate-200 dark:border-slate-700"
                     >
                         <BarChart3 className="w-4 h-4 text-indigo-500" /> Relatório por Cliente
                     </button>
-                    <button onClick={() => setIsCreateOpen(true)} className="px-5 py-2.5 bg-[var(--color-primary-base)] text-white rounded-xl font-semibold hover:opacity-90 shadow-sm transition flex items-center gap-2 text-sm whitespace-nowrap">
+                    <button
+                        onClick={() => setIsCreateOpen(true)}
+                        className="px-4 py-2 bg-[var(--color-primary-base)] text-white rounded-xl font-bold hover:opacity-90 shadow-sm transition flex items-center gap-1.5 text-xs whitespace-nowrap"
+                    >
                         <Plus className="w-4 h-4"/> Nova O.S.
                     </button>
                 </div>
             </div>
             
-            {/* Gráfico Compacto de Projeção Anual & Histórico de O.S. */}
-            <ServiceOrdersProjectionChart 
-                customerFilter={customerFilter}
-                onSelectMonthFilter={(start, end) => {
-                    setStartDate(start);
-                    setEndDate(end);
-                    setActivePeriodShortcut('custom');
-                    setPage(1);
-                }}
-            />
+            {/* Gráfico Compacto de Projeção Anual & Histórico de O.S. (Ocultável pelo usuário) */}
+            {showProjectionChart && (
+                <ServiceOrdersProjectionChart 
+                    customerFilter={customerFilter}
+                    onSelectMonthFilter={(start, end) => {
+                        setStartDate(start);
+                        setEndDate(end);
+                        setActivePeriodShortcut('custom');
+                        setPage(1);
+                    }}
+                />
+            )}
 
-            {/* Nova Action Bar de Filtros e Resumo */}
-            <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col gap-5">
-                
-                {/* Linha Superior: Filtros */}
-                <div className="flex flex-wrap items-center gap-5 w-full">
-                    <div className="flex flex-col gap-1.5 min-w-fit">
-                        <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Data de Execução</label>
-                        {/* Atalhos rápidos */}
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                            {[
-                                { key: 'este_mes', label: 'Este mês' },
-                                { key: 'proximo_mes', label: 'Próx. mês' },
-                                { key: 'ultimos_3', label: 'Últ. 3 meses' },
-                                { key: 'sem_filtro', label: 'Sem filtro' },
-                            ].map(({ key, label }) => (
-                                <button
-                                    key={key}
-                                    type="button"
-                                    onClick={() => applyPeriodShortcut(key)}
-                                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
-                                        activePeriodShortcut === key
-                                            ? 'bg-[var(--color-primary-base)] text-white border-[var(--color-primary-base)]'
-                                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-[var(--color-primary-base)] hover:text-[var(--color-primary-base)]'
-                                    }`}
-                                >
-                                    {label}
-                                </button>
-                            ))}
-                            {/* Inputs de data customizada */}
-                            <div className="flex items-center gap-1.5 ml-1">
-                               <input
-                                   type="date"
-                                   value={startDate}
-                                   onChange={(e) => { setStartDate(e.target.value); setActivePeriodShortcut('custom'); }}
-                                   className="px-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
-                               />
-                               <span className="text-slate-400 text-xs">até</span>
-                               <input
-                                   type="date"
-                                   value={endDate}
-                                   onChange={(e) => { setEndDate(e.target.value); setActivePeriodShortcut('custom'); }}
-                                   className="px-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
-                               />
+            {/* Painel de Filtros Distribuído em Grid de 12 Colunas + KPIs Financeiros */}
+            <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-3.5">
+                {/* Linha 1: Grid de 12 Colunas perfeitamente alinhado */}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3.5 items-end">
+                    {/* Coluna 1-5: Período de Execução com Atalhos no Topo */}
+                    <div className="xl:col-span-5 flex flex-col gap-1.5">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Período de Execução
+                            </label>
+                            <div className="flex items-center gap-1">
+                                {[
+                                    { key: 'este_mes', label: 'Este mês' },
+                                    { key: 'proximo_mes', label: 'Próx. mês' },
+                                    { key: 'ultimos_3', label: 'Últ. 3m' },
+                                    { key: 'sem_filtro', label: 'Tudo' },
+                                ].map(({ key, label }) => (
+                                    <button
+                                        key={key}
+                                        type="button"
+                                        onClick={() => applyPeriodShortcut(key)}
+                                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold border transition-all ${
+                                            activePeriodShortcut === key
+                                                ? 'bg-slate-900 dark:bg-indigo-600 text-white border-slate-900 dark:border-indigo-600'
+                                                : 'bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-slate-400'
+                                        }`}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
                             </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                            <input
+                                type="date"
+                                value={startDate}
+                                onChange={(e) => { setStartDate(e.target.value); setActivePeriodShortcut('custom'); }}
+                                className="h-9 px-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono focus:outline-none focus:border-[var(--color-primary-base)] bg-slate-50/70 dark:bg-slate-950 dark:text-white w-full"
+                                title="Data Inicial"
+                            />
+                            <input
+                                type="date"
+                                value={endDate}
+                                onChange={(e) => { setEndDate(e.target.value); setActivePeriodShortcut('custom'); }}
+                                className="h-9 px-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono focus:outline-none focus:border-[var(--color-primary-base)] bg-slate-50/70 dark:bg-slate-950 dark:text-white w-full"
+                                title="Data Final"
+                            />
                         </div>
                     </div>
                     
-                    <div className="flex items-center gap-3 min-w-fit">
-                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Nº O.S.:</label>
-                        <input 
-                            type="text" 
-                            placeholder="Buscar por ID..."
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && fetchOrders()}
-                            className="px-4 py-2 w-28 md:w-auto border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
-                        />
-                    </div>
-
-                    <div className="flex items-center gap-3 min-w-fit relative">
-                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Cliente:</label>
-                        <div className="w-64">
-                            <CustomerAutocomplete 
-                                value={customerFilter}
-                                onChange={(id) => setCustomerFilter(id)}
-                                placeholder="Todos os Clientes..."
+                    {/* Coluna 6-7: Nº O.S. / Busca Rápida */}
+                    <div className="xl:col-span-2 flex flex-col gap-1.5">
+                        <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                            Nº O.S. / Busca Rápida
+                        </label>
+                        <div className="relative">
+                            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                            <input 
+                                type="text" 
+                                placeholder="ID, cliente ou serviço..."
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && fetchOrders()}
+                                className="h-9 pl-8 pr-3 w-full border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium focus:outline-none focus:border-[var(--color-primary-base)] bg-slate-50/70 dark:bg-slate-950 dark:text-white"
                             />
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3 min-w-fit md:ml-auto">
-                        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Status:</label>
+                    {/* Coluna 8-10: Cliente / Tomador */}
+                    <div className="xl:col-span-3 flex flex-col gap-1.5 relative">
+                        <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                            Cliente / Tomador
+                        </label>
+                        <div className="w-full">
+                            <CustomerAutocomplete 
+                                value={customerFilter}
+                                onChange={(id) => setCustomerFilter(id)}
+                                placeholder="Todos os Clientes..."
+                                compact
+                            />
+                        </div>
+                    </div>
+
+                    {/* Coluna 11-12: Visão / Filtro de Status */}
+                    <div className="xl:col-span-2 flex flex-col gap-1.5">
+                        <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                            Visão / Status
+                        </label>
                         <select 
                             value={statusFilter}
                             onChange={(e) => setStatusFilter(e.target.value)}
-                            className="px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:outline-none focus:border-[var(--color-primary-base)] dark:bg-slate-950 dark:text-white"
+                            className="h-9 px-3 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold focus:outline-none focus:border-[var(--color-primary-base)] bg-slate-50/70 dark:bg-slate-950 dark:text-white w-full cursor-pointer"
                         >
                             <option value="Ativas">Ativas (sem Canceladas)</option>
-                            <option value="Todas">Todas</option>
-                            <option value="Pendente">Pendente</option>
-                            <option value="Em Execucao">Em Execução</option>
-                            <option value="Concluido">Concluído</option>
-                            <option value="Cancelado">Cancelado</option>
+                            <option value="Pendente Faturamento">⚡ Pendente Faturamento</option>
+                            <option value="Concluido_Pendente_Faturamento">💰 Prontas p/ Faturar</option>
+                            <option value="Faturadas">✅ Faturadas / Emitidas</option>
+                            <option value="Pendente">⏳ Pendente (Execução)</option>
+                            <option value="Em Execucao">🔧 Em Execução</option>
+                            <option value="Concluido">✔️ Concluído (Geral)</option>
+                            <option value="Cancelado">🚫 Cancelado</option>
+                            <option value="Todas">📋 Todas as O.S.</option>
                         </select>
                     </div>
                 </div>
 
-                {/* Linha Inferior: Caixas Financeiras (Resumo) */}
-                <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap md:flex-nowrap items-center gap-3 w-full justify-between lg:justify-end">
-                    <div className="bg-indigo-50 dark:bg-indigo-900/30 px-4 py-2 rounded-xl border border-indigo-100 dark:border-indigo-800 flex flex-col items-start lg:items-end min-w-fit flex-1 md:flex-none">
-                        <span className="text-[10px] uppercase font-black text-indigo-500">Pendentes (Previstos)</span>
-                        <span className="text-sm font-bold text-indigo-700 dark:text-indigo-400 leading-tight">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalExpected)}
+                {/* Linha 2: 4 Indicadores Financeiros Distribuídos Uniformemente (Clicáveis para Filtrar) */}
+                <div className="pt-3 border-t border-slate-100 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <button
+                        type="button"
+                        onClick={() => setStatusFilter(statusFilter === 'Pendente Faturamento' ? 'Ativas' : 'Pendente Faturamento')}
+                        className={`px-3.5 py-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 ${
+                            statusFilter === 'Pendente Faturamento'
+                                ? 'bg-amber-100/90 dark:bg-amber-900/40 border-amber-400 ring-1 ring-amber-400 shadow-xs'
+                                : 'bg-amber-50/70 dark:bg-amber-950/25 border-amber-200/80 dark:border-amber-800/60 hover:border-amber-400'
+                        }`}
+                        title="Clique para filtrar apenas serviços pendentes de faturamento"
+                    >
+                        <div>
+                            <span className="text-[10px] uppercase font-black text-amber-700 dark:text-amber-400 tracking-wide block">
+                                Pendente Faturamento
+                            </span>
+                            <span className="text-sm font-mono font-black text-amber-900 dark:text-amber-200 mt-0.5 block">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalPendingBillingValue)}
+                            </span>
+                        </div>
+                        <span className="px-2 py-1 rounded-lg text-xs font-mono font-black bg-amber-200/80 dark:bg-amber-900 text-amber-900 dark:text-amber-200">
+                            {pendingBillingOrders.length} O.S.
                         </span>
-                    </div>
-                    <div className="bg-emerald-50 dark:bg-emerald-900/30 px-4 py-2 rounded-xl border border-emerald-100 dark:border-emerald-800 flex flex-col items-start lg:items-end min-w-fit flex-1 md:flex-none">
-                        <span className="text-[10px] uppercase font-black text-emerald-500">Concluídas (Realizado)</span>
-                        <span className="text-sm font-bold text-emerald-700 dark:text-emerald-400 leading-tight">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalCompleted)}
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setStatusFilter(statusFilter === 'Pendente' ? 'Ativas' : 'Pendente')}
+                        className={`px-3.5 py-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 ${
+                            statusFilter === 'Pendente'
+                                ? 'bg-indigo-100/90 dark:bg-indigo-900/40 border-indigo-400 ring-1 ring-indigo-400 shadow-xs'
+                                : 'bg-indigo-50/70 dark:bg-indigo-950/25 border-indigo-100 dark:border-indigo-800/60 hover:border-indigo-300'
+                        }`}
+                        title="Clique para filtrar serviços pendentes de execução"
+                    >
+                        <div>
+                            <span className="text-[10px] uppercase font-black text-indigo-600 dark:text-indigo-400 tracking-wide block">
+                                Pendentes (Previstos)
+                            </span>
+                            <span className="text-sm font-mono font-black text-indigo-800 dark:text-indigo-300 mt-0.5 block">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalExpected)}
+                            </span>
+                        </div>
+                        <span className="px-2 py-1 rounded-lg text-xs font-mono font-bold bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
+                            {orders.filter(o => o.status === 'Pendente' || o.status === 'Em Execucao').length} O.S.
                         </span>
-                    </div>
-                    <div className="bg-rose-50 dark:bg-rose-900/30 px-4 py-2 rounded-xl border border-rose-100 dark:border-rose-800 flex flex-col items-start lg:items-end min-w-fit flex-1 md:flex-none">
-                        <span className="text-[10px] uppercase font-black text-rose-500">Canceladas (Estorno)</span>
-                        <span className="text-sm font-bold text-rose-700 dark:text-rose-400 leading-tight">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalCancelled)}
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setStatusFilter(statusFilter === 'Concluido' ? 'Ativas' : 'Concluido')}
+                        className={`px-3.5 py-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 ${
+                            statusFilter === 'Concluido'
+                                ? 'bg-emerald-100/90 dark:bg-emerald-900/40 border-emerald-400 ring-1 ring-emerald-400 shadow-xs'
+                                : 'bg-emerald-50/70 dark:bg-emerald-950/25 border-emerald-100 dark:border-emerald-800/60 hover:border-emerald-300'
+                        }`}
+                        title="Clique para filtrar serviços concluídos"
+                    >
+                        <div>
+                            <span className="text-[10px] uppercase font-black text-emerald-600 dark:text-emerald-400 tracking-wide block">
+                                Concluídas (Realizado)
+                            </span>
+                            <span className="text-sm font-mono font-black text-emerald-800 dark:text-emerald-300 mt-0.5 block">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalCompleted)}
+                            </span>
+                        </div>
+                        <span className="px-2 py-1 rounded-lg text-xs font-mono font-bold bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300">
+                            {orders.filter(o => o.status === 'Concluido').length} O.S.
                         </span>
-                    </div>
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => setStatusFilter(statusFilter === 'Cancelado' ? 'Ativas' : 'Cancelado')}
+                        className={`px-3.5 py-2.5 rounded-xl border text-left transition flex items-center justify-between gap-2 ${
+                            statusFilter === 'Cancelado'
+                                ? 'bg-rose-100/90 dark:bg-rose-900/40 border-rose-400 ring-1 ring-rose-400 shadow-xs'
+                                : 'bg-rose-50/70 dark:bg-rose-950/25 border-rose-100 dark:border-rose-800/60 hover:border-rose-300'
+                        }`}
+                        title="Clique para filtrar serviços cancelados"
+                    >
+                        <div>
+                            <span className="text-[10px] uppercase font-black text-rose-600 dark:text-rose-400 tracking-wide block">
+                                Canceladas (Estorno)
+                            </span>
+                            <span className="text-sm font-mono font-black text-rose-800 dark:text-rose-300 mt-0.5 block">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(totalCancelled)}
+                            </span>
+                        </div>
+                        <span className="px-2 py-1 rounded-lg text-xs font-mono font-bold bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300">
+                            {orders.filter(o => o.status === 'Cancelado').length} O.S.
+                        </span>
+                    </button>
                 </div>
             </div>
 
             {/* BARRA DE AÇÕES EM LOTE NO TOPO */}
             {selectedOrders.length > 0 && (
-                <div className="bg-indigo-50 border border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-800 rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm animate-in fade-in duration-300">
+                <div className="bg-indigo-50/90 border border-indigo-300 dark:bg-indigo-950/50 dark:border-indigo-800 rounded-xl px-4 py-2.5 flex flex-col md:flex-row items-center justify-between gap-3 shadow-sm animate-in fade-in duration-200">
                     <div className="flex items-center gap-3">
-                        <div className="bg-indigo-600 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shadow-md">{selectedOrders.length}</div>
-                        <span className="text-indigo-900 dark:text-indigo-300 font-bold text-sm">OS Selecionadas</span>
+                        <div className="bg-indigo-600 text-white px-2.5 py-1 rounded-lg font-mono font-black text-xs shadow-xs">
+                            {selectedOrders.length} sel.
+                        </div>
+                        <div className="text-xs">
+                            <span className="text-indigo-950 dark:text-indigo-200 font-bold">Soma da Seleção: </span>
+                            <span className="font-mono font-black text-indigo-700 dark:text-indigo-300">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(selectedTotalValue)}
+                            </span>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setSelectedOrders([])}
+                            className="text-[11px] font-bold text-slate-500 hover:text-rose-600 underline ml-1"
+                        >
+                            Limpar
+                        </button>
                     </div>
                     
-                    <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
-                        <div className="flex items-center gap-3 bg-white dark:bg-slate-900 px-4 py-2 rounded-xl border border-indigo-100 dark:border-slate-700 shadow-sm w-full md:w-auto">
-                            <span className="text-xs font-bold text-slate-500 tracking-wide uppercase">Alterar Status:</span>
+                    <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto justify-end">
+                        <div className="flex items-center gap-2 bg-white dark:bg-slate-900 px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-slate-700 shadow-xs">
+                            <span className="text-[10px] font-black text-slate-400 uppercase">Status Lote:</span>
                             <select 
                                 onChange={(e) => { 
                                     if(e.target.value) {
@@ -1186,9 +1455,9 @@ export default function ServiceOrdersPage() {
                                         e.target.value = '';
                                     }
                                 }}
-                                className="bg-transparent text-slate-800 dark:text-slate-200 rounded text-sm outline-none font-bold cursor-pointer min-w-[120px]"
+                                className="bg-transparent text-slate-800 dark:text-slate-200 rounded text-xs outline-none font-bold cursor-pointer"
                             >
-                                <option value="">Selecione...</option>
+                                <option value="">Aplicar...</option>
                                 <option value="Em Execucao">Em Execução</option>
                                 <option value="Concluido">Concluir Lote</option>
                                 <option value="Cancelado">Cancelar Lote</option>
@@ -1198,9 +1467,9 @@ export default function ServiceOrdersPage() {
                         
                         <button 
                             onClick={() => setIsBulkDateModalOpen(true)}
-                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition shadow-sm flex items-center gap-2 w-full md:w-auto justify-center"
+                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition shadow-xs flex items-center gap-1.5"
                         >
-                            <Calendar className="w-4 h-4"/> Alterar Datas
+                            <Calendar className="w-3.5 h-3.5"/> Alterar Datas
                         </button>
 
                         {(() => {
@@ -1214,15 +1483,13 @@ export default function ServiceOrdersPage() {
                             return (
                                 <button
                                     onClick={openGroupModal}
-                                    className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-bold rounded-xl text-sm transition shadow-sm flex items-center gap-2 w-full md:w-auto justify-center whitespace-nowrap"
+                                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg text-xs transition shadow-xs flex items-center gap-1.5 whitespace-nowrap"
                                     title="Agrupar O.S. selecionadas deste cliente em uma única O.S."
                                 >
-                                    <Layers className="w-4 h-4"/> Agrupar O.S.
+                                    <Layers className="w-3.5 h-3.5"/> Agrupar O.S.
                                 </button>
                             );
                         })()}
-                        
-                        <div className="hidden md:block w-px h-8 bg-indigo-200 dark:bg-indigo-800/60"></div>
                         
                         {(() => {
                             const selectedObj = orders.filter(o => selectedOrders.includes(o.id));
@@ -1232,33 +1499,33 @@ export default function ServiceOrdersPage() {
                             const mixedNfseStatus = !allNaoEmitida && !allProcessando && selectedObj.length > 0;
                             
                             return (
-                                <div className="flex flex-col md:flex-row items-center gap-3">
+                                <div className="flex flex-wrap items-center gap-2">
                                     {mixedNfseStatus && (
-                                        <span className="text-xs text-rose-500 font-bold px-4 text-center md:text-left bg-rose-50 dark:bg-rose-900/30 py-2 rounded-lg">
-                                            Atenção: Seleção possui mix de "Não Emitidas" e "Processando". Filtre ou selecione separadamente para aplicar ações financeiras.
+                                        <span className="text-[11px] text-rose-600 font-bold px-2.5 py-1 bg-rose-50 dark:bg-rose-900/30 rounded-lg border border-rose-200 dark:border-rose-800">
+                                            Mix de status NFS-e na seleção
                                         </span>
                                     )}
                                     
                                     {allNaoEmitida && allConcluido && (
-                                        <div className="flex bg-white dark:bg-slate-900 rounded-xl p-1 shadow-sm border border-slate-200 dark:border-slate-800 w-full md:w-auto">
-                                            <button onClick={prepareBulkBillIndividual} className="px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold rounded-lg text-sm transition flex items-center gap-2 flex-1 justify-center border-r border-transparent">
-                                                <FileText className="w-4 h-4"/> Faturar Separadas
+                                        <div className="flex items-center gap-1.5">
+                                            <button onClick={prepareBulkBillIndividual} className="px-3 py-1.5 bg-white dark:bg-slate-900 hover:bg-slate-50 text-slate-700 dark:text-slate-200 font-bold rounded-lg text-xs transition flex items-center gap-1.5 border border-slate-300 dark:border-slate-700 shadow-xs">
+                                                <FileText className="w-3.5 h-3.5"/> Faturar Separadas
                                             </button>
-                                            <button onClick={prepareBulkBillGrouped} className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-90 text-white font-bold rounded-lg text-sm transition shadow-sm flex items-center gap-2 flex-1 justify-center border border-indigo-500">
-                                                <DollarSign className="w-4 h-4"/> Agrupar Num Boleto
+                                            <button onClick={prepareBulkBillGrouped} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition shadow-xs flex items-center gap-1.5">
+                                                <DollarSign className="w-3.5 h-3.5"/> Agrupar Num Boleto
                                             </button>
                                         </div>
                                     )}
 
                                     {allNaoEmitida && !allConcluido && !mixedNfseStatus && (
-                                         <span className="text-xs text-slate-500 font-bold px-4 text-center tracking-wide">
-                                             Conclua o lote selecionado para Faturar
-                                         </span>
+                                        <span className="text-[11px] text-amber-700 dark:text-amber-300 font-bold px-2.5 py-1 bg-amber-50 dark:bg-amber-950/40 rounded-lg border border-amber-200 dark:border-amber-800">
+                                            Conclua o lote para liberar Faturamento
+                                        </span>
                                     )}
                                     
                                     {allProcessando && (
-                                        <button onClick={() => setIsPrintPointModalOpen(true)} className="px-6 py-2.5 bg-slate-900 border border-slate-700 hover:bg-slate-800 text-white font-bold rounded-xl text-sm transition shadow-md flex items-center gap-2 justify-center w-full md:w-auto">
-                                            <Receipt className="w-4 h-4"/> Transmitir NFS em Lote
+                                        <button onClick={() => setIsPrintPointModalOpen(true)} className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-xs transition shadow-xs flex items-center gap-1.5">
+                                            <Receipt className="w-3.5 h-3.5"/> Transmitir NFS-e Lote
                                         </button>
                                     )}
                                 </div>
@@ -1268,283 +1535,532 @@ export default function ServiceOrdersPage() {
                 </div>
             )}
 
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                <div className="overflow-x-auto min-h-[400px]">
-                    <table className="w-full text-sm text-left">
-                        <thead className="bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold uppercase text-xs">
+            {/* GRADE ESTILO MICROSOFT ACCESS / EXCEL DATASHEET */}
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-300 dark:border-slate-800 overflow-hidden shadow-sm flex flex-col">
+                {/* Barra de Abas de Visão Rápida da Planilha (Estilo Access / Excel Tabs) */}
+                <div className="bg-slate-50 dark:bg-slate-950/80 border-b border-slate-200 dark:border-slate-800 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 overflow-x-auto">
+                        <button
+                            type="button"
+                            onClick={() => setStatusFilter('Ativas')}
+                            className={`px-3 py-1 rounded-lg text-xs font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+                                statusFilter === 'Ativas'
+                                    ? 'bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-900 shadow-xs'
+                                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:bg-slate-100'
+                            }`}
+                        >
+                            Todas Ativas
+                            <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
+                                statusFilter === 'Ativas'
+                                    ? 'bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900'
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                            }`}>
+                                {orders.filter(o => o.status !== 'Cancelado').length}
+                            </span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setStatusFilter(statusFilter === 'Pendente Faturamento' ? 'Ativas' : 'Pendente Faturamento')}
+                            className={`px-3 py-1 rounded-lg text-xs font-black whitespace-nowrap transition flex items-center gap-1.5 border ${
+                                statusFilter === 'Pendente Faturamento'
+                                    ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
+                                    : 'bg-amber-50/90 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800 hover:bg-amber-100'
+                            }`}
+                        >
+                            <DollarSign className="w-3.5 h-3.5" />
+                            Pendente Faturamento
+                            <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
+                                statusFilter === 'Pendente Faturamento'
+                                    ? 'bg-amber-700 text-white'
+                                    : 'bg-amber-200/80 dark:bg-amber-900 text-amber-900 dark:text-amber-200'
+                            }`}>
+                                {pendingBillingOrders.length}
+                            </span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setStatusFilter(statusFilter === 'Concluido_Pendente_Faturamento' ? 'Ativas' : 'Concluido_Pendente_Faturamento')}
+                            className={`px-3 py-1 rounded-lg text-xs font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+                                statusFilter === 'Concluido_Pendente_Faturamento'
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                                    : 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/70 hover:bg-indigo-50'
+                            }`}
+                        >
+                            Prontas p/ Faturar
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-indigo-100 dark:bg-indigo-900/60 text-indigo-800 dark:text-indigo-200">
+                                {orders.filter(o => o.status === 'Concluido' && isOrderPendingBilling(o)).length}
+                            </span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setStatusFilter(statusFilter === 'Faturadas' ? 'Ativas' : 'Faturadas')}
+                            className={`px-3 py-1 rounded-lg text-xs font-bold whitespace-nowrap transition flex items-center gap-1.5 border ${
+                                statusFilter === 'Faturadas'
+                                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                                    : 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/70 hover:bg-emerald-50'
+                            }`}
+                        >
+                            Faturadas / Emitidas
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200">
+                                {orders.filter(o => o.status !== 'Cancelado' && (o.status_nfse === 'Emitida' || o.status_nfse === 'EMITIDA' || o.status_nfse === 'Processando')).length}
+                            </span>
+                        </button>
+                    </div>
+
+                    <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 hidden sm:flex items-center gap-2">
+                        <span>Exibindo <strong>{filteredOrders.length}</strong> registro(s)</span>
+                        <span>•</span>
+                        <span className="font-bold text-slate-800 dark:text-slate-200">
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(visibleTotalValue)}
+                        </span>
+                    </div>
+                </div>
+
+                <div className="overflow-x-auto max-h-[68vh] overflow-y-auto custom-scrollbar">
+                    <table className="w-full text-xs text-left border-collapse select-none">
+                        <thead className="bg-slate-100 dark:bg-slate-800/90 border-b-2 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-black uppercase text-[10px] tracking-wider sticky top-0 z-20">
                             <tr>
-                                <th className="px-4 py-4 w-10">
+                                <th className="py-2.5 px-2 w-8 text-center border-r border-slate-200 dark:border-slate-700 bg-slate-200/70 dark:bg-slate-800">#</th>
+                                <th className="py-2.5 px-2.5 w-9 text-center border-r border-slate-200 dark:border-slate-700">
                                     <input 
                                         type="checkbox" 
-                                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 dark:bg-slate-800 border-slate-300 dark:border-slate-600"
-                                        checked={orders.length > 0 && selectedOrders.length === orders.length}
+                                        className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 dark:bg-slate-900 border-slate-300 dark:border-slate-600 cursor-pointer"
+                                        checked={filteredOrders.length > 0 && filteredOrders.every(o => selectedOrders.includes(o.id))}
                                         onChange={() => {
-                                            if (selectedOrders.length === orders.length) setSelectedOrders([]);
-                                            else setSelectedOrders(orders.map(o => o.id));
+                                            const visibleIds = filteredOrders.map(o => o.id);
+                                            const allChecked = visibleIds.every(id => selectedOrders.includes(id));
+                                            if (allChecked) {
+                                                setSelectedOrders(prev => prev.filter(id => !visibleIds.includes(id)));
+                                            } else {
+                                                setSelectedOrders(prev => Array.from(new Set([...prev, ...visibleIds])));
+                                            }
                                         }}
                                     />
                                 </th>
-                                <th className="px-6 py-4">ID e Cliente</th>
-                                <th className="px-6 py-4">Serviço Prestado</th>
                                 <th
-                                    className="px-6 py-4 cursor-pointer select-none hover:text-[var(--color-primary-base)] transition-colors group"
+                                    className="py-2.5 px-3 w-28 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/50 transition-colors"
                                     onClick={() => {
-                                        if (sortField === 'execution_date') {
-                                            setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-                                        } else {
-                                            setSortField('execution_date');
-                                            setSortDir('asc');
-                                        }
+                                        if (sortField === 'id') setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                                        else { setSortField('id'); setSortDir('desc'); }
                                     }}
                                 >
-                                    <span className="flex items-center gap-1">
-                                        Execução
-                                        <span className={`transition-colors ${ sortField === 'execution_date' ? 'text-[var(--color-primary-base)]' : 'text-slate-300 dark:text-slate-600 group-hover:text-slate-400' }`}>
-                                            {sortField === 'execution_date' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ' ↕'}
-                                        </span>
-                                    </span>
+                                    <div className="flex items-center justify-between">
+                                        <span>Nº O.S.</span>
+                                        <span className="font-mono text-[10px]">{sortField === 'id' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
+                                    </div>
                                 </th>
-                                <th className="px-6 py-4 text-center">Status / NFS-e</th>
-                                <th className="px-6 py-4 text-right">Ações de Faturamento</th>
+                                <th
+                                    className="py-2.5 px-3 min-w-[200px] border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/50 transition-colors"
+                                    onClick={() => {
+                                        if (sortField === 'customer_name') setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                                        else { setSortField('customer_name'); setSortDir('asc'); }
+                                    }}
+                                >
+                                    <div className="flex items-center justify-between">
+                                        <span>Cliente / Tomador</span>
+                                        <span className="font-mono text-[10px]">{sortField === 'customer_name' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
+                                    </div>
+                                </th>
+                                <th className="py-2.5 px-3 min-w-[220px] border-r border-slate-200 dark:border-slate-700">
+                                    Serviço / Discriminação
+                                </th>
+                                <th
+                                    className="py-2.5 px-3 w-28 text-center border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/50 transition-colors"
+                                    onClick={() => {
+                                        if (sortField === 'execution_date') setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                                        else { setSortField('execution_date'); setSortDir('asc'); }
+                                    }}
+                                >
+                                    <div className="flex items-center justify-center gap-1">
+                                        <span>Execução</span>
+                                        <span className="font-mono text-[10px]">{sortField === 'execution_date' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
+                                    </div>
+                                </th>
+                                <th
+                                    className="py-2.5 px-3 w-32 text-right border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/50 transition-colors"
+                                    onClick={() => {
+                                        if (sortField === 'negotiated_value') setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                                        else { setSortField('negotiated_value'); setSortDir('desc'); }
+                                    }}
+                                >
+                                    <div className="flex items-center justify-end gap-1">
+                                        <span>Valor (R$)</span>
+                                        <span className="font-mono text-[10px]">{sortField === 'negotiated_value' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
+                                    </div>
+                                </th>
+                                <th className="py-2.5 px-2.5 min-w-[135px] w-36 text-center border-r border-slate-200 dark:border-slate-700">
+                                    Status O.S.
+                                </th>
+                                <th className="py-2.5 px-3 w-40 text-center border-r border-slate-200 dark:border-slate-700">
+                                    Situação Fat. / NFS-e
+                                </th>
+                                <th className="py-2.5 px-3 text-right min-w-[230px]">
+                                    Ações de Faturamento & Controle
+                                </th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800">
                             {loading ? (
-                                <tr><td colSpan={6} className="text-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--color-primary-base)] mx-auto"></div></td></tr>
-                            ) : (() => {
-                                const filteredOrders = orders.filter(o =>
-                                    statusFilter === 'Todas' ? true :
-                                    statusFilter === 'Ativas' ? o.status !== 'Cancelado' :
-                                    o.status === statusFilter
-                                ).sort((a, b) => {
-                                    if (sortField === 'execution_date') {
-                                        const da = new Date(a.execution_date).getTime();
-                                        const db = new Date(b.execution_date).getTime();
-                                        return sortDir === 'asc' ? da - db : db - da;
-                                    }
-                                    return sortDir === 'asc' ? a.id - b.id : b.id - a.id;
-                                });
-                                if (filteredOrders.length === 0) return <tr><td colSpan={6} className="text-center py-12 text-slate-500">Nenhuma O.S. encontrada.</td></tr>;
-                                return filteredOrders.map(order => (
-                                    <tr key={order.id} className="border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-800/30">
-                                        <td className="px-4 py-4">
-                                            <input 
-                                                type="checkbox"
-                                                className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 dark:bg-slate-800 border-slate-300 dark:border-slate-600"
-                                                checked={selectedOrders.includes(order.id)}
-                                                onChange={() => {
-                                                    setSelectedOrders(prev => prev.includes(order.id) ? prev.filter(x => x !== order.id) : [...prev, order.id]);
-                                                }}
-                                            />
-                                        </td>
-                                        <td className="px-6 py-4 font-bold text-slate-900 dark:text-white">
-                                            <Link 
-                                                href={`/services/orders/${order.id}`}
-                                                className="text-xs text-indigo-500 hover:text-indigo-700 dark:hover:text-indigo-400 mb-1 font-black flex items-center gap-2 cursor-pointer hover:underline transition"
-                                                title="Ver Detalhes completos da O.S"
-                                            >
-                                                OS #{order.local_id || order.id}
-                                                {order.email_sent_at && (
-                                                    <span className="text-emerald-500 dark:text-emerald-400 ml-1" title={`E-mail enviado em: ${new Date(order.email_sent_at).toLocaleString('pt-BR')}`}>
-                                                        <Mail className="w-3 h-3" />
-                                                    </span>
-                                                )}
-                                                {order.is_recurrent && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 text-[9px] rounded-md whitespace-nowrap dark:bg-purple-900/30 no-underline ml-1">🔄 RECORRENTE</span>}
-                                            </Link>
-                                            <Link href={`/customers/${order.customer_id}`} className="hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-colors cursor-pointer" title="Ver Perfil do Cliente">
-                                                {order.customer_name}
-                                            </Link>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="font-bold text-slate-700 dark:text-slate-200">{order.service_name}</div>
-                                            <div className="text-xs font-semibold text-emerald-600 mt-1 dark:text-emerald-400">
-                                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(order.negotiated_value)}
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 font-medium text-slate-600 dark:text-slate-400">
-                                            <div className="flex items-center gap-1.5"><Calendar className="w-4 h-4"/> {new Date(order.execution_date).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</div>
-                                        </td>
-                                        <td className="px-6 py-4 text-center">
-                                            <div className="flex flex-col gap-3">
-                                                <div className="flex items-center justify-between gap-3 px-2">
-                                                    <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Serviço</span>
-                                                    <select 
-                                                        value={order.status}
-                                                        onChange={(e) => handleStatusChange(order.id, e.target.value)}
-                                                        className={`px-2 py-1 text-xs font-bold rounded-lg border outline-none ${getStatusColor(order.status)} w-[140px] text-center`}
-                                                    >
-                                                        <option value="Pendente">Pendente</option>
-                                                        <option value="Em Execucao">Em Execução</option>
-                                                        <option value="Concluido">Concluído</option>
-                                                        {order.status_nfse !== 'Nao Emitida' ? (
-                                                            <option disabled value="Cancelado">Cancelado (Faturada)</option>
-                                                        ) : (
-                                                            <option value="Cancelado">Cancelado</option>
-                                                        )}
-                                                    </select>
-                                                </div>
-                                                
-                                                <div className="flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800/60 pt-3 px-2">
-                                                    <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">NFS-e</span>
-                                                    <div className="flex flex-col items-center gap-1.5 w-[140px]">
-                                                        <span className={`px-2.5 py-1 text-[10px] w-full text-center font-black rounded-lg uppercase
-                                                            ${order.status_nfse === 'Emitida' ? 'bg-emerald-100 text-emerald-700' :
-                                                              order.status_nfse === 'Processando' ? 'bg-indigo-100 text-indigo-700' :
-                                                              order.status_nfse === 'Erro' ? 'bg-rose-100 text-rose-700' :
-                                                              'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'}`}>
-                                                            {order.status_nfse}
-                                                        </span>
-                                                        {order.nfse_number && (
-                                                            <div className="flex flex-col items-center justify-center gap-0.5 mt-1" title={`Chave: ${order.nfse_number}`}>
-                                                                <div className="text-[10px] text-slate-500 font-bold flex items-center gap-1">
-                                                                    <FileText className="w-3 h-3 flex-shrink-0"/>
-                                                                    <span className="truncate">
-                                                                        Nº {(() => {
-                                                                            const k = order.nfse_number;
-                                                                            if (k.startsWith('SUCESS_DUMMY_')) return k.replace('SUCESS_DUMMY_', '');
-                                                                            if (k.length === 50) {
-                                                                                const num = parseInt(k.substring(23, 36), 10);
-                                                                                return num > 0 ? num : k.slice(-9); // Fallback p/ os ultimos 9 caso seja zeros
-                                                                            }
-                                                                            return k;
-                                                                        })()}
-                                                                    </span>
-                                                                </div>
-                                                                <div className="text-[9px] text-slate-400 font-semibold align-middle truncate">
-                                                                    RPS/Ref: {order.id}
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-right">
-                                            <div className="flex justify-end items-center gap-3">
-                                                {order.status === 'Concluido' && order.status_nfse === 'Nao Emitida' ? (
-                                                    order.is_nfse ? (
-                                                        <button 
-                                                            onClick={() => {
-                                                                setBillData({ order_id: order.id, installments_count: '1', first_due_date: order.execution_date, account_id: '', print_point_id: '' });
-                                                                setIsBillOpen(true);
-                                                            }}
-                                                            className="px-4 py-2 bg-[var(--color-primary-base)] hover:opacity-90 text-white font-bold rounded-xl shadow-md text-xs inline-flex items-center gap-2 whitespace-nowrap transition"
-                                                        >
-                                                            <DollarSign className="w-3.5 h-3.5"/> Faturar e Emitir
-                                                        </button>
-                                                    ) : (
-                                                        <button 
-                                                            onClick={() => {
-                                                                setBillData({ order_id: order.id, installments_count: '1', first_due_date: order.execution_date, account_id: '', print_point_id: companyDefaultPrintPointId ? companyDefaultPrintPointId.toString() : '' });
-                                                                setIsBillOpen(true);
-                                                            }}
-                                                            className="px-4 py-2 bg-[var(--color-primary-base)] hover:opacity-90 text-white font-bold rounded-xl shadow-md text-xs inline-flex items-center gap-2 whitespace-nowrap transition"
-                                                        >
-                                                            <DollarSign className="w-3.5 h-3.5"/> Faturar
-                                                        </button>
-                                                    )
-                                                ) : order.status_nfse === 'Processando' ? (
-                                                    <>
-                                                        <span className="text-xs font-bold text-slate-400 inline-flex items-center gap-1"><Receipt className="w-3 h-3"/> Faturado</span>
-                                                        <button 
-                                                            onClick={() => handleIssueNFClick(order.id)}
-                                                            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl shadow-md text-xs inline-flex items-center gap-2 whitespace-nowrap border border-slate-600"
-                                                        >
-                                                            📜 Emitir NFS-e
-                                                        </button>
-                                                    </>
-                                                ) : order.status_nfse === 'Emitida' || order.status_nfse === 'EMITIDA' ? (
+                                <tr>
+                                    <td colSpan={10} className="text-center py-14">
+                                        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-[var(--color-primary-base)] mx-auto"></div>
+                                    </td>
+                                </tr>
+                            ) : filteredOrders.length === 0 ? (
+                                <tr>
+                                    <td colSpan={10} className="text-center py-12 text-slate-500 font-medium">
+                                        Nenhum registro encontrado para o filtro atual.
+                                    </td>
+                                </tr>
+                            ) : (
+                                filteredOrders.map((order, idx) => {
+                                    const isSelected = selectedOrders.includes(order.id);
+                                    const isActiveRow = idx === activeRowIdx;
+                                    const pendingBill = isOrderPendingBilling(order);
 
-                                                    <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/10 p-1 rounded-xl border border-emerald-100 dark:border-emerald-800/30">
-                                                        <button 
-                                                            onClick={() => handleDownloadPDF(order.id)}
-                                                            className="p-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg shadow-sm text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
-                                                            title="Baixar DANFSe"
-                                                        >
-                                                            <Receipt className="w-3.5 h-3.5"/> PDF
-                                                        </button>
-                                                        <button 
-                                                            onClick={() => handleConsultNfse(order.id)}
-                                                            className="p-2 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 dark:border-emerald-800 dark:hover:bg-emerald-800 dark:text-emerald-300 font-bold rounded-lg text-xs inline-flex items-center transition cursor-pointer"
-                                                            title="Consultar na Sefaz"
-                                                        >
-                                                            <Search className="w-3.5 h-3.5"/>
-                                                        </button>
-                                                        <button 
-                                                            onClick={() => {
-                                                                setCancelNfseData({...cancelNfseData, order_id: order.id});
-                                                                setIsCancelNfseOpen(true);
-                                                            }}
-                                                            className="p-2 border border-rose-200 hover:bg-rose-100 text-rose-600 dark:border-rose-800 dark:hover:bg-rose-800/50 dark:text-rose-400 font-bold rounded-lg text-xs inline-flex items-center transition cursor-pointer"
-                                                            title="Cancelar NFS-e"
-                                                        >
-                                                            <X className="w-3.5 h-3.5"/>
-                                                        </button>
-                                                    </div>
-                                                ) : order.status_nfse === 'Erro' || order.status_nfse === 'ERROR' ? (
-                                                    <>
-                                                        <span className="text-[10px] uppercase font-bold text-rose-500">Falha</span>
-                                                        {order.status !== 'Cancelado' && (
-                                                            <button 
-                                                                onClick={() => handleIssueNFClick(order.id)}
-                                                                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-md text-xs inline-flex items-center gap-2 whitespace-nowrap transition border border-rose-800"
-                                                            >
-                                                                ↻ Tentar Novamente
-                                                            </button>
-                                                        )}
-                                                    </>
-                                                ) : (
-                                                    <span className="text-[10px] uppercase font-bold text-slate-400">
-                                                        {order.status === 'Cancelado' && !order.is_nfse ? 'Avulsa Cancelada' : 
-                                                         order.status === 'Cancelado' ? 'Cancelado / Sincronizado' : 'Aguardando Conclusão'}
-                                                    </span>
-                                                )}
-                                                
-                                                {order.has_boleto && (
+                                    return (
+                                        <tr
+                                            key={order.id}
+                                            onClick={() => setActiveRowIdx(idx)}
+                                            onDoubleClick={() => {
+                                                window.location.href = `/services/orders/${order.id}`;
+                                            }}
+                                            className={`transition-colors cursor-pointer ${
+                                                isActiveRow
+                                                    ? 'bg-indigo-50/90 dark:bg-indigo-950/50 ring-1 ring-inset ring-indigo-500/40'
+                                                    : isSelected
+                                                    ? 'bg-indigo-50/40 dark:bg-indigo-950/25'
+                                                    : idx % 2 === 1
+                                                    ? 'bg-slate-50/50 dark:bg-slate-900/40 hover:bg-slate-100/70 dark:hover:bg-slate-800/40'
+                                                    : 'bg-white dark:bg-slate-900 hover:bg-slate-100/70 dark:hover:bg-slate-800/40'
+                                            }`}
+                                        >
+                                            {/* Seletor de Linha estilo Access */}
+                                            <td className={`py-1.5 px-1.5 text-center font-mono text-[10px] border-r border-slate-200/80 dark:border-slate-800 ${
+                                                isActiveRow ? 'bg-indigo-600 text-white font-black' : 'bg-slate-100/70 dark:bg-slate-800/60 text-slate-400'
+                                            }`}>
+                                                {isActiveRow ? '▶' : idx + 1}
+                                            </td>
+
+                                            {/* Checkbox Lote */}
+                                            <td className="py-1.5 px-2.5 text-center border-r border-slate-200/80 dark:border-slate-800" onClick={(e) => e.stopPropagation()}>
+                                                <input 
+                                                    type="checkbox"
+                                                    className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 dark:bg-slate-800 border-slate-300 dark:border-slate-600 cursor-pointer"
+                                                    checked={isSelected}
+                                                    onChange={() => {
+                                                        setSelectedOrders(prev => prev.includes(order.id) ? prev.filter(x => x !== order.id) : [...prev, order.id]);
+                                                    }}
+                                                />
+                                            </td>
+
+                                            {/* Nº O.S. */}
+                                            <td className="py-1.5 px-2.5 font-mono border-r border-slate-200/80 dark:border-slate-800 whitespace-nowrap">
+                                                <div className="flex items-center gap-1.5">
                                                     <Link 
                                                         href={`/services/orders/${order.id}`}
-                                                        className="p-2 ml-1 bg-orange-100 hover:bg-orange-200 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400 font-bold rounded-lg shadow-sm text-xs inline-flex items-center gap-1.5 transition cursor-pointer border border-orange-200 dark:border-orange-800/50"
-                                                        title="Ver Boletos / Faturas"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        className="font-black text-indigo-600 dark:text-indigo-400 hover:underline text-xs"
+                                                        title="Abrir Ficha Completa da O.S."
                                                     >
-                                                        <QrCode className="w-4 h-4"/> Boleto
+                                                        #{order.local_id || order.id}
                                                     </Link>
-                                                )}
-                                                <div className="flex gap-2 items-center ml-2 border-l border-slate-200 dark:border-slate-700 pl-3">
-                                                    {order.status_nfse === 'Nao Emitida' && order.status !== 'Cancelado' && (
-                                                        <button 
-                                                            onClick={() => handleOpenSplit(order)}
-                                                            className="p-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 font-bold rounded-lg transition"
-                                                            title="Desmembrar O.S. (Dividir)"
-                                                        >
-                                                            <Scissors className="w-4 h-4"/>
-                                                        </button>
+                                                    {order.is_recurrent && (
+                                                        <span className="px-1 py-0.2 bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 text-[9px] font-sans font-bold rounded" title="Serviço Recorrente Mensal">
+                                                            REC
+                                                        </span>
                                                     )}
-                                                    {order.status_nfse === 'Nao Emitida' && order.status !== 'Cancelado' && order.status !== 'Pendente' && (
-                                                        <button 
-                                                            onClick={() => handleCancelLocal(order.id)}
-                                                            className="p-2 bg-amber-100 hover:bg-amber-200 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 font-bold rounded-lg transition"
-                                                            title="Cancelar O.S do Sistema"
-                                                        >
-                                                            <X className="w-4 h-4"/>
-                                                        </button>
-                                                    )}
-                                                    {order.status_nfse === 'Nao Emitida' && (
-                                                        <button 
-                                                            onClick={() => handleDeleteOrder(order.id)}
-                                                            className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition"
-                                                            title="Excluir O.S."
-                                                        >
-                                                            <Trash2 className="w-4 h-4"/>
-                                                        </button>
+                                                    {order.email_sent_at && (
+                                                        <span className="text-emerald-500" title={`E-mail enviado em: ${new Date(order.email_sent_at).toLocaleString('pt-BR')}`}>
+                                                            <Mail className="w-3 h-3" />
+                                                        </span>
                                                     )}
                                                 </div>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ));
-                            })()}
+                                            </td>
+
+                                            {/* Cliente */}
+                                            <td className="py-1.5 px-3 border-r border-slate-200/80 dark:border-slate-800 max-w-[240px]">
+                                                <Link
+                                                    href={`/customers/${order.customer_id}`}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="font-bold text-slate-800 dark:text-slate-100 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline truncate block"
+                                                    title={order.customer_name}
+                                                >
+                                                    {order.customer_name}
+                                                </Link>
+                                            </td>
+
+                                            {/* Serviço Prestado + Observação */}
+                                            <td className="py-1.5 px-3 border-r border-slate-200/80 dark:border-slate-800 max-w-[260px]">
+                                                <div className="font-semibold text-slate-700 dark:text-slate-200 truncate" title={order.service_name}>
+                                                    {order.service_name}
+                                                </div>
+                                                {order.custom_description && (
+                                                    <div className="text-[10px] text-slate-400 dark:text-slate-500 truncate" title={order.custom_description}>
+                                                        {order.custom_description}
+                                                    </div>
+                                                )}
+                                            </td>
+
+                                            {/* Data de Execução */}
+                                            <td className="py-1.5 px-2.5 text-center font-mono text-slate-600 dark:text-slate-300 border-r border-slate-200/80 dark:border-slate-800 whitespace-nowrap">
+                                                {new Date(order.execution_date).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}
+                                            </td>
+
+                                            {/* Valor Negociado */}
+                                            <td className="py-1.5 px-3 text-right font-mono font-bold text-slate-900 dark:text-white border-r border-slate-200/80 dark:border-slate-800 whitespace-nowrap tabular-nums">
+                                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(order.negotiated_value)}
+                                            </td>
+
+                                            {/* Status O.S. (Inline Select estilo Access) */}
+                                            <td className="py-1.5 px-2 min-w-[135px] text-center border-r border-slate-200/80 dark:border-slate-800" onClick={(e) => e.stopPropagation()}>
+                                                <select 
+                                                    value={order.status}
+                                                    onChange={(e) => handleStatusChange(order.id, e.target.value)}
+                                                    className={`px-2 py-1 text-[11px] font-bold rounded border outline-none w-full min-w-[118px] cursor-pointer ${getStatusColor(order.status)}`}
+                                                >
+                                                    <option value="Pendente">Pendente</option>
+                                                    <option value="Em Execucao">Em Execução</option>
+                                                    <option value="Concluido">Concluído</option>
+                                                    {order.status_nfse !== 'Nao Emitida' ? (
+                                                        <option disabled value="Cancelado">Cancelado (Fat.)</option>
+                                                    ) : (
+                                                        <option value="Cancelado">Cancelado</option>
+                                                    )}
+                                                </select>
+                                            </td>
+
+                                            {/* Situação Faturamento / NFS-e */}
+                                            <td className="py-1.5 px-2.5 text-center border-r border-slate-200/80 dark:border-slate-800 whitespace-nowrap">
+                                                <div className="flex flex-col items-center justify-center gap-0.5">
+                                                    <span className={`px-2 py-0.5 text-[10px] font-black rounded uppercase tracking-wide inline-flex items-center gap-1 ${
+                                                        order.status_nfse === 'Emitida' || order.status_nfse === 'EMITIDA'
+                                                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                                            : order.status_nfse === 'Processando'
+                                                            ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300'
+                                                            : order.status_nfse === 'Erro'
+                                                            ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
+                                                            : pendingBill
+                                                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                                                            : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                                                    }`}>
+                                                        {order.status_nfse === 'Nao Emitida' && pendingBill ? 'PENDENTE FAT.' : order.status_nfse}
+                                                    </span>
+                                                    {order.nfse_number && (
+                                                        <span className="text-[10px] font-mono font-bold text-slate-500 dark:text-slate-400" title={`Chave/Protocolo: ${order.nfse_number}`}>
+                                                            Nº {(() => {
+                                                                const k = order.nfse_number;
+                                                                if (k.startsWith('SUCESS_DUMMY_')) return k.replace('SUCESS_DUMMY_', '');
+                                                                if (k.length === 50) {
+                                                                    const num = parseInt(k.substring(23, 36), 10);
+                                                                    return num > 0 ? num : k.slice(-9);
+                                                                }
+                                                                return k;
+                                                            })()}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+
+                                            {/* Ações de Faturamento Compactas */}
+                                            <td className="py-1.5 px-2.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                                                <div className="flex justify-end items-center gap-1.5">
+                                                    {order.status === 'Concluido' && order.status_nfse === 'Nao Emitida' ? (
+                                                        <button 
+                                                            onClick={() => {
+                                                                setBillData({
+                                                                    order_id: order.id,
+                                                                    installments_count: '1',
+                                                                    first_due_date: order.execution_date,
+                                                                    account_id: '',
+                                                                    print_point_id: order.is_nfse ? '' : (companyDefaultPrintPointId ? companyDefaultPrintPointId.toString() : '')
+                                                                });
+                                                                setIsBillOpen(true);
+                                                            }}
+                                                            className="px-2.5 py-1 bg-[var(--color-primary-base)] hover:opacity-90 text-white font-bold rounded-lg shadow-xs text-[11px] inline-flex items-center gap-1 transition"
+                                                        >
+                                                            <DollarSign className="w-3 h-3"/>
+                                                            {order.is_nfse ? 'Faturar e Emitir' : 'Faturar'}
+                                                        </button>
+                                                    ) : order.status_nfse === 'Processando' ? (
+                                                        <button 
+                                                            onClick={() => handleIssueNFClick(order.id)}
+                                                            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-lg text-[11px] inline-flex items-center gap-1 border border-slate-600"
+                                                        >
+                                                            <Receipt className="w-3 h-3"/> Emitir NFS-e
+                                                        </button>
+                                                    ) : order.status_nfse === 'Emitida' || order.status_nfse === 'EMITIDA' ? (
+                                                        <div className="inline-flex items-center gap-1">
+                                                            <button 
+                                                                onClick={() => handleDownloadPDF(order.id)}
+                                                                className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-[11px] inline-flex items-center gap-1 transition"
+                                                                title="Baixar DANFSe (PDF)"
+                                                            >
+                                                                <Receipt className="w-3 h-3"/> PDF
+                                                            </button>
+                                                            <button 
+                                                                onClick={() => handleConsultNfse(order.id)}
+                                                                className="p-1 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 dark:border-emerald-800 dark:hover:bg-emerald-900/50 dark:text-emerald-300 rounded transition"
+                                                                title="Consultar na Sefaz"
+                                                            >
+                                                                <Search className="w-3 h-3"/>
+                                                            </button>
+                                                            <button 
+                                                                onClick={() => {
+                                                                    setCancelNfseData({...cancelNfseData, order_id: order.id});
+                                                                    setIsCancelNfseOpen(true);
+                                                                }}
+                                                                className="p-1 border border-rose-200 hover:bg-rose-100 text-rose-600 dark:border-rose-800 dark:hover:bg-rose-900/50 dark:text-rose-400 rounded transition"
+                                                                title="Cancelar NFS-e na Sefin"
+                                                            >
+                                                                <X className="w-3 h-3"/>
+                                                            </button>
+                                                        </div>
+                                                    ) : order.status_nfse === 'Erro' || order.status_nfse === 'ERROR' ? (
+                                                        order.status !== 'Cancelado' && (
+                                                            <button 
+                                                                onClick={() => handleIssueNFClick(order.id)}
+                                                                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded text-[11px] inline-flex items-center gap-1 transition"
+                                                            >
+                                                                <RefreshCw className="w-3 h-3"/> Reenviar
+                                                            </button>
+                                                        )
+                                                    ) : (
+                                                        <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">
+                                                            {order.status === 'Cancelado' ? 'Cancelada' : 'Concluir p/ Fat.'}
+                                                        </span>
+                                                    )}
+
+                                                    {order.has_boleto && (
+                                                        <Link 
+                                                            href={`/services/orders/${order.id}`}
+                                                            className="px-2 py-1 bg-orange-100 hover:bg-orange-200 text-orange-700 dark:bg-orange-950/60 dark:text-orange-300 font-bold rounded text-[11px] inline-flex items-center gap-1 border border-orange-200 dark:border-orange-800/60"
+                                                            title="Ver Boletos / Faturas"
+                                                        >
+                                                            <QrCode className="w-3 h-3"/> Boleto
+                                                        </Link>
+                                                    )}
+
+                                                    <div className="inline-flex items-center gap-1 pl-1.5 border-l border-slate-200 dark:border-slate-700">
+                                                        {order.status_nfse === 'Nao Emitida' && order.status !== 'Cancelado' && (
+                                                            <button 
+                                                                onClick={() => handleOpenSplit(order)}
+                                                                className="p-1 text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-950/50 rounded transition"
+                                                                title="Desmembrar O.S. (Dividir)"
+                                                            >
+                                                                <Scissors className="w-3.5 h-3.5"/>
+                                                            </button>
+                                                        )}
+                                                        {order.status_nfse === 'Nao Emitida' && order.status !== 'Cancelado' && order.status !== 'Pendente' && (
+                                                            <button 
+                                                                onClick={() => handleCancelLocal(order.id)}
+                                                                className="p-1 text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/50 rounded transition"
+                                                                title="Cancelar O.S. do Sistema"
+                                                            >
+                                                                <X className="w-3.5 h-3.5"/>
+                                                            </button>
+                                                        )}
+                                                        {order.status_nfse === 'Nao Emitida' && (
+                                                            <button 
+                                                                onClick={() => handleDeleteOrder(order.id)}
+                                                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition"
+                                                                title="Excluir O.S."
+                                                            >
+                                                                <Trash2 className="w-3.5 h-3.5"/>
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
                         </tbody>
                     </table>
+                </div>
+
+                {/* RODAPÉ DE NAVEGAÇÃO DE REGISTROS ESTILO MICROSOFT ACCESS */}
+                <div className="bg-slate-100 dark:bg-slate-950 border-t border-slate-300 dark:border-slate-800 px-3 py-2 flex flex-wrap items-center justify-between gap-3 text-xs font-mono text-slate-600 dark:text-slate-400">
+                    <div className="flex items-center gap-1">
+                        <button
+                            type="button"
+                            disabled={filteredOrders.length === 0 || activeRowIdx === 0}
+                            onClick={() => setActiveRowIdx(0)}
+                            className="px-2 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded hover:bg-slate-50 disabled:opacity-40 font-bold"
+                            title="Primeiro Registro (Home)"
+                        >
+                            |&lt;
+                        </button>
+                        <button
+                            type="button"
+                            disabled={filteredOrders.length === 0 || activeRowIdx === 0}
+                            onClick={() => setActiveRowIdx(prev => Math.max(0, prev - 1))}
+                            className="px-2 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded hover:bg-slate-50 disabled:opacity-40 font-bold"
+                            title="Registro Anterior (↑)"
+                        >
+                            &lt;
+                        </button>
+                        <span className="px-3 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded font-bold text-slate-800 dark:text-slate-200">
+                            Registro {filteredOrders.length > 0 ? activeRowIdx + 1 : 0} de {filteredOrders.length}
+                        </span>
+                        <button
+                            type="button"
+                            disabled={filteredOrders.length === 0 || activeRowIdx >= filteredOrders.length - 1}
+                            onClick={() => setActiveRowIdx(prev => Math.min(filteredOrders.length - 1, prev + 1))}
+                            className="px-2 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded hover:bg-slate-50 disabled:opacity-40 font-bold"
+                            title="Próximo Registro (↓)"
+                        >
+                            &gt;
+                        </button>
+                        <button
+                            type="button"
+                            disabled={filteredOrders.length === 0 || activeRowIdx >= filteredOrders.length - 1}
+                            onClick={() => setActiveRowIdx(Math.max(0, filteredOrders.length - 1))}
+                            className="px-2 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded hover:bg-slate-50 disabled:opacity-40 font-bold"
+                            title="Último Registro (End)"
+                        >
+                            &gt;|
+                        </button>
+
+                        {total > 100 && (
+                            <div className="flex items-center gap-1 ml-3 pl-3 border-l border-slate-300 dark:border-slate-700">
+                                <button
+                                    type="button"
+                                    disabled={page <= 1}
+                                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                                    className="px-2 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded disabled:opacity-40"
+                                >
+                                    Pág. Ant.
+                                </button>
+                                <span className="px-2 font-bold">Pág. {page}</span>
+                                <button
+                                    type="button"
+                                    disabled={page * 100 >= total}
+                                    onClick={() => setPage(p => p + 1)}
+                                    className="px-2 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded disabled:opacity-40"
+                                >
+                                    Próx. Pág.
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-4 flex-wrap">
+                        <div>
+                            <span className="text-slate-400">Filtro Ativo: </span>
+                            <span className="font-bold text-indigo-600 dark:text-indigo-400">{statusFilter}</span>
+                        </div>
+                        <div>
+                            <span className="text-slate-400">Soma Visível ({filteredOrders.length}): </span>
+                            <span className="font-black text-emerald-700 dark:text-emerald-400">
+                                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency:'BRL' }).format(visibleTotalValue)}
+                            </span>
+                        </div>
+                    </div>
                 </div>
             </div>
 

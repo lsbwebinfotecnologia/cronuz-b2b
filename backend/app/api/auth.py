@@ -26,28 +26,41 @@ def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends()
 ):
     # Prepare search inputs
+    from sqlalchemy import func
     username_input = form_data.username.strip()
     
-    filters = [User.email == username_input]
+    filters = [func.lower(User.email) == username_input.lower()]
     if "@" not in username_input:
         username_clean = re.sub(r"\D", "", username_input)
         if username_clean:
             filters.append(User.document == username_clean)
+            filters.append(func.regexp_replace(User.document, r'\D', '', 'g') == username_clean)
 
-    # Find user
+    # Find candidate user(s)
     query = db.query(User).filter(or_(*filters))
     
     # Isolate by tenant if accessing via storefront
     if company_id:
         query = query.filter(User.company_id == company_id)
         
-    user = query.first()
+    candidates = query.order_by(User.id.asc()).all()
+    user = candidates[0] if candidates else None
+    if len(candidates) > 1:
+        for cand in candidates:
+            if getattr(cand, "active", True) and security.verify_password(form_data.password, cand.password_hash):
+                user = cand
+                break
     
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email ou senha incorretos",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not getattr(user, "active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Este acesso está desativado. Entre em contato com o administrador.",
         )
         
     # Check if user is temporarily locked out
@@ -81,9 +94,13 @@ def login_for_access_token(
     if user.type == "CUSTOMER" and user.company_id:
         settings = db.query(CompanySettings).filter(CompanySettings.company_id == user.company_id).first()
         if settings and settings.horus_enabled:
+            user_doc_clean = re.sub(r"\D", "", user.document or "")
             customer = db.query(Customer).filter(
-                Customer.document == user.document,
-                Customer.company_id == user.company_id
+                Customer.company_id == user.company_id,
+                or_(
+                    Customer.document == user.document,
+                    func.regexp_replace(Customer.document, r'\D', '', 'g') == user_doc_clean
+                )
             ).first()
             
             if not customer or not customer.id_guid or not customer.id_doc:

@@ -16,7 +16,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     email = Column(String(255), nullable=False, index=True)
-    document = Column(String(50), nullable=True) # CPF/CNPJ
+    document = Column(String(50), nullable=True, index=True) # CPF/CNPJ
     password_hash = Column(String(255), nullable=False)
     
     type = Column(Enum(UserRole), nullable=False)
@@ -44,13 +44,8 @@ class User(Base):
 
     __table_args__ = (
         # You cannot have the same email for the same TYPE in the same COMPANY
-        # Example: john@email.com can be a CUSTOMER and an AGENT in the same company, 
-        # but cannot be two CUSTOMERs in the same company.
-        # SQLite treats NULL values as distinct in unique constraints in newer versions, 
-        # so for MASTER (company_id=NULL), it might allow multiples if we aren't careful, 
-        # but logic normally handles this.
+        # Multiple CUSTOMER logins can share the same customer document (CNPJ/CPF) within the same company.
         UniqueConstraint('email', 'type', 'company_id', name='uq_usr_email_type_company'),
-        UniqueConstraint('document', 'type', 'company_id', name='uq_usr_document_type_company'),
     )
 
 import app.models.company
