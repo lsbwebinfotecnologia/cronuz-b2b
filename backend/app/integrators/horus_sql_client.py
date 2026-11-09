@@ -139,8 +139,8 @@ class HorusSQLClient:
                         user=username,
                         password=password,
                         database=database,
-                        login_timeout=10,
-                        timeout=30,
+                        login_timeout=15,
+                        timeout=90,
                         autocommit=True,
                         as_dict=True,
                     )
@@ -157,8 +157,8 @@ class HorusSQLClient:
                             user="sa",
                             password=password,
                             database=database,
-                            login_timeout=10,
-                            timeout=30,
+                            login_timeout=15,
+                            timeout=90,
                             autocommit=True,
                             as_dict=True,
                         )

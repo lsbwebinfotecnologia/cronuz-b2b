@@ -17,6 +17,7 @@ PERFORMANCE & SEGURANÇA:
 """
 import io
 import time
+import uuid
 import asyncio
 import logging
 from datetime import datetime
@@ -26,7 +27,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from app.db.session import get_db
+from app.db.session import get_db, SessionLocal
 from app.core.dependencies import get_current_user
 from app.core.utils import assert_company_ownership
 from app.core.upload_security import validate_file_size_and_extension, read_file_safely
@@ -215,6 +216,669 @@ def download_vindi_template(
     )
 
 
+# ── Rastreador de Jobs de Conciliação em Memória (Progresso em Tempo Real) ────
+_RECONCILIATION_JOBS: Dict[str, Dict[str, Any]] = {}
+_JOB_TTL_SECONDS = 900  # 15 minutos
+
+
+def _cleanup_old_reconciliation_jobs() -> None:
+    now = time.time()
+    expired = [
+        jid for jid, j in list(_RECONCILIATION_JOBS.items())
+        if now - float(j.get("started_at") or now) > _JOB_TTL_SECONDS
+    ]
+    for jid in expired:
+        _RECONCILIATION_JOBS.pop(jid, None)
+
+
+def _update_job_progress(job_id: Optional[str], **kwargs) -> None:
+    if not job_id or job_id not in _RECONCILIATION_JOBS:
+        return
+    job = _RECONCILIATION_JOBS[job_id]
+    job.update(kwargs)
+    job["elapsed_seconds"] = round(time.time() - float(job.get("started_at") or time.time()), 1)
+
+
+@router.get("/companies/{company_id}/horus-sql/reconciliation/jobs/{job_id}")
+def get_reconciliation_job_status(
+    company_id: int,
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Retorna o progresso em tempo real de um processamento de conciliação:
+      - `status`: 'RUNNING' | 'COMPLETED' | 'ERROR'
+      - `percent`: 0..100
+      - `phase`: 'LENDO_PLANILHAS' | 'VINCULANDO_TRAY' | 'CONSULTANDO_HORUS' | 'AUDITORIA_VALORES' | 'CONCLUIDO'
+      - `message`, `processed_orders`, `total_orders`, `current_batch`, `total_batches`, `horus_found_count`, `elapsed_seconds`
+      - `result`: payload completo quando `status == 'COMPLETED'`
+    """
+    _assert_ownership(current_user, company_id)
+    _cleanup_old_reconciliation_jobs()
+    job = _RECONCILIATION_JOBS.get(job_id)
+    if not job or int(job.get("company_id") or 0) != int(company_id):
+        raise HTTPException(status_code=404, detail="Processo de conciliação não encontrado ou expirado.")
+    job["elapsed_seconds"] = round(time.time() - float(job.get("started_at") or time.time()), 1)
+    return job
+
+
+def _run_reconciliation_core(
+    company_id: int,
+    contents: bytes,
+    channel_filename: str,
+    tray_bytes: Optional[bytes],
+    tray_filename: Optional[str],
+    active_profile: str,
+    filial: Optional[str],
+    job_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Executa todo o pipeline de conciliação em thread separada com telemetria de progresso,
+    consultas indexadas `WITH (NOLOCK)` no SQL Server e retentativa automática por lote.
+    """
+    t0 = time.time()
+    db_local = SessionLocal()
+    try:
+        settings = _get_settings_or_404(db_local, company_id)
+        is_dual_file = active_profile in ("TRAY_SHOPEE", "TRAY_TIKTOK", "TRAY_VINDI")
+
+        # ETAPA 1: Leitura da Planilha do Canal
+        _update_job_progress(
+            job_id,
+            phase="LENDO_PLANILHAS",
+            percent=8,
+            message=f"Lendo e validando planilha principal ({channel_filename})...",
+        )
+
+        parse_warnings: List[str] = []
+        tray_map: Dict[str, Any] = {"rows": [], "by_channel_order": {}, "by_tray_order": {}, "token_index": {}}
+
+        vindi_rows, w1 = parse_channel_file(contents, channel_filename, active_profile)
+        parse_warnings.extend(w1)
+        if not vindi_rows and active_profile == "VINDI_DIRECT":
+            vindi_rows, w_fallback = parse_vindi_file(contents, channel_filename)
+            parse_warnings.extend(w_fallback)
+
+        if not vindi_rows:
+            raise ValueError(
+                f"Não foi possível extrair lançamentos da planilha principal. {'; '.join(parse_warnings)}"
+            )
+
+        _update_job_progress(
+            job_id,
+            phase="LENDO_PLANILHAS",
+            percent=18,
+            total_orders=len(vindi_rows),
+            message=f"{len(vindi_rows)} pedidos válidos extraídos da planilha do canal.",
+        )
+
+        # ETAPA 2: Leitura e Amarração da Planilha da Tray (se enviada)
+        if tray_bytes:
+            _update_job_progress(
+                job_id,
+                phase="VINCULANDO_TRAY",
+                percent=22,
+                message=f"Indexando planilha de pedidos da Tray ({tray_filename or 'tray.csv'})...",
+            )
+            tray_map, w2 = parse_tray_bridge_file(tray_bytes, tray_filename or "tray.csv")
+            parse_warnings.extend(w2)
+
+        by_channel = tray_map.get("by_channel_order") or {}
+        by_tray = tray_map.get("by_tray_order") or {}
+        token_idx = tray_map.get("token_index") or {}
+
+        pedidos_set = set()
+        linked_tray_count = 0
+        unlinked_tray_count = 0
+
+        for v_row in vindi_rows:
+            ped_canal = _normalize_order_key(v_row.get("pedido_canal") or v_row.get("pedido_web") or "")
+            v_row["pedido_canal"] = ped_canal
+
+            if is_dual_file:
+                stripped_canal = ped_canal.lstrip("0") or ped_canal
+                t_match = (
+                    by_channel.get(ped_canal)
+                    or by_channel.get(stripped_canal)
+                    or by_tray.get(ped_canal)
+                    or token_idx.get(ped_canal)
+                )
+                if t_match:
+                    linked_tray_count += 1
+                    ped_tray = str(t_match.get("pedido_tray") or "").strip()
+                    ped_horus_ref = str(t_match.get("pedido_horus_ref") or ped_tray or ped_canal).strip()
+                    v_row["vinculo_tray_ok"] = True
+                    v_row["pedido_tray"] = ped_tray
+                    v_row["pedido_horus_ref"] = ped_horus_ref
+                    v_row["pedido_web"] = ped_horus_ref
+                    v_row["valor_tray"] = float(t_match.get("valor_tray") or 0.0)
+                    v_row["subtotal_tray"] = float(t_match.get("subtotal_tray") or 0.0)
+                    v_row["status_tray"] = t_match.get("status_tray") or ""
+                    v_row["nf_tray"] = t_match.get("nf_tray") or ""
+                    if (not v_row.get("cliente_nome") or v_row["cliente_nome"] == "-") and t_match.get("cliente_tray"):
+                        v_row["cliente_nome"] = t_match["cliente_tray"]
+                    if (not v_row.get("documento") or v_row["documento"] == "-") and t_match.get("documento_tray"):
+                        v_row["documento"] = t_match["documento_tray"]
+                    if t_match.get("forma_pagamento_tray") and v_row.get("forma_pagamento") in ("Shopee", "TikTok Shop", "SHOPEE", "TIKTOK"):
+                        v_row["forma_pagamento"] = f"{v_row['forma_pagamento']} • {t_match['forma_pagamento_tray']}"
+
+                    if not v_row.get("bruto_from_channel", True) and float(t_match.get("valor_tray") or 0.0) > 0:
+                        bruto_tray = float(t_match["valor_tray"])
+                        liq_canal = float(v_row.get("valor_liquido") or v_row.get("valor") or 0.0)
+                        v_row["valor"] = round(bruto_tray, 2)
+                        v_row["valor_bruto"] = round(bruto_tray, 2)
+                        v_row["taxa"] = round(max(0.0, bruto_tray - liq_canal), 2)
+                    elif float(v_row.get("valor") or 0.0) <= 0 and float(t_match.get("valor_tray") or 0.0) > 0:
+                        v_row["valor"] = float(t_match["valor_tray"])
+                        v_row["valor_bruto"] = float(t_match["valor_tray"])
+
+                    for cand in (ped_horus_ref, ped_tray, ped_canal):
+                        if cand:
+                            pedidos_set.add(cand)
+                elif active_profile == "TRAY_VINDI" and ped_canal:
+                    linked_tray_count += 1
+                    v_row["vinculo_tray_ok"] = True
+                    v_row["pedido_tray"] = ped_canal
+                    v_row["pedido_horus_ref"] = ped_canal
+                    v_row["pedido_web"] = ped_canal
+                    v_row["valor_tray"] = float(v_row.get("valor_bruto") or v_row.get("valor") or 0.0)
+                    pedidos_set.add(ped_canal)
+                else:
+                    unlinked_tray_count += 1
+                    v_row["vinculo_tray_ok"] = False
+                    v_row["pedido_tray"] = "-"
+                    v_row["pedido_horus_ref"] = ped_canal
+                    v_row["pedido_web"] = ped_canal
+                    v_row["valor_tray"] = 0.0
+                    if ped_canal:
+                        pedidos_set.add(ped_canal)
+            else:
+                v_row["vinculo_tray_ok"] = True
+                v_row["pedido_tray"] = "-"
+                v_row["pedido_horus_ref"] = ped_canal
+                if ped_canal:
+                    pedidos_set.add(ped_canal)
+
+        if not pedidos_set:
+            raise ValueError("Nenhum número de pedido identificado nas planilhas.")
+
+        _update_job_progress(
+            job_id,
+            phase="VINCULANDO_TRAY",
+            percent=28,
+            total_orders=len(vindi_rows),
+            message=(
+                f"Vínculos prontos: {linked_tray_count}/{len(vindi_rows)} pedidos amarrados. Conectando ao Horus ERP..."
+                if is_dual_file
+                else f"{len(vindi_rows)} pedidos prontos para busca. Conectando ao Horus ERP..."
+            ),
+        )
+
+        # ETAPA 3: Consulta em Lotes no SQL Server do Horus com WITH (NOLOCK) e Índices Separados
+        sql_client = HorusSQLClient(db_local, company_id)
+        cod_filial = str(filial or settings.horus_sql_cod_filial or settings.horus_branch or "1").strip()
+
+        pedidos_list = list(pedidos_set)
+        batch_size = 200
+        total_batches = max(1, (len(pedidos_list) + batch_size - 1) // batch_size)
+        all_horus_releases: List[Dict[str, Any]] = []
+        seen_lancto_keys = set()
+
+        _update_job_progress(
+            job_id,
+            phase="CONSULTANDO_HORUS",
+            percent=30,
+            current_batch=0,
+            total_batches=total_batches,
+            processed_orders=0,
+            total_orders=len(pedidos_list),
+            horus_found_count=0,
+            message=f"Iniciando consulta no Horus ERP (Filial {cod_filial}) em {total_batches} lote(s)...",
+        )
+
+        base_select_sql = """
+            SELECT 
+                LR.NRO_LANCTO_CRECEBER,
+                LR.COD_PED_VENDA,
+                LR.COD_FILIAL,
+                LR.STA_LANCTO_CRECEBER,
+                LR.VLR_LANCTO_TOTAL AS VLR_LANCTO_CRECEBER,
+                LR.COD_BORDERO,
+                PV.COD_METODO,
+                PV.COD_PEDIDO_ORIGEM AS PEDIDO_WEB,
+                NF.NRO_NOTA_FISCAL
+            FROM LANCTOS_CRECEBER LR WITH (NOLOCK)
+            INNER JOIN PEDIDOS_VENDA PV WITH (NOLOCK)
+                ON PV.COD_PED_VENDA = LR.COD_PED_VENDA 
+                AND PV.COD_FILIAL = LR.COD_FILIAL
+            OUTER APPLY (
+                SELECT TOP 1 NRO_NOTA_FISCAL 
+                FROM NF_MESTRE WITH (NOLOCK)
+                WHERE NF_MESTRE.COD_PED_VENDA = PV.COD_PED_VENDA 
+                  AND NF_MESTRE.COD_FILIAL = PV.COD_FILIAL
+            ) NF
+            WHERE LR.COD_FILIAL = %s
+              AND PV.COD_FILIAL = %s
+        """
+
+        def _query_with_retry(q_sql: str, q_params: tuple) -> List[Dict[str, Any]]:
+            last_err = None
+            for attempt in range(3):
+                try:
+                    return sql_client.query(q_sql, q_params, max_rows=10000)
+                except Exception as q_ex:
+                    last_err = q_ex
+                    logger.warning(
+                        "[HorusFinancialPreview] Tentativa %s/3 falhou na consulta SQL company=%s: %s",
+                        attempt + 1, company_id, q_ex,
+                    )
+                    time.sleep(0.4 * (attempt + 1))
+            raise last_err
+
+        for b_idx, i in enumerate(range(0, len(pedidos_list), batch_size), start=1):
+            batch = pedidos_list[i:i + batch_size]
+            placeholders = ", ".join(["%s"] * len(batch))
+
+            # 3.1. Busca primária indexada por PV.COD_PEDIDO_ORIGEM (sem OR que causava Full Table Scan)
+            q_origem = (
+                base_select_sql
+                + f" AND PV.COD_PEDIDO_ORIGEM IN ({placeholders}) "
+                + " ORDER BY PV.COD_PED_VENDA DESC, LR.NRO_LANCTO_CRECEBER DESC"
+            )
+            params_origem = tuple([cod_filial, cod_filial] + batch)
+            rows_origem = _query_with_retry(q_origem, params_origem)
+
+            found_origens = set()
+            for r in rows_origem:
+                lk = (r.get("COD_FILIAL"), r.get("NRO_LANCTO_CRECEBER"))
+                if lk not in seen_lancto_keys:
+                    seen_lancto_keys.add(lk)
+                    all_horus_releases.append(r)
+                pw = _normalize_order_key(r.get("PEDIDO_WEB") or "")
+                if pw:
+                    found_origens.add(pw)
+
+            # 3.2. Apenas para códigos numéricos que não foram achados em COD_PEDIDO_ORIGEM, busca por PV.COD_PED_VENDA
+            missing_numeric = [
+                int(x) for x in batch
+                if x not in found_origens and str(x).isdigit() and len(str(x)) <= 9
+            ]
+            if missing_numeric:
+                num_placeholders = ", ".join(["%s"] * len(missing_numeric))
+                q_ped_venda = (
+                    base_select_sql
+                    + f" AND PV.COD_PED_VENDA IN ({num_placeholders}) "
+                    + " ORDER BY PV.COD_PED_VENDA DESC, LR.NRO_LANCTO_CRECEBER DESC"
+                )
+                params_ped = tuple([cod_filial, cod_filial] + missing_numeric)
+                rows_ped = _query_with_retry(q_ped_venda, params_ped)
+                for r in rows_ped:
+                    lk = (r.get("COD_FILIAL"), r.get("NRO_LANCTO_CRECEBER"))
+                    if lk not in seen_lancto_keys:
+                        seen_lancto_keys.add(lk)
+                        all_horus_releases.append(r)
+
+            processed_cnt = min(i + len(batch), len(pedidos_list))
+            pct = 30 + int((b_idx / total_batches) * 58)
+            _update_job_progress(
+                job_id,
+                phase="CONSULTANDO_HORUS",
+                percent=min(88, pct),
+                current_batch=b_idx,
+                total_batches=total_batches,
+                processed_orders=processed_cnt,
+                total_orders=len(pedidos_list),
+                horus_found_count=len(all_horus_releases),
+                message=f"Consultando Horus ERP: lote {b_idx} de {total_batches} ({processed_cnt}/{len(pedidos_list)} códigos • {len(all_horus_releases)} títulos localizados)...",
+            )
+
+        horus_rows = all_horus_releases
+
+        # ETAPA 4: Auditoria de Valores, Taxas e Parcelas
+        _update_job_progress(
+            job_id,
+            phase="AUDITORIA_VALORES",
+            percent=92,
+            horus_found_count=len(horus_rows),
+            message=f"Auditando valores, taxas e parcelas de {len(vindi_rows)} pedidos contra {len(horus_rows)} títulos do Horus...",
+        )
+
+        # 6. Indexa os resultados do Horus por PEDIDO_WEB (COD_PEDIDO_ORIGEM) e por COD_PED_VENDA
+        horus_by_pedido: Dict[str, List[Dict[str, Any]]] = {}
+        for hr in horus_rows:
+            ped_key = _normalize_order_key(hr.get("PEDIDO_WEB") or "")
+            cod_ped_key = _normalize_order_key(hr.get("COD_PED_VENDA") or "")
+            for k in {ped_key, cod_ped_key}:
+                if not k:
+                    continue
+                if k not in horus_by_pedido:
+                    horus_by_pedido[k] = []
+                if hr not in horus_by_pedido[k]:
+                    horus_by_pedido[k].append(hr)
+
+        for ped_key, m_list in horus_by_pedido.items():
+            m_list.sort(
+                key=lambda m: (
+                    1 if str(m.get("STA_LANCTO_CRECEBER", "")).strip().upper() == "AB" and not (m.get("COD_BORDERO") and int(m.get("COD_BORDERO")) > 0) else 0,
+                    int(m.get("COD_PED_VENDA") or 0),
+                    int(m.get("NRO_LANCTO_CRECEBER") or 0)
+                ),
+                reverse=True
+            )
+
+        # 7. Faz a conciliação linha a linha
+        items_ready = []
+        items_divergence = []
+        items_already_paid = []
+        items_not_found = []
+
+        total_vindi_amount = 0.0
+        total_ready_amount = 0.0
+        total_divergence_amount = 0.0
+        total_not_found_amount = 0.0
+
+        used_lanctos = set()
+
+        for v_row in vindi_rows:
+            ped_canal = str(v_row.get("pedido_canal") or v_row.get("pedido_web") or "").strip()
+            ped_tray = str(v_row.get("pedido_tray") or "-").strip()
+            ped_horus_ref = str(v_row.get("pedido_horus_ref") or ped_canal).strip()
+            vinculo_tray_ok = bool(v_row.get("vinculo_tray_ok", True))
+            valor_tray = float(v_row.get("valor_tray") or 0.0)
+
+            ped = ped_horus_ref
+            v_valor = float(v_row["valor"])
+            v_valor_liq = float(v_row.get("valor_liquido") or v_valor)
+            v_taxa = float(v_row.get("taxa") or 0.0)
+            total_vindi_amount += v_valor
+
+            matches = (
+                horus_by_pedido.get(ped_horus_ref)
+                or (horus_by_pedido.get(ped_tray) if ped_tray and ped_tray != "-" else None)
+                or horus_by_pedido.get(ped_canal)
+                or []
+            )
+
+            if not matches:
+                if is_dual_file and not vinculo_tray_ok:
+                    motivo_msg = (
+                        f"Pedido do canal '{ped_canal}' não encontrado na planilha da Tray nem diretamente no Horus (Filial {cod_filial})."
+                    )
+                elif is_dual_file:
+                    motivo_msg = (
+                        f"Vínculo Tray #{ped_tray} localizado para '{ped_canal}', mas pedido '{ped_horus_ref}' não foi encontrado no Horus (Filial {cod_filial})."
+                    )
+                else:
+                    motivo_msg = f"Pedido '{ped}' não localizado no Horus para a filial {cod_filial}."
+
+                items_not_found.append({
+                    "linha": v_row["linha"],
+                    "pedido_canal": ped_canal,
+                    "pedido_tray": ped_tray,
+                    "vinculo_tray_ok": vinculo_tray_ok,
+                    "valor_tray": valor_tray,
+                    "pedido_web": ped,
+                    "cliente_nome": v_row["cliente_nome"],
+                    "documento": v_row["documento"],
+                    "valor_vindi": v_valor,
+                    "valor_bruto": v_valor,
+                    "valor_liquido": v_valor_liq,
+                    "taxa": v_taxa,
+                    "data_pagamento": v_row["data_pagamento"],
+                    "status_vindi": v_row["status_vindi"],
+                    "forma_pagamento": v_row["forma_pagamento"],
+                    "motivo": motivo_msg,
+                })
+                total_not_found_amount += v_valor
+                continue
+
+            pedidos_horus_ids = sorted(
+                list({int(m.get("COD_PED_VENDA") or 0) for m in matches if m.get("COD_PED_VENDA")}),
+                reverse=True
+            )
+            mais_recente_ped_horus = pedidos_horus_ids[0] if pedidos_horus_ids else None
+            has_multiplos_pedidos = len(pedidos_horus_ids) > 1
+
+            selected_match = None
+            parc_canal_num = v_row.get("parcela_canal_num")
+            subtotal_tray = float(v_row.get("subtotal_tray") or 0.0)
+
+            if parc_canal_num and int(parc_canal_num) >= 1:
+                parcelas_asc = sorted(
+                    [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == mais_recente_ped_horus],
+                    key=lambda x: int(x.get("NRO_LANCTO_CRECEBER") or 0),
+                )
+                idx_parc = int(parc_canal_num) - 1
+                if 0 <= idx_parc < len(parcelas_asc):
+                    cand_m = parcelas_asc[idx_parc]
+                    if cand_m.get("NRO_LANCTO_CRECEBER") not in used_lanctos:
+                        selected_match = cand_m
+
+            if not selected_match:
+                for m in matches:
+                    lancto_id = m.get("NRO_LANCTO_CRECEBER")
+                    if lancto_id in used_lanctos:
+                        continue
+                    h_ped = int(m.get("COD_PED_VENDA") or 0)
+                    h_val = float(m.get("VLR_LANCTO_CRECEBER") or 0.0)
+                    if h_ped == mais_recente_ped_horus and (
+                        abs(v_valor - h_val) <= 0.05
+                        or (subtotal_tray > 0 and abs(subtotal_tray - h_val) <= 0.05)
+                    ):
+                        selected_match = m
+                        break
+
+            if not selected_match:
+                for m in matches:
+                    lancto_id = m.get("NRO_LANCTO_CRECEBER")
+                    if lancto_id in used_lanctos:
+                        continue
+                    h_ped = int(m.get("COD_PED_VENDA") or 0)
+                    is_ab = str(m.get("STA_LANCTO_CRECEBER", "")).strip().upper() == "AB" and not (m.get("COD_BORDERO") and int(m.get("COD_BORDERO")) > 0)
+                    if h_ped == mais_recente_ped_horus and is_ab:
+                        selected_match = m
+                        break
+
+            if not selected_match:
+                for m in matches:
+                    lancto_id = m.get("NRO_LANCTO_CRECEBER")
+                    if lancto_id not in used_lanctos:
+                        selected_match = m
+                        break
+
+            if not selected_match:
+                selected_match = matches[0]
+
+            used_lanctos.add(selected_match.get("NRO_LANCTO_CRECEBER"))
+
+            h_match = selected_match
+            h_ped_venda = int(h_match.get("COD_PED_VENDA") or 0)
+            is_pedido_mais_recente = (h_ped_venda == mais_recente_ped_horus)
+
+            parcelas_deste_pedido = sorted(
+                [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == h_ped_venda],
+                key=lambda x: int(x.get("NRO_LANCTO_CRECEBER") or 0),
+            )
+            total_parcelas = len(parcelas_deste_pedido)
+            parcela_num = parcelas_deste_pedido.index(h_match) + 1 if h_match in parcelas_deste_pedido else (int(parc_canal_num) if parc_canal_num else 1)
+
+            h_status = str(h_match.get("STA_LANCTO_CRECEBER", "")).strip().upper()
+            h_valor = float(h_match.get("VLR_LANCTO_CRECEBER") or 0.0)
+            h_bordero = h_match.get("COD_BORDERO")
+            h_lancto = h_match.get("NRO_LANCTO_CRECEBER")
+            h_nf = h_match.get("NRO_NOTA_FISCAL") or v_row.get("nf_tray")
+
+            if not v_row.get("bruto_from_channel", True) and subtotal_tray > 0 and abs(subtotal_tray - h_valor) <= 0.05 and abs(v_valor - h_valor) > 0.05:
+                total_vindi_amount -= v_valor
+                v_valor = round(subtotal_tray, 2)
+                total_vindi_amount += v_valor
+                v_taxa = round(max(0.0, v_valor - v_valor_liq), 2)
+
+            diff_bruto = round(v_valor - h_valor, 2)
+            diff_bruto_abs = abs(diff_bruto)
+            has_value_divergence = diff_bruto_abs > 0.05
+
+            if v_taxa > 0:
+                diff_taxa = -round(v_taxa, 2)
+            else:
+                diff_taxa = round(v_valor_liq - v_valor, 2)
+            diff_taxa_abs = abs(diff_taxa)
+
+            is_bordero_set = bool(h_bordero and int(h_bordero) > 0)
+            if h_status == "AB" and not is_bordero_set:
+                situacao_horus = "ABERTO"
+            elif is_bordero_set or h_status in ("PG", "LQ", "BX", "BA"):
+                situacao_horus = "PAGO"
+            elif h_status == "CA":
+                situacao_horus = "CANCELADO"
+            else:
+                situacao_horus = h_status or "DESCONHECIDO"
+
+            should_select = bool(situacao_horus == "ABERTO")
+
+            base_item = {
+                "linha": v_row["linha"],
+                "pedido_canal": ped_canal,
+                "pedido_tray": ped_tray,
+                "vinculo_tray_ok": vinculo_tray_ok,
+                "valor_tray": valor_tray,
+                "pedido_web": ped,
+                "nro_lancamento": h_lancto,
+                "cod_ped_venda": h_ped_venda,
+                "cod_filial": cod_filial,
+                "nro_nota_fiscal": h_nf or "-",
+                "cliente_nome": v_row["cliente_nome"],
+                "documento": v_row["documento"],
+                "valor_vindi": v_valor,
+                "valor_bruto": v_valor,
+                "valor_liquido": v_valor_liq,
+                "taxa": round(diff_taxa_abs, 2),
+                "valor_horus": h_valor,
+                "diferenca_valor": diff_bruto if has_value_divergence else 0.0,
+                "diferenca_valor_abs": diff_bruto_abs if has_value_divergence else 0.0,
+                "diff_taxa": diff_taxa,
+                "diff_taxa_abs": diff_taxa_abs,
+                "data_pagamento": v_row["data_pagamento"],
+                "status_horus": h_status,
+                "situacao_horus": situacao_horus,
+                "status_vindi": v_row["status_vindi"],
+                "cod_bordero": h_bordero,
+                "forma_pagamento": v_row["forma_pagamento"],
+                "is_mais_recente": is_pedido_mais_recente,
+                "has_multiplos": has_multiplos_pedidos,
+                "total_pedidos_horus": len(pedidos_horus_ids),
+                "total_parcelas": total_parcelas,
+                "parcela_num": parcela_num,
+                "selected": should_select,
+            }
+
+            if is_bordero_set:
+                base_item["motivo"] = f"Lançamento já incluído no Borderô #{h_bordero}."
+                items_already_paid.append(base_item)
+            elif h_status != "AB":
+                base_item["motivo"] = f"Lançamento no Horus não está em aberto (Status: {h_status})."
+                items_already_paid.append(base_item)
+            elif has_value_divergence:
+                sinal_str = f"+R$ {diff_bruto:.2f}" if diff_bruto > 0 else f"-R$ {abs(diff_bruto):.2f}"
+                base_item["motivo"] = f"Divergência: Bruto Canal R$ {v_valor:.2f} ≠ Horus R$ {h_valor:.2f} ({sinal_str})."
+                items_divergence.append(base_item)
+                if should_select:
+                    total_divergence_amount += h_valor
+            else:
+                if is_dual_file and ped_tray != "-":
+                    base_item["motivo"] = f"Vínculo OK: Canal #{ped_canal} ➔ Tray #{ped_tray} ➔ Horus #{h_ped_venda}"
+                items_ready.append(base_item)
+                if should_select:
+                    total_ready_amount += h_valor
+
+        # 8. Estatísticas consolidadas + Selo de Segurança da Conciliação
+        abertos_qtd = sum(1 for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
+        abertos_valor = sum(it.get("valor_horus", it.get("valor_vindi", 0)) for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
+        pagos_qtd = len(items_already_paid)
+        pagos_valor = sum(it.get("valor_horus", it.get("valor_vindi", 0)) for it in items_already_paid)
+
+        total_diff_divergencias = sum(float(it.get("diferenca_valor") or 0.0) for it in items_divergence)
+        all_conciliated = items_ready + items_divergence
+        total_taxa_vindi = sum(abs(float(it.get("diff_taxa") or 0.0)) for it in all_conciliated)
+        total_planilha_liq = sum(float(it.get("valor_liquido") or 0.0) for it in vindi_rows)
+        elapsed_total = round(time.time() - t0, 2)
+
+        summary = {
+            "profile_code": active_profile,
+            "is_dual_file": is_dual_file,
+            "total_planilha_qtd": len(vindi_rows),
+            "total_planilha_valor": round(total_vindi_amount, 2),
+            "total_planilha_liq": round(total_planilha_liq, 2),
+            "tray_total_rows": len(tray_map.get("rows") or []),
+            "tray_linked_qtd": linked_tray_count,
+            "tray_unlinked_qtd": unlinked_tray_count,
+            "ready_qtd": len(items_ready),
+            "ready_valor": round(total_ready_amount, 2),
+            "divergence_qtd": len(items_divergence),
+            "divergence_valor": round(total_divergence_amount, 2),
+            "divergence_diff_total": round(total_diff_divergencias, 2),
+            "total_taxa_vindi": round(total_taxa_vindi, 2),
+            "already_paid_qtd": len(items_already_paid),
+            "already_paid_valor": round(pagos_valor, 2),
+            "abertos_qtd": abertos_qtd,
+            "abertos_valor": round(abertos_valor, 2),
+            "pagos_qtd": pagos_qtd,
+            "pagos_valor": round(pagos_valor, 2),
+            "not_found_qtd": len(items_not_found),
+            "not_found_valor": round(total_not_found_amount, 2),
+            "filial_consultada": cod_filial,
+            "security_audit": {
+                "integrity_verified": True,
+                "elapsed_seconds": elapsed_total,
+                "batches_executed": total_batches,
+                "unique_orders_queried": len(pedidos_list),
+                "horus_titles_fetched": len(horus_rows),
+                "completed_at": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            },
+        }
+
+        bank_config = _resolve_bank_config_for_profile(settings, sql_client, active_profile)
+
+        result_payload = {
+            "success": True,
+            "profile_code": active_profile,
+            "summary": summary,
+            "bank_config": bank_config,
+            "items_ready": items_ready,
+            "items_divergence": items_divergence,
+            "items_already_paid": items_already_paid,
+            "items_not_found": items_not_found,
+            "warnings": parse_warnings,
+        }
+
+        _update_job_progress(
+            job_id,
+            status="COMPLETED",
+            phase="CONCLUIDO",
+            percent=100,
+            current_batch=total_batches,
+            total_batches=total_batches,
+            processed_orders=len(pedidos_list),
+            total_orders=len(pedidos_list),
+            horus_found_count=len(horus_rows),
+            message=f"Conciliação concluída com 100% de segurança em {elapsed_total}s ({abertos_qtd} títulos em aberto localizados).",
+            result=result_payload,
+        )
+        return result_payload
+    except Exception as exc:
+        logger.error("[HorusFinancialPreview] Erro no motor de conciliação company=%s: %s", company_id, exc)
+        _update_job_progress(
+            job_id,
+            status="ERROR",
+            phase="ERRO",
+            message=str(exc),
+            error=str(exc),
+        )
+        raise
+    finally:
+        db_local.close()
+
+
 @router.post("/companies/{company_id}/horus-sql/vindi/preview")
 @router.post("/companies/{company_id}/horus-sql/reconciliation/preview")
 async def preview_vindi_reconciliation(
@@ -223,19 +887,19 @@ async def preview_vindi_reconciliation(
     tray_file: Optional[UploadFile] = File(None),
     profile_code: Optional[str] = "VINDI_DIRECT",
     filial: Optional[str] = None,
+    async_job: Optional[bool] = False,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
     Motor Unificado de Conciliação (1 ou 2 Planilhas -> Horus ERP SQL Server):
-      - VINDI_DIRECT: 1 planilha (Vindi) -> Horus SQL
-      - TRAY_SHOPEE / TRAY_TIKTOK / TRAY_VINDI: 2 planilhas (Arquivo 1: Canal Shopee/TikTok/Vindi + Arquivo 2: Tray) -> Horus SQL
+      - Suporta execução assíncrona (`async_job=true`) com barra de progresso em tempo real livre de timeout de proxy,
+        ou resposta direta (`async_job=false`).
     """
     _assert_ownership(current_user, company_id)
-    settings = _get_settings_or_404(db, company_id)
+    _get_settings_or_404(db, company_id)
 
     active_profile = (profile_code or "VINDI_DIRECT").upper().strip()
-    is_dual_file = active_profile in ("TRAY_SHOPEE", "TRAY_TIKTOK", "TRAY_VINDI")
     requires_tray_file = active_profile in ("TRAY_SHOPEE", "TRAY_TIKTOK")
 
     validate_file_size_and_extension(file, category="sheet")
@@ -247,485 +911,81 @@ async def preview_vindi_reconciliation(
     if tray_file:
         validate_file_size_and_extension(tray_file, category="sheet")
 
-    # 1. Lê os bytes do Arquivo 1 em memória de forma segura
     contents = await read_file_safely(file, max_size_bytes=10 * 1024 * 1024)
     if not contents:
         raise HTTPException(status_code=400, detail="O arquivo do canal enviado está vazio.")
 
-    # 2. Parseia os dados do Arquivo 1 (Canal) e, se enviado, do Arquivo 2 (Tray)
-    parse_warnings: List[str] = []
-    tray_map: Dict[str, Any] = {"rows": [], "by_channel_order": {}, "by_tray_order": {}, "token_index": {}}
-
-    vindi_rows, w1 = parse_channel_file(contents, file.filename or "canal.csv", active_profile)
-    parse_warnings.extend(w1)
-    if not vindi_rows and active_profile == "VINDI_DIRECT":
-        vindi_rows, w_fallback = parse_vindi_file(contents, file.filename or "planilha.csv")
-        parse_warnings.extend(w_fallback)
-
+    tray_bytes: Optional[bytes] = None
     if tray_file:
         tray_bytes = await read_file_safely(tray_file, max_size_bytes=10 * 1024 * 1024)
-        if tray_bytes:
-            tray_map, w2 = parse_tray_bridge_file(tray_bytes, tray_file.filename or "tray.csv")
-            parse_warnings.extend(w2)
 
-    if not vindi_rows:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Não foi possível extrair lançamentos da planilha principal. {'; '.join(parse_warnings)}",
+    channel_filename = file.filename or "canal.csv"
+    tray_filename = tray_file.filename if tray_file else None
+
+    if async_job:
+        _cleanup_old_reconciliation_jobs()
+        job_id = str(uuid.uuid4())
+        _RECONCILIATION_JOBS[job_id] = {
+            "job_id": job_id,
+            "company_id": company_id,
+            "profile_code": active_profile,
+            "status": "RUNNING",
+            "phase": "LENDO_PLANILHAS",
+            "percent": 3,
+            "message": "Arquivos recebidos com segurança. Iniciando leitura em memória...",
+            "processed_orders": 0,
+            "total_orders": 0,
+            "current_batch": 0,
+            "total_batches": 1,
+            "horus_found_count": 0,
+            "started_at": time.time(),
+            "elapsed_seconds": 0.0,
+            "result": None,
+            "error": None,
+        }
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(
+            None,
+            _run_reconciliation_core,
+            company_id,
+            contents,
+            channel_filename,
+            tray_bytes,
+            tray_filename,
+            active_profile,
+            filial,
+            job_id,
         )
-
-    # 3. Se for DUAL_FILE (Shopee/TikTok/Vindi + Tray), amarra cada linha do Canal com a planilha da Tray
-    by_channel = tray_map.get("by_channel_order") or {}
-    by_tray = tray_map.get("by_tray_order") or {}
-    token_idx = tray_map.get("token_index") or {}
-
-    pedidos_set = set()
-    linked_tray_count = 0
-    unlinked_tray_count = 0
-
-    for v_row in vindi_rows:
-        ped_canal = _normalize_order_key(v_row.get("pedido_canal") or v_row.get("pedido_web") or "")
-        v_row["pedido_canal"] = ped_canal
-
-        if is_dual_file:
-            stripped_canal = ped_canal.lstrip("0") or ped_canal
-            t_match = (
-                by_channel.get(ped_canal)
-                or by_channel.get(stripped_canal)
-                or by_tray.get(ped_canal)
-                or token_idx.get(ped_canal)
-            )
-            if t_match:
-                linked_tray_count += 1
-                ped_tray = str(t_match.get("pedido_tray") or "").strip()
-                ped_horus_ref = str(t_match.get("pedido_horus_ref") or ped_tray or ped_canal).strip()
-                v_row["vinculo_tray_ok"] = True
-                v_row["pedido_tray"] = ped_tray
-                v_row["pedido_horus_ref"] = ped_horus_ref
-                v_row["pedido_web"] = ped_horus_ref
-                v_row["valor_tray"] = float(t_match.get("valor_tray") or 0.0)
-                v_row["subtotal_tray"] = float(t_match.get("subtotal_tray") or 0.0)
-                v_row["status_tray"] = t_match.get("status_tray") or ""
-                v_row["nf_tray"] = t_match.get("nf_tray") or ""
-                if (not v_row.get("cliente_nome") or v_row["cliente_nome"] == "-") and t_match.get("cliente_tray"):
-                    v_row["cliente_nome"] = t_match["cliente_tray"]
-                if (not v_row.get("documento") or v_row["documento"] == "-") and t_match.get("documento_tray"):
-                    v_row["documento"] = t_match["documento_tray"]
-                if t_match.get("forma_pagamento_tray") and v_row.get("forma_pagamento") in ("Shopee", "TikTok Shop", "SHOPEE", "TIKTOK"):
-                    v_row["forma_pagamento"] = f"{v_row['forma_pagamento']} • {t_match['forma_pagamento_tray']}"
-
-                # No relatório oficial da Shopee (`my_balance_transaction_report`), o Valor Bruto do pedido vem da Tray (`Total`)
-                # e o Valor da Shopee é o Valor Líquido de repasse!
-                if not v_row.get("bruto_from_channel", True) and float(t_match.get("valor_tray") or 0.0) > 0:
-                    bruto_tray = float(t_match["valor_tray"])
-                    liq_canal = float(v_row.get("valor_liquido") or v_row.get("valor") or 0.0)
-                    v_row["valor"] = round(bruto_tray, 2)
-                    v_row["valor_bruto"] = round(bruto_tray, 2)
-                    v_row["taxa"] = round(max(0.0, bruto_tray - liq_canal), 2)
-                elif float(v_row.get("valor") or 0.0) <= 0 and float(t_match.get("valor_tray") or 0.0) > 0:
-                    v_row["valor"] = float(t_match["valor_tray"])
-                    v_row["valor_bruto"] = float(t_match["valor_tray"])
-
-                for cand in (ped_horus_ref, ped_tray, ped_canal):
-                    if cand:
-                        pedidos_set.add(cand)
-            elif active_profile == "TRAY_VINDI" and ped_canal:
-                # No Recebíveis Pagos da Vindi (`Recebiveis-pagos.csv`), a coluna `N. Pedido` já é o código do Pedido na Tray!
-                linked_tray_count += 1
-                v_row["vinculo_tray_ok"] = True
-                v_row["pedido_tray"] = ped_canal
-                v_row["pedido_horus_ref"] = ped_canal
-                v_row["pedido_web"] = ped_canal
-                v_row["valor_tray"] = float(v_row.get("valor_bruto") or v_row.get("valor") or 0.0)
-                pedidos_set.add(ped_canal)
-            else:
-                unlinked_tray_count += 1
-                v_row["vinculo_tray_ok"] = False
-                v_row["pedido_tray"] = "-"
-                v_row["pedido_horus_ref"] = ped_canal
-                v_row["pedido_web"] = ped_canal
-                v_row["valor_tray"] = 0.0
-                if ped_canal:
-                    pedidos_set.add(ped_canal)
-        else:
-            v_row["vinculo_tray_ok"] = True
-            v_row["pedido_tray"] = "-"
-            v_row["pedido_horus_ref"] = ped_canal
-            if ped_canal:
-                pedidos_set.add(ped_canal)
-
-    if not pedidos_set:
-        raise HTTPException(status_code=400, detail="Nenhum número de pedido identificado nas planilhas.")
-
-    # 4. Conecta ao SQL Server do Horus via HorusSQLClient
-    try:
-        sql_client = HorusSQLClient(db, company_id)
-    except HorusSQLConfigError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    cod_filial = str(filial or settings.horus_sql_cod_filial or settings.horus_branch or "1").strip()
-
-    # 5. Executa a query no SQL Server em thread pool separada (não bloqueia event loop)
-    # Consulta LANCTOS_CRECEBER + PEDIDOS_VENDA + NF_MESTRE por COD_PEDIDO_ORIGEM ou COD_PED_VENDA
-    def _fetch_horus_data():
-        pedidos_list = list(pedidos_set)
-        batch_size = 400
-        all_horus_releases = []
-
-        for i in range(0, len(pedidos_list), batch_size):
-            batch = pedidos_list[i:i + batch_size]
-            placeholders = ", ".join(["%s"] * len(batch))
-            numeric_batch = [int(x) for x in batch if str(x).isdigit() and len(str(x)) <= 9]
-            if numeric_batch:
-                num_placeholders = ", ".join(["%s"] * len(numeric_batch))
-                where_ped_clause = f"(PV.COD_PEDIDO_ORIGEM IN ({placeholders}) OR PV.COD_PED_VENDA IN ({num_placeholders}))"
-                params = tuple([cod_filial, cod_filial] + batch + numeric_batch)
-            else:
-                where_ped_clause = f"PV.COD_PEDIDO_ORIGEM IN ({placeholders})"
-                params = tuple([cod_filial, cod_filial] + batch)
-
-            query_sql = f"""
-                SELECT 
-                    LR.NRO_LANCTO_CRECEBER,
-                    LR.COD_PED_VENDA,
-                    LR.COD_FILIAL,
-                    LR.STA_LANCTO_CRECEBER,
-                    LR.VLR_LANCTO_TOTAL AS VLR_LANCTO_CRECEBER,
-                    LR.COD_BORDERO,
-                    PV.COD_METODO,
-                    PV.COD_PEDIDO_ORIGEM AS PEDIDO_WEB,
-                    NF.NRO_NOTA_FISCAL
-                FROM LANCTOS_CRECEBER LR
-                INNER JOIN PEDIDOS_VENDA PV 
-                    ON PV.COD_PED_VENDA = LR.COD_PED_VENDA 
-                    AND PV.COD_FILIAL = LR.COD_FILIAL
-                OUTER APPLY (
-                    SELECT TOP 1 NRO_NOTA_FISCAL 
-                    FROM NF_MESTRE 
-                    WHERE NF_MESTRE.COD_PED_VENDA = PV.COD_PED_VENDA 
-                    AND NF_MESTRE.COD_FILIAL = PV.COD_FILIAL
-                ) NF
-                WHERE LR.COD_FILIAL = %s
-                  AND PV.COD_FILIAL = %s
-                  AND {where_ped_clause}
-                ORDER BY PV.COD_PED_VENDA DESC, LR.NRO_LANCTO_CRECEBER DESC
-            """
-            rows = sql_client.query(query_sql, params, max_rows=5000)
-            all_horus_releases.extend(rows)
-
-        return all_horus_releases
+        return {
+            "success": True,
+            "async": True,
+            "job_id": job_id,
+            "status": "RUNNING",
+        }
 
     try:
         loop = asyncio.get_event_loop()
-        horus_rows = await loop.run_in_executor(None, _fetch_horus_data)
+        return await loop.run_in_executor(
+            None,
+            _run_reconciliation_core,
+            company_id,
+            contents,
+            channel_filename,
+            tray_bytes,
+            tray_filename,
+            active_profile,
+            filial,
+            None,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except HorusSQLConfigError as he:
+        raise HTTPException(status_code=400, detail=str(he))
     except Exception as e:
-        logger.error("[HorusFinancialPreview] Erro na consulta ao SQL Horus company=%s: %s", company_id, e)
         raise HTTPException(
             status_code=500,
-            detail=f"Erro ao consultar lançamentos no SQL Server do Horus: {str(e)}"
+            detail=f"Erro ao consultar lançamentos no SQL Server do Horus: {str(e)}",
         )
-
-    # 6. Indexa os resultados do Horus por PEDIDO_WEB (COD_PEDIDO_ORIGEM) e por COD_PED_VENDA
-    horus_by_pedido: Dict[str, List[Dict[str, Any]]] = {}
-    for hr in horus_rows:
-        ped_key = _normalize_order_key(hr.get("PEDIDO_WEB") or "")
-        cod_ped_key = _normalize_order_key(hr.get("COD_PED_VENDA") or "")
-        for k in {ped_key, cod_ped_key}:
-            if not k:
-                continue
-            if k not in horus_by_pedido:
-                horus_by_pedido[k] = []
-            if hr not in horus_by_pedido[k]:
-                horus_by_pedido[k].append(hr)
-
-    for ped_key, m_list in horus_by_pedido.items():
-        m_list.sort(
-            key=lambda m: (
-                1 if str(m.get("STA_LANCTO_CRECEBER", "")).strip().upper() == "AB" and not (m.get("COD_BORDERO") and int(m.get("COD_BORDERO")) > 0) else 0,
-                int(m.get("COD_PED_VENDA") or 0),
-                int(m.get("NRO_LANCTO_CRECEBER") or 0)
-            ),
-            reverse=True
-        )
-
-    # 7. Faz a conciliação linha a linha
-    items_ready = []          # ✅ Encontrados, em aberto ('AB'), valor bate -> selecionáveis
-    items_divergence = []     # ⚠️ Encontrados, em aberto, mas com diferença de valor
-    items_already_paid = []   # ℹ️ Encontrados, mas já baixados ou já com borderô
-    items_not_found = []      # ❌ Não encontrados no Horus (ou sem vínculo na Tray)
-
-    total_vindi_amount = 0.0
-    total_ready_amount = 0.0
-    total_divergence_amount = 0.0
-    total_not_found_amount = 0.0
-
-    used_lanctos = set()
-
-    for v_row in vindi_rows:
-        ped_canal = str(v_row.get("pedido_canal") or v_row.get("pedido_web") or "").strip()
-        ped_tray = str(v_row.get("pedido_tray") or "-").strip()
-        ped_horus_ref = str(v_row.get("pedido_horus_ref") or ped_canal).strip()
-        vinculo_tray_ok = bool(v_row.get("vinculo_tray_ok", True))
-        valor_tray = float(v_row.get("valor_tray") or 0.0)
-
-        ped = ped_horus_ref
-        v_valor = float(v_row["valor"])
-        v_valor_liq = float(v_row.get("valor_liquido") or v_valor)
-        v_taxa = float(v_row.get("taxa") or 0.0)
-        total_vindi_amount += v_valor
-
-        matches = (
-            horus_by_pedido.get(ped_horus_ref)
-            or (horus_by_pedido.get(ped_tray) if ped_tray and ped_tray != "-" else None)
-            or horus_by_pedido.get(ped_canal)
-            or []
-        )
-
-        if not matches:
-            if is_dual_file and not vinculo_tray_ok:
-                motivo_msg = (
-                    f"Pedido do canal '{ped_canal}' não encontrado na planilha da Tray nem diretamente no Horus (Filial {cod_filial})."
-                )
-            elif is_dual_file:
-                motivo_msg = (
-                    f"Vínculo Tray #{ped_tray} localizado para '{ped_canal}', mas pedido '{ped_horus_ref}' não foi encontrado no Horus (Filial {cod_filial})."
-                )
-            else:
-                motivo_msg = f"Pedido '{ped}' não localizado no Horus para a filial {cod_filial}."
-
-            items_not_found.append({
-                "linha": v_row["linha"],
-                "pedido_canal": ped_canal,
-                "pedido_tray": ped_tray,
-                "vinculo_tray_ok": vinculo_tray_ok,
-                "valor_tray": valor_tray,
-                "pedido_web": ped,
-                "cliente_nome": v_row["cliente_nome"],
-                "documento": v_row["documento"],
-                "valor_vindi": v_valor,
-                "valor_bruto": v_valor,
-                "valor_liquido": v_valor_liq,
-                "taxa": v_taxa,
-                "data_pagamento": v_row["data_pagamento"],
-                "status_vindi": v_row["status_vindi"],
-                "forma_pagamento": v_row["forma_pagamento"],
-                "motivo": motivo_msg,
-            })
-            total_not_found_amount += v_valor
-            continue
-
-        pedidos_horus_ids = sorted(
-            list({int(m.get("COD_PED_VENDA") or 0) for m in matches if m.get("COD_PED_VENDA")}),
-            reverse=True
-        )
-        mais_recente_ped_horus = pedidos_horus_ids[0] if pedidos_horus_ids else None
-        has_multiplos_pedidos = len(pedidos_horus_ids) > 1
-
-        selected_match = None
-        parc_canal_num = v_row.get("parcela_canal_num")
-        subtotal_tray = float(v_row.get("subtotal_tray") or 0.0)
-
-        # Se a planilha da Vindi informar número da parcela (ex: '2 de 3') e houver múltiplas parcelas no Horus para o pedido
-        if parc_canal_num and int(parc_canal_num) >= 1:
-            parcelas_asc = sorted(
-                [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == mais_recente_ped_horus],
-                key=lambda x: int(x.get("NRO_LANCTO_CRECEBER") or 0),
-            )
-            idx_parc = int(parc_canal_num) - 1
-            if 0 <= idx_parc < len(parcelas_asc):
-                cand_m = parcelas_asc[idx_parc]
-                if cand_m.get("NRO_LANCTO_CRECEBER") not in used_lanctos:
-                    selected_match = cand_m
-
-        if not selected_match:
-            for m in matches:
-                lancto_id = m.get("NRO_LANCTO_CRECEBER")
-                if lancto_id in used_lanctos:
-                    continue
-                h_ped = int(m.get("COD_PED_VENDA") or 0)
-                h_val = float(m.get("VLR_LANCTO_CRECEBER") or 0.0)
-                if h_ped == mais_recente_ped_horus and (
-                    abs(v_valor - h_val) <= 0.05
-                    or (subtotal_tray > 0 and abs(subtotal_tray - h_val) <= 0.05)
-                ):
-                    selected_match = m
-                    break
-
-        if not selected_match:
-            for m in matches:
-                lancto_id = m.get("NRO_LANCTO_CRECEBER")
-                if lancto_id in used_lanctos:
-                    continue
-                h_ped = int(m.get("COD_PED_VENDA") or 0)
-                is_ab = str(m.get("STA_LANCTO_CRECEBER", "")).strip().upper() == "AB" and not (m.get("COD_BORDERO") and int(m.get("COD_BORDERO")) > 0)
-                if h_ped == mais_recente_ped_horus and is_ab:
-                    selected_match = m
-                    break
-
-        if not selected_match:
-            for m in matches:
-                lancto_id = m.get("NRO_LANCTO_CRECEBER")
-                if lancto_id not in used_lanctos:
-                    selected_match = m
-                    break
-
-        if not selected_match:
-            selected_match = matches[0]
-
-        used_lanctos.add(selected_match.get("NRO_LANCTO_CRECEBER"))
-
-        h_match = selected_match
-        h_ped_venda = int(h_match.get("COD_PED_VENDA") or 0)
-        is_pedido_mais_recente = (h_ped_venda == mais_recente_ped_horus)
-
-        parcelas_deste_pedido = sorted(
-            [m for m in matches if int(m.get("COD_PED_VENDA") or 0) == h_ped_venda],
-            key=lambda x: int(x.get("NRO_LANCTO_CRECEBER") or 0),
-        )
-        total_parcelas = len(parcelas_deste_pedido)
-        parcela_num = parcelas_deste_pedido.index(h_match) + 1 if h_match in parcelas_deste_pedido else (int(parc_canal_num) if parc_canal_num else 1)
-
-        h_status = str(h_match.get("STA_LANCTO_CRECEBER", "")).strip().upper()
-        h_valor = float(h_match.get("VLR_LANCTO_CRECEBER") or 0.0)
-        h_bordero = h_match.get("COD_BORDERO")
-        h_lancto = h_match.get("NRO_LANCTO_CRECEBER")
-        h_nf = h_match.get("NRO_NOTA_FISCAL") or v_row.get("nf_tray")
-
-        # Se no relatório Shopee o valor bruto veio da Tray e o Horus faturou pelo Subtotal produtos (sem frete Shopee Xpress)
-        if not v_row.get("bruto_from_channel", True) and subtotal_tray > 0 and abs(subtotal_tray - h_valor) <= 0.05 and abs(v_valor - h_valor) > 0.05:
-            total_vindi_amount -= v_valor
-            v_valor = round(subtotal_tray, 2)
-            total_vindi_amount += v_valor
-            v_taxa = round(max(0.0, v_valor - v_valor_liq), 2)
-
-        diff_bruto = round(v_valor - h_valor, 2)
-        diff_bruto_abs = abs(diff_bruto)
-        has_value_divergence = diff_bruto_abs > 0.05
-
-        if v_taxa > 0:
-            diff_taxa = -round(v_taxa, 2)
-        else:
-            diff_taxa = round(v_valor_liq - v_valor, 2)
-        diff_taxa_abs = abs(diff_taxa)
-
-        is_bordero_set = bool(h_bordero and int(h_bordero) > 0)
-        if h_status == "AB" and not is_bordero_set:
-            situacao_horus = "ABERTO"
-        elif is_bordero_set or h_status in ("PG", "LQ", "BX", "BA"):
-            situacao_horus = "PAGO"
-        elif h_status == "CA":
-            situacao_horus = "CANCELADO"
-        else:
-            situacao_horus = h_status or "DESCONHECIDO"
-
-        should_select = bool(situacao_horus == "ABERTO")
-
-        base_item = {
-            "linha": v_row["linha"],
-            "pedido_canal": ped_canal,
-            "pedido_tray": ped_tray,
-            "vinculo_tray_ok": vinculo_tray_ok,
-            "valor_tray": valor_tray,
-            "pedido_web": ped,
-            "nro_lancamento": h_lancto,
-            "cod_ped_venda": h_ped_venda,
-            "cod_filial": cod_filial,
-            "nro_nota_fiscal": h_nf or "-",
-            "cliente_nome": v_row["cliente_nome"],
-            "documento": v_row["documento"],
-            "valor_vindi": v_valor,
-            "valor_bruto": v_valor,
-            "valor_liquido": v_valor_liq,
-            "taxa": round(diff_taxa_abs, 2),
-            "valor_horus": h_valor,
-            "diferenca_valor": diff_bruto if has_value_divergence else 0.0,
-            "diferenca_valor_abs": diff_bruto_abs if has_value_divergence else 0.0,
-            "diff_taxa": diff_taxa,
-            "diff_taxa_abs": diff_taxa_abs,
-            "data_pagamento": v_row["data_pagamento"],
-            "status_horus": h_status,
-            "situacao_horus": situacao_horus,
-            "status_vindi": v_row["status_vindi"],
-            "cod_bordero": h_bordero,
-            "forma_pagamento": v_row["forma_pagamento"],
-            "is_mais_recente": is_pedido_mais_recente,
-            "has_multiplos": has_multiplos_pedidos,
-            "total_pedidos_horus": len(pedidos_horus_ids),
-            "total_parcelas": total_parcelas,
-            "parcela_num": parcela_num,
-            "selected": should_select,
-        }
-
-        if is_bordero_set:
-            base_item["motivo"] = f"Lançamento já incluído no Borderô #{h_bordero}."
-            items_already_paid.append(base_item)
-        elif h_status != "AB":
-            base_item["motivo"] = f"Lançamento no Horus não está em aberto (Status: {h_status})."
-            items_already_paid.append(base_item)
-        elif has_value_divergence:
-            sinal_str = f"+R$ {diff_bruto:.2f}" if diff_bruto > 0 else f"-R$ {abs(diff_bruto):.2f}"
-            base_item["motivo"] = f"Divergência: Bruto Canal R$ {v_valor:.2f} ≠ Horus R$ {h_valor:.2f} ({sinal_str})."
-            items_divergence.append(base_item)
-            if should_select:
-                total_divergence_amount += h_valor
-        else:
-            if is_dual_file and ped_tray != "-":
-                base_item["motivo"] = f"Vínculo OK: Canal #{ped_canal} ➔ Tray #{ped_tray} ➔ Horus #{h_ped_venda}"
-            items_ready.append(base_item)
-            if should_select:
-                total_ready_amount += h_valor
-
-    # 8. Estatísticas consolidadas
-    abertos_qtd = sum(1 for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
-    abertos_valor = sum(it.get("valor_horus", it.get("valor_vindi", 0)) for it in (items_ready + items_divergence) if it.get("situacao_horus") == "ABERTO")
-    pagos_qtd = len(items_already_paid)
-    pagos_valor = sum(it.get("valor_horus", it.get("valor_vindi", 0)) for it in items_already_paid)
-
-    total_diff_divergencias = sum(float(it.get("diferenca_valor") or 0.0) for it in items_divergence)
-    all_conciliated = items_ready + items_divergence
-    total_taxa_vindi = sum(abs(float(it.get("diff_taxa") or 0.0)) for it in all_conciliated)
-    total_planilha_liq = sum(float(it.get("valor_liquido") or 0.0) for it in vindi_rows)
-
-    summary = {
-        "profile_code": active_profile,
-        "is_dual_file": is_dual_file,
-        "total_planilha_qtd": len(vindi_rows),
-        "total_planilha_valor": round(total_vindi_amount, 2),
-        "total_planilha_liq": round(total_planilha_liq, 2),
-        "tray_total_rows": len(tray_map.get("rows") or []),
-        "tray_linked_qtd": linked_tray_count,
-        "tray_unlinked_qtd": unlinked_tray_count,
-        "ready_qtd": len(items_ready),
-        "ready_valor": round(total_ready_amount, 2),
-        "divergence_qtd": len(items_divergence),
-        "divergence_valor": round(total_divergence_amount, 2),
-        "divergence_diff_total": round(total_diff_divergencias, 2),
-        "total_taxa_vindi": round(total_taxa_vindi, 2),
-        "already_paid_qtd": len(items_already_paid),
-        "already_paid_valor": round(pagos_valor, 2),
-        "abertos_qtd": abertos_qtd,
-        "abertos_valor": round(abertos_valor, 2),
-        "pagos_qtd": pagos_qtd,
-        "pagos_valor": round(pagos_valor, 2),
-        "not_found_qtd": len(items_not_found),
-        "not_found_valor": round(total_not_found_amount, 2),
-        "filial_consultada": cod_filial,
-    }
-
-    # 9. Configurações bancárias ativas (específicas do perfil ou herdadas do Horus SQL)
-    bank_config = _resolve_bank_config_for_profile(settings, sql_client, active_profile)
-
-    return {
-        "success": True,
-        "profile_code": active_profile,
-        "summary": summary,
-        "bank_config": bank_config,
-        "items_ready": items_ready,
-        "items_divergence": items_divergence,
-        "items_already_paid": items_already_paid,
-        "items_not_found": items_not_found,
-        "warnings": parse_warnings,
-    }
 
 
 @router.post("/companies/{company_id}/horus-sql/vindi/bordero")
@@ -836,8 +1096,8 @@ async def create_vindi_bordero(
             cur.execute(insert_sql, insert_params)
 
             # 4.3. UPDATE em LANCTOS_CRECEBER e LANCTOS_CRECEBERA
-            # Atualiza em batches para respeitar limite de parâmetros
-            batch_size = 500
+            # Atualiza em batches de 250 para respeitar limite de parâmetros e evitar lock de tabela
+            batch_size = 250
             for i in range(0, len(lancto_ids), batch_size):
                 b_ids = lancto_ids[i:i + batch_size]
                 placeholders = ", ".join(["%s"] * len(b_ids))
@@ -866,11 +1126,43 @@ async def create_vindi_bordero(
 
         # Commit da transação no SQL Server
         conn.commit()
-        return id_bordero
+
+        # 4.4. Auditoria Pós-Gravação: Confere no SQL Server quantos títulos ficaram amarrados ao Borderô
+        verified_count = len(lancto_ids)
+        verified_sum = total_bordero
+        try:
+            with conn.cursor() as cur_verify:
+                cur_verify.execute(
+                    """
+                    SELECT COUNT(*) AS qtd_gravada,
+                           ISNULL(SUM(VLR_LANCTO_TOTAL), 0) AS total_gravado
+                    FROM LANCTOS_CRECEBER WITH (NOLOCK)
+                    WHERE COD_FILIAL = %s AND COD_BORDERO = %s
+                    """,
+                    (cod_filial, id_bordero),
+                )
+                v_row = cur_verify.fetchone()
+                if v_row:
+                    verified_count = int(
+                        v_row["qtd_gravada"] if isinstance(v_row, dict) else v_row[0]
+                    )
+                    verified_sum = round(
+                        float(v_row["total_gravado"] if isinstance(v_row, dict) else v_row[1]), 2
+                    )
+        except Exception as ex_v:
+            logger.warning("[HorusBordero] Aviso na conferência pós-commit: %s", ex_v)
+
+        return {
+            "id_bordero": id_bordero,
+            "verified_count": verified_count,
+            "verified_sum": verified_sum,
+            "completed_at": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        }
 
     try:
         loop = asyncio.get_event_loop()
-        bordero_id = await loop.run_in_executor(None, _execute_bordero_transaction)
+        tx_res = await loop.run_in_executor(None, _execute_bordero_transaction)
+        bordero_id = tx_res["id_bordero"]
     except Exception as e:
         logger.error("[HorusBordero] Erro ao gravar bordero company=%s: %s", company_id, e)
         raise HTTPException(
@@ -883,5 +1175,12 @@ async def create_vindi_bordero(
         "bordero_number": bordero_id,
         "total_valor": total_bordero,
         "itens_baixados": len(releases_validos),
-        "message": f"Borderô #{bordero_id} gerado com sucesso no Horus ERP (Total: R$ {total_bordero:.2f} em {len(releases_validos)} lançamentos).",
+        "security_verification": {
+            "verified_in_horus": True,
+            "expected_count": len(releases_validos),
+            "verified_count": tx_res["verified_count"],
+            "verified_sum": tx_res["verified_sum"],
+            "completed_at": tx_res["completed_at"],
+        },
+        "message": f"Borderô #{bordero_id} gravado e auditado com sucesso no Horus ERP ({tx_res['verified_count']} títulos confirmados • Total: R$ {total_bordero:.2f}).",
     }

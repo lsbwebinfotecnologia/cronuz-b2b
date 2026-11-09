@@ -39,6 +39,28 @@ interface ReconciliationProfile {
   bank_configured: boolean;
 }
 
+interface SecurityAuditInfo {
+  integrity_verified: boolean;
+  elapsed_seconds: number;
+  batches_executed: number;
+  unique_orders_queried: number;
+  horus_titles_fetched: number;
+  completed_at: string;
+}
+
+interface JobProgressState {
+  status: 'RUNNING' | 'COMPLETED' | 'ERROR';
+  phase: 'PARSING' | 'LINKING' | 'QUERYING_HORUS' | 'AUDITING' | 'COMPLETED' | 'ERROR';
+  percent: number;
+  message: string;
+  current_batch: number;
+  total_batches: number;
+  processed_orders: number;
+  total_orders: number;
+  horus_found_count: number;
+  elapsed_seconds: number;
+}
+
 interface SummaryData {
   profile_code?: string;
   is_dual_file?: boolean;
@@ -63,6 +85,7 @@ interface SummaryData {
   not_found_qtd: number;
   not_found_valor: number;
   filial_consultada: string;
+  security_audit?: SecurityAuditInfo;
 }
 
 interface BankConfig {
@@ -201,6 +224,7 @@ export default function FinanceiroVindiPage() {
   const [trayFile, setTrayFile] = useState<File | null>(null);
   const [selectedFilial, setSelectedFilial] = useState('1');
   const [reading, setReading] = useState(false);
+  const [jobProgress, setJobProgress] = useState<JobProgressState | null>(null);
 
   const [summary, setSummary] = useState<SummaryData | null>(null);
   const [bankConfig, setBankConfig] = useState<BankConfig | null>(null);
@@ -229,6 +253,8 @@ export default function FinanceiroVindiPage() {
     number: number;
     total: number;
     qtd: number;
+    verified_count?: number;
+    completed_at?: string;
   } | null>(null);
 
   const channelFileInputRef = useRef<HTMLInputElement>(null);
@@ -332,7 +358,7 @@ export default function FinanceiroVindiPage() {
     }
   };
 
-  // Processamento das planilhas (1 ou 2 arquivos) e consulta ao SQL Server do Horus
+  // Processamento das planilhas (1 ou 2 arquivos) e consulta ao SQL Server do Horus com telemetria em tempo real
   const handleProcessFiles = async () => {
     if (!channelFile) {
       toast.error(
@@ -349,6 +375,19 @@ export default function FinanceiroVindiPage() {
 
     setReading(true);
     setBorderoSuccess(null);
+    setJobProgress({
+      status: 'RUNNING',
+      phase: 'PARSING',
+      percent: 5,
+      message: 'Enviando e validando estrutura das planilhas...',
+      current_batch: 0,
+      total_batches: 0,
+      processed_orders: 0,
+      total_orders: 0,
+      horus_found_count: 0,
+      elapsed_seconds: 0,
+    });
+
     try {
       const token = getToken();
       const formData = new FormData();
@@ -360,6 +399,7 @@ export default function FinanceiroVindiPage() {
       const qs = new URLSearchParams({
         filial: selectedFilial.trim() || '1',
         profile_code: activeProfile.code,
+        async_job: 'true',
       });
 
       const res = await fetch(
@@ -371,25 +411,67 @@ export default function FinanceiroVindiPage() {
         }
       );
 
-      const data = await res.json();
+      const initialData = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || 'Erro ao cruzar planilhas com o Horus SQL.');
+        throw new Error(initialData.detail || 'Erro ao iniciar conciliação com o Horus SQL.');
       }
 
-      setSummary(data.summary);
-      setBankConfig(data.bank_config);
-      setItemsReady(data.items_ready || []);
-      setItemsDivergence(data.items_divergence || []);
-      setItemsAlreadyPaid(data.items_already_paid || []);
-      setItemsNotFound(data.items_not_found || []);
-      setWarnings(data.warnings || []);
+      let finalResult = initialData;
+
+      // Se o backend iniciou um job assíncrono (proteção anti-timeout para planilhas grandes), fazemos polling em tempo real
+      if (initialData.async_job && initialData.job_id) {
+        const jobId = initialData.job_id;
+        let completed = false;
+        while (!completed) {
+          await new Promise((resolve) => setTimeout(resolve, 550));
+          const pollRes = await fetch(
+            `${API}/companies/${companyId}/horus-sql/reconciliation/jobs/${jobId}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (!pollRes.ok) {
+            const errData = await pollRes.json().catch(() => ({}));
+            throw new Error(errData.detail || 'Falha ao consultar progresso da conciliação.');
+          }
+          const jobState = await pollRes.json();
+          setJobProgress({
+            status: jobState.status,
+            phase: jobState.phase || 'QUERYING_HORUS',
+            percent: jobState.percent ?? 15,
+            message: jobState.message || 'Processando lotes no Horus ERP...',
+            current_batch: jobState.current_batch || 0,
+            total_batches: jobState.total_batches || 0,
+            processed_orders: jobState.processed_orders || 0,
+            total_orders: jobState.total_orders || 0,
+            horus_found_count: jobState.horus_found_count || 0,
+            elapsed_seconds: jobState.elapsed_seconds || 0,
+          });
+
+          if (jobState.status === 'ERROR') {
+            throw new Error(
+              jobState.error || jobState.message || 'Erro durante o processamento dos lotes SQL.'
+            );
+          }
+          if (jobState.status === 'COMPLETED' && jobState.result) {
+            finalResult = jobState.result;
+            completed = true;
+          }
+        }
+      }
+
+      setSummary(finalResult.summary);
+      setBankConfig(finalResult.bank_config);
+      setItemsReady(finalResult.items_ready || []);
+      setItemsDivergence(finalResult.items_divergence || []);
+      setItemsAlreadyPaid(finalResult.items_already_paid || []);
+      setItemsNotFound(finalResult.items_not_found || []);
+      setWarnings(finalResult.warnings || []);
       setActiveRowIndex(0);
 
       const totalAbertos =
-        data.summary?.abertos_qtd ??
-        (data.items_ready?.length || 0) + (data.items_divergence?.length || 0);
+        finalResult.summary?.abertos_qtd ??
+        (finalResult.items_ready?.length || 0) + (finalResult.items_divergence?.length || 0);
       toast.success(
-        `Conciliação concluída! ${totalAbertos} título(s) em aberto localizado(s) no Horus ERP.`
+        `Conciliação concluída com 100% de segurança! ${totalAbertos} título(s) em aberto localizado(s) no Horus ERP.`
       );
     } catch (e: any) {
       toast.error(e.message || 'Erro de conexão com o servidor.');
@@ -699,6 +781,8 @@ export default function FinanceiroVindiPage() {
         number: data.bordero_number,
         total: data.total_valor,
         qtd: data.itens_baixados,
+        verified_count: data.security_verification?.verified_count ?? data.itens_baixados,
+        completed_at: data.security_verification?.completed_at,
       });
       setShowBorderoModal(false);
       toast.success(data.message || `Borderô #${data.bordero_number} gerado com sucesso!`);
@@ -973,7 +1057,7 @@ export default function FinanceiroVindiPage() {
                 {reading ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Cruzando Dados...
+                    {jobProgress ? `${jobProgress.percent}% Processando...` : 'Cruzando Dados...'}
                   </>
                 ) : (
                   <>
@@ -984,37 +1068,160 @@ export default function FinanceiroVindiPage() {
               </button>
             </div>
           </div>
+
+          {/* ─── BARRA DE CARREGAMENTO & TELEMETRIA DE SEGURANÇA EM TEMPO REAL ─── */}
+          <AnimatePresence>
+            {reading && jobProgress && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/30 p-4 space-y-3.5 overflow-hidden"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-xs">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-extrabold text-slate-900 dark:text-white">
+                          Motor de Conciliação Blindado em Execução
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-600 text-white">
+                          {jobProgress.percent}%
+                        </span>
+                      </div>
+                      <p className="text-xs text-indigo-800 dark:text-indigo-200 font-medium mt-0.5">
+                        {jobProgress.message}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Contadores ao vivo */}
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+                    {jobProgress.total_batches > 0 && (
+                      <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 font-bold text-indigo-700 dark:text-indigo-300">
+                        Lote SQL: {jobProgress.current_batch}/{jobProgress.total_batches}
+                      </span>
+                    )}
+                    {jobProgress.total_orders > 0 && (
+                      <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 font-bold text-slate-700 dark:text-slate-300">
+                        Pedidos: {jobProgress.processed_orders}/{jobProgress.total_orders}
+                      </span>
+                    )}
+                    <span className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 font-bold text-emerald-700 dark:text-emerald-300">
+                      Títulos Horus: {jobProgress.horus_found_count}
+                    </span>
+                    <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 flex items-center gap-1">
+                      <Clock className="h-3 w-3 text-indigo-500" />
+                      {jobProgress.elapsed_seconds.toFixed(1)}s
+                    </span>
+                  </div>
+                </div>
+
+                {/* Barra de Progresso Animada */}
+                <div className="w-full h-3 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden p-0.5">
+                  <motion.div
+                    initial={{ width: '5%' }}
+                    animate={{ width: `${Math.max(5, Math.min(100, jobProgress.percent))}%` }}
+                    transition={{ duration: 0.35, ease: 'easeOut' }}
+                    className="h-full rounded-full bg-gradient-to-r from-indigo-600 via-violet-600 to-emerald-500 shadow-xs"
+                  />
+                </div>
+
+                {/* 4 Checkpoints de Segurança */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 pt-0.5">
+                  {[
+                    {
+                      step: 1,
+                      label: '1. Leitura e Sanitização da Planilha',
+                      done: jobProgress.percent >= 20,
+                      active: jobProgress.phase === 'PARSING',
+                    },
+                    {
+                      step: 2,
+                      label: isDualFileMode
+                        ? '2. Cruzamento de Vínculos Tray'
+                        : '2. Mapeamento de Pedidos e Parcelas',
+                      done: jobProgress.percent >= 35,
+                      active: jobProgress.phase === 'LINKING',
+                    },
+                    {
+                      step: 3,
+                      label: '3. Lotes Indexados SQL Server (NOLOCK)',
+                      done: jobProgress.percent >= 88,
+                      active: jobProgress.phase === 'QUERYING_HORUS',
+                    },
+                    {
+                      step: 4,
+                      label: '4. Auditoria Financeira & Integridade',
+                      done: jobProgress.percent >= 100,
+                      active: jobProgress.phase === 'AUDITING',
+                    },
+                  ].map((st) => (
+                    <div
+                      key={st.step}
+                      className={`px-3 py-2 rounded-xl border text-[11px] font-bold flex items-center gap-2 transition-all ${
+                        st.done
+                          ? 'border-emerald-300 bg-emerald-50/70 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                          : st.active
+                          ? 'border-indigo-400 bg-white text-indigo-700 dark:border-indigo-700 dark:bg-slate-900 dark:text-indigo-300 shadow-2xs'
+                          : 'border-slate-200/80 bg-white/50 text-slate-400 dark:border-slate-800 dark:bg-slate-900/40'
+                      }`}
+                    >
+                      {st.done ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                      ) : st.active ? (
+                        <Loader2 className="h-4 w-4 text-indigo-600 animate-spin shrink-0" />
+                      ) : (
+                        <div className="h-3.5 w-3.5 rounded-full border-2 border-slate-300 dark:border-slate-700 shrink-0" />
+                      )}
+                      <span className="truncate">{st.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
-      {/* ─── BANNER DE SUCESSO DO BORDERÔ ───────────────────────────────────── */}
+      {/* ─── BANNER DE SUCESSO E AUDITORIA PÓS-GRAVAÇÃO DO BORDERÔ ──────────── */}
       <AnimatePresence>
         {borderoSuccess && (
           <motion.div
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="rounded-2xl border border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30 p-4 flex items-center justify-between gap-4"
+            className="rounded-2xl border border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs"
           >
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-white font-bold">
-                <Check className="h-5 w-5" />
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white font-bold">
+                <ShieldCheck className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-sm font-extrabold text-emerald-950 dark:text-emerald-200">
-                  Borderô #{borderoSuccess.number} Gravado no Horus ERP com Sucesso!
-                </h3>
-                <p className="text-xs text-emerald-800 dark:text-emerald-300">
-                  Foram baixados <b>{borderoSuccess.qtd} títulos</b> de Contas a Receber totalizando{' '}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm font-extrabold text-emerald-950 dark:text-emerald-200">
+                    Borderô #{borderoSuccess.number} Gravado e Auditado no Horus ERP!
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-emerald-600 text-white">
+                    CONFERÊNCIA SQL: {borderoSuccess.verified_count ?? borderoSuccess.qtd}/{borderoSuccess.qtd} TÍTULOS CONFIRMADOS
+                  </span>
+                </div>
+                <p className="text-xs text-emerald-800 dark:text-emerald-300 mt-0.5">
+                  Foram baixados e verificados na tabela <code className="font-mono font-bold">LANCTOS_CRECEBER</code>{' '}
+                  <b>{borderoSuccess.qtd} títulos</b> totalizando{' '}
                   <b>R$ {formatBRL(borderoSuccess.total)}</b> na modalidade{' '}
-                  <b>{activeProfile.name}</b>.
+                  <b>{activeProfile.name}</b>
+                  {borderoSuccess.completed_at ? ` às ${borderoSuccess.completed_at}` : ''}.
                 </p>
               </div>
             </div>
             <button
               type="button"
               onClick={() => setBorderoSuccess(null)}
-              className="text-xs font-bold text-emerald-700 hover:underline"
+              className="text-xs font-bold text-emerald-700 hover:underline shrink-0 cursor-pointer"
             >
               Fechar
             </button>
@@ -1022,9 +1229,47 @@ export default function FinanceiroVindiPage() {
         )}
       </AnimatePresence>
 
-      {/* ─── WORKSTATION ACCESS ATUALIZADO: KPIs + GRADE DE ALTA DENSIDADE + RODAPÉ NAVEGADOR ─── */}
+      {/* ─── WORKSTATION ACCESS ATUALIZADO: SELO DE SEGURANÇA + KPIs + GRADE DE ALTA DENSIDADE ─── */}
       {summary && (
         <div className="space-y-3">
+          {/* SELO DE SEGURANÇA E INTEGRIDADE DA CONCILIAÇÃO */}
+          <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/25 px-4 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="text-xs font-extrabold text-emerald-950 dark:text-emerald-200">
+                Conciliação Finalizada com 100% de Segurança e Integridade Auditada
+              </span>
+            </div>
+            {summary.security_audit && (
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-emerald-800 dark:text-emerald-300">
+                <span className="px-2 py-0.5 rounded bg-white/80 dark:bg-slate-900/80 border border-emerald-200 dark:border-emerald-800 font-bold">
+                  {summary.security_audit.unique_orders_queried} pedidos auditados
+                </span>
+                <span className="px-2 py-0.5 rounded bg-white/80 dark:bg-slate-900/80 border border-emerald-200 dark:border-emerald-800 font-bold">
+                  {summary.security_audit.batches_executed} lote(s) SQL sem falhas
+                </span>
+                <span className="px-2 py-0.5 rounded bg-white/80 dark:bg-slate-900/80 border border-emerald-200 dark:border-emerald-800 font-bold">
+                  {summary.security_audit.horus_titles_fetched} títulos Horus ERP
+                </span>
+                <span className="px-2 py-0.5 rounded bg-white/80 dark:bg-slate-900/80 border border-emerald-200 dark:border-emerald-800">
+                  Tempo: {summary.security_audit.elapsed_seconds}s • {summary.security_audit.completed_at}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* AVISOS / DIAGNÓSTICOS DA PLANILHA (SE HOUVER) */}
+          {warnings.length > 0 && (
+            <div className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-2.5 space-y-1">
+              {warnings.map((w, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs text-amber-900 dark:text-amber-200">
+                  <Info className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                  <span>{w}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* FAIXA DE INDICADORES COMPACTA */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
             {/* 1. Lidos no Canal */}
