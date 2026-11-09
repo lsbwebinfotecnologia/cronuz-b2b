@@ -111,10 +111,9 @@ def get_dashboard_metrics(
             ]
         except Exception:
             reconciliation_profiles_enabled = []
-        if reconciliation_profiles_enabled:
-            horus_sql_feature_vindi_baixa = True
+        horus_sql_feature_vindi_baixa = bool(reconciliation_profiles_enabled)
 
-    pdv_horus_sync_enabled = True
+    pdv_horus_sync_enabled = False
     if settings and getattr(settings, "b2c_showcases_config", None):
         import json as _json
         _raw_cfg = settings.b2c_showcases_config

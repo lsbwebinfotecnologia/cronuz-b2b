@@ -209,7 +209,7 @@ def get_company_reconciliation_profiles(settings) -> List[dict]:
         if "enabled" in saved:
             enabled = bool(saved.get("enabled"))
         else:
-            enabled = vindi_legacy_enabled if code == "VINDI_DIRECT" else False
+            enabled = False
 
         use_custom_bank = bool(saved.get("use_custom_bank", False))
         custom_bank = {

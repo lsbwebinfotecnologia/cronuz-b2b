@@ -272,7 +272,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuleMarketing(data.module_marketing || false);
                setModuleSubscriptions(data.module_subscriptions || false);
                setModulePdv(data.module_pdv || false);
-               setPdvHorusSyncEnabled(data.pdv_horus_sync_enabled ?? true);
+               setPdvHorusSyncEnabled(data.pdv_horus_sync_enabled || false);
                if (data.user_allowed_modules !== undefined) {
                  setUser((prev: any) => prev ? { ...prev, allowed_modules: data.user_allowed_modules } : prev);
                }
@@ -288,7 +288,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuleBuscaPreco(data.module_busca_preco || false);
                setModuleHorusSql(data.module_horus_sql || false);
                setHorusSqlVindiBaixa(data.horus_sql_feature_vindi_baixa || false);
-               setHorusSqlPedidos(data.horus_sql_feature_pedidos ?? true);
+               setHorusSqlPedidos(data.horus_sql_feature_pedidos || false);
                setHorusSqlDbm(data.horus_sql_feature_dbm || false);
                setPaymentProvidersEnabled(Array.isArray(data.payment_providers_enabled) ? data.payment_providers_enabled : []);
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
@@ -503,18 +503,20 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
       subItems.push({ name: 'Pedidos (Horus)', href: '/horus-direct/pedidos', icon: ShoppingBag });
       subItems.push({ name: 'Logs da Logística', href: '/horus-direct/logistica-logs', icon: Truck });
     }
-    if (horusSqlVindiBaixa || subItems.length === 0) {
+    if (horusSqlVindiBaixa) {
       subItems.push({ name: 'Conciliações (Bancos)', href: '/horus-direct/financeiro-vindi', icon: CreditCard });
     }
     if (horusSqlDbm) {
       subItems.push({ name: 'DBM (Painel & CRM)', href: '/dbm', icon: LayoutGrid });
     }
-    filteredSellerNavigation.splice(targetIndex, 0, {
-      name: 'Horus Direct',
-      href: subItems[0]?.href || '/horus-direct/pedidos',
-      icon: DatabaseZap,
-      subItems: subItems.length > 1 ? subItems : undefined
-    });
+    if (subItems.length > 0) {
+      filteredSellerNavigation.splice(targetIndex, 0, {
+        name: 'Horus Direct',
+        href: subItems[0].href,
+        icon: DatabaseZap,
+        subItems: subItems.length > 1 ? subItems : undefined
+      });
+    }
   }
 
   if (moduloAutoresAtivo) {
