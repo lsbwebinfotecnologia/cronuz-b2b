@@ -259,6 +259,61 @@ def update_company_modules(
 
     for key, value in update_data.items():
         setattr(company, key, value)
+
+    # Sincroniza novos módulos ativados pelo Master com usuários Seller que possuem lista restrita de allowed_modules
+    MODULE_TO_USER_PERMISSIONS = {
+        "module_b2c_storefront": ["b2c"],
+        "module_pdv": ["pdv", "pdv_horus_sync"],
+        "module_busca_preco": ["busca_preco"],
+        "module_encomendas": ["encomendas"],
+        "module_orders": ["orders"],
+        "module_order_intake": ["order_intake"],
+        "module_proposals": ["proposals"],
+        "module_subscriptions": ["subscriptions"],
+        "module_logistica_horus": ["logistics"],
+        "has_inventory_module": ["inventory"],
+        "module_consignment": ["consignment"],
+        "module_dropship": ["dropship"],
+        "module_horus_sql": ["horus_sql", "dbm"],
+        "module_products": ["products"],
+        "module_customers": ["customers"],
+        "module_agents": ["agents"],
+        "module_commercial": ["commercial"],
+        "module_marketing": ["promotions"],
+        "module_notifications": ["notifications"],
+        "module_cafeteria": ["cafeteria"],
+        "module_schools": ["schools"],
+        "module_editorial": ["editorial"],
+        "modulo_autores_ativo": ["authors", "portal_autor"],
+        "module_financial": ["financial"],
+        "module_cora": ["financial"],
+        "module_services": ["services"],
+        "module_mercadolivre": ["mercadolivre"],
+    }
+    newly_enabled_perms: List[str] = []
+    for mod_key, mod_val in update_data.items():
+        if mod_val is True and mod_key in MODULE_TO_USER_PERMISSIONS:
+            for perm_id in MODULE_TO_USER_PERMISSIONS[mod_key]:
+                if perm_id not in newly_enabled_perms:
+                    newly_enabled_perms.append(perm_id)
+
+    if newly_enabled_perms:
+        from sqlalchemy.orm.attributes import flag_modified
+        seller_users = db.query(user_models.User).filter(
+            user_models.User.company_id == company_id,
+            user_models.User.type == user_models.UserRole.SELLER,
+        ).all()
+        for su in seller_users:
+            if isinstance(su.allowed_modules, list) and len(su.allowed_modules) > 0:
+                updated_list = list(su.allowed_modules)
+                changed_su = False
+                for perm_id in newly_enabled_perms:
+                    if perm_id not in updated_list:
+                        updated_list.append(perm_id)
+                        changed_su = True
+                if changed_su:
+                    su.allowed_modules = updated_list
+                    flag_modified(su, "allowed_modules")
     
     db.commit()
     db.refresh(company)

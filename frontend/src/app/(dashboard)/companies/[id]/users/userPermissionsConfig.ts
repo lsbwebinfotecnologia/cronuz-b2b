@@ -204,6 +204,14 @@ export const MODULE_PERMISSIONS_LIST: ModulePermissionItem[] = [
     icon: Repeat,
     companyCheck: (c) => Boolean(c?.module_subscriptions),
   },
+  {
+    id: 'mercadolivre',
+    label: 'Hub Marketplaces (Mercado Livre)',
+    description: 'Publicação de anúncios, sincronização de estoque e pedidos de marketplaces',
+    category: 'sales_channels',
+    icon: ShoppingBag,
+    companyCheck: (c) => Boolean(c?.module_mercadolivre),
+  },
 
   // 2. Ecossistema Horus, Logística & Estoque
   {
@@ -260,7 +268,7 @@ export const MODULE_PERMISSIONS_LIST: ModulePermissionItem[] = [
     description: 'Consulta de catálogo nacional, tiragens e enriquecimento DBM',
     category: 'horus_logistics',
     icon: LayoutGrid,
-    companyCheck: (c) => Boolean(c?.module_horus_sql && c?.horus_sql_feature_dbm),
+    companyCheck: (c) => Boolean(c?.module_horus_sql),
   },
   {
     id: 'distributors',

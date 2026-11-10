@@ -498,16 +498,22 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   if (moduleHorusSql) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    const hasRestricted = user?.type === 'SELLER' && Array.isArray(user?.allowed_modules) && user.allowed_modules.length > 0;
+    const canHorusSql = !hasRestricted || user?.allowed_modules?.includes('horus_sql') || user?.allowed_modules?.includes('logistics');
+    const canDbm = !hasRestricted || user?.allowed_modules?.includes('dbm') || user?.allowed_modules?.includes('horus_sql');
     const subItems: { name: string; href: string; icon?: any }[] = [];
-    if (horusSqlPedidos) {
+    if (horusSqlPedidos && canHorusSql) {
       subItems.push({ name: 'Pedidos (Horus)', href: '/horus-direct/pedidos', icon: ShoppingBag });
       subItems.push({ name: 'Logs da Logística', href: '/horus-direct/logistica-logs', icon: Truck });
     }
-    if (horusSqlVindiBaixa) {
+    if (horusSqlVindiBaixa && canHorusSql) {
       subItems.push({ name: 'Conciliações (Bancos)', href: '/horus-direct/financeiro-vindi', icon: CreditCard });
     }
-    if (horusSqlDbm) {
+    if (horusSqlDbm && canDbm) {
       subItems.push({ name: 'DBM (Painel & CRM)', href: '/dbm', icon: LayoutGrid });
+    }
+    if (subItems.length === 0 && canHorusSql && !horusSqlPedidos && !horusSqlVindiBaixa && !horusSqlDbm) {
+      subItems.push({ name: 'Pedidos (Horus)', href: '/horus-direct/pedidos', icon: ShoppingBag });
     }
     if (subItems.length > 0) {
       filteredSellerNavigation.splice(targetIndex, 0, {
@@ -667,7 +673,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const dynamicNavigation = (user?.type === 'SELLER' && Array.isArray(userAllowedModules) && userAllowedModules.length > 0)
     ? baseNavigation.filter(nav => {
         if (nav.name === 'B2C' || nav.href.startsWith('/b2c-storefront')) return userAllowedModules.includes('b2c') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
-        if (nav.name === 'Mercado Livre' || nav.href.startsWith('/mercadolivre')) return userAllowedModules.includes('mercadolivre') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
+        if (nav.name === 'Hub Marketplaces' || nav.name === 'Mercado Livre' || nav.href.startsWith('/mercadolivre')) return userAllowedModules.includes('mercadolivre') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
         if (nav.name === 'PDV' || nav.href.startsWith('/pdv')) return userAllowedModules.includes('pdv') || userAllowedModules.includes('pdv_horus_sync');
         if (nav.name === 'Busca Preço' || nav.href === '/product-search' || nav.name === 'Endereçamento' || nav.href === '/addressing') return userAllowedModules.includes('busca_preco') || userAllowedModules.includes('enderecamento');
         if (nav.name === 'Encomendas' || nav.href === '/encomendas') return userAllowedModules.includes('encomendas') || userAllowedModules.includes('orders');
@@ -683,8 +689,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
         if (nav.name === 'Propostas' || nav.href === '/proposals') return userAllowedModules.includes('proposals');
         if (nav.name === 'Configurações' || nav.href === '/settings') return userAllowedModules.includes('settings');
         if (nav.name === 'Dropship' || nav.href.startsWith('/orders/dropship')) return userAllowedModules.includes('dropship');
-        if (nav.name === 'Horus Direct' || nav.href.startsWith('/horus-direct')) return userAllowedModules.includes('horus_sql') || userAllowedModules.includes('logistics');
-        if (nav.name === 'DBM' || nav.href.startsWith('/dbm')) return userAllowedModules.includes('dbm') || userAllowedModules.includes('horus_sql');
+        if (nav.name === 'Horus Direct' || nav.href.startsWith('/horus-direct') || nav.name === 'DBM' || nav.href.startsWith('/dbm')) return userAllowedModules.includes('horus_sql') || userAllowedModules.includes('dbm') || userAllowedModules.includes('logistics');
         if (nav.name === 'Assinaturas' || nav.href === '/subscriptions') return userAllowedModules.includes('subscriptions');
         if (nav.name === 'Notificações' || nav.href === '/notifications') return userAllowedModules.includes('notifications');
         if (nav.name === 'Autores' || nav.href === '/authors') return userAllowedModules.includes('authors') || userAllowedModules.includes('products');

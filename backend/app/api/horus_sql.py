@@ -467,6 +467,29 @@ def update_horus_sql_features(
         changed = True
 
     if changed:
+        # Se alguma feature do Horus SQL foi ativada, garante que usuários Seller com lista restrita enxerguem o módulo
+        perms_to_add = []
+        if payload.horus_sql_feature_pedidos is True or payload.horus_sql_feature_vindi_baixa is True:
+            perms_to_add.append("horus_sql")
+        if payload.horus_sql_feature_dbm is True:
+            perms_to_add.extend(["horus_sql", "dbm"])
+        if perms_to_add:
+            from app.models.user import User, UserRole
+            seller_users = db.query(User).filter(
+                User.company_id == company_id,
+                User.type == UserRole.SELLER,
+            ).all()
+            for su in seller_users:
+                if isinstance(su.allowed_modules, list) and len(su.allowed_modules) > 0:
+                    updated_list = list(su.allowed_modules)
+                    changed_su = False
+                    for p in perms_to_add:
+                        if p not in updated_list:
+                            updated_list.append(p)
+                            changed_su = True
+                    if changed_su:
+                        su.allowed_modules = updated_list
+                        flag_modified(su, "allowed_modules")
         db.commit()
         db.refresh(settings)
 
