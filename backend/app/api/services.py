@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import and_
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import datetime, date
@@ -2008,7 +2009,7 @@ def get_service_orders_projection_chart(
     análise de projeção de serviços e meta de faturamento.
     """
     from dateutil.relativedelta import relativedelta
-    from sqlalchemy import func, case
+    from sqlalchemy import func, case, and_
     import calendar
 
     PT_MONTHS = ["", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
