@@ -734,10 +734,20 @@ export default function ProposalsDeskPage() {
         const remainingSavedOther = Array.from(savedByIsbn.values());
         setItems([...savedPedidoOnly, ...remainingSavedOther, ...novList, ...fndList]);
       } else {
+        let errDetail = `HTTP ${resCat.status}`;
+        try {
+          const errJson = await resCat.json();
+          errDetail = errJson?.detail || errJson?.message || errDetail;
+        } catch {
+          // ignore
+        }
+        toast.error(`Falha ao carregar abas de catálogo (${errDetail})`);
         setItems(savedProposalItems || []);
       }
-    } catch (e) {
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
       console.error('Erro ao carregar abas de catálogo:', e);
+      toast.error(`Erro ao carregar abas de catálogo (${msg})`);
       setItems(savedProposalItems || []);
     } finally {
       setIsLoadingCatalog(false);
@@ -809,7 +819,19 @@ export default function ProposalsDeskPage() {
         { headers: { 'Authorization': `Bearer ${getToken()}` } }
       );
       if (!res.ok) {
-        throw new Error('Falha ao buscar itens de reposição do cliente.');
+        let errorDetail = `HTTP ${res.status}`;
+        try {
+          const errJson = await res.json();
+          if (errJson?.detail) {
+            errorDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+          } else if (errJson?.message) {
+            errorDetail = errJson.message;
+          }
+        } catch {
+          const errText = await res.text().catch(() => '');
+          if (errText) errorDetail = `HTTP ${res.status}: ${errText.slice(0, 180)}`;
+        }
+        throw new Error(`Falha ao buscar itens de reposição (${errorDetail})`);
       }
       const data = await res.json();
       const loadedRep: DbmItem[] = (data.items || [])
@@ -892,7 +914,19 @@ export default function ProposalsDeskPage() {
         { headers: { 'Authorization': `Bearer ${getToken()}` } }
       );
       if (!res.ok) {
-        throw new Error('Falha ao consultar última operação do cliente.');
+        let errorDetail = `HTTP ${res.status}`;
+        try {
+          const errJson = await res.json();
+          if (errJson?.detail) {
+            errorDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+          } else if (errJson?.message) {
+            errorDetail = errJson.message;
+          }
+        } catch {
+          const errText = await res.text().catch(() => '');
+          if (errText) errorDetail = `HTTP ${res.status}: ${errText.slice(0, 180)}`;
+        }
+        throw new Error(`Falha ao consultar última operação (${errorDetail})`);
       }
       const data = await res.json();
       setLastOpInvoiceMeta(data.invoice || null);
@@ -1710,6 +1744,31 @@ export default function ProposalsDeskPage() {
     toast.success('Planilha Excel do Pedido Consolidado gerada com sucesso!');
   };
 
+  const handleNewProposalInDesk = () => {
+    setProposalId(null);
+    setProposalLocalId(null);
+    setSelectedCustomerId('');
+    setCustomer(null);
+    setOperationsMetrics(EMPTY_OPERATIONS_METRICS);
+    setItems([]);
+    setSelectedCheckedIds({});
+    setSelectedRowId('');
+    setLastOpInvoiceMeta(null);
+    setLastOpTypeSelected(null);
+    setReplenishmentMeta(null);
+    setManualQuery('');
+    setManualSuggestions([]);
+    setSelectedManualProduct(null);
+    setActiveTab('pedido');
+    if (availableStatuses.length > 0) {
+      setCurrentStatusId(availableStatuses[0].id);
+    }
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', '/proposals/desk');
+    }
+    toast.info('Mesa limpa para iniciar um Novo Orçamento. Selecione o cliente acima.');
+  };
+
   const handleSaveProposal = async (overrideStatus?: SellerCustomStatus) => {
     if (!customer) {
       toast.error('Selecione um cliente antes de salvar o orçamento.');
@@ -1900,6 +1959,16 @@ export default function ProposalsDeskPage() {
           >
             {isSavingProposal ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
             {proposalId ? 'Atualizar' : 'Salvar'}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleNewProposalInDesk}
+            title="Limpar a mesa atual e iniciar um Novo Orçamento sem precisar voltar"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>Novo Orçamento</span>
           </button>
 
           {/* Ícone de Interrogação (?) no Canto Direito para Consultar Regras da Mesa */}
@@ -2889,6 +2958,14 @@ export default function ProposalsDeskPage() {
                                 • Consignação ({replenishmentMeta.sqlDiagnostic.consignmentSource}): <b>{replenishmentMeta.sqlDiagnostic.consignedSkusFound} SKUs</b> com saldo &gt; 0 no cliente<br />
                                 • Vendas/Acertos (NF_MESTRE + NF_ITENS últimos {replenishmentMeta.sqlDiagnostic.salesWindowDays}d): <b>{replenishmentMeta.sqlDiagnostic.salesSkusFound} SKUs</b> ({replenishmentMeta.sqlDiagnostic.salesTotalUnits} exemplares)
                               </div>
+                              {Array.isArray(replenishmentMeta.sqlDiagnostic.sqlErrors) && replenishmentMeta.sqlDiagnostic.sqlErrors.length > 0 && (
+                                <div className="mt-1.5 p-2 rounded bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-mono text-[10px] space-y-0.5">
+                                  <div className="font-bold">Avisos / Erros SQL detectados:</div>
+                                  {replenishmentMeta.sqlDiagnostic.sqlErrors.map((errStr: string, idx: number) => (
+                                    <div key={idx}>• {errStr}</div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>

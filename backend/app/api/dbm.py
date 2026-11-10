@@ -33,6 +33,7 @@ from app.integrators.horus_sql_client import HorusSQLClient, HorusSQLConfigError
 
 router = APIRouter(prefix="/dbm", tags=["dbm"])
 log = logging.getLogger(__name__)
+logger = log
 
 
 def _resolve_seller_id(current_user: User, company_id: Optional[int] = None) -> int:
@@ -1832,29 +1833,64 @@ def _load_seller_product_exclusion_sets(
         rows = db.query(
             Product.ean_gtin,
             Product.sku,
-            Product.ebook_isbns,
+            Product.horus_cod_item,
+            Product.additional_isbns,
             Product.name,
             Product.binding_finish,
             Product.is_ebook,
             Product.is_out_of_print,
         ).filter(Product.company_id == seller_id).all()
-        for ean_gtin, sku, ebook_isbns, name, binding_finish, is_eb, is_oop in rows:
+        for ean_gtin, sku, horus_cod_item, additional_isbns, name, binding_finish, is_eb, is_oop in rows:
             eb_flag = bool(is_eb) or str(binding_finish or "").strip().lower() in ("e-book", "ebook", "digital")
             oop_flag = bool(is_oop)
             if (hide_ebooks and eb_flag) or (hide_out_of_print and oop_flag):
-                for raw_val in (ean_gtin, sku):
-                    if raw_val:
+                for raw_val in (ean_gtin, sku, horus_cod_item):
+                    if raw_val is not None and str(raw_val).strip():
                         cl = str(raw_val).strip().replace("-", "").replace(" ", "")
                         if cl:
                             excluded_keys.add(cl)
             # Se esconder e-books estiver ativo, nunca retornar ISBNs secundários de e-book
-            if hide_ebooks and ebook_isbns:
-                for sub in str(ebook_isbns).replace(";", ",").split(","):
+            if hide_ebooks and additional_isbns:
+                for sub in str(additional_isbns).replace(";", ",").split(","):
                     cl = sub.strip().replace("-", "").replace(" ", "")
                     if cl:
                         excluded_keys.add(cl)
     except Exception as exc:
-        logger.debug(f"[DBM] Falha ao carregar filtro de e-books/esgotados: {exc}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        log.warning(f"[DBM] Aviso ao carregar filtro de e-books/esgotados (tentando fallback sem coluna is_ebook): {exc}")
+        try:
+            rows_fb = db.query(
+                Product.ean_gtin,
+                Product.sku,
+                Product.horus_cod_item,
+                Product.additional_isbns,
+                Product.name,
+                Product.binding_finish,
+                Product.is_out_of_print,
+            ).filter(Product.company_id == seller_id).all()
+            for ean_gtin, sku, horus_cod_item, additional_isbns, name, binding_finish, is_oop in rows_fb:
+                eb_flag = str(binding_finish or "").strip().lower() in ("e-book", "ebook", "digital")
+                oop_flag = bool(is_oop)
+                if (hide_ebooks and eb_flag) or (hide_out_of_print and oop_flag):
+                    for raw_val in (ean_gtin, sku, horus_cod_item):
+                        if raw_val is not None and str(raw_val).strip():
+                            cl = str(raw_val).strip().replace("-", "").replace(" ", "")
+                            if cl:
+                                excluded_keys.add(cl)
+                if hide_ebooks and additional_isbns:
+                    for sub in str(additional_isbns).replace(";", ",").split(","):
+                        cl = sub.strip().replace("-", "").replace(" ", "")
+                        if cl:
+                            excluded_keys.add(cl)
+        except Exception as fb_exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            log.warning(f"[DBM] Falha no fallback de filtro de e-books/esgotados: {fb_exc}")
     return excluded_keys
 
 
@@ -2274,10 +2310,12 @@ async def get_proposals_desk_replenishment_items(
                 excluded_set.add(cl)
 
     sql_client = None
+    sql_init_error = None
     try:
         sql_client = HorusSQLClient(db, seller_id)
-    except Exception:
+    except Exception as sql_exc:
         sql_client = None
+        sql_init_error = f"{type(sql_exc).__name__}: {str(sql_exc)}"
 
     cod_cli = _resolve_customer_horus_cod_cli(db, customer, sql_client)
     cod_filial = int(sql_client.cod_filial) if (sql_client and str(sql_client.cod_filial).isdigit()) else 2
@@ -2291,6 +2329,13 @@ async def get_proposals_desk_replenishment_items(
     consigned_from_sql_count = 0
     sold_in_window_count = 0
     sold_total_units_window = 0
+    sql_errors: list[str] = []
+    if sql_init_error:
+        sql_errors.append(f"Conexão SQL Horus: {sql_init_error}")
+    if not cod_cli:
+        sql_errors.append(
+            f"Cliente #{customer.id} ({customer.name}) não possui COD_CLI do Horus vinculado (CNPJ: {clean_cli_doc or 'não informado'})."
+        )
 
     api_diagnostic: dict = {
         "endpoint": "Busca_Contrato_Cliente_Analitico",
@@ -2310,6 +2355,7 @@ async def get_proposals_desk_replenishment_items(
         "salesCfops": list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST),
         "salesSkusFound": 0,
         "salesTotalUnits": 0,
+        "sqlErrors": sql_errors,
     }
 
     # ── PASSO 1A: Coletar Saldo Consignado no Cliente via API Horus (Busca_Contrato_Cliente_Analitico) ──
@@ -2477,6 +2523,8 @@ async def get_proposals_desk_replenishment_items(
             sql_diagnostic["consignmentSource"] = "VW_ITENS_CONSIGNACAO"
             sql_diagnostic["consignedSkusFound"] = consigned_from_sql_count
         except Exception as e:
+            err_detail = f"Erro SQL em VW_ITENS_CONSIGNACAO: {type(e).__name__}: {str(e)}"
+            sql_errors.append(err_detail)
             log.warning(f"[DBM Desk] Aviso ao buscar consignação via SQL VW_ITENS_CONSIGNACAO: {e}")
 
     # ── PASSO 2: Histórico de Itens Vendidos / Acertados ao Cliente nos últimos X dias (SQL + BI) ──
@@ -2564,6 +2612,8 @@ async def get_proposals_desk_replenishment_items(
             sql_diagnostic["salesSkusFound"] = sold_in_window_count
             sql_diagnostic["salesTotalUnits"] = sold_total_units_window
         except Exception as e:
+            err_detail = f"Erro SQL em NF_ITENS/NF_MESTRE (Vendas/Acertos): {type(e).__name__}: {str(e)}"
+            sql_errors.append(err_detail)
             log.warning(f"[DBM Desk] Aviso ao buscar vendas de reposição no Horus SQL: {e}")
 
     # Complementa também com HorusBISale local para os últimos X dias
@@ -2658,6 +2708,8 @@ async def get_proposals_desk_replenishment_items(
                             c_obj["subject"] = str(er.get("assunto")).strip()
                         c_obj["boxQty"] = max(1, int(er.get("qtd_caixa") or 12))
         except Exception as e:
+            err_msg = f"ITENS_ESTOQUE_GERAL (Enriquecimento de Estoque): {type(e).__name__}: {str(e)}"
+            sql_errors.append(err_msg)
             log.warning(f"[DBM Desk] Aviso ao enriquecer estoque SQL da reposição: {e}")
 
     # Complementa estoque/preço com base local prd_product quando necessário
@@ -2685,6 +2737,7 @@ async def get_proposals_desk_replenishment_items(
                         c_obj["publisher"] = b_name or lp.brand or "Editora"
                     c_obj["boxQty"] = max(1, int(lp.units_per_box or 12))
         except Exception as e:
+            db.rollback()
             log.warning(f"[DBM Desk] Aviso ao cruzar prd_product na reposição: {e}")
 
     # Filtra rigorosamente saldo de estoque > 0 (Regra 6) e ordena por Consignado DESC, Vendidos nos últimos X dias DESC
