@@ -7,7 +7,7 @@ Usa CoraConfig (ambiente ativo, formas, multa/juros/desconto, notificações) e 
 do ambiente ativo). Uma única sessão mTLS por bloco `with` (reaproveitada em lotes).
 """
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +18,7 @@ from app.models.cora import CoraAccount, CoraConfig
 from app.payments.base import ChargeRequest, ChargeResult, PaymentProvider, PaymentProviderError
 
 _STATUS_MAP = {"CANCELED": "CANCELLED", "DRAFT": "PENDING"}
+_BRT = timezone(timedelta(hours=-3))
 
 
 def _digits(v: Any) -> str:
@@ -37,16 +38,34 @@ def _from_cents(v: Any) -> Optional[Decimal]:
 
 
 def _parse_dt(v: Any) -> Optional[datetime]:
+    """
+    Converte datas/timestamps do Cora preservando a data civil brasileira (BRT / UTC-03:00).
+    Importante: `occurrence_date` no Cora vem como 'YYYY-MM-DD' (sem hora). Se for atribuído
+    00:00:00 UTC, no fuso de Brasília (-03:00) ele vira 21:00:00 do DIA ANTERIOR.
+    Por isso, datas sem hora recebem 12:00:00 no fuso -03:00.
+    """
     if not v:
         return None
-    try:
-        dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-    except ValueError:
+    raw = str(v).strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
         try:
-            dt = datetime.strptime(str(v)[:10], "%Y-%m-%d")
+            d = datetime.strptime(raw, "%Y-%m-%d")
+            return d.replace(hour=12, minute=0, second=0, tzinfo=_BRT)
         except ValueError:
             return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            d = datetime.strptime(raw[:10], "%Y-%m-%d")
+            return d.replace(hour=12, minute=0, second=0, tzinfo=_BRT)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+            return dt.replace(hour=12, minute=0, second=0, tzinfo=_BRT)
+        return dt.replace(tzinfo=_BRT)
+    return dt.astimezone(_BRT)
 
 
 class CoraProvider(PaymentProvider):

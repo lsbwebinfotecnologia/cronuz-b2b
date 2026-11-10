@@ -20,7 +20,7 @@ Regras arquiteturais mandatórias:
    com `STA_FECHADO = 'N'` e `DATA_FECHAMENTO = NULL` (em aberto para o operador realizar o fechamento de banco).
 """
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -36,6 +36,25 @@ logger = logging.getLogger(__name__)
 
 CRONUZ_NATIVE_ORIGINS = ("FINANCIAL", "B2B_ORDER", "B2C_ORDER", "PDV", "MANUAL")
 HORUS_ORIGINS = ("HORUS_INVOICE", "HORUS_API", "HORUS_SQL")
+_BRT = timezone(timedelta(hours=-3))
+
+
+def _resolve_brazil_paid_date(paid_at: Optional[datetime]) -> date:
+    """
+    Extrai a data civil de pagamento no fuso horário de Brasília (-03:00).
+    Trata também cobranças legadas onde `occurrence_date` ('YYYY-MM-DD') foi salvo como
+    00:00:00 UTC (o que no fuso -03:00 virava 21:00:00 do dia anterior).
+    """
+    if not paid_at:
+        return datetime.now(_BRT).date()
+    if not isinstance(paid_at, datetime):
+        return paid_at
+    if paid_at.tzinfo is not None:
+        dt_utc = paid_at.astimezone(timezone.utc)
+        if dt_utc.hour == 0 and dt_utc.minute == 0 and dt_utc.second == 0:
+            return dt_utc.date()
+        return paid_at.astimezone(_BRT).date()
+    return paid_at.date()
 
 
 def _record_settlement_event(
@@ -116,7 +135,7 @@ def _settle_cronuz_native(db: Session, charge: PayCharge, config: CoraConfig) ->
                 movement_type="+",
                 amount=paid_amount,
                 progressive_balance=account.current_balance,
-                movement_date=paid_dt.date() if isinstance(paid_dt, datetime) else date.today(),
+                movement_date=_resolve_brazil_paid_date(paid_dt),
             ))
 
     msg = f"Baixa nativa Cronuz concluída: Parcela #{installment.id} (R$ {paid_amount:.2f})"
@@ -180,8 +199,7 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
     tarifa_val = Decimal(str(getattr(config, "horus_tarifa_boleto", None) or "0.00")).quantize(Decimal("0.01"))
 
     paid_val = Decimal(str(charge.total_paid if charge.total_paid is not None else (charge.amount or "0.00"))).quantize(Decimal("0.01"))
-    paid_dt = charge.paid_at or datetime.now(timezone.utc)
-    paid_date_iso = (paid_dt.date() if isinstance(paid_dt, datetime) else date.today()).strftime("%Y-%m-%d")
+    paid_date_iso = _resolve_brazil_paid_date(charge.paid_at).strftime("%Y-%m-%d")
 
     from app.integrators.horus_sql_client import HorusSQLClient
 
